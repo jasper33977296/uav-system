@@ -16,11 +16,54 @@ logging.basicConfig(level=logging.INFO, format="%(asctime)s %(name)s %(message)s
 log = logging.getLogger("main")
 
 
+async def _link_transition(state: str, m: dict) -> str:
+    """鏈路狀態機：SINR 位準 → 離散的狀態轉換，回傳新狀態。
+
+    SINR 是連續量、事件是離散點，直接比大小會在干擾區內每秒發一筆重複事件。
+    這裡用 ok / degraded / lost 三態，只在真的跨級時發一次事件。
+
+    每一級的回升都要多 sinr_hysteresis_db 才算數（lost→degraded 要 -2+3=1dB、
+    degraded→ok 要 5+3=8dB），避免 SINR 在門檻附近抖動時來回發事件。
+
+    設計取向是「忠實記錄事實」：每一次跨級都留紀錄（包含從 lost 回到 degraded
+    這種中間轉換），detail 帶上 from 欄位，事件序列可完整還原鏈路狀態變化。
+    不採用 time-to-trigger——那會讓事件時間戳晚於實際發生時刻，而「位置 ↔ 鏈路
+    劣化」的時間對應正是本研究的重點。
+    """
+    sinr = m["sinr"]
+    lost_th, deg_th = settings.sinr_lost_db, settings.sinr_degraded_db
+    hyst = settings.sinr_hysteresis_db
+
+    if sinr < lost_th and state != "lost":
+        new, severity, type_ = "lost", "critical", "link_lost"
+    elif lost_th + hyst <= sinr < deg_th and state == "lost":
+        new, severity, type_ = "degraded", "warning", "link_degraded"
+    elif sinr < deg_th and state == "ok":
+        new, severity, type_ = "degraded", "warning", "link_degraded"
+    elif sinr >= deg_th + hyst and state != "ok":
+        new, severity, type_ = "ok", "info", "link_recovered"
+    else:
+        return state
+
+    ev = await db.insert_event(
+        live.drone_id, live.session_id, severity, type_,
+        {"sinr": sinr, "in_zone": m["in_interference_zone"], "from": state},
+    )
+    await manager.broadcast({"type": "event", **ev})
+    return new
+
+
 async def _link_and_db_loop() -> None:
-    """每秒：取樣 5G 鏈路品質 → 更新 live state → 發鏈路事件 → 入庫。"""
-    source = SimulatedLinkSource(await db.fetch_cells(), await db.fetch_zones(enabled_only=True))
-    prev_pci: int | None = None
-    degraded = False
+    """每秒：取樣 5G 鏈路品質 → 更新 live state →（armed 時）發鏈路事件並入庫。
+
+    取樣一律執行，讓前端待機時也看得到即時鏈路品質；但**只在 armed 時入庫**。
+    上鎖時飛機停在原地不動，那些資料是同一個座標重複上萬筆，沒有記錄的必要。
+    見 issues/004。
+    """
+    source = SimulatedLinkSource(await db.fetch_cells(), await db.fetch_zones(enabled_only=True),
+                                 handover_margin_db=settings.handover_margin_db)
+    link_state = "ok"          # ok / degraded / lost
+    recording = False          # 上一輪是否處於記錄狀態，用來偵測架次開始
     tick = 0
     while True:
         await asyncio.sleep(1.0 / settings.db_write_hz)
@@ -32,30 +75,22 @@ async def _link_and_db_loop() -> None:
             continue
 
         m = source.sample(live.lat, live.lon, live.alt_rel)
-        live.link = m
+        live.link = m          # live state 一律更新（前端待機時仍看得到鏈路品質）
 
-        # 鏈路事件：handover / link_degraded / link_lost
-        if prev_pci is not None and m["pci"] != prev_pci:
-            ev = await db.insert_event(live.drone_id, live.session_id, "info", "handover",
-                                       {"from_pci": prev_pci, "to_pci": m["pci"]})
-            await manager.broadcast({"type": "event", **ev})
-        prev_pci = m["pci"]
+        # 同時檢查 session_id：armed 由 ingest 的另一個任務設定，剛解鎖的瞬間
+        # 可能還沒建好 session，此時寫入會產生 session_id NULL 的孤兒資料。
+        if not (live.armed and live.session_id):
+            recording = False
+            continue
 
-        if m["sinr"] < settings.sinr_lost_db and not degraded:
-            degraded = True
-            ev = await db.insert_event(live.drone_id, live.session_id, "critical", "link_lost",
-                                       {"sinr": m["sinr"], "in_zone": m["in_interference_zone"]})
-            await manager.broadcast({"type": "event", **ev})
-        elif m["sinr"] < settings.sinr_degraded_db and not degraded:
-            degraded = True
-            ev = await db.insert_event(live.drone_id, live.session_id, "warning", "link_degraded",
-                                       {"sinr": m["sinr"], "in_zone": m["in_interference_zone"]})
-            await manager.broadcast({"type": "event", **ev})
-        elif m["sinr"] >= settings.sinr_degraded_db + 3.0 and degraded:  # +3dB 遲滯避免抖動
-            degraded = False
-            ev = await db.insert_event(live.drone_id, live.session_id, "info", "link_recovered",
-                                       {"sinr": m["sinr"]})
-            await manager.broadcast({"type": "event", **ev})
+        if not recording:      # 架次開始：狀態機重置，避免沿用上一趟的狀態
+            link_state = "ok"
+            recording = True
+
+        # 鏈路事件：link_degraded / link_lost / link_recovered
+        # （不發 handover 事件——無人機等價於一台 UE，換手由 modem 與網路側處理，
+        #   應用層不參與也不研究它。服務 cell 仍以 pci 欄位記錄在 link_metrics。）
+        link_state = await _link_transition(link_state, m)
 
         await db.insert_telemetry(live)
         await db.insert_link(live)

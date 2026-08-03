@@ -69,12 +69,25 @@ async def _mode(drone: System) -> None:
 
 
 async def _armed(drone: System) -> None:
+    """armed 轉換即架次邊界。
+
+    賦值順序是刻意的——`_link_and_db_loop` 以 `armed and session_id` 為入庫條件，
+    兩者都是同一個 event loop 內的協程，會在 await 點交錯執行：
+
+    - 解鎖：先建好 session 再標記 armed。反過來的話，中間那一秒 armed=True 但
+      session_id 還是 None，那筆資料就成了無主孤兒。
+    - 上鎖：先清掉 armed／session_id 再關 session。`end_session()` 內含 await，
+      若在那期間 `_link_and_db_loop` 被排程到，會把資料寫進已經結算完摘要的架次。
+    """
     async for armed in drone.telemetry.armed():
         if armed and not live.armed:
             live.session_id = await db.create_session(live.drone_id)
+            live.armed = True
             log.info("session started: %s", live.session_id)
-        elif not armed and live.armed and live.session_id:
-            await db.end_session(live.session_id)
-            log.info("session ended: %s", live.session_id)
-            live.session_id = None
-        live.armed = armed
+        elif not armed and live.armed:
+            sid, live.session_id, live.armed = live.session_id, None, False
+            if sid:
+                await db.end_session(sid)
+                log.info("session ended: %s", sid)
+        else:
+            live.armed = armed

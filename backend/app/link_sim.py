@@ -1,14 +1,26 @@
-"""模擬 5G 鏈路品質。
+"""模擬 5G 鏈路品質。**這是開發鷹架，不是產品的一部分。**
+
+**目的：確保本系統的功能正常。** SITL 沒有真的 5G modem，需要有東西餵進管線，
+才能驗證取樣 → live state → 事件 → 入庫 → WebSocket → 前端這條路徑真的會動。
+判準是「有沒有走到與真機相同的程式路徑」，不是「數值像不像真的」。
+
+本系統的職責是控制資料蒐集與記錄事實，不做通道模擬。因此這裡**不追求擬真**：
+夠合理讓開發看得出因果、不產生會誤導開發者的假象即可。
+不要在這裡投資 3GPP 等級的建模（A3 offset、time-to-trigger、L3 濾波那一套）。
 
 模型（刻意簡單，重點是讓「位置 → 訊號品質」的因果關係可控、可重現）：
-  1. 對每個 gNB 以 log-distance path loss 估 RSRP，取最強者為服務 cell
-     （服務 cell 改變即為 handover）。
+  1. 對每個 gNB 以 log-distance path loss 估 RSRP，取最強者為服務 cell。
+     現任服務 cell 有 handover_margin_db 的優勢，避免雜訊造成每秒抖動。
   2. SINR 由 RSRP 線性映射，落在干擾區內時額外扣 severity_db（區緣有漸變）。
-  3. RTT / jitter / 丟包率 / 吞吐量由 SINR 推導 — 這是研究上「RF 劣化
-     如何反映到端到端品質」的模擬版本，真機階段換成實測值。
+  3. RTT / jitter / 丟包率 / 吞吐量由 SINR 推導 — 真機階段換成實測值。
 
-真機階段：新增 ModemLinkSource（AT command / QMI 讀 modem + ping 實測），
-與本類別實作相同的 sample() 介面即可，其餘程式碼不動。
+只輸出 `pci` 不輸出 `cell_id`：`cell_id` 的語意是 modem 回報的全域 cell 識別碼
+（NCI/CGI），模擬器產生不出有意義的值，留 NULL 才是誠實的。模擬階段用 pci
+就足以識別服務 cell。
+
+真機階段：改用 ModemLinkSource（modem 讀 RF 指標 + ping 實測 RTT/丟包）。
+注意介面可能要從 pull（sample()）改成 push——機上跑 ROS，量測的自然採集點在
+機上，見 doc/architecture.md 的「5G 量測資料如何從機上回到地面站」。
 """
 import math
 import random
@@ -27,19 +39,31 @@ def _clamp(v: float, lo: float, hi: float) -> float:
 
 
 class SimulatedLinkSource:
-    def __init__(self, cells: list[dict], zones: list[dict]):
+    def __init__(self, cells: list[dict], zones: list[dict], handover_margin_db: float = 6.0):
         self.cells = cells
         self.zones = zones
+        self.handover_margin_db = handover_margin_db
+        self._serving_pci: int | None = None
 
     def sample(self, lat: float, lon: float, alt_rel: float | None) -> dict:
-        # 1. 選最強 cell
-        best, best_rsrp = None, -999.0
+        # 1. 量各 cell 的 RSRP
+        measured = []
         for c in self.cells:
             d = _dist_m(lat, lon, c["lat"], c["lon"])
             rsrp = -55.0 - 25.0 * math.log10(max(d, 10.0) / 10.0) \
                    + (c.get("tx_power_dbm", 40.0) - 40.0) + random.gauss(0, 1.5)
-            if rsrp > best_rsrp:
-                best, best_rsrp = c, rsrp
+            measured.append((c, rsrp))
+        best, best_rsrp = max(measured, key=lambda m: m[1])
+
+        # 2. 換手邊際：現任服務 cell 有優勢，候選要強過 margin 才換。
+        #    沒有這道門檻的話，兩個 cell 距離相近時（RSRP 只差 ~1dB）純靠 ±1.5dB
+        #    的雜訊就會每秒來回換手，產生大量不對應任何真實現象的 handover 事件。
+        #    真機階段 PCI 由 modem 直接回報，這段不適用。
+        serving = next((m for m in measured if m[0]["pci"] == self._serving_pci), None)
+        if serving is not None and best_rsrp < serving[1] + self.handover_margin_db:
+            best, best_rsrp = serving
+        self._serving_pci = best["pci"]
+
         rsrp = _clamp(best_rsrp, -140.0, -50.0)
 
         # 2. RSRP → SINR，再套用干擾區衰減
@@ -65,7 +89,6 @@ class SimulatedLinkSource:
             "sinr": round(sinr, 1),
             "cqi": int(_clamp(round((sinr + 10.0) / 3.0), 1, 15)),
             "pci": best["pci"],
-            "cell_id": best["id"],
             "band": best.get("band", "n78"),
             "nr_mode": "SA",
             "rtt_ms": round(rtt, 1),

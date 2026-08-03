@@ -102,8 +102,9 @@ CREATE TABLE link_metrics (
   rsrq      REAL,                      -- dB
   sinr      REAL,                      -- dB, 訊號干擾雜訊比（干擾研究主指標）
   cqi       SMALLINT,
-  pci       INT,                       -- 目前連上的 cell（變化 = handover）
-  cell_id   BIGINT,
+  pci       INT,                       -- Physical Cell ID（會重複使用，僅鄰區內唯一）
+  cell_id   BIGINT,                    -- modem 回報的全域 cell 識別碼 (NCI/CGI)，
+                                       -- 用來消除 PCI 重複。模擬資料為 NULL
   band      TEXT,
   nr_mode   TEXT,                      -- SA / NSA / LTE
   -- 端到端鏈路指標
@@ -143,7 +144,7 @@ CREATE TABLE waypoints (
 );
 
 -- ============================================================
--- 事件/告警（含鏈路事件：link_degraded / link_lost / handover）
+-- 事件/告警（含鏈路事件：link_degraded / link_lost / link_recovered）
 -- ============================================================
 CREATE TABLE events (
   id         BIGSERIAL PRIMARY KEY,
@@ -151,7 +152,7 @@ CREATE TABLE events (
   drone_id   UUID,
   session_id UUID,
   severity   TEXT NOT NULL,            -- info / warning / critical
-  type       TEXT NOT NULL,            -- low_battery / gps_lost / link_degraded / link_lost / handover / mode_change
+  type       TEXT NOT NULL,            -- low_battery / gps_lost / link_degraded / link_lost / link_recovered / mode_change
   detail     JSONB,
   acked_at   TIMESTAMPTZ
 );
