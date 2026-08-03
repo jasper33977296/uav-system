@@ -15,5 +15,5 @@ export function classifySinr(sinr: number): (typeof LINK_CLASSES)[number] {
   return LINK_CLASSES.find((c) => sinr >= c.min) ?? LINK_CLASSES[3];
 }
 
-export const API = process.env.NEXT_PUBLIC_API_URL ?? "http://localhost:8000";
-export const WS_URL = process.env.NEXT_PUBLIC_WS_URL ?? "ws://localhost:8000/ws/telemetry";
+export const API = process.env.NEXT_PUBLIC_API_URL ?? "http://localhost:38000";
+export const WS_URL = process.env.NEXT_PUBLIC_WS_URL ?? "ws://localhost:38000/ws/telemetry";

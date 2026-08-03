@@ -6,7 +6,8 @@ services:
       POSTGRES_PASSWORD: uav
       POSTGRES_DB: uav
     ports:
-      - "5432:5432"
+      # host port 由根目錄 .env 的 DB_PORT 決定（見 scripts/setup.sh；一律 30000 以上）
+      - "${DB_PORT:-35432}:5432"
     volumes:
       - ./db/init:/docker-entrypoint-initdb.d:ro
       - dbdata:/var/lib/postgresql/data
@@ -20,12 +21,27 @@ services:
   sitl:
     image: jonasvautherin/px4-gazebo-headless:1.14.3
     network_mode: host
+    # 必須明確指定 MAVLink 目標 IP（14540 給 backend、14550 給 QGroundControl）。
+    # 映像預設拿「預設閘道」當目標，那是為 bridge 網路設計的（閘道=docker host）；
+    # 在 host network 下閘道會變成區網 router，封包就飛到別台機器去了。見 issues/005。
+    command: ["127.0.0.1", "127.0.0.1"]
+    # 必須掛 TTY：沒有 TTY 時 PX4 的互動式 shell 讀 stdin 立刻 EOF，
+    # 會以最高速無限重畫提示字元（pxh> + ESC[K），把磁碟寫爆。見 issues/009。
+    stdin_open: true
+    tty: true
+    # 第二道防線：Docker 預設的 json-file driver 沒有大小上限。
+    logging:
+      driver: json-file
+      options:
+        max-size: "50m"
+        max-file: "3"
 
   backend:
     build: ./backend
-    network_mode: host          # 直接收 SITL 的 UDP；API 服務於 :8000
+    network_mode: host          # 直接收 SITL 的 UDP；API 服務於 :${BACKEND_PORT:-38000}
+    command: ["uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "${BACKEND_PORT:-38000}"]
     environment:
-      DATABASE_URL: postgresql://uav:uav@localhost:5432/uav
+      DATABASE_URL: postgresql://uav:uav@localhost:${DB_PORT:-35432}/uav
       MAVLINK_URL: udpin://0.0.0.0:14540
       DRONE_NAME: sim-uav-1
       LINK_SOURCE: simulated
