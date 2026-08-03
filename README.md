@@ -9,7 +9,11 @@
 backend/    FastAPI + MAVSDK：遙測接收、5G 鏈路模擬、WebSocket 廣播、API
 frontend/   Next.js + MapLibre：即時地圖監控、SINR 上色軌跡、5G 儀表板
 db/init/    TimescaleDB schema（容器首次啟動自動執行）
-doc/        系統設計文件
+doc/        系統設計文件（架構、schema、前端設計、QGC 整合）
+missions/   QGroundControl .plan 航線檔（研究用固定航線）
+scripts/    安裝與啟動腳本
+issues/     已知問題與待決事項（一問題一檔，編號引用）
+progress/   開發進度現況 + 逐次開發紀錄 log/
 ```
 
 | 文件 | 內容 |
@@ -17,24 +21,39 @@ doc/        系統設計文件
 | [doc/architecture.md](doc/architecture.md) | 系統架構、關鍵決策（單機→多機、模擬→真機的擴充路徑）|
 | [doc/data-schema.md](doc/data-schema.md) | 資料表設計與理由、取樣頻率策略 |
 | [doc/frontend.md](doc/frontend.md) | 前端版面、軌跡上色規則、即時資料流 |
+| [doc/qgc-integration.md](doc/qgc-integration.md) | QGroundControl 分工、連線拓撲、完整作業流程 |
+| [progress/README.md](progress/README.md) | **目前進度、環境現況、下一步** |
+| [issues/README.md](issues/README.md) | 問題索引與狀態 |
 
 ## 快速啟動
 
 ```bash
-docker compose up -d          # TimescaleDB + PX4 SITL + backend
-cd frontend
-cp .env.local.example .env.local
-npm install && npm run dev    # http://localhost:3000
+./scripts/setup.sh          # 裝 Docker、backend venv、frontend 套件、挑選 port
 ```
 
-Backend 不進 Docker 的開發跑法：
+安裝完分三個終端啟動（細節見 [scripts/README.md](scripts/README.md)）：
 
 ```bash
-docker compose up -d db sitl
-cd backend
-uv venv .venv && uv pip install -r requirements.txt --python .venv/bin/python
-.venv/bin/uvicorn app.main:app --reload --port 8000
+./scripts/dev-up.sh         # 1. TimescaleDB + PX4 SITL 容器
+./scripts/dev-backend.sh    # 2. backend  → http://localhost:38000
+./scripts/dev-frontend.sh   # 3. frontend → http://localhost:33000
 ```
+
+全部進 Docker（不做前端開發時）：`docker compose up -d`
+
+### 連接埠慣例
+
+自家服務一律使用 **30000 以上**的 port，避開系統服務與同機其他專案：
+
+| 服務 | Port |
+|---|---|
+| TimescaleDB | 35432 |
+| Backend (FastAPI) | 38000 |
+| Frontend (Next.js) | 33000 |
+| MAVLink UDP | 14540 / 14550（PX4 與 QGroundControl 固定慣例，不改）|
+
+實際使用的 port 由 `scripts/setup.sh` 偵測衝突後寫進根目錄 `.env`，
+`docker-compose.yml` 與各 dev 腳本都讀它。
 
 ## 測試場景：飛進干擾區
 
@@ -56,7 +75,9 @@ async def go():
 asyncio.run(go())"
 ```
 
-（或用 QGroundControl 連 `udp:14550` 手動規劃任務。）
+（或用 QGroundControl 連 `udp:14550` 手動規劃任務——實務上校正與規劃都走 QGC，
+分工與完整流程見 [doc/qgc-integration.md](doc/qgc-integration.md)。
+現成航線在 [missions/](missions/)。）
 
 ## Roadmap
 

@@ -57,17 +57,68 @@ session 下，「回放某次飛行」「比較兩次實驗」都是一個 `sess
 
 ### 鏈路事件門檻（`backend/app/config.py`）
 
-| 事件 | 條件 | severity |
-|---|---|---|
-| `link_degraded` | SINR < 5 dB | warning |
-| `link_lost` | SINR < -2 dB | critical |
-| `link_recovered` | SINR ≥ 8 dB（+3dB 遲滯防抖）| info |
-| `handover` | 服務 cell PCI 改變 | info |
+鏈路狀態是 **ok / degraded / lost 三態機**（`main.py:_link_transition`）。
+SINR 是連續量、事件是離散點，直接比大小會在干擾區內每秒發一筆重複事件，
+因此只在跨級的當下發一次。
+
+| 轉換 | 條件 | 事件 | severity |
+|---|---|---|---|
+| → `lost` | SINR < -2 dB | `link_lost` | critical |
+| `ok` → `degraded` | SINR < 5 dB | `link_degraded` | warning |
+| `lost` → `degraded` | SINR ≥ 1 dB（-2 +3 遲滯）且 < 5 dB | `link_degraded` | warning |
+| → `ok` | SINR ≥ 8 dB（5 +3 遲滯）| `link_recovered` | info |
+
+**不發 handover 事件。** 一台無人機等價於一台 UE，換手由 modem 與網路側自行處理，
+應用層（機上 ROS、我們的資料蒐集）既不參與決策也不控制它，因此不在研究範圍內。
+服務 cell 仍以 `pci` 欄位記錄在 `link_metrics`——那是 modem 回報的事實，
+需要時可從時序資料看出變化，不需要為它建立事件。
+
+回升方向都要多 `sinr_hysteresis_db`（預設 3 dB）才算數，避免 SINR 在門檻附近
+抖動時來回發事件。每一次跨級都留紀錄——包含 `lost → degraded` 這種中間轉換——
+detail 帶 `from` 欄位，事件序列可完整還原鏈路狀態變化。
+
+刻意**不採用 time-to-trigger**（連續 N 秒才轉換）：那會讓事件時間戳晚於實際
+發生時刻，而「位置 ↔ 鏈路劣化」的時間對應正是本研究要看的東西。
+
+> 注意：事件是**衍生資料**。`link_metrics` 已經 1Hz 完整記錄 SINR，
+> 事後想用別的門檻重新分析，直接查 `link_metrics` 即可，且能回溯套用到
+> 所有歷史架次。事件的角色是即時通知與快速查詢，不是統計的唯一來源。
 
 ### 影像串流（第一版不做）
 
 前端已預留 16:9 視窗。之後接 **MediaMTX + WebRTC (WHEP)**，
 前端只需把 placeholder 換成 `<video>`，版面不動。
+
+## 系統定位與範圍
+
+本專案是**無人機管理系統**，跑在**地面站（Ubuntu）**上，職責是
+**控制資料蒐集與記錄事實**。
+
+```
+   無人機（機上跑 ROS）              地面站（Ubuntu）
+   ┌──────────────────┐            ┌────────────────────────────┐
+   │ 飛控 (PX4)        │  MAVLink   │ 本系統：資料蒐集與記錄        │
+   │ ROS               │ ─── 5G ──→ │ QGroundControl：控制與校正   │
+   │ 5G modem (= 1 UE) │            └────────────────────────────┘
+   └──────────────────┘
+```
+
+**明確不在範圍內：**
+
+| 項目 | 理由 |
+|---|---|
+| 網通架構（gNB 佈建、核網、切片）| 另一條工作線負責。本系統只從 UE 側量測鏈路品質 |
+| 通道模擬 / 電波傳播建模 | 本系統記錄事實，不做模擬。`link_sim.py` 純為開發鷹架 |
+| 換手決策 | 一台無人機 = 一台 UE，換手由 modem 與網路側處理，應用層不參與 |
+| 飛行控制與航線規劃 | QGC 負責（QGC 是包在本系統下的控制元件，見 [qgc-integration.md](qgc-integration.md)）|
+
+**衍生的設計原則：backend 對 MAVLink 只讀不寫。** 資料蒐集端不應該有能力
+下達飛行指令——真機階段一個誤送的指令可能造成事故。目前 `ingest.py` 只訂閱
+telemetry、`api.py` 不含任何 action 呼叫，符合此原則；日後新增功能時須維持。
+
+> 註：`cells` 表在真機階段的角色會縮小。既然不負責網通架構，我們不擁有 gNB
+> 佈建資訊，該表退化為「modem 回報過的 cell」參考資料或直接不用。
+> `interference_zones` 則仍是我們的——那是研究場景的標注。
 
 ## 部署形態
 
@@ -76,3 +127,19 @@ session 下，「回放某次飛行」「比較兩次實驗」都是一個 `sess
 - SITL 與 backend 用 host network，避免 MAVLink UDP 過 NAT 的問題。
 - 真機階段：無人機側 companion computer 經 5G 回傳 MAVLink
   （backend 的 `MAVLINK_URL` 換掉即可），`LINK_SOURCE=modem`。
+
+### 待決：5G 量測資料如何從機上回到地面站
+
+`SimulatedLinkSource.sample()` 目前是 **pull** 介面（backend 主動取樣）。
+但機上跑 ROS，5G 指標的自然採集點是**機上**——ROS node 讀 modem（AT/QMI）
+並實測 RTT／丟包，這比較適合 **push**（機上定期送上來）。
+
+| 傳輸方式 | 取捨 |
+|---|---|
+| MAVLink 自訂訊息 | 與現有 MAVLink 鏈路共用，不必多開通道；但要定義 dialect、頻寬受限 |
+| HTTP POST 到本系統 API | 最簡單直接，機上 ROS node 用 requests 即可；斷線時要自行緩衝重送 |
+| MQTT | 斷線容忍佳、天然支援多機；要多架一個 broker |
+| ROS bridge（rosbridge / DDS）| 與機上生態一致；地面站要引入 ROS 相依 |
+
+決定後 `link_source` 的抽象可能要從 `sample()` 改成「接收並寫入 live state」。
+現階段 SITL 用不到，不擋開發，但真機前必須定案。

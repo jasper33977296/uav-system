@@ -22,7 +22,7 @@ interference_zones   （干擾區標注，研究場景設定）
 | 欄位群 | 欄位 | 說明 |
 |---|---|---|
 | RF 層 | `rsrp` `rsrq` `sinr` `cqi` | SINR 是干擾研究主指標 |
-| Cell | `pci` `cell_id` `band` `nr_mode` | PCI 變化 = handover |
+| Cell | `pci` `cell_id` `band` `nr_mode` | `pci` 是 Physical Cell ID（會重複使用）；`cell_id` 是 modem 回報的全域識別碼 NCI/CGI，模擬資料為 NULL。換手不在研究範圍（無人機 = 一台 UE，由 modem 與網路側處理），只記錄不發事件 |
 | 端到端 | `rtt_ms` `jitter_ms` `packet_loss_pct` `throughput_up/down_kbps` | RF 劣化如何反映到應用層 |
 | 空間 | `lat` `lon` `alt_rel` | **刻意反正規化**：空間分析／熱度圖不必與 telemetry 做時間 join |
 | 標注 | `in_interference_zone` `source` | source = simulated / modem，模擬與實測資料可共存、可過濾 |
@@ -51,7 +51,7 @@ max_alt、avg/min SINR、avg RTT、干擾區內取樣數／總取樣數。
 
 ### `events`
 
-`link_degraded` / `link_lost` / `link_recovered` / `handover` / `mode_change` /
+`link_degraded` / `link_lost` / `link_recovered` / `mode_change` /
 `low_battery`…，帶 `severity` 與 `acked_at`（操作員確認）。
 
 ## 取樣頻率策略
@@ -59,8 +59,13 @@ max_alt、avg/min SINR、avg RTT、干擾區內取樣數／總取樣數。
 | 路徑 | 頻率 | 理由 |
 |---|---|---|
 | 前端即時顯示（WebSocket）| 5 Hz | 順暢的位置更新，不落地 |
-| telemetry / link_metrics 入庫 | 1 Hz | 回放與分析足夠，資料量可控 |
+| telemetry / link_metrics 入庫 | 1 Hz，**僅 armed 時** | 回放與分析足夠，資料量可控 |
 | 長期彙總 | （未做）| 之後用 TimescaleDB continuous aggregate 產 1 分鐘級別 |
+
+**只在 armed 且已建立架次時入庫**（見 [issues/004](../issues/004-writes-while-disarmed.md)）。
+上鎖狀態下飛機停在原地不動，那些資料是同一座標重複上萬筆，不構成有意義的
+對照組——修正前累積的 11,007 筆待機資料裡只有 2 個不同緯度、1 個經度。
+取樣本身照常執行，`live` state 持續更新，因此前端待機時仍看得到即時鏈路品質。
 
 ## 已知取捨
 
