@@ -9,7 +9,7 @@
 backend/    FastAPI + MAVSDK：遙測接收、5G 鏈路模擬、WebSocket 廣播、API
 frontend/   Next.js + MapLibre：即時地圖監控、SINR 上色軌跡、5G 儀表板
 db/init/    TimescaleDB schema（容器首次啟動自動執行）
-doc/        系統設計文件（架構、schema、前端設計、QGC 整合）
+doc/        系統設計文件（架構、schema、前端設計、QGC 整合、機上量測回傳）
 missions/   QGroundControl .plan 航線檔（研究用固定航線）
 scripts/    安裝與啟動腳本
 issues/     已知問題與待決事項（一問題一檔，編號引用）
@@ -22,6 +22,7 @@ progress/   開發進度現況 + 逐次開發紀錄 log/
 | [doc/data-schema.md](doc/data-schema.md) | 資料表設計與理由、取樣頻率策略 |
 | [doc/frontend.md](doc/frontend.md) | 前端版面、軌跡上色規則、即時資料流 |
 | [doc/qgc-integration.md](doc/qgc-integration.md) | QGroundControl 分工、連線拓撲、完整作業流程 |
+| [doc/onboard-telemetry.md](doc/onboard-telemetry.md) | 真機階段：機上 ROS 如何把 5G 量測送回地面站 |
 | [progress/README.md](progress/README.md) | **目前進度、環境現況、下一步** |
 | [issues/README.md](issues/README.md) | 問題索引與狀態 |
 

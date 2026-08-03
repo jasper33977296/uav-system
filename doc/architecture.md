@@ -128,18 +128,17 @@ telemetry、`api.py` 不含任何 action 呼叫，符合此原則；日後新增
 - 真機階段：無人機側 companion computer 經 5G 回傳 MAVLink
   （backend 的 `MAVLINK_URL` 換掉即可），`LINK_SOURCE=modem`。
 
-### 待決：5G 量測資料如何從機上回到地面站
+### 5G 量測資料如何從機上回到地面站
 
-`SimulatedLinkSource.sample()` 目前是 **pull** 介面（backend 主動取樣）。
-但機上跑 ROS，5G 指標的自然採集點是**機上**——ROS node 讀 modem（AT/QMI）
-並實測 RTT／丟包，這比較適合 **push**（機上定期送上來）。
+已定案：**機上 ROS node 採樣後以 HTTP POST 送回，分即時與記錄兩條通道。**
+完整設計見 **[onboard-telemetry.md](onboard-telemetry.md)**。
 
-| 傳輸方式 | 取捨 |
-|---|---|
-| MAVLink 自訂訊息 | 與現有 MAVLink 鏈路共用，不必多開通道；但要定義 dialect、頻寬受限 |
-| HTTP POST 到本系統 API | 最簡單直接，機上 ROS node 用 requests 即可；斷線時要自行緩衝重送 |
-| MQTT | 斷線容忍佳、天然支援多機；要多架一個 broker |
-| ROS bridge（rosbridge / DDS）| 與機上生態一致；地面站要引入 ROS 相依 |
+關鍵前提是「量測通道就是被量測的通道」——鏈路劣化時回傳管道也一起劣化，
+而那正是研究最想看的時刻。因此機上必須有持久化緩衝與斷點續傳，
+否則資料會系統性地缺少最差的樣本，統計上有偏。
 
-決定後 `link_source` 的抽象可能要從 `sample()` 改成「接收並寫入 live state」。
-現階段 SITL 用不到，不擋開發，但真機前必須定案。
+`SimulatedLinkSource.sample()` 的 pull 介面因此只用於模擬階段；
+modem 模式下入庫改由 API endpoint 負責。
+
+> 待與網通線確認：**選用的 modem 必須能回報 SINR**——不是每一款都會，
+> 而 SINR 是干擾研究的主指標。這是目前唯一擋住真機實作的外部相依。
