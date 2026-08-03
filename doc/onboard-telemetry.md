@@ -3,8 +3,29 @@
 真機階段，5G 鏈路指標的採集點在**機上**（companion computer 上的 ROS node
 讀 modem），本文定義它如何把資料送回地面站的本系統。
 
-狀態：**設計定案，尚未實作。** 硬體選型未定，但介面設計不依賴硬體，
-可先行實作地面站側。
+狀態：**設計定案，硬體已確認，尚未實作。**
+
+## 硬體
+
+| 項目 | 型號 | 對本設計的意義 |
+|---|---|---|
+| 機上運算 | Qualcomm Flight RB5 5G Platform（QRB5165，ModalAI 參考設計）| — |
+| 5G modem | **Quectel RM500Q-GL**（Snapdragon X55）| 我們的量測儀器 |
+| 作業系統 | Ubuntu 18.04（Yocto Dunfell）、kernel 4.19 | 版本偏舊，見下方注意事項 |
+| 中介軟體 | **ROS 2**（平台預裝）| 機上 node 用 ROS 2 撰寫 |
+| 飛控 | **PX4**（平台預裝，同一台機器）| 位置可在機上直接取得，不需跨裝置 |
+
+三件事因此確定下來：
+
+1. **ROS 版本是 ROS 2**，不需再議。
+2. **PX4 與 modem 在同一台機器上**——這正好支撐了「位置在機上就綁進同一筆」
+   的設計，取位置是本機呼叫，沒有跨裝置的時鐘與延遲問題。
+3. **SINR 拿得到**（見下節），原本標記為唯一外部相依的風險解除。
+
+> **注意事項：平台軟體堆疊偏舊。** Ubuntu 18.04 已於 2023 年結束標準支援，
+> 搭配的 ROS 2 版本也屬早期。實作前需確認機上可用的 Python 版本與 ROS 2 發行版，
+> 這會影響機上 node 能用哪些套件。這不影響本文的介面設計——
+> HTTP POST 對執行環境幾乎沒有要求，這正是選它的好處之一。
 
 相關：[architecture.md](architecture.md) 的系統定位、
 [data-schema.md](data-schema.md) 的 `link_metrics` 欄位定義。
@@ -186,24 +207,56 @@ WHERE drone_id = $1 AND started_at <= $2
 `link_metrics` 的 `source`（`simulated`/`modem`）與 `raw` JSONB 欄位
 當初就是為此保留的，不需新增。
 
-## Modem 選型：一個必須確認的需求
+## 從 modem 讀什麼、怎麼讀
 
 **modem 是本研究唯一的量測儀器。** RSRP、RSRQ、SINR、PCI 不是我們算出來的，
-是向 modem 查詢得來。
+是向 modem 查詢得來。RM500Q-GL 有兩條存取路徑，取捨不同。
 
-雖然網通架構屬於另一條工作線（見 [architecture.md](architecture.md) 的範圍界定），
-但選型直接決定我們拿得到什麼資料。**需要與該線確認一件事：**
+### 路徑一：AT 指令（建議主用）
 
-> **選用的 modem 必須能回報 SINR。**
+`AT+QENG="servingcell"` 在 NR5G-SA 模式的回應格式：
 
-不是每一款都會——有些只給 RSRP 與 RSRQ。而 SINR 是干擾研究的主指標
-（見 `01_schema.sql` 的欄位註解）。若最終選型不報 SINR，
-研究的核心指標就得改用其他方式取得，那是設計層級的變更。
+```
++QENG: "servingcell",<state>,"NR5G-SA",<duplex_mode>,<MCC>,<MNC>,
+       <cellID>,<PCID>,<TAC>,<ARFCN>,<band>,<NR_DL_bandwidth>,
+       <RSRP>,<RSRQ>,<SINR>,<scs>,<srxlev>
+```
 
-各廠牌的查詢指令格式不同（Quectel 用 `AT+QENG="servingcell"`，其他家不一樣）。
-Linux 上的 **ModemManager** 提供統一的 D-Bus 介面可抽象掉大部分差異，
-但廠商特有欄位（往往就包含 SINR）仍需直接下 AT 指令。
-建議機上實作以 ModemManager 為主、AT 指令補足。
+**這條路徑直接給 SINR**（5G NR 模式下範圍 -20 ~ 30 dB），
+而且欄位與 `link_metrics` 幾乎一對一對應：
+
+| AT 回應欄位 | `link_metrics` 欄位 |
+|---|---|
+| `<SINR>` | `sinr` ← **干擾研究主指標** |
+| `<RSRP>` / `<RSRQ>` | `rsrp` / `rsrq` |
+| `<PCID>` | `pci` |
+| `<cellID>` | `cell_id` ← 全域識別碼，正是 [issues/003](../issues/003-cell-id-not-persisted.md) 定義的語意 |
+| `<band>` | `band` |
+| `"NR5G-SA"` | `nr_mode` |
+| `<duplex_mode>` `<ARFCN>` `<scs>` `<srxlev>` `<TAC>` | 存進 `raw` JSONB |
+
+schema 不需要為真機階段做任何修改——當初的欄位設計與 modem 實際回報的內容吻合。
+
+### 路徑二：QMI（libqmi / `qmicli`）
+
+RM500Q-GL 是 Qualcomm X55 平台，支援 QMI。
+`qmicli --nas-get-signal-info` 回報 5G NR 的 RSRP、RSRQ 與 **SNR**。
+
+**注意這裡是 SNR 不是 SINR。** 兩者名稱相近但定義不同——SINR 把干擾算進分母，
+SNR 只算雜訊。實務上接收端難以區分兩者（量到的雜訊底噪本就含其他 cell 的干擾），
+但既然 AT 路徑明確提供 SINR，**主指標應以 AT 路徑為準**，
+避免在論文裡把兩個定義不同的量混用。
+
+QMI 適合當輔助：介面穩定、解析比 AT 字串容易，可用來取連線狀態等非主指標資訊。
+
+### 上機後要做的第一個驗證
+
+Quectel 論壇上有 RM500Q SINR 回報異常的討論串，因此**不要假設數值一定正確**。
+建議的驗證方式：在已知干擾源附近做一次可控測試，確認 `<SINR>` 會隨干擾出現而下降。
+
+這個測試同時驗證了整條量測鏈路（modem → ROS node → HTTP → 資料庫），
+是上機後的第一個里程碑。若 SINR 對干擾無反應，主指標就要改用其他方式取得——
+那是設計層級的變更，越早發現越好。
 
 ## 量測本身會干擾量測
 
@@ -216,11 +269,21 @@ Linux 上的 **ModemManager** 提供統一的 D-Bus 介面可抽象掉大部分�
 
 ## 未定事項
 
-| 項目 | 影響 | 是否擋住實作 |
-|---|---|---|
-| ROS 版本 | 只影響機上 node 的樣板程式碼。選 HTTP 的好處之一就是與 ROS 版本解耦。新專案應選 ROS 2（ROS 1 已於 2025-05 EOL）| 否 |
-| companion computer 平台 | 影響 modem 存取方式 | 否 |
-| **modem 型號** | **決定 SINR 是否可得** | **是——需先與網通線確認** |
+原本列為未定的三項（ROS 版本、運算平台、modem 型號）都已因硬體確認而解決，
+**沒有外部相依擋住實作**。剩下的是實作階段自然會遇到的事：
 
-地面站側（API endpoint、schema 索引、前端失聯顯示）不依賴上述任何一項，
-可先實作並用模擬器驗證。
+| 項目 | 何時處理 |
+|---|---|
+| 機上可用的 Python 版本與 ROS 2 發行版（平台為 Ubuntu 18.04）| 開始寫機上 node 前確認 |
+| `<SINR>` 是否確實隨干擾變化 | 上機後第一個驗證，見上節 |
+| 吞吐量要用被動計數器還是低頻主動測試 | 機上 node 實作時決定 |
+
+地面站側（兩個 API endpoint、schema 索引、前端失聯顯示）不依賴以上任何一項，
+**可以現在就實作**，並用一支模擬機上 node 的腳本打進去驗證完整流程。
+
+## 參考資料
+
+- [Qualcomm Flight RB5 5G Platform（ModalAI）](https://www.modalai.com/pages/qualcomm-flight-rb5-5g-platform)
+- [Qualcomm Dragonwing QRB5165 產品頁](https://www.qualcomm.com/internet-of-things/products/q5-series/qrb5165)
+- [Quectel RG50xQ & RM5xxQ 系列 AT 指令手冊](https://quectel.com/content/uploads/2024/05/Quectel_RG50xQRM5xxQ_Series_AT_Commands_Manual_V1.2.pdf)
+- [libqmi NAS Get Signal Info 參考文件](https://www.freedesktop.org/software/libqmi/libqmi-glib/latest/libqmi-glib-NAS-Get-Signal-Info-response.html)

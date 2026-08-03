@@ -140,5 +140,6 @@ telemetry、`api.py` 不含任何 action 呼叫，符合此原則；日後新增
 `SimulatedLinkSource.sample()` 的 pull 介面因此只用於模擬階段；
 modem 模式下入庫改由 API endpoint 負責。
 
-> 待與網通線確認：**選用的 modem 必須能回報 SINR**——不是每一款都會，
-> 而 SINR 是干擾研究的主指標。這是目前唯一擋住真機實作的外部相依。
+機上硬體為 **Qualcomm Flight RB5 5G Platform**（QRB5165 + Quectel RM500Q-GL
+modem，預裝 ROS 2 與 PX4）。modem 的 `AT+QENG="servingcell"` 直接回報 SINR，
+且欄位與 `link_metrics` 幾乎一對一對應，schema 不需為真機階段修改。
