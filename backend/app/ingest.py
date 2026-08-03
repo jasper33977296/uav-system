@@ -27,7 +27,7 @@ async def run() -> None:
             break
 
     await asyncio.gather(
-        _position(drone), _velocity(drone), _battery(drone),
+        _position(drone), _velocity(drone), _heading(drone), _battery(drone),
         _gps(drone), _mode(drone), _armed(drone),
     )
 
@@ -46,9 +46,20 @@ async def _velocity(drone: System) -> None:
         live.vertical_speed = -v.down_m_s
 
 
+async def _heading(drone: System) -> None:
+    # 用 telemetry.heading()（0–360）而非 attitude_euler().yaw_deg（-180–180），
+    # 語意直接對應地圖上的機頭朝向，不需轉換。
+    async for h in drone.telemetry.heading():
+        live.heading = h.heading_deg
+
+
 async def _battery(drone: System) -> None:
     async for b in drone.telemetry.battery():
-        live.battery_pct = b.remaining_percent * 100.0
+        # mavsdk 3.x 的 remaining_percent 已是百分比（0–100），不要再乘 100。
+        # 舊版是 0.0–1.0 的比例，升降版時注意這裡。
+        # 刻意不做「值 <= 1 就當比例乘 100」的自動判斷——1% 是真實的低電量值，
+        # 誤判成 100% 正好發生在最需要正確的時候。
+        live.battery_pct = b.remaining_percent
         live.battery_voltage = b.voltage_v
 
 

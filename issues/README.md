@@ -28,9 +28,9 @@
 | [003](003-cell-id-not-persisted.md) | `cell_id` 沒寫進 DB → 改判非 bug，是 schema 語意不明 | low | **closed** | `backend/app/db.py:87-100` |
 | [004](004-writes-while-disarmed.md) | 未 armed 時仍持續 1Hz 入庫，資料無限成長 ✔實測確認 | medium | **closed** | `backend/app/main.py:31-61` |
 | [005](005-sitl-mavlink-target-ip.md) | SITL 在 host network 下把 MAVLink 送到區網閘道 | high | **closed** | `docker-compose.yml` |
-| [006](006-battery-pct-x100.md) | `battery_pct` 多乘 100，實際值 10000 ✔實測確認 | medium | open | `backend/app/ingest.py:51` |
-| [007](007-heading-never-populated.md) | `heading` 從未訂閱，地圖機頭永遠指北 ✔實測確認 | medium | open | `backend/app/ingest.py` |
-| [008](008-readme-test-script-port-conflict.md) | README 測試腳本用 14540，與 backend 搶埠 | low | open | `README.md:65` |
+| [006](006-battery-pct-x100.md) | `battery_pct` 多乘 100，實際值 10000 ✔實測確認 | medium | **closed** | `backend/app/ingest.py:51` |
+| [007](007-heading-never-populated.md) | `heading` 從未訂閱，地圖機頭永遠指北 ✔實測確認 | medium | **closed** | `backend/app/ingest.py` |
+| [008](008-readme-test-script-port-conflict.md) | README 測試腳本用 14540，與 backend 搶埠 | low | **closed** | `README.md:65` |
 | [009](009-sitl-log-fills-disk.md) | SITL 沒掛 TTY，log 以 4.9GB/hr 寫爆磁碟 ✔實測確認 | critical | **closed** | `docker-compose.yml` |
 
 「✔實測確認」= 2026-08-03 首次實飛（SITL 起飛 → 進干擾區 → RTL）取得的實際資料佐證，

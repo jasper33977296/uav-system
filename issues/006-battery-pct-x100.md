@@ -1,7 +1,8 @@
 # 006 · `battery_pct` 多乘了 100，實際值是 10000
 
-- 狀態：open
+- 狀態：closed
 - 嚴重度：medium
+- 關閉：2026-08-03
 - 位置：`backend/app/ingest.py:51`
 - 建立：2026-08-03
 
@@ -43,3 +44,19 @@ live.battery_pct = b.remaining_percent
 
 因為這個欄位的語意在 MAVSDK 版本間變過，建議加一行防呆註解或做範圍判斷
 （`if pct <= 1.0: pct *= 100`），避免之後升降版又踩到。
+
+## 解決方式
+
+拿掉乘法，`live.battery_pct = b.remaining_percent`。
+
+**刻意不採用上面建議的 `if pct <= 1.0: pct *= 100` 自動判斷**——1% 是真實的
+低電量值，把它誤判成 100% 正好發生在最需要正確的時候。改為在程式碼註記
+版本差異，升降版時人工確認。
+
+實證確認值域：修正前 DB 裡 `battery_pct` 的 min=5000、max=10000，
+即 `remaining_percent` 回傳 50.0–100.0，確為 0–100 值域。
+
+## 驗證
+
+實飛一趟（157 筆遙測）：`battery_pct` 範圍 **55.0 – 100.0**，數值合理，
+且隨飛行遞減。WebSocket 推送同步正確。

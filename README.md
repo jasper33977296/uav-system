@@ -61,19 +61,12 @@ Seed 資料在 PX4 SITL 預設起飛點（蘇黎世）旁放了兩個 gNB 和一
 起飛往北約 200m 進入干擾區，可觀察 SINR 驟降、`link_lost` 事件與軌跡變色：
 
 ```bash
-backend/.venv/bin/python -c "
-import asyncio
-from mavsdk import System
-async def go():
-    d = System(); await d.connect('udpin://0.0.0.0:14540')
-    async for s in d.core.connection_state():
-        if s.is_connected: break
-    await d.action.arm(); await d.action.takeoff()
-    await asyncio.sleep(15)
-    await d.action.goto_location(47.3995, 8.5456, 540, 0)  # 干擾區中心
-    await asyncio.sleep(60); await d.action.return_to_launch()
-asyncio.run(go())"
+backend/.venv/bin/python scripts/test-flight.py
 ```
+
+腳本連 **14550** 而非 14540——backend 的 mavsdk_server 已經綁住 14540，
+同一個 UDP 埠不能兩個程序同時用（見 [issues/008](issues/008-readme-test-script-port-conflict.md)）。
+PX4 SITL 對兩個埠都會送 MAVLink，控制指令走哪個都可以。
 
 （或用 QGroundControl 連 `udp:14550` 手動規劃任務——實務上校正與規劃都走 QGC，
 分工與完整流程見 [doc/qgc-integration.md](doc/qgc-integration.md)。
