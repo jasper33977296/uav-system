@@ -1,0 +1,38 @@
+services:
+  db:
+    image: timescale/timescaledb:latest-pg16
+    environment:
+      POSTGRES_USER: uav
+      POSTGRES_PASSWORD: uav
+      POSTGRES_DB: uav
+    ports:
+      - "5432:5432"
+    volumes:
+      - ./db/init:/docker-entrypoint-initdb.d:ro
+      - dbdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U uav"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+
+  # PX4 SITL (headless Gazebo)。host network 讓 MAVLink UDP 直接打到本機 14540/14550
+  sitl:
+    image: jonasvautherin/px4-gazebo-headless:1.14.3
+    network_mode: host
+
+  backend:
+    build: ./backend
+    network_mode: host          # 直接收 SITL 的 UDP；API 服務於 :8000
+    environment:
+      DATABASE_URL: postgresql://uav:uav@localhost:5432/uav
+      MAVLINK_URL: udpin://0.0.0.0:14540
+      DRONE_NAME: sim-uav-1
+      LINK_SOURCE: simulated
+    depends_on:
+      db:
+        condition: service_healthy
+    restart: unless-stopped
+
+volumes:
+  dbdata:

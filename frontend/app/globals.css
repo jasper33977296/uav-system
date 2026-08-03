@@ -1,0 +1,101 @@
+/* 色彩角色（light/dark 各自選定，非自動反轉）*/
+:root {
+  color-scheme: light;
+  --page: #f9f9f7;
+  --surface: #fcfcfb;
+  --ink: #0b0b0b;
+  --ink-2: #52514e;
+  --muted: #898781;
+  --hairline: #e1e0d9;
+  --border: rgba(11, 11, 11, 0.1);
+  --series-1: #2a78d6;
+}
+@media (prefers-color-scheme: dark) {
+  :root {
+    color-scheme: dark;
+    --page: #0d0d0d;
+    --surface: #1a1a19;
+    --ink: #ffffff;
+    --ink-2: #c3c2b7;
+    --muted: #898781;
+    --hairline: #2c2c2a;
+    --border: rgba(255, 255, 255, 0.1);
+    --series-1: #3987e5;
+  }
+}
+
+* { margin: 0; padding: 0; box-sizing: border-box; }
+html, body { height: 100%; }
+body {
+  font-family: system-ui, -apple-system, "Segoe UI", sans-serif;
+  background: var(--page);
+  color: var(--ink);
+}
+
+.app { display: grid; grid-template-columns: 1fr 380px; height: 100vh; }
+.map-wrap { position: relative; }
+.map-wrap .maplibregl-map { position: absolute; inset: 0; }
+
+/* 地圖圖例（鏈路品質分級）*/
+.legend {
+  position: absolute; left: 12px; bottom: 24px; z-index: 5;
+  background: var(--surface); border: 1px solid var(--border);
+  border-radius: 8px; padding: 10px 12px; font-size: 12px;
+}
+.legend h4 { font-size: 12px; font-weight: 600; margin-bottom: 6px; }
+.legend .row { display: flex; align-items: center; gap: 6px; color: var(--ink-2); line-height: 1.7; }
+.dot { width: 8px; height: 8px; border-radius: 50%; flex: none; }
+
+/* 無人機圖示 */
+.drone-marker {
+  width: 0; height: 0;
+  border-left: 9px solid transparent;
+  border-right: 9px solid transparent;
+  border-bottom: 24px solid var(--series-1);
+  filter: drop-shadow(0 1px 2px rgba(0, 0, 0, 0.4));
+}
+
+/* 側欄 */
+.panel {
+  background: var(--page); border-left: 1px solid var(--hairline);
+  overflow-y: auto; padding: 12px; display: flex; flex-direction: column; gap: 12px;
+}
+.card {
+  background: var(--surface); border: 1px solid var(--border);
+  border-radius: 10px; padding: 12px;
+}
+.card h3 {
+  font-size: 12px; font-weight: 600; color: var(--ink-2);
+  text-transform: uppercase; letter-spacing: 0.04em; margin-bottom: 8px;
+}
+
+.chips { display: flex; gap: 6px; flex-wrap: wrap; }
+.chip {
+  display: inline-flex; align-items: center; gap: 6px;
+  font-size: 12px; color: var(--ink-2);
+  border: 1px solid var(--border); border-radius: 999px; padding: 3px 10px;
+}
+
+.video-placeholder {
+  aspect-ratio: 16 / 9; border-radius: 8px; border: 1px dashed var(--hairline);
+  display: grid; place-items: center; color: var(--muted); font-size: 13px;
+}
+
+.metrics { display: grid; grid-template-columns: repeat(3, 1fr); gap: 8px; }
+.metric { padding: 4px 0; }
+.metric .label { font-size: 11px; color: var(--muted); }
+.metric .value { font-size: 18px; font-weight: 600; font-variant-numeric: tabular-nums; }
+.metric .unit { font-size: 11px; color: var(--ink-2); margin-left: 2px; }
+
+.hero { display: flex; align-items: baseline; gap: 10px; margin-bottom: 4px; }
+.hero .num { font-size: 34px; font-weight: 700; }
+.hero .unit { color: var(--ink-2); font-size: 13px; }
+
+.spark { display: block; margin: 6px 0 10px; }
+
+.events { display: flex; flex-direction: column; gap: 6px; max-height: 220px; overflow-y: auto; }
+.event { display: flex; gap: 8px; font-size: 12px; align-items: baseline; }
+.event time { color: var(--muted); font-variant-numeric: tabular-nums; flex: none; }
+.event .type { font-weight: 600; }
+.event .detail { color: var(--ink-2); }
+.empty { color: var(--muted); font-size: 12px; }
