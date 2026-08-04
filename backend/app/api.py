@@ -163,6 +163,100 @@ async def current_mission():
     return {"item_count": len(items), "waypoints": waypoints}
 
 
+# ── 任務庫（路徑管理頁）───────────────────────────────────────────────────
+# 儲存的路徑可標記 is_active（至多一條），即時頁優先顯示它；
+# 沒有啟用中的路徑時，退回「從機上讀回目前任務」。
+
+class WaypointIn(BaseModel):
+    seq: int
+    lat: float
+    lon: float
+    alt: float | None = None
+    action: str | None = "waypoint"
+
+
+class MissionIn(BaseModel):
+    name: str
+    source: str = "plan-file"        # plan-file / vehicle
+    waypoints: list[WaypointIn] = Field(min_length=2, max_length=500)
+
+
+async def _store_mission(name: str, source: str, wps: list[dict]) -> str:
+    async with db.pool.acquire() as con:
+        async with con.transaction():
+            row = await con.fetchrow(
+                "INSERT INTO missions (name, created_by) VALUES ($1, $2) RETURNING id",
+                name, source)
+            await con.executemany(
+                """INSERT INTO waypoints (mission_id, seq, lat, lon, alt, action)
+                   VALUES ($1, $2, $3, $4, $5, $6)""",
+                [(row["id"], w["seq"], w["lat"], w["lon"], w.get("alt"),
+                  w.get("action", "waypoint")) for w in wps])
+    return str(row["id"])
+
+
+@router.get("/missions")
+async def list_missions():
+    rows = await db.pool.fetch("""
+        SELECT m.id, m.name, m.created_by AS source, m.created_at, m.is_active,
+               count(w.seq) AS waypoint_count
+        FROM missions m LEFT JOIN waypoints w ON w.mission_id = m.id
+        GROUP BY m.id ORDER BY m.created_at DESC""")
+    return [dict(r) for r in rows]
+
+
+@router.get("/missions/active")
+async def active_mission():
+    row = await db.pool.fetchrow("SELECT id, name FROM missions WHERE is_active LIMIT 1")
+    if row is None:
+        raise HTTPException(404, "沒有啟用中的路徑")
+    wps = await db.pool.fetch(
+        "SELECT seq, lat, lon, alt, action FROM waypoints WHERE mission_id = $1 ORDER BY seq",
+        row["id"])
+    return {"id": str(row["id"]), "name": row["name"], "waypoints": [dict(w) for w in wps]}
+
+
+@router.post("/missions")
+async def save_mission(m: MissionIn):
+    mid = await _store_mission(m.name, m.source, [w.model_dump() for w in m.waypoints])
+    return {"id": mid}
+
+
+@router.post("/missions/from-vehicle")
+async def import_mission_from_vehicle(name: str | None = None):
+    """把機上目前的任務（QGC 上傳的）讀回並存進任務庫。唯讀 + 入庫。"""
+    data = await current_mission()
+    wps = data["waypoints"]
+    if len(wps) < 2:
+        raise HTTPException(404, "機上沒有可儲存的任務（航點少於 2）")
+    mid = await _store_mission(
+        name or f"機上任務 {datetime.now().strftime('%m/%d %H:%M')}", "vehicle",
+        [{"seq": w["seq"], "lat": w["lat"], "lon": w["lon"], "alt": w["alt"],
+          "action": {22: "takeoff", 21: "land"}.get(w["command"], "waypoint")} for w in wps])
+    return {"id": mid, "waypoint_count": len(wps)}
+
+
+@router.post("/missions/{mission_id}/activate")
+async def activate_mission(mission_id: str, active: bool = True):
+    async with db.pool.acquire() as con:
+        async with con.transaction():
+            await con.execute("UPDATE missions SET is_active = false WHERE is_active")
+            if active:
+                r = await con.execute(
+                    "UPDATE missions SET is_active = true WHERE id = $1", mission_id)
+                if r.split()[-1] == "0":
+                    raise HTTPException(404, "無此路徑")
+    return {"ok": True}
+
+
+@router.delete("/missions/{mission_id}")
+async def delete_mission(mission_id: str):
+    r = await db.pool.execute("DELETE FROM missions WHERE id = $1", mission_id)
+    if r.split()[-1] == "0":
+        raise HTTPException(404, "無此路徑")
+    return {"ok": True}  # waypoints 由 FK CASCADE 一併刪除
+
+
 # ── 機上 5G 量測回傳（真機階段）────────────────────────────────────────────
 # 設計見 doc/onboard-telemetry.md。兩條通道分工：
 #   live  即時通道：只送最新一筆、失敗不重試、只更新 live state 不入庫

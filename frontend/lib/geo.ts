@@ -78,12 +78,53 @@ export function ribbon<T extends { lat: number | null; lon: number | null; alt: 
     const a = pts[i - 1], b = pts[i];
     if (a.lat == null || a.lon == null || b.lat == null || b.lon == null) continue;
     const quad = segQuad(a.lat, a.lon, b.lat, b.lon, halfW);
-    if (!quad) continue;
-    const alt = ((a.alt ?? 0) + (b.alt ?? 0)) / 2;
+    if (quad) {
+      const alt = ((a.alt ?? 0) + (b.alt ?? 0)) / 2;
+      feats.push({
+        type: "Feature",
+        properties: { base: Math.max(alt - 0.5, 0), top: Math.max(alt + 0.5, 0.5), ...props(a, b) },
+        geometry: quad,
+      });
+      continue;
+    }
+    // 水平位移過小（起降／懸停中的爬升）：畫成該點的垂直段，
+    // 讓上升下降的路徑同樣被顏色標示，不再隱形
+    const lo = Math.min(a.alt ?? 0, b.alt ?? 0), hi = Math.max(a.alt ?? 0, b.alt ?? 0);
+    if (hi - lo < 0.6) continue;   // 純懸停不畫
     feats.push({
       type: "Feature",
-      properties: { base: Math.max(alt - 0.5, 0), top: Math.max(alt + 0.5, 0.5), ...props(a, b) },
-      geometry: quad,
+      properties: { base: Math.max(lo, 0), top: hi, ...props(a, b) },
+      geometry: ngonAt(b.lat, b.lon, halfW * 0.8, 8),
+    });
+  }
+  return { type: "FeatureCollection", features: feats };
+}
+
+/** 路徑方向箭頭：沿飛行方向的小三角形，浮在絲帶上方一點。
+    每 everyN 個樣本放一枚；水平位移太小的段落跳過（垂直段方向無意義）。 */
+export function pathArrows<T extends { lat: number | null; lon: number | null; alt: number | null }>(
+  pts: T[], everyN = 12, sizeM = 6,
+): GeoJSON.FeatureCollection {
+  const feats: GeoJSON.Feature[] = [];
+  for (let i = everyN; i < pts.length - 1; i += everyN) {
+    const a = pts[i], b = pts[i + 1];
+    if (a.lat == null || a.lon == null || b.lat == null || b.lon == null) continue;
+    const k = mLon(a.lat);
+    const dx = (b.lon - a.lon) * k, dy = (b.lat - a.lat) * M_LAT;
+    const len = Math.hypot(dx, dy);
+    if (len < 0.5) continue;
+    const ux = dx / len, uy = dy / len;              // 前進方向單位向量
+    const px = -uy, py = ux;                          // 垂直向
+    const c = (sx: number, sy: number): [number, number] =>
+      [a.lon! + sx / k, a.lat! + sy / M_LAT];
+    const tip = c(ux * sizeM * 0.6, uy * sizeM * 0.6);
+    const l = c(-ux * sizeM * 0.4 + px * sizeM * 0.35, -uy * sizeM * 0.4 + py * sizeM * 0.35);
+    const r = c(-ux * sizeM * 0.4 - px * sizeM * 0.35, -uy * sizeM * 0.4 - py * sizeM * 0.35);
+    const alt = a.alt ?? 0;
+    feats.push({
+      type: "Feature",
+      properties: { base: alt + 0.7, top: alt + 1.2 },
+      geometry: { type: "Polygon", coordinates: [[tip, l, r, tip]] },
     });
   }
   return { type: "FeatureCollection", features: feats };

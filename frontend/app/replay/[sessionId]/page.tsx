@@ -4,7 +4,8 @@ import "maplibre-gl/dist/maplibre-gl.css";
 import { useParams, useRouter } from "next/navigation";
 import { useEffect, useMemo, useRef, useState } from "react";
 
-import { CANVAS, groundGrid, ngonAt, ribbon } from "@/lib/geo";
+import { createDroneLayer } from "@/components/droneLayer";
+import { CANVAS, groundGrid, pathArrows, ribbon } from "@/lib/geo";
 import { API, LINK_CLASSES, classifySinr } from "@/lib/signal";
 
 interface LinkRow {
@@ -73,6 +74,7 @@ export default function Replay() {
   const [idx, setIdx] = useState(0);
   const mapRef = useRef<maplibregl.Map | null>(null);
   const containerRef = useRef<HTMLDivElement>(null);
+  const cursorRef = useRef<LinkRow | null>(null);
 
   useEffect(() => {
     fetch(`${API}/api/sessions/${sessionId}/track`)
@@ -145,28 +147,28 @@ export default function Replay() {
           "fill-extrusion-height": ["get", "top"], "fill-extrusion-base": ["get", "base"],
           "fill-extrusion-opacity": 0.9 } });
 
-      // 回放游標：懸浮在該時刻高度的機體
-      map.addSource("cursor", { type: "geojson",
-        data: { type: "FeatureCollection", features: [] } });
-      map.addLayer({ id: "cursor", type: "fill-extrusion", source: "cursor",
-        paint: { "fill-extrusion-color": "#3987e5",
+      // 方向箭頭：浮在絲帶上方的小三角形，指出飛行方向
+      map.addSource("arrows", { type: "geojson",
+        data: pathArrows(rows.map((r) => ({ lat: r.lat, lon: r.lon, alt: r.alt_rel }))) });
+      map.addLayer({ id: "arrows", type: "fill-extrusion", source: "arrows",
+        paint: { "fill-extrusion-color": "#e8eaed",
           "fill-extrusion-height": ["get", "top"], "fill-extrusion-base": ["get", "base"],
-          "fill-extrusion-opacity": 0.95 } });
+          "fill-extrusion-opacity": 0.9 } });
+
+      // 回放游標：three.js 球體（與即時頁的機體一致）
+      map.addLayer(createDroneLayer("cursor-ball", () => {
+        const r = cursorRef.current;
+        if (!r || r.lat == null || r.lon == null) return [];
+        return [{ id: "cursor", lat: r.lat, lon: r.lon, alt: r.alt_rel ?? 0, color: "#3987e5" }];
+      }));
     });
     return () => { map.remove(); mapRef.current = null; };
   }, [rows]);
 
-  // scrub → 地圖游標
+  // scrub → 球體游標（球體層每幀讀 cursorRef，觸發一次重繪即可）
   useEffect(() => {
-    const map = mapRef.current, r = rows[idx];
-    if (!map || !r || !map.getSource("cursor")) return;
-    const alt = r.alt_rel ?? 0, rad = 3.2;
-    (map.getSource("cursor") as maplibregl.GeoJSONSource).setData({
-      type: "FeatureCollection",
-      features: [{ type: "Feature",
-        properties: { base: Math.max(alt - rad, 0), top: Math.max(alt + rad, rad) },
-        geometry: ngonAt(r.lat!, r.lon!, rad, 8) }],
-    });
+    cursorRef.current = rows[idx] ?? null;
+    mapRef.current?.triggerRepaint();
   }, [idx, rows]);
 
   const cur = rows[idx];

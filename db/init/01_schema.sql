@@ -133,6 +133,7 @@ CREATE TABLE missions (
   name       TEXT NOT NULL,
   drone_id   UUID REFERENCES drones(id),
   status     TEXT NOT NULL DEFAULT 'draft',  -- draft / uploaded / running / completed / aborted
+  is_active  BOOLEAN NOT NULL DEFAULT false,  -- 顯示於即時頁的那一條（至多一條）
   geometry   JSONB,
   created_by TEXT,
   created_at TIMESTAMPTZ NOT NULL DEFAULT now()

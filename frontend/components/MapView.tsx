@@ -3,9 +3,8 @@ import maplibregl from "maplibre-gl";
 import "maplibre-gl/dist/maplibre-gl.css";
 import { useEffect, useRef, useState } from "react";
 
-import {
-  CANVAS, DRONE_COLOR, droneBall, groundGrid, ribbon,
-} from "@/lib/geo";
+import { createDroneLayer, DRONE_PALETTE } from "@/components/droneLayer";
+import { CANVAS, DRONE_COLOR, groundGrid, ribbon } from "@/lib/geo";
 import { API, LINK_CLASSES, classifySinr } from "@/lib/signal";
 import { useUavStore } from "@/lib/store";
 
@@ -99,26 +98,30 @@ export default function MapView() {
         },
       });
 
-      // 無人機 3D 本體：浮在實際高度
-      map.addSource("drone3d", { type: "geojson",
-        data: { type: "FeatureCollection", features: [] } });
-      map.addLayer({
-        id: "drone3d", type: "fill-extrusion", source: "drone3d",
-        paint: {
-          "fill-extrusion-color": DRONE_COLOR,
-          "fill-extrusion-height": ["get", "top"],
-          "fill-extrusion-base": ["get", "base"],
-          "fill-extrusion-opacity": 0.95,
-        },
-      });
+      // 無人機本體：three.js 正圓球體，浮在實際高度。
+      // 層內以 drone_id 為鍵——多機群飛時 store 擴成多機，這裡不用改。
+      map.addLayer(createDroneLayer("drones", () => {
+        const t = useUavStore.getState().live;
+        if (!t || t.lat == null || t.lon == null) return [];
+        return [{
+          id: t.drone_id ?? "drone-0",
+          lat: t.lat, lon: t.lon, alt: t.alt_rel ?? 0,
+          color: DRONE_PALETTE[0],
+        }];
+      }));
 
-      // 任務疊圖：從飛機讀回 QGC 上傳的任務（唯讀），畫成灰色懸浮預計路徑。
-      // 沒有任務或未連線時靜默略過。
+      // 任務疊圖：任務庫的啟用路徑優先（路徑管理頁選的），
+      // 沒有啟用中的路徑時退回「從機上讀回目前任務」。兩者都沒有就不畫。
       try {
-        const r = await fetch(`${API}/api/mission/current`);
-        if (r.ok) {
-          const m = await r.json();
-          const wps = (m.waypoints ?? []).filter((w: any) => w.lat && w.lon);
+        let wps: any[] = [];
+        const ra = await fetch(`${API}/api/missions/active`);
+        if (ra.ok) wps = ((await ra.json()).waypoints ?? []);
+        if (wps.length < 2) {
+          const rv = await fetch(`${API}/api/mission/current`);
+          if (rv.ok) wps = ((await rv.json()).waypoints ?? []);
+        }
+        {
+          wps = wps.filter((w: any) => w.lat && w.lon);
           if (wps.length >= 2) {
             // 預計路徑：窄灰絲帶浮在各段目標高度（比實際路徑窄且淡，主從分明）
             map.addSource("plan3d", {
@@ -195,10 +198,7 @@ export default function MapView() {
           map.jumpTo({ center: [t.lon, t.lat], zoom: 16 });
         }
 
-        (map.getSource("drone3d") as maplibregl.GeoJSONSource | undefined)?.setData({
-          type: "FeatureCollection",
-          features: [droneBall(t.lat, t.lon, t.alt_rel ?? 0)],
-        });
+        // 球體層自己每幀從 store 讀位置（triggerRepaint 驅動），不需在此餵資料
 
         (map.getSource("trail") as maplibregl.GeoJSONSource | undefined)?.setData({
           type: "FeatureCollection",
