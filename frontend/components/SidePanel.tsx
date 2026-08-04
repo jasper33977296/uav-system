@@ -42,14 +42,6 @@ export default function SidePanel() {
 
   return (
     <aside className="panel">
-      {/* 連線／記錄狀態 chips 已移至頂欄（AppShell），全站可見 */}
-
-      {/* 影像預留位：之後接 MediaMTX/WebRTC 時換成 <video> 即可，版面不動 */}
-      <div className="card">
-        <h3>即時影像</h3>
-        <div className="video-placeholder">影像尚未接入</div>
-      </div>
-
       <div className="card">
         <h3>飛行狀態</h3>
         <div className="metrics">

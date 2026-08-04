@@ -36,27 +36,27 @@ export default function AppShell({ children }: { children: React.ReactNode }) {
           </Link>
         ))}
         <span className="spacer" />
-        <span className="chip">
-          <span className="dot" style={{ background: wsConnected ? "#0ca30c" : "#a01818" }} />
-          後端 {wsConnected ? "已連線" : "斷線"}
-        </span>
-        <span className="chip">
-          <span className="dot" style={{ background: live?.connected ? "#0ca30c" : "#a01818" }} />
-          MAVLink {live?.connected ? "已連線" : "等待中"}
-        </span>
-        {/* 記錄狀態是最重要的一顆：待機時系統刻意不入庫（#004），
-            操作員必須隨時知道「現在飛的東西有沒有被記下來」 */}
-        <span className={`chip ${recording ? "chip-rec" : ""}`}>
-          <span
-            className="dot"
-            style={
-              recording
-                ? { background: "#d03b3b" }
-                : { background: "transparent", border: "1.5px solid var(--muted)" }
-            }
-          />
-          {recording ? "記錄中" : "待機（不記錄）"}
-        </span>
+        {/* 狀態縮成純圓點（文字 label 依需求移除），語意放 title——hover 可見。
+            記錄狀態（#004：待機時刻意不入庫）仍以紅點／空心圈區分。 */}
+        <span
+          className="status-dot"
+          title={`後端 ${wsConnected ? "已連線" : "斷線"}`}
+          style={{ background: wsConnected ? "#0ca30c" : "#a01818" }}
+        />
+        <span
+          className="status-dot"
+          title={`MAVLink ${live?.connected ? "已連線" : "等待中"}`}
+          style={{ background: live?.connected ? "#0ca30c" : "#a01818" }}
+        />
+        <span
+          className="status-dot"
+          title={recording ? "記錄中" : "待機（不記錄）"}
+          style={
+            recording
+              ? { background: "#d03b3b" }
+              : { background: "transparent", border: "1.5px solid var(--muted)" }
+          }
+        />
       </nav>
       <div className="content">{children}</div>
     </div>

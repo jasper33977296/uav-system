@@ -54,7 +54,10 @@ body {
 .nav a.active { color: var(--ink); background: var(--page); border-color: var(--hairline); }
 .nav .spacer { flex: 1; }
 .nav .chip { flex: none; }
-.chip-rec { border-color: rgba(208, 59, 59, 0.5); }
+.status-dot {
+  width: 10px; height: 10px; border-radius: 50%; flex: none;
+  margin-left: 10px; box-sizing: border-box;
+}
 
 /* 即時監控頁：地圖＋側欄。
    側欄用 clamp 而非寫死 380px——視窗縮小或瀏覽器放大（等效縮小視窗）時
@@ -116,11 +119,6 @@ body {
   display: inline-flex; align-items: center; gap: 6px;
   font-size: 12px; color: var(--ink-2);
   border: 1px solid var(--border); border-radius: 999px; padding: 3px 10px;
-}
-
-.video-placeholder {
-  aspect-ratio: 16 / 9; border-radius: 8px; border: 1px dashed var(--hairline);
-  display: grid; place-items: center; color: var(--muted); font-size: 13px;
 }
 
 .metrics { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 8px; }
