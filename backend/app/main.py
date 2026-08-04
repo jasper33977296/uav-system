@@ -131,4 +131,7 @@ async def ws_telemetry(ws: WebSocket):
 
 @app.get("/healthz")
 async def healthz():
-    return {"ok": True, "mavlink_connected": live.connected}
+    # link_source 讓前端決定要不要畫模擬專用圖層（干擾區、gNB）——
+    # 真機模式下系統對干擾無先驗知識，畫出來就是撒謊。見 doc/architecture.md。
+    return {"ok": True, "mavlink_connected": live.connected,
+            "link_source": settings.link_source}

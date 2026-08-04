@@ -1,7 +1,7 @@
 "use client";
 import maplibregl from "maplibre-gl";
 import "maplibre-gl/dist/maplibre-gl.css";
-import { useEffect, useRef } from "react";
+import { useEffect, useRef, useState } from "react";
 
 import { API, LINK_CLASSES, classifySinr } from "@/lib/signal";
 import { useUavStore } from "@/lib/store";
@@ -35,6 +35,8 @@ export default function MapView() {
   const mapRef = useRef<maplibregl.Map | null>(null);
   const markerRef = useRef<maplibregl.Marker | null>(null);
   const centeredRef = useRef(false);
+  // 模擬模式才顯示干擾區/gNB 圖層與對應圖例（真機對干擾無先驗知識）
+  const [simulated, setSimulated] = useState(false);
 
   useEffect(() => {
     const map = new maplibregl.Map({
@@ -56,7 +58,36 @@ export default function MapView() {
     mapRef.current = map;
 
     map.on("load", async () => {
-      // 干擾區與基地台（靜態設定，由 API 載入）
+      // 飛行軌跡：依鏈路健康分級上色（門檻同 backend 事件門檻）。
+      // 兩種模式都要有——真機模式下它就是唯一的「場域圖」：
+      // 干擾的空間分布由實測 SINR 軌跡自己揭露。
+      map.addSource("trail", {
+        type: "geojson",
+        data: { type: "FeatureCollection", features: [] },
+      });
+      map.addLayer({
+        id: "trail-pt", type: "circle", source: "trail",
+        paint: {
+          "circle-radius": 4,
+          "circle-color": [
+            "match", ["get", "cls"],
+            ...LINK_CLASSES.flatMap((c) => [c.key, c.color]),
+            "#898781",
+          ] as any,
+          // 不描邊：5Hz 推送下點距不到 1px，任何描邊都會把前一點的填色蓋掉，
+          // 整條尾跡變成描邊色（實際發生過——2026-08-04 截圖整條變深色）。
+          // 高密度點不描邊會融合成連續色線，分級轉換處自然出現色變。
+          "circle-stroke-width": 0,
+        },
+      });
+
+      // 干擾區與 gNB 是**模擬專用圖層**：真機模式下系統對干擾無先驗知識、
+      // 也不擁有基地台座標（modem 只回報 PCI），畫出來就是宣稱不知道的事。
+      const health = await fetch(`${API}/healthz`).then((r) => r.json()).catch(() => ({}));
+      const isSim = health.link_source === "simulated";
+      setSimulated(isSim);
+      if (!isSim) return;
+
       const [zones, cells] = await Promise.all([
         fetch(`${API}/api/zones`).then((r) => r.json()).catch(() => []),
         fetch(`${API}/api/cells`).then((r) => r.json()).catch(() => []),
@@ -74,11 +105,11 @@ export default function MapView() {
       map.addLayer({
         id: "zones-fill", type: "fill", source: "zones",
         paint: { "fill-color": "#a01818", "fill-opacity": 0.14 },
-      });
+      }, "trail-pt");   // 插在尾跡下層：量測畫在假設之上
       map.addLayer({
         id: "zones-line", type: "line", source: "zones",
         paint: { "line-color": "#a01818", "line-width": 2, "line-dasharray": [2, 2] },
-      });
+      }, "trail-pt");
 
       map.addSource("cells", {
         type: "geojson",
@@ -97,28 +128,7 @@ export default function MapView() {
           "circle-radius": 6, "circle-color": "#2a78d6",
           "circle-stroke-width": 2, "circle-stroke-color": "#fcfcfb",
         },
-      });
-
-      // 飛行軌跡：依鏈路健康分級上色（門檻同 backend 事件門檻）
-      map.addSource("trail", {
-        type: "geojson",
-        data: { type: "FeatureCollection", features: [] },
-      });
-      map.addLayer({
-        id: "trail-pt", type: "circle", source: "trail",
-        paint: {
-          "circle-radius": 4,
-          "circle-color": [
-            "match", ["get", "cls"],
-            ...LINK_CLASSES.flatMap((c) => [c.key, c.color]),
-            "#898781",
-          ] as any,
-          // 不描邊：5Hz 推送下點距不到 1px，任何描邊都會把前一點的填色蓋掉，
-          // 整條尾跡變成描邊色（實際發生過——2026-08-04 截圖整條變深色）。
-          // 高密度點不描邊會融合成連續色線，分級轉換處自然出現色變，正是要的效果。
-          "circle-stroke-width": 0,
-        },
-      });
+      }, "trail-pt");
     });
 
     return () => map.remove();
@@ -170,12 +180,14 @@ export default function MapView() {
             {c.label}
           </div>
         ))}
-        <div className="row">
-          <span className="dot" style={{ background: "#a01818", opacity: 0.45 }} />
-          干擾區
-          <span className="dot" style={{ background: "#2a78d6" }} />
-          gNB 基地台
-        </div>
+        {simulated && (
+          <div className="row">
+            <span className="dot" style={{ background: "#a01818", opacity: 0.45 }} />
+            干擾區（模擬假設）
+            <span className="dot" style={{ background: "#2a78d6" }} />
+            gNB 基地台
+          </div>
+        )}
       </div>
     </div>
   );

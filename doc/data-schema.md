@@ -23,6 +23,7 @@ interference_zones   （干擾區標注，研究場景設定）
 |---|---|---|
 | RF 層 | `rsrp` `rsrq` `sinr` `cqi` | SINR 是干擾研究主指標 |
 | Cell | `pci` `cell_id` `band` `nr_mode` | `pci` 是 Physical Cell ID（會重複使用）；`cell_id` 是 modem 回報的全域識別碼 NCI/CGI，模擬資料為 NULL。換手不在研究範圍（無人機 = 一台 UE，由 modem 與網路側處理），只記錄不發事件 |
+| 干擾標注 | `in_interference_zone` | **模擬專用**：模擬器對照 `interference_zones`（它自己的輸入）標的。真機階段系統對干擾無先驗知識，此欄為 NULL；干擾的空間分布由實測 SINR 軌跡揭露，是產出不是輸入 |
 | 端到端 | `rtt_ms` `jitter_ms` `packet_loss_pct` `throughput_up/down_kbps` | RF 劣化如何反映到應用層 |
 | 空間 | `lat` `lon` `alt_rel` | **刻意反正規化**：空間分析／熱度圖不必與 telemetry 做時間 join |
 | 標注 | `in_interference_zone` `source` | source = simulated / modem，模擬與實測資料可共存、可過濾 |
