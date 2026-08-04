@@ -24,7 +24,7 @@ export interface UavEvent {
   type: string; detail: Record<string, unknown>;
 }
 
-export interface TrailPoint { lat: number; lon: number; sinr: number | null }
+export interface TrailPoint { lat: number; lon: number; sinr: number | null; alt: number | null }
 
 const TRAIL_MAX = 1200; // 1Hz 入庫、5Hz 推送下約 4 分鐘的尾跡
 
@@ -50,7 +50,7 @@ export const useUavStore = create<UavStore>((set) => ({
     set((s) => {
       const trail =
         t.lat != null && t.lon != null
-          ? [...s.trail, { lat: t.lat, lon: t.lon, sinr: t.link?.sinr ?? null }].slice(-TRAIL_MAX)
+          ? [...s.trail, { lat: t.lat, lon: t.lon, sinr: t.link?.sinr ?? null, alt: t.alt_rel }].slice(-TRAIL_MAX)
           : s.trail;
       const sinrHistory =
         t.link?.sinr != null ? [...s.sinrHistory, t.link.sinr].slice(-120) : s.sinrHistory;

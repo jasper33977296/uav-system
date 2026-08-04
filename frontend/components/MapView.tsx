@@ -17,6 +17,34 @@ const HOME: [number, number] = [8.5456, 47.3977]; // PX4 SITL 預設起飛點
 // 其餘圖層順序不動。
 const CANVAS = "#14181c";
 
+const M_LAT = 110574;                       // 一度緯度的公尺數
+const mLon = (lat: number) => 111320 * Math.cos((lat * Math.PI) / 180);
+
+/** 地面網格：無底圖時的地面基準。每 stepM 一條線，覆蓋 ±halfM。 */
+function groundGrid(lat: number, lon: number, halfM = 400, stepM = 50): GeoJSON.FeatureCollection {
+  const feats: GeoJSON.Feature[] = [];
+  const line = (a: [number, number], b: [number, number]): GeoJSON.Feature => ({
+    type: "Feature", properties: {},
+    geometry: { type: "LineString", coordinates: [a, b] },
+  });
+  for (let m = -halfM; m <= halfM; m += stepM) {
+    feats.push(line([lon + m / mLon(lat), lat - halfM / M_LAT],
+                    [lon + m / mLon(lat), lat + halfM / M_LAT]));
+    feats.push(line([lon - halfM / mLon(lat), lat + m / M_LAT],
+                    [lon + halfM / mLon(lat), lat + m / M_LAT]));
+  }
+  return { type: "FeatureCollection", features: feats };
+}
+
+/** 以點為中心的小方形（3D 軌跡柱的底面） */
+function squareAt(lat: number, lon: number, halfM = 1.6): GeoJSON.Polygon {
+  const dy = halfM / M_LAT, dx = halfM / mLon(lat);
+  return { type: "Polygon", coordinates: [[
+    [lon - dx, lat - dy], [lon + dx, lat - dy],
+    [lon + dx, lat + dy], [lon - dx, lat + dy], [lon - dx, lat - dy],
+  ]] };
+}
+
 /** 以中心點/半徑產生圓形 polygon（干擾區顯示用） */
 function circlePolygon(lat: number, lon: number, radiusM: number): GeoJSON.Feature {
   const pts: [number, number][] = [];
@@ -43,6 +71,8 @@ export default function MapView() {
       container: containerRef.current!,
       center: HOME,
       zoom: 15,
+      pitch: 55,                 // 3D 傾斜視角：高度差才看得出來（拖曳右鍵可調）
+      maxPitch: 75,
       style: {
         version: 8,
         sources: {
@@ -58,6 +88,29 @@ export default function MapView() {
     mapRef.current = map;
 
     map.on("load", async () => {
+      // 地面基準：無底圖時「地在哪裡」由網格回答，50m 一格（配合比例尺讀距離）。
+      map.addSource("grid", { type: "geojson", data: groundGrid(HOME[1], HOME[0]) });
+      map.addLayer({
+        id: "grid", type: "line", source: "grid",
+        paint: { "line-color": "#232a31", "line-width": 1 },
+      });
+      // 起飛點（雙圈標記）：3D 視角下的地面錨點
+      map.addSource("home", {
+        type: "geojson",
+        data: { type: "Feature", properties: {}, geometry: { type: "Point", coordinates: HOME } },
+      });
+      map.addLayer({
+        id: "home-ring", type: "circle", source: "home",
+        paint: {
+          "circle-radius": 10, "circle-color": "transparent",
+          "circle-stroke-width": 2, "circle-stroke-color": "#898781",
+        },
+      });
+      map.addLayer({
+        id: "home-dot", type: "circle", source: "home",
+        paint: { "circle-radius": 3, "circle-color": "#898781" },
+      });
+
       // 飛行軌跡：依鏈路健康分級上色（門檻同 backend 事件門檻）。
       // 兩種模式都要有——真機模式下它就是唯一的「場域圖」：
       // 干擾的空間分布由實測 SINR 軌跡自己揭露。
@@ -78,6 +131,25 @@ export default function MapView() {
           // 整條尾跡變成描邊色（實際發生過——2026-08-04 截圖整條變深色）。
           // 高密度點不描邊會融合成連續色線，分級轉換處自然出現色變。
           "circle-stroke-width": 0,
+        },
+      });
+
+      // 3D 軌跡柱：把每個取樣點拉成「地面到飛行高度」的細柱，顏色同分級。
+      // 地面的 trail-pt 因此兼任「軌跡投影」——柱頂是航跡、柱底是投影，
+      // 兩者間的高度差在傾斜視角下直接可讀。
+      map.addSource("trail3d", { type: "geojson",
+        data: { type: "FeatureCollection", features: [] } });
+      map.addLayer({
+        id: "trail3d", type: "fill-extrusion", source: "trail3d",
+        paint: {
+          "fill-extrusion-color": [
+            "match", ["get", "cls"],
+            ...LINK_CLASSES.flatMap((c) => [c.key, c.color]),
+            "#898781",
+          ] as any,
+          "fill-extrusion-height": ["get", "h"],
+          "fill-extrusion-base": 0,
+          "fill-extrusion-opacity": 0.55,
         },
       });
 
@@ -165,6 +237,22 @@ export default function MapView() {
             geometry: { type: "Point", coordinates: [p.lon, p.lat] },
           })),
         });
+
+        // 3D 柱隔 3 點取一柱：5Hz 下柱距約 3m，視覺已連續，幾何量省 2/3
+        const src3d = map.getSource("trail3d") as maplibregl.GeoJSONSource | undefined;
+        src3d?.setData({
+          type: "FeatureCollection",
+          features: s.trail
+            .filter((_, i) => i % 3 === 0)
+            .map((p) => ({
+              type: "Feature",
+              properties: {
+                cls: p.sinr == null ? "unknown" : classifySinr(p.sinr).key,
+                h: p.alt ?? 0,
+              },
+              geometry: squareAt(p.lat, p.lon),
+            })),
+        });
       }),
     []
   );
@@ -180,6 +268,10 @@ export default function MapView() {
             {c.label}
           </div>
         ))}
+        <div className="row">
+          <span className="dot" style={{ background: "transparent", border: "1.5px solid #898781" }} />
+          起飛點（地面基準）
+        </div>
         {simulated && (
           <div className="row">
             <span className="dot" style={{ background: "#a01818", opacity: 0.45 }} />

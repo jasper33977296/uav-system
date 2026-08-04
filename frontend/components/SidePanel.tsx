@@ -55,7 +55,7 @@ export default function SidePanel() {
       </div>
 
       <div className="card">
-        <h3>5G 鏈路品質</h3>
+        <h3>無人機訊號品質</h3>
         <div className="hero">
           <span className="num">{fmt(link?.sinr)}</span>
           <span className="unit">dB SINR</span>
@@ -90,7 +90,7 @@ export default function SidePanel() {
         </div>
       </div>
 
-      <div className="card">
+      <div className="card card-grow">
         <h3>事件</h3>
         <div className="events">
           {events.length === 0 && <div className="empty">尚無事件</div>}

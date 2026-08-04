@@ -7,7 +7,7 @@ import { useTelemetry } from "@/lib/useTelemetry";
 
 const TABS = [
   { href: "/", label: "即時監控" },
-  { href: "/flights", label: "架次" },
+  { href: "/drones", label: "無人機" },
   { href: "/scene", label: "場景" },
 ];
 
