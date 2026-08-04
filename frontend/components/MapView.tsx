@@ -8,6 +8,15 @@ import { useUavStore } from "@/lib/store";
 
 const HOME: [number, number] = [8.5456, 47.3977]; // PX4 SITL 預設起飛點
 
+// 地圖畫布色。目前刻意**不放底圖**（設計決定，2026-08-04）：
+//  - SITL 場景在蘇黎世，OSM 街圖沒有研究意義，反而增加視覺噪音
+//  - 不抓外部 tile → 地面站離線（場域實測常態）也完全可用
+//  - 深色畫布讓四段上色的軌跡對比最好
+// 之後要加底圖（例如台灣場域用國土測繪中心 NLSC 正射影像），
+// 在 style.sources 加 raster source、layers **最前面**插 raster layer 即可，
+// 其餘圖層順序不動。
+const CANVAS = "#14181c";
+
 /** 以中心點/半徑產生圓形 polygon（干擾區顯示用） */
 function circlePolygon(lat: number, lon: number, radiusM: number): GeoJSON.Feature {
   const pts: [number, number][] = [];
@@ -35,16 +44,15 @@ export default function MapView() {
       style: {
         version: 8,
         sources: {
-          osm: {
-            type: "raster",
-            tiles: ["https://tile.openstreetmap.org/{z}/{x}/{y}.png"],
-            tileSize: 256,
-            attribution: "© OpenStreetMap contributors",
-          },
+          // ← 底圖插槽：需要時在此加 raster source（見檔頭 CANVAS 註解）
         },
-        layers: [{ id: "osm", type: "raster", source: "osm" }],
+        layers: [
+          { id: "canvas", type: "background", paint: { "background-color": CANVAS } },
+        ],
       },
     });
+    // 無底圖時距離感只剩比例尺，必加（干擾區半徑 120m 這類尺度要對得上）
+    map.addControl(new maplibregl.ScaleControl({ maxWidth: 120, unit: "metric" }), "bottom-right");
     mapRef.current = map;
 
     map.on("load", async () => {
@@ -65,11 +73,11 @@ export default function MapView() {
       });
       map.addLayer({
         id: "zones-fill", type: "fill", source: "zones",
-        paint: { "fill-color": "#d03b3b", "fill-opacity": 0.1 },
+        paint: { "fill-color": "#a01818", "fill-opacity": 0.14 },
       });
       map.addLayer({
         id: "zones-line", type: "line", source: "zones",
-        paint: { "line-color": "#d03b3b", "line-width": 2, "line-dasharray": [2, 2] },
+        paint: { "line-color": "#a01818", "line-width": 2, "line-dasharray": [2, 2] },
       });
 
       map.addSource("cells", {
@@ -105,8 +113,10 @@ export default function MapView() {
             ...LINK_CLASSES.flatMap((c) => [c.key, c.color]),
             "#898781",
           ] as any,
-          "circle-stroke-width": 1,
-          "circle-stroke-color": "rgba(252,252,251,0.6)",
+          // 描邊用畫布色：重疊的軌跡點之間出現「畫布縫」才分得開；
+          // 白色 halo 在深色畫布上是發光效果，反而糊掉相鄰點的邊界
+          "circle-stroke-width": 1.5,
+          "circle-stroke-color": CANVAS,
         },
       });
     });
@@ -161,7 +171,7 @@ export default function MapView() {
           </div>
         ))}
         <div className="row">
-          <span className="dot" style={{ background: "#d03b3b", opacity: 0.35 }} />
+          <span className="dot" style={{ background: "#a01818", opacity: 0.45 }} />
           干擾區
           <span className="dot" style={{ background: "#2a78d6" }} />
           gNB 基地台
