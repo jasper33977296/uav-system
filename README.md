@@ -7,7 +7,7 @@
 
 ```
 backend/    FastAPI + MAVSDK：遙測接收、5G 鏈路模擬、WebSocket 廣播、API
-frontend/   Next.js + MapLibre：即時地圖監控、SINR 上色軌跡、5G 儀表板
+frontend/   Next.js + MapLibre + three.js：3D 即時監控、架次回放、機隊與路徑管理
 db/init/    TimescaleDB schema（容器首次啟動自動執行）
 doc/        系統設計文件（架構、schema、前端設計、QGC 整合、機上量測回傳）
 missions/   QGroundControl .plan 航線檔（研究用固定航線）
@@ -30,17 +30,23 @@ progress/   開發進度現況 + 逐次開發紀錄 log/
 
 ```bash
 ./scripts/setup.sh          # 裝 Docker、backend venv、frontend 套件、挑選 port
+docker compose up -d        # 全部服務：DB + SITL + backend + frontend
 ```
 
-安裝完分三個終端啟動（細節見 [scripts/README.md](scripts/README.md)）：
+**開發也是這樣跑**（2026-08-04 起）：backend/frontend 容器掛載原始碼並
+熱重載，改檔案即生效；`restart: unless-stopped` 讓服務不依賴任何終端
+session，機器重開自動復活。前端 `http://<主機IP>:33000`（區網可直連，
+API 位址自動推導）。
+
+host 端腳本（`scripts/dev-*.sh`）保留給需要單獨跑某個服務除錯時用。
+
+測試飛行：
 
 ```bash
-./scripts/dev-up.sh         # 1. TimescaleDB + PX4 SITL 容器
-./scripts/dev-backend.sh    # 2. backend  → http://localhost:38000
-./scripts/dev-frontend.sh   # 3. frontend → http://localhost:33000
+backend/.venv/bin/python scripts/test-flight.py    # 直線穿越干擾區
+backend/.venv/bin/python scripts/fly-mission.py    # 以 QGC 身分上傳並執行 .plan 任務
+backend/.venv/bin/python scripts/fly-mission.py missions/complex-survey.plan  # 複雜航線
 ```
-
-全部進 Docker（不做前端開發時）：`docker compose up -d`
 
 ### 連接埠慣例
 

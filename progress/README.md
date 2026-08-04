@@ -15,19 +15,24 @@
 | 2 | 歷史回放頁（軌跡上色 + SINR/RTT 時序圖）| ✅ 完成並實測 | /replay/[id]：3D 懸浮絲帶＋雙圖時間軸＋scrubber |
 | 3 | ~~任務規劃 UI~~ → **QGC 任務擷取與疊圖** | ✅ 完成並實測 | GET /api/mission/current 自機上唯讀讀回；灰色懸浮絲帶＋地面虛線疊圖 |
 | 4 | ~~前端干擾區編輯~~ | ✂️ 已移除 | 場域物件不存在於系統認知（2026-08-04 釐清），干擾分布由實測軌跡揭露 |
-| 5 | 真機：機上量測回傳、影像 WebRTC | 🔶 地面站側完成 | push 端點＋補傳＋失聯偵測已實測；機上 ROS node 待硬體（RB5）到位，見 [doc/onboard-telemetry.md](../doc/onboard-telemetry.md) |
+| 5 | 真機：機上量測回傳、影像 WebRTC | 🔶 地面站側完成 | 機上 ROS node 待硬體（RB5）；上機首驗：AT+QENG 的 SINR 是否隨已知干擾下降 |
 
 ## 各模組現況
 
 | 模組 | 完成度 | 說明 |
 |---|---|---|
-| `backend/app/ingest.py` | 可用 | MAVSDK 六路訂閱、armed↔disarmed 切分 session |
-| `backend/app/link_sim.py` | 可用 | 開發鷹架（不擬真）；換手邊際防抖，見 [#002](../issues/002-handover-event-flapping.md) |
+| `backend/app/ingest.py` | 可用 | MAVSDK 七路訂閱、armed↔disarmed 切分架次、模組層共享 System |
+| `backend/app/link_events.py` | 可用 | 三態鏈路狀態機，模擬／真機共用 |
+| `backend/app/link_sim.py` | 可用 | 開發鷹架（不擬真）；換手邊際防抖 |
+| `backend/app/api.py` | 可用 | 場景/架次/事件 + 無人機生命週期 + 任務庫 + 機上量測 push + 任務讀回 |
 | `backend/app/main.py` | 可用 | armed gate＋雙模式分工（simulated 取樣／modem 只寫 telemetry）|
-| `backend/app/link_events.py` | 可用 | 三態鏈路狀態機，模擬與真機兩路共用 |
-| `backend/app/api.py` | 部分 | 另有機上量測 push 端點（live/batch，冪等＋架次反查）；missions 未做 |
-| `db/init/01_schema.sql` | 可用 | 兩個 hypertable + seed 場景，尚無 retention / continuous aggregate |
-| `frontend` 即時監控頁 | 可用 | 地圖 + 側欄；`/missions`、`/flights/[id]` 未建 |
+| `db/init/01_schema.sql` | 可用 | 兩個 hypertable + 任務庫 + 冪等去重索引；尚無 retention |
+| 前端 `/` 即時監控 | 可用 | 3D 懸浮絲帶＋球體機體＋任務疊圖＋地面網格；失聯 UI 未做 |
+| 前端 `/drones` | 可用 | 註冊／刪除／架次統計，點列進回放 |
+| 前端 `/replay/[id]` | 可用 | 3D 絲帶＋方向箭頭＋雙圖時間軸＋球體游標 |
+| 前端 `/missions` | 可用 | .plan 上傳／機上讀回／顯示於即時頁切換 |
+| `frontend/lib/geo.ts`、`components/droneLayer.ts` | 可用 | 3D 幾何與 three.js 球體層（多機結構就緒）|
+| `scripts/` | 可用 | setup／dev／test-flight／fly-mission／fake-onboard-node |
 
 ## 環境現況
 
