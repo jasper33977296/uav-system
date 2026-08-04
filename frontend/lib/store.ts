@@ -37,6 +37,7 @@ interface UavStore {
   setLive: (t: Telemetry) => void;
   setWsConnected: (v: boolean) => void;
   pushEvent: (e: UavEvent) => void;
+  seedEvents: (es: UavEvent[]) => void;
 }
 
 export const useUavStore = create<UavStore>((set) => ({
@@ -57,4 +58,10 @@ export const useUavStore = create<UavStore>((set) => ({
     }),
   setWsConnected: (v) => set({ wsConnected: v }),
   pushEvent: (e) => set((s) => ({ events: [e, ...s.events].slice(0, 100) })),
+  // 開頁補歷史用：只在 WS 事件先到時去重（以 id 為準），不覆蓋已收到的
+  seedEvents: (es) =>
+    set((s) => {
+      const seen = new Set(s.events.map((e) => e.id));
+      return { events: [...s.events, ...es.filter((e) => !seen.has(e.id))].slice(0, 100) };
+    }),
 }));

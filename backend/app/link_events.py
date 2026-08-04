@@ -53,4 +53,6 @@ async def transition(m: dict) -> None:
         live.drone_id, live.session_id, severity, type_,
         {"sinr": sinr, "in_zone": m.get("in_interference_zone"), "from": state},
     )
-    await manager.broadcast({"type": "event", **ev})
+    # 事件要巢狀包住，不能 {"type": "event", **ev} 展開——ev 自帶 type 欄位
+    # （link_lost 等），會把外層的 "type": "event" 蓋掉，前端因此永遠比對不到。
+    await manager.broadcast({"type": "event", "event": ev})

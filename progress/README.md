@@ -11,7 +11,7 @@
 
 | # | 階段 | 狀態 | 備註 |
 |---|---|---|---|
-| 1 | 資料流骨架：SITL → backend → DB + WS → 前端即時地圖 | ✅ 完成並實測 | 2026-08-03 首飛跑通全鏈；前端 UI 尚未目視確認 |
+| 1 | 資料流骨架：SITL → backend → DB + WS → 前端即時地圖 | ✅ 完成並實測 | 2026-08-03 首飛跑通全鏈；2026-08-04 前端 UI 已目視確認（headless Chromium 截圖，尾跡四段上色與事件流均正常） |
 | 2 | 歷史回放頁（軌跡上色 + SINR/RTT 時序圖）| ⬜ 未開始 | 後端 `GET /api/sessions/{id}/track` 已就緒 |
 | 3 | ~~任務規劃 UI~~ → **QGC 任務擷取與疊圖** | ⬜ 未開始 | 已改寫，見 [doc/qgc-integration.md](../doc/qgc-integration.md)；整合機制已實測驗證 |
 | 4 | 前端干擾區編輯 | ⬜ 未開始 | `POST/DELETE /api/zones` 已就緒，缺前端畫圈 UI |

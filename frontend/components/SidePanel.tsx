@@ -118,7 +118,7 @@ export default function SidePanel() {
                 className="dot"
                 style={{
                   background:
-                    e.severity === "critical" ? "#d03b3b" : e.severity === "warning" ? "#fab219" : "#898781",
+                    e.severity === "critical" ? "#a01818" : e.severity === "warning" ? "#fab219" : "#898781",
                 }}
               />
               <time>{new Date(e.time).toLocaleTimeString("zh-TW", { hour12: false })}</time>

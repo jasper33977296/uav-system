@@ -113,10 +113,10 @@ export default function MapView() {
             ...LINK_CLASSES.flatMap((c) => [c.key, c.color]),
             "#898781",
           ] as any,
-          // 描邊用畫布色：重疊的軌跡點之間出現「畫布縫」才分得開；
-          // 白色 halo 在深色畫布上是發光效果，反而糊掉相鄰點的邊界
-          "circle-stroke-width": 1.5,
-          "circle-stroke-color": CANVAS,
+          // 不描邊：5Hz 推送下點距不到 1px，任何描邊都會把前一點的填色蓋掉，
+          // 整條尾跡變成描邊色（實際發生過——2026-08-04 截圖整條變深色）。
+          // 高密度點不描邊會融合成連續色線，分級轉換處自然出現色變，正是要的效果。
+          "circle-stroke-width": 0,
         },
       });
     });
