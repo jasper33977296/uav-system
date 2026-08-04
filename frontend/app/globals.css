@@ -167,3 +167,48 @@ body {
 .table td.num { text-align: right; }
 .table th.num { text-align: right; }
 .table tr:hover td { background: var(--page); }
+
+/* 註冊表單 / 刪除 */
+.form-row { display: flex; gap: 8px; flex-wrap: wrap; }
+.form-row input {
+  flex: 1; min-width: 180px; font-size: 13px; color: var(--ink);
+  background: var(--page); border: 1px solid var(--hairline);
+  border-radius: 6px; padding: 7px 10px;
+}
+.form-row button, .btn-danger, .btn-plain {
+  font-size: 13px; border-radius: 6px; padding: 7px 14px; cursor: pointer;
+  background: var(--surface); color: var(--ink); border: 1px solid var(--hairline);
+}
+.form-row button:disabled, .btn-danger:disabled { opacity: 0.4; cursor: not-allowed; }
+.btn-danger { color: #e05e5e; border-color: rgba(208, 59, 59, 0.4); padding: 4px 12px; }
+.btn-danger:hover:not(:disabled) { background: rgba(208, 59, 59, 0.12); }
+.form-err { margin-top: 8px; font-size: 12px; color: #e05e5e; }
+.drone-head .spacer { flex: 1; }
+.row-link { cursor: pointer; }
+
+/* 回放頁 */
+.replay { height: 100%; display: flex; flex-direction: column; }
+.replay-head {
+  flex: none; display: flex; align-items: center; gap: 12px;
+  padding: 8px 14px; border-bottom: 1px solid var(--hairline);
+}
+.replay-head .meta { font-size: 12px; color: var(--muted); }
+.btn-plain { padding: 4px 10px; }
+.replay-map { flex: 1; min-height: 0; position: relative; }
+.replay-map .maplibregl-map { position: absolute; inset: 0; }
+.timeline {
+  flex: none; border-top: 1px solid var(--hairline); background: var(--surface);
+  padding: 10px 14px; display: flex; flex-direction: column; gap: 8px;
+}
+.chart { position: relative; }
+.chart svg { display: block; width: 100%; height: auto; }
+.chart-label {
+  position: absolute; top: 2px; left: 4px; font-size: 10px; color: var(--muted);
+  text-transform: uppercase; letter-spacing: 0.04em;
+}
+.scrub-row { display: flex; align-items: center; gap: 12px; }
+.scrub-row input[type="range"] { flex: 1; accent-color: var(--series-1); }
+.scrub-read {
+  font-size: 12px; color: var(--ink-2); font-variant-numeric: tabular-nums;
+  display: inline-flex; align-items: center; white-space: nowrap;
+}

@@ -1,21 +1,21 @@
 "use client";
 import maplibregl from "maplibre-gl";
 import "maplibre-gl/dist/maplibre-gl.css";
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useRef } from "react";
 
-import { API, LINK_CLASSES, classifySinr } from "@/lib/signal";
+import { LINK_CLASSES, classifySinr } from "@/lib/signal";
 import { useUavStore } from "@/lib/store";
 
 const HOME: [number, number] = [8.5456, 47.3977]; // PX4 SITL 預設起飛點
 
-// 地圖畫布色。目前刻意**不放底圖**（設計決定，2026-08-04）：
-//  - SITL 場景在蘇黎世，OSM 街圖沒有研究意義，反而增加視覺噪音
+// 地圖畫布色。刻意**不放底圖**（設計決定，2026-08-04）：
+//  - 場域物件（基地台、干擾區等）不存在於系統認知中——系統對干擾無先驗知識，
+//    鏈路品質的空間分布由實測軌跡自己揭露（那是研究產出物，不是輸入）
 //  - 不抓外部 tile → 地面站離線（場域實測常態）也完全可用
-//  - 深色畫布讓四段上色的軌跡對比最好
-// 之後要加底圖（例如台灣場域用國土測繪中心 NLSC 正射影像），
-// 在 style.sources 加 raster source、layers **最前面**插 raster layer 即可，
-// 其餘圖層順序不動。
+// 之後要加底圖（例如 NLSC 正射影像），在 style.sources 加 raster source、
+// layers 最前面插 raster layer 即可，其餘圖層順序不動。
 const CANVAS = "#14181c";
+const DRONE_COLOR = "#3987e5";
 
 const M_LAT = 110574;                       // 一度緯度的公尺數
 const mLon = (lat: number) => 111320 * Math.cos((lat * Math.PI) / 180);
@@ -36,26 +36,26 @@ function groundGrid(lat: number, lon: number, halfM = 400, stepM = 50): GeoJSON.
   return { type: "FeatureCollection", features: feats };
 }
 
-/** 以點為中心的小方形（3D 軌跡柱的底面） */
-function squareAt(lat: number, lon: number, halfM = 1.6): GeoJSON.Polygon {
-  const dy = halfM / M_LAT, dx = halfM / mLon(lat);
-  return { type: "Polygon", coordinates: [[
-    [lon - dx, lat - dy], [lon + dx, lat - dy],
-    [lon + dx, lat + dy], [lon - dx, lat + dy], [lon - dx, lat - dy],
-  ]] };
+/** 以點為中心的正多邊形（3D 柱底／機體底面） */
+function ngonAt(lat: number, lon: number, halfM: number, n = 4): GeoJSON.Polygon {
+  const pts: [number, number][] = [];
+  for (let i = 0; i <= n; i++) {
+    const a = (i / n) * 2 * Math.PI + Math.PI / n;
+    pts.push([lon + (halfM * Math.cos(a)) / mLon(lat), lat + (halfM * Math.sin(a)) / M_LAT]);
+  }
+  return { type: "Polygon", coordinates: [pts] };
 }
 
-/** 以中心點/半徑產生圓形 polygon（干擾區顯示用） */
-function circlePolygon(lat: number, lon: number, radiusM: number): GeoJSON.Feature {
-  const pts: [number, number][] = [];
-  for (let i = 0; i <= 48; i++) {
-    const a = (i / 48) * 2 * Math.PI;
-    pts.push([
-      lon + ((radiusM * Math.cos(a)) / 111320) / Math.cos((lat * Math.PI) / 180),
-      lat + (radiusM * Math.sin(a)) / 110574,
-    ]);
-  }
-  return { type: "Feature", properties: {}, geometry: { type: "Polygon", coordinates: [pts] } };
+/** 無人機 3D 本體：八角柱近似球體，浮在實際飛行高度。
+    MapLibre 沒有球體 primitive，fill-extrusion 八角柱在這個尺寸讀起來就是
+    一顆懸浮機體——升降時整顆上下移動，高度差直接可見。 */
+function droneBall(lat: number, lon: number, alt: number): GeoJSON.Feature {
+  const r = 3.2;
+  return {
+    type: "Feature",
+    properties: { base: Math.max(alt - r, 0), top: Math.max(alt + r, r) },
+    geometry: ngonAt(lat, lon, r, 8),
+  };
 }
 
 export default function MapView() {
@@ -63,15 +63,13 @@ export default function MapView() {
   const mapRef = useRef<maplibregl.Map | null>(null);
   const markerRef = useRef<maplibregl.Marker | null>(null);
   const centeredRef = useRef(false);
-  // 模擬模式才顯示干擾區/gNB 圖層與對應圖例（真機對干擾無先驗知識）
-  const [simulated, setSimulated] = useState(false);
 
   useEffect(() => {
     const map = new maplibregl.Map({
       container: containerRef.current!,
       center: HOME,
       zoom: 15,
-      pitch: 55,                 // 3D 傾斜視角：高度差才看得出來（拖曳右鍵可調）
+      pitch: 55,                 // 3D 傾斜視角：高度差才看得出來（右鍵拖曳可調）
       maxPitch: 75,
       style: {
         version: 8,
@@ -83,18 +81,18 @@ export default function MapView() {
         ],
       },
     });
-    // 無底圖時距離感只剩比例尺，必加（干擾區半徑 120m 這類尺度要對得上）
+    // 無底圖時距離感只剩比例尺，必加
     map.addControl(new maplibregl.ScaleControl({ maxWidth: 120, unit: "metric" }), "bottom-right");
     mapRef.current = map;
 
-    map.on("load", async () => {
-      // 地面基準：無底圖時「地在哪裡」由網格回答，50m 一格（配合比例尺讀距離）。
+    map.on("load", () => {
+      // 地面基準：無底圖時「地在哪裡」由網格回答，50m 一格（配合比例尺讀距離）
       map.addSource("grid", { type: "geojson", data: groundGrid(HOME[1], HOME[0]) });
       map.addLayer({
         id: "grid", type: "line", source: "grid",
         paint: { "line-color": "#232a31", "line-width": 1 },
       });
-      // 起飛點（雙圈標記）：3D 視角下的地面錨點
+      // 起飛點（雙圈標記）：地面錨點
       map.addSource("home", {
         type: "geojson",
         data: { type: "Feature", properties: {}, geometry: { type: "Point", coordinates: HOME } },
@@ -111,9 +109,7 @@ export default function MapView() {
         paint: { "circle-radius": 3, "circle-color": "#898781" },
       });
 
-      // 飛行軌跡：依鏈路健康分級上色（門檻同 backend 事件門檻）。
-      // 兩種模式都要有——真機模式下它就是唯一的「場域圖」：
-      // 干擾的空間分布由實測 SINR 軌跡自己揭露。
+      // 地面軌跡（= 3D 軌跡的投影）：依鏈路健康分級上色
       map.addSource("trail", {
         type: "geojson",
         data: { type: "FeatureCollection", features: [] },
@@ -127,16 +123,12 @@ export default function MapView() {
             ...LINK_CLASSES.flatMap((c) => [c.key, c.color]),
             "#898781",
           ] as any,
-          // 不描邊：5Hz 推送下點距不到 1px，任何描邊都會把前一點的填色蓋掉，
-          // 整條尾跡變成描邊色（實際發生過——2026-08-04 截圖整條變深色）。
-          // 高密度點不描邊會融合成連續色線，分級轉換處自然出現色變。
+          // 不描邊：5Hz 推送下點距不到 1px，描邊會把相鄰點的填色蓋掉
           "circle-stroke-width": 0,
         },
       });
 
-      // 3D 軌跡柱：把每個取樣點拉成「地面到飛行高度」的細柱，顏色同分級。
-      // 地面的 trail-pt 因此兼任「軌跡投影」——柱頂是航跡、柱底是投影，
-      // 兩者間的高度差在傾斜視角下直接可讀。
+      // 3D 軌跡柱：柱頂是航跡、柱底是投影，高度差在傾斜視角下直接可讀
       map.addSource("trail3d", { type: "geojson",
         data: { type: "FeatureCollection", features: [] } });
       map.addLayer({
@@ -153,60 +145,24 @@ export default function MapView() {
         },
       });
 
-      // 干擾區與 gNB 是**模擬專用圖層**：真機模式下系統對干擾無先驗知識、
-      // 也不擁有基地台座標（modem 只回報 PCI），畫出來就是宣稱不知道的事。
-      const health = await fetch(`${API}/healthz`).then((r) => r.json()).catch(() => ({}));
-      const isSim = health.link_source === "simulated";
-      setSimulated(isSim);
-      if (!isSim) return;
-
-      const [zones, cells] = await Promise.all([
-        fetch(`${API}/api/zones`).then((r) => r.json()).catch(() => []),
-        fetch(`${API}/api/cells`).then((r) => r.json()).catch(() => []),
-      ]);
-
-      map.addSource("zones", {
-        type: "geojson",
-        data: {
-          type: "FeatureCollection",
-          features: zones
-            .filter((z: any) => z.enabled)
-            .map((z: any) => circlePolygon(z.center_lat, z.center_lon, z.radius_m)),
-        },
-      });
+      // 無人機 3D 本體：浮在實際高度，升降直接可見
+      map.addSource("drone3d", { type: "geojson",
+        data: { type: "FeatureCollection", features: [] } });
       map.addLayer({
-        id: "zones-fill", type: "fill", source: "zones",
-        paint: { "fill-color": "#a01818", "fill-opacity": 0.14 },
-      }, "trail-pt");   // 插在尾跡下層：量測畫在假設之上
-      map.addLayer({
-        id: "zones-line", type: "line", source: "zones",
-        paint: { "line-color": "#a01818", "line-width": 2, "line-dasharray": [2, 2] },
-      }, "trail-pt");
-
-      map.addSource("cells", {
-        type: "geojson",
-        data: {
-          type: "FeatureCollection",
-          features: cells.map((c: any) => ({
-            type: "Feature",
-            properties: { name: `${c.name} (PCI ${c.pci})` },
-            geometry: { type: "Point", coordinates: [c.lon, c.lat] },
-          })),
-        },
-      });
-      map.addLayer({
-        id: "cells-pt", type: "circle", source: "cells",
+        id: "drone3d", type: "fill-extrusion", source: "drone3d",
         paint: {
-          "circle-radius": 6, "circle-color": "#2a78d6",
-          "circle-stroke-width": 2, "circle-stroke-color": "#fcfcfb",
+          "fill-extrusion-color": DRONE_COLOR,
+          "fill-extrusion-height": ["get", "top"],
+          "fill-extrusion-base": ["get", "base"],
+          "fill-extrusion-opacity": 0.95,
         },
-      }, "trail-pt");
+      });
     });
 
     return () => map.remove();
   }, []);
 
-  // 即時更新：無人機位置 marker + 軌跡
+  // 即時更新：無人機 3D 本體 + 地面航向投影 + 軌跡
   useEffect(
     () =>
       useUavStore.subscribe((s) => {
@@ -214,6 +170,7 @@ export default function MapView() {
         const t = s.live;
         if (!map || !t || t.lat == null || t.lon == null) return;
 
+        // 地面投影三角形表示航向（3D 機體不易表達朝向，兩者互補）
         if (!markerRef.current) {
           const el = document.createElement("div");
           el.className = "drone-marker";
@@ -228,8 +185,12 @@ export default function MapView() {
           map.jumpTo({ center: [t.lon, t.lat], zoom: 16 });
         }
 
-        const src = map.getSource("trail") as maplibregl.GeoJSONSource | undefined;
-        src?.setData({
+        (map.getSource("drone3d") as maplibregl.GeoJSONSource | undefined)?.setData({
+          type: "FeatureCollection",
+          features: [droneBall(t.lat, t.lon, t.alt_rel ?? 0)],
+        });
+
+        (map.getSource("trail") as maplibregl.GeoJSONSource | undefined)?.setData({
           type: "FeatureCollection",
           features: s.trail.map((p) => ({
             type: "Feature",
@@ -239,8 +200,7 @@ export default function MapView() {
         });
 
         // 3D 柱隔 3 點取一柱：5Hz 下柱距約 3m，視覺已連續，幾何量省 2/3
-        const src3d = map.getSource("trail3d") as maplibregl.GeoJSONSource | undefined;
-        src3d?.setData({
+        (map.getSource("trail3d") as maplibregl.GeoJSONSource | undefined)?.setData({
           type: "FeatureCollection",
           features: s.trail
             .filter((_, i) => i % 3 === 0)
@@ -250,7 +210,7 @@ export default function MapView() {
                 cls: p.sinr == null ? "unknown" : classifySinr(p.sinr).key,
                 h: p.alt ?? 0,
               },
-              geometry: squareAt(p.lat, p.lon),
+              geometry: ngonAt(p.lat, p.lon, 1.6),
             })),
         });
       }),
@@ -269,17 +229,13 @@ export default function MapView() {
           </div>
         ))}
         <div className="row">
+          <span className="dot" style={{ background: DRONE_COLOR }} />
+          無人機（懸浮於實際高度）
+        </div>
+        <div className="row">
           <span className="dot" style={{ background: "transparent", border: "1.5px solid #898781" }} />
           起飛點（地面基準）
         </div>
-        {simulated && (
-          <div className="row">
-            <span className="dot" style={{ background: "#a01818", opacity: 0.45 }} />
-            干擾區（模擬假設）
-            <span className="dot" style={{ background: "#2a78d6" }} />
-            gNB 基地台
-          </div>
-        )}
       </div>
     </div>
   );

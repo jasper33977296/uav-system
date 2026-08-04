@@ -1,5 +1,6 @@
 "use client";
-import { useEffect, useState } from "react";
+import { useRouter } from "next/navigation";
+import { useCallback, useEffect, useState } from "react";
 
 import { API } from "@/lib/signal";
 import { useUavStore } from "@/lib/store";
@@ -13,7 +14,7 @@ interface Session {
   started_at: string; ended_at: string | null;
   summary: {
     avg_sinr?: number | null; min_sinr?: number | null; avg_rtt_ms?: number | null;
-    max_alt_rel?: number | null; samples_total?: number; samples_in_zone?: number;
+    max_alt_rel?: number | null; samples_total?: number;
   } | null;
 }
 
@@ -26,11 +27,15 @@ function duration(a: string, b: string | null): string {
 }
 
 export default function Drones() {
+  const router = useRouter();
   const [drones, setDrones] = useState<Drone[]>([]);
   const [sessions, setSessions] = useState<Session[]>([]);
+  const [name, setName] = useState("");
+  const [url, setUrl] = useState("");
+  const [err, setErr] = useState<string | null>(null);
   const live = useUavStore((s) => s.live);
 
-  useEffect(() => {
+  const reload = useCallback(() => {
     fetch(`${API}/api/drones`).then((r) => r.json()).then(setDrones).catch(() => {});
     fetch(`${API}/api/sessions`)
       .then((r) => r.json())
@@ -45,9 +50,58 @@ export default function Drones() {
       )
       .catch(() => {});
   }, []);
+  useEffect(reload, [reload]);
+
+  async function register() {
+    setErr(null);
+    const res = await fetch(`${API}/api/drones`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ name: name.trim(), connection_url: url.trim() || null }),
+    });
+    if (!res.ok) {
+      setErr((await res.json()).detail ?? `註冊失敗（${res.status}）`);
+      return;
+    }
+    setName(""); setUrl("");
+    reload();
+  }
+
+  async function remove(d: Drone, sessionCount: number) {
+    const msg =
+      `刪除「${d.name}」？\n\n將一併刪除其 ${sessionCount} 個架次與全部遙測、` +
+      `鏈路量測、事件資料。此操作無法復原。`;
+    if (!window.confirm(msg)) return;
+    setErr(null);
+    const res = await fetch(`${API}/api/drones/${d.id}`, { method: "DELETE" });
+    if (!res.ok) {
+      setErr((await res.json()).detail ?? `刪除失敗（${res.status}）`);
+      return;
+    }
+    reload();
+  }
 
   return (
     <div className="page-pad">
+      {/* 註冊：真機階段用；模擬機由 backend 啟動時自動註冊 */}
+      <div className="card">
+        <h3>註冊無人機</h3>
+        <div className="form-row">
+          <input
+            placeholder="名稱（如 rb5-uav-1）"
+            value={name}
+            onChange={(e) => setName(e.target.value)}
+          />
+          <input
+            placeholder="連線位址（選填，如 udpin://0.0.0.0:14540）"
+            value={url}
+            onChange={(e) => setUrl(e.target.value)}
+          />
+          <button disabled={!name.trim()} onClick={register}>註冊</button>
+        </div>
+        {err && <div className="form-err">{err}</div>}
+      </div>
+
       {drones.map((d) => {
         const mine = sessions.filter((s) => s.drone_id === d.id);
         const isLive = live?.drone_id === d.id;
@@ -65,6 +119,15 @@ export default function Drones() {
               <span className="meta">
                 {d.connection_url ?? ""} · 共 {mine.length} 個架次
               </span>
+              <span className="spacer" />
+              <button
+                className="btn-danger"
+                disabled={isLive}
+                title={isLive ? "連線中的無人機無法刪除" : "刪除無人機與其全部資料"}
+                onClick={() => remove(d, mine.length)}
+              >
+                刪除
+              </button>
             </div>
 
             <table className="table" style={{ marginTop: 10 }}>
@@ -84,7 +147,12 @@ export default function Drones() {
                   <tr><td colSpan={7} className="empty">尚無架次——一次飛行（解鎖到上鎖）＝一個架次</td></tr>
                 )}
                 {mine.map((s) => (
-                  <tr key={s.id}>
+                  <tr
+                    key={s.id}
+                    className="row-link"
+                    title="點擊回放這個架次"
+                    onClick={() => router.push(`/replay/${s.id}`)}
+                  >
                     <td>{new Date(s.started_at).toLocaleString("zh-TW", { hour12: false })}</td>
                     <td>{duration(s.started_at, s.ended_at)}</td>
                     <td className="num">{s.summary?.samples_total ?? "—"}</td>

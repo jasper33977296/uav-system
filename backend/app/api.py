@@ -16,6 +16,50 @@ async def list_drones():
     return [dict(r) for r in await db.pool.fetch("SELECT * FROM drones ORDER BY created_at")]
 
 
+class DroneIn(BaseModel):
+    name: str
+    connection_url: str | None = None
+    note: str | None = None
+
+
+@router.post("/drones")
+async def register_drone(d: DroneIn):
+    """註冊一台無人機（真機階段用；模擬機由 backend 啟動時自動註冊）。"""
+    row = await db.pool.fetchrow(
+        """
+        INSERT INTO drones (name, serial_no, is_simulated, connection_url, status)
+        VALUES ($1, $1, false, $2, 'idle')
+        ON CONFLICT (serial_no) DO NOTHING
+        RETURNING *
+        """,
+        d.name, d.connection_url,
+    )
+    if row is None:
+        raise HTTPException(409, f"名稱 {d.name} 已存在")
+    return dict(row)
+
+
+@router.delete("/drones/{drone_id}")
+async def delete_drone(drone_id: str):
+    """刪除無人機與其**全部**架次、遙測、鏈路與事件資料。不可復原。
+
+    連線中的無人機拒刪：live 迴圈還在用它的 id 寫入，刪了會整路 FK 錯誤；
+    模擬機由系統啟動時自動註冊，刪了重啟也會重新出現。
+    """
+    if live.drone_id == drone_id:
+        raise HTTPException(409, "此無人機目前連線中（模擬機由系統自動註冊），無法刪除")
+    async with db.pool.acquire() as con:
+        async with con.transaction():
+            counts = {}
+            for table in ("telemetry", "link_metrics", "events", "flight_sessions"):
+                r = await con.execute(f"DELETE FROM {table} WHERE drone_id = $1", drone_id)
+                counts[table] = int(r.split()[-1])
+            r = await con.execute("DELETE FROM drones WHERE id = $1", drone_id)
+    if r.split()[-1] == "0":
+        raise HTTPException(404, "無此無人機")
+    return {"deleted": counts}
+
+
 @router.get("/cells")
 async def list_cells():
     return await db.fetch_cells()
@@ -78,8 +122,12 @@ async def session_track(session_id: str):
 
 
 @router.get("/events")
-async def list_events(limit: int = 100):
-    rows = await db.pool.fetch("SELECT * FROM events ORDER BY time DESC LIMIT $1", limit)
+async def list_events(limit: int = 100, session_id: str | None = None):
+    if session_id:
+        rows = await db.pool.fetch(
+            "SELECT * FROM events WHERE session_id = $1 ORDER BY time LIMIT $2", session_id, limit)
+    else:
+        rows = await db.pool.fetch("SELECT * FROM events ORDER BY time DESC LIMIT $1", limit)
     return [dict(r) for r in rows]
 
 
