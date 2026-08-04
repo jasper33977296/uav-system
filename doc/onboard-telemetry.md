@@ -3,7 +3,11 @@
 真機階段，5G 鏈路指標的採集點在**機上**（companion computer 上的 ROS node
 讀 modem），本文定義它如何把資料送回地面站的本系統。
 
-狀態：**設計定案，硬體已確認，尚未實作。**
+狀態：**地面站側已實作並實測通過；機上 ROS node 待實作。**
+
+地面站的兩個 endpoint、schema 去重索引、失聯偵測都已完成，
+並以 `scripts/fake-onboard-node.py`（模擬機上節點，含持久化緩衝與斷線重送）
+配合 SITL 飛行驗證過完整管線。
 
 ## 硬體
 
@@ -146,6 +150,31 @@ Body 即單一樣本物件（格式見下）。回應 `204 No Content`。
 `seq` 是機上單調遞增序號，只用於批次確認，不入庫。
 `source` 由地面站填 `'modem'`。`raw` 存 modem 原始回應，便於事後追查。
 
+## 事件是盡力而為，`link_metrics` 才是權威記錄
+
+鏈路事件由**即時通道**觸發。既然即時通道會靜默丟失，**斷線期間發生的狀態轉換
+就不會有對應的事件**。這是刻意的取捨，不是缺陷——但必須寫清楚，否則之後
+有人會拿事件表當統計來源而得到偏低的計數。
+
+實測（2026-08-03，模擬 25 秒斷線）正好撞上這個情況：
+
+```
+斷線視窗（節點第 76–99 秒）恰好涵蓋飛機飛出干擾區的過程
+  SINR  -2.1 → 1.3 → 2.5 → 8.7 → 7.3     全部在斷線期間，只透過補傳入庫
+  斷線結束後第一筆即時樣本已是 12.0
+
+結果：事件序列為 ok → degraded → lost →(直接) ok
+     缺少 lost → degraded 這個中間轉換
+```
+
+同一趟飛行的 `link_metrics`：**155 筆、0 個資料空洞**，1.3 / 2.5 / 8.7 這些
+中間值全都在裡面。也就是說**資料一筆沒少，只有即時通知降級**——
+需要完整的狀態轉換序列時，從 `link_metrics` 重新推導即可，
+而且能回溯套用到所有歷史架次。
+
+這與 [architecture.md](architecture.md) 既有的原則一致：事件是衍生資料，
+時序表才是原始事實。
+
 ## `session_id` 用時間戳反查
 
 **這是 [issues/004](../issues/004-writes-while-disarmed.md) 的 armed gate
@@ -195,14 +224,30 @@ WHERE drone_id = $1 AND started_at <= $2
 
 ## 對現有程式碼的影響
 
-| 位置 | 改動 |
-|---|---|
-| `main.py:_link_and_db_loop` | 只在 `LINK_SOURCE=simulated` 時運作；modem 模式下入庫改由 API endpoint 負責 |
-| `api.py` | 新增上述兩個 endpoint |
-| `db.py` | `insert_link` 支援指定時間戳與 `ON CONFLICT DO NOTHING`；新增架次反查 |
-| `01_schema.sql` | `link_metrics` 加唯一索引 `(drone_id, time)`；`flight_sessions` 加索引 |
-| `state.py` | 加 `link_last_seen` |
-| 前端 | 失聯狀態顯示 |
+| 位置 | 改動 | 狀態 |
+|---|---|---|
+| `main.py:_link_and_db_loop` | 鏈路取樣與事件只在 `simulated` 時做；telemetry 兩種模式都寫（它來自地面站收到的 MAVLink）| ✅ |
+| `link_events.py` | 狀態機從 main.py 抽出成獨立模組，讓模擬與真機兩條路徑共用（留在 main.py 會使 api.py 反向 import 而循環）| ✅ |
+| `api.py` | 兩個 endpoint | ✅ |
+| `db.py` | `insert_link_sample()` 指定時間戳 + `ON CONFLICT DO NOTHING`；`find_session_at()` 架次反查 | ✅ |
+| `01_schema.sql` | `link_metrics` 加唯一索引 `idx_link_dedup (drone_id, time)`（`flight_sessions` 的 `idx_sessions_drone` 已足夠）| ✅ |
+| `state.py` | `link_state`（兩條路徑共用）、`link_seen_mono` / `link_age_s`（失聯偵測）| ✅ |
+| `scripts/fake-onboard-node.py` | 模擬機上節點，驗證用 | ✅ |
+| 前端 | 失聯狀態顯示 | ⬜ 未做 |
+
+### 實作時踩到的一個坑
+
+`live.link` 會被 WebSocket 廣播出去，所以存進去的東西**必須是 JSON 可序列化的**。
+即時通道原本直接放 `model_dump()` 的結果，其中 `time` 是 `datetime` 物件，
+`json.dumps` 因此拋錯，**整個廣播迴圈靜默死亡**——前端與所有 client 再也收不到
+資料，日誌卻乾乾淨淨。
+
+無聲無息的原因是 lifespan 的 `tasks` list 持有該 task 的強參照，
+asyncio 永遠不會 GC 它，「Task exception was never retrieved」也就永遠不會印出來。
+
+兩處修正：即時通道改用 `model_dump(mode="json")`（批次通道不能改，
+`time` 要保持 `datetime` 才寫得進 `TIMESTAMPTZ`）；廣播迴圈加 try/except
+並記錄例外，讓單次序列化失敗不再讓即時更新永久停擺。
 
 `link_metrics` 的 `source`（`simulated`/`modem`）與 `raw` JSONB 欄位
 當初就是為此保留的，不需新增。

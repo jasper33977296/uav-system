@@ -3,7 +3,7 @@
 專案目前走到哪、下一步做什麼。**這份是現況快照**（改動時直接覆寫），
 逐次的開發紀錄放在 [log/](log/)。
 
-最後更新：2026-08-03
+最後更新：2026-08-04
 
 ## Roadmap 狀態
 
@@ -15,16 +15,17 @@
 | 2 | 歷史回放頁（軌跡上色 + SINR/RTT 時序圖）| ⬜ 未開始 | 後端 `GET /api/sessions/{id}/track` 已就緒 |
 | 3 | ~~任務規劃 UI~~ → **QGC 任務擷取與疊圖** | ⬜ 未開始 | 已改寫，見 [doc/qgc-integration.md](../doc/qgc-integration.md)；整合機制已實測驗證 |
 | 4 | 前端干擾區編輯 | ⬜ 未開始 | `POST/DELETE /api/zones` 已就緒，缺前端畫圈 UI |
-| 5 | 真機：`ModemLinkSource`、影像 WebRTC | ⬜ 未開始 | `sample()` 介面與 16:9 placeholder 已預留 |
+| 5 | 真機：機上量測回傳、影像 WebRTC | 🔶 地面站側完成 | push 端點＋補傳＋失聯偵測已實測；機上 ROS node 待硬體（RB5）到位，見 [doc/onboard-telemetry.md](../doc/onboard-telemetry.md) |
 
 ## 各模組現況
 
 | 模組 | 完成度 | 說明 |
 |---|---|---|
 | `backend/app/ingest.py` | 可用 | MAVSDK 六路訂閱、armed↔disarmed 切分 session |
-| `backend/app/link_sim.py` | 可用 | path loss → RSRP → SINR → 端到端指標；見 [#002](../issues/002-handover-event-flapping.md) |
-| `backend/app/main.py` | 有缺陷 | 鏈路事件邏輯見 [#001](../issues/001-link-lost-event-never-fires.md) |
-| `backend/app/api.py` | 部分 | drones/cells/zones/sessions/events 已有；missions 未做 |
+| `backend/app/link_sim.py` | 可用 | 開發鷹架（不擬真）；換手邊際防抖，見 [#002](../issues/002-handover-event-flapping.md) |
+| `backend/app/main.py` | 可用 | armed gate＋雙模式分工（simulated 取樣／modem 只寫 telemetry）|
+| `backend/app/link_events.py` | 可用 | 三態鏈路狀態機，模擬與真機兩路共用 |
+| `backend/app/api.py` | 部分 | 另有機上量測 push 端點（live/batch，冪等＋架次反查）；missions 未做 |
 | `db/init/01_schema.sql` | 可用 | 兩個 hypertable + seed 場景，尚無 retention / continuous aggregate |
 | `frontend` 即時監控頁 | 可用 | 地圖 + 側欄；`/missions`、`/flights/[id]` 未建 |
 

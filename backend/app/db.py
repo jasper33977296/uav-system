@@ -100,6 +100,55 @@ async def insert_link(s: LiveState) -> None:
     )
 
 
+async def find_session_at(drone_id: str, ts) -> str | None:
+    """回傳涵蓋 ts 這個時刻的架次 id，沒有則 None。
+
+    真機階段機上是 push 且允許補傳，資料抵達時飛機可能早已上鎖，
+    不能用「當前架次」歸屬。用樣本自帶的時間戳反查，語意等同
+    issues/004 的 armed gate，但對補傳資料成立。
+    走 idx_sessions_drone (drone_id, started_at DESC)。
+    """
+    row = await pool.fetchrow(
+        """
+        SELECT id FROM flight_sessions
+        WHERE drone_id = $1 AND started_at <= $2
+          AND (ended_at IS NULL OR ended_at >= $2)
+        ORDER BY started_at DESC LIMIT 1
+        """,
+        drone_id, ts,
+    )
+    return str(row["id"]) if row else None
+
+
+async def insert_link_sample(drone_id: str, session_id: str | None, m: dict) -> bool:
+    """寫入一筆機上送來的鏈路量測，使用樣本自帶的時間戳。
+
+    冪等：重試屬 at-least-once 投遞，同一筆可能送達兩次，
+    以 (drone_id, time) 為天然鍵 DO NOTHING（唯一索引 idx_link_dedup）。
+    回傳是否真的新增（False 表示已存在，機上仍應視為送達成功）。
+    """
+    row = await pool.fetchrow(
+        """
+        INSERT INTO link_metrics (time, drone_id, session_id, lat, lon, alt_rel,
+          rsrp, rsrq, sinr, cqi, pci, cell_id, band, nr_mode,
+          rtt_ms, jitter_ms, packet_loss_pct, throughput_up_kbps, throughput_down_kbps,
+          in_interference_zone, source, raw)
+        VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14,
+                $15, $16, $17, $18, $19, $20, $21, $22)
+        ON CONFLICT (drone_id, time) DO NOTHING
+        RETURNING 1
+        """,
+        m["time"], drone_id, session_id, m.get("lat"), m.get("lon"), m.get("alt_rel"),
+        m.get("rsrp"), m.get("rsrq"), m.get("sinr"), m.get("cqi"),
+        m.get("pci"), m.get("cell_id"), m.get("band"), m.get("nr_mode"),
+        m.get("rtt_ms"), m.get("jitter_ms"), m.get("packet_loss_pct"),
+        m.get("throughput_up_kbps"), m.get("throughput_down_kbps"),
+        m.get("in_interference_zone"), m.get("source", "modem"),
+        json.dumps(m["raw"]) if m.get("raw") is not None else None,
+    )
+    return row is not None
+
+
 async def insert_event(drone_id: str, session_id: str | None,
                        severity: str, type_: str, detail: dict) -> dict:
     row = await pool.fetchrow(

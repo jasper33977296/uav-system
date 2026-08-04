@@ -8,6 +8,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from . import db, ingest
 from .api import router
 from .config import settings
+from .link_events import transition as link_transition
 from .link_sim import SimulatedLinkSource
 from .state import live
 from .ws import manager
@@ -16,66 +17,44 @@ logging.basicConfig(level=logging.INFO, format="%(asctime)s %(name)s %(message)s
 log = logging.getLogger("main")
 
 
-async def _link_transition(state: str, m: dict) -> str:
-    """鏈路狀態機：SINR 位準 → 離散的狀態轉換，回傳新狀態。
-
-    SINR 是連續量、事件是離散點，直接比大小會在干擾區內每秒發一筆重複事件。
-    這裡用 ok / degraded / lost 三態，只在真的跨級時發一次事件。
-
-    每一級的回升都要多 sinr_hysteresis_db 才算數（lost→degraded 要 -2+3=1dB、
-    degraded→ok 要 5+3=8dB），避免 SINR 在門檻附近抖動時來回發事件。
-
-    設計取向是「忠實記錄事實」：每一次跨級都留紀錄（包含從 lost 回到 degraded
-    這種中間轉換），detail 帶上 from 欄位，事件序列可完整還原鏈路狀態變化。
-    不採用 time-to-trigger——那會讓事件時間戳晚於實際發生時刻，而「位置 ↔ 鏈路
-    劣化」的時間對應正是本研究的重點。
-    """
-    sinr = m["sinr"]
-    lost_th, deg_th = settings.sinr_lost_db, settings.sinr_degraded_db
-    hyst = settings.sinr_hysteresis_db
-
-    if sinr < lost_th and state != "lost":
-        new, severity, type_ = "lost", "critical", "link_lost"
-    elif lost_th + hyst <= sinr < deg_th and state == "lost":
-        new, severity, type_ = "degraded", "warning", "link_degraded"
-    elif sinr < deg_th and state == "ok":
-        new, severity, type_ = "degraded", "warning", "link_degraded"
-    elif sinr >= deg_th + hyst and state != "ok":
-        new, severity, type_ = "ok", "info", "link_recovered"
-    else:
-        return state
-
-    ev = await db.insert_event(
-        live.drone_id, live.session_id, severity, type_,
-        {"sinr": sinr, "in_zone": m["in_interference_zone"], "from": state},
-    )
-    await manager.broadcast({"type": "event", **ev})
-    return new
-
-
 async def _link_and_db_loop() -> None:
-    """每秒：取樣 5G 鏈路品質 → 更新 live state →（armed 時）發鏈路事件並入庫。
+    """每秒把 telemetry 入庫；模擬模式下另外負責取樣鏈路品質與發事件。
 
-    取樣一律執行，讓前端待機時也看得到即時鏈路品質；但**只在 armed 時入庫**。
-    上鎖時飛機停在原地不動，那些資料是同一個座標重複上萬筆，沒有記錄的必要。
-    見 issues/004。
+    **只在 armed 且已建立架次時入庫**——上鎖時飛機停在原地不動，那些資料是同一個
+    座標重複上萬筆，沒有記錄的必要。見 issues/004。
+
+    兩種 link_source 的分工（見 doc/onboard-telemetry.md）：
+
+    - `simulated`：本迴圈取樣、更新 live state、發事件、寫 link_metrics。
+    - `modem`：鏈路資料由機上 ROS node push 進來——即時通道
+      （POST /api/link-metrics/live）更新 live state 並發事件，記錄通道
+      （POST .../batch）負責寫 link_metrics。本迴圈只管 telemetry。
+      telemetry 仍走這裡，因為它來自地面站收到的 MAVLink，不是機上送的。
     """
-    source = SimulatedLinkSource(await db.fetch_cells(), await db.fetch_zones(enabled_only=True),
-                                 handover_margin_db=settings.handover_margin_db)
-    link_state = "ok"          # ok / degraded / lost
+    simulated = settings.link_source == "simulated"
+    source = None
+    if simulated:
+        source = SimulatedLinkSource(
+            await db.fetch_cells(), await db.fetch_zones(enabled_only=True),
+            handover_margin_db=settings.handover_margin_db)
+    else:
+        log.info("link_source=%s：鏈路資料改由機上 POST 進來，本迴圈只寫 telemetry",
+                 settings.link_source)
+
     recording = False          # 上一輪是否處於記錄狀態，用來偵測架次開始
     tick = 0
     while True:
         await asyncio.sleep(1.0 / settings.db_write_hz)
         tick += 1
-        if tick % 30 == 0:  # 每 30 秒重讀干擾區設定，前端新增/刪除立即生效
+        if simulated and tick % 30 == 0:  # 每 30 秒重讀干擾區，前端新增/刪除立即生效
             source.zones = await db.fetch_zones(enabled_only=True)
             source.cells = await db.fetch_cells()
         if live.lat is None or live.lon is None:
             continue
 
-        m = source.sample(live.lat, live.lon, live.alt_rel)
-        live.link = m          # live state 一律更新（前端待機時仍看得到鏈路品質）
+        if simulated:
+            live.link = source.sample(live.lat, live.lon, live.alt_rel)
+            live.mark_link_seen()   # 前端待機時仍看得到鏈路品質
 
         # 同時檢查 session_id：armed 由 ingest 的另一個任務設定，剛解鎖的瞬間
         # 可能還沒建好 session，此時寫入會產生 session_id NULL 的孤兒資料。
@@ -84,23 +63,34 @@ async def _link_and_db_loop() -> None:
             continue
 
         if not recording:      # 架次開始：狀態機重置，避免沿用上一趟的狀態
-            link_state = "ok"
+            live.link_state = "ok"
             recording = True
 
-        # 鏈路事件：link_degraded / link_lost / link_recovered
-        # （不發 handover 事件——無人機等價於一台 UE，換手由 modem 與網路側處理，
-        #   應用層不參與也不研究它。服務 cell 仍以 pci 欄位記錄在 link_metrics。）
-        link_state = await _link_transition(link_state, m)
+        if simulated:
+            # 鏈路事件：link_degraded / link_lost / link_recovered
+            # （不發 handover——無人機等價於一台 UE，換手由 modem 與網路側處理。）
+            await link_transition(live.link)
+            await db.insert_link(live)
 
         await db.insert_telemetry(live)
-        await db.insert_link(live)
 
 
 async def _broadcast_loop() -> None:
+    """定時把 live state 推給前端。
+
+    整個迴圈包 try/except 是必要的：這個 task 的參照被 lifespan 的 tasks list
+    持有，asyncio 因此永遠不會 GC 它，「Task exception was never retrieved」
+    也就永遠不會印出來——任何未捕捉的例外都會讓廣播無聲無息地停止。
+    實際踩過：live.link 裡混進 datetime 物件導致 json.dumps 拋錯，
+    前端與所有 WebSocket client 就此再也收不到資料，日誌卻乾乾淨淨。
+    """
     while True:
         await asyncio.sleep(1.0 / settings.broadcast_hz)
-        if manager.clients:
-            await manager.broadcast({"type": "telemetry", **live.telemetry_dict()})
+        try:
+            if manager.clients:
+                await manager.broadcast({"type": "telemetry", **live.telemetry_dict()})
+        except Exception:
+            log.exception("broadcast 失敗，略過這一輪")
 
 
 @asynccontextmanager

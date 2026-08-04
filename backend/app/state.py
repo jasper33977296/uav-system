@@ -3,6 +3,7 @@
 多機擴充時，把這裡換成 dict[drone_id, LiveState]，
 ingest 任務一機一個，其餘程式碼不變。
 """
+import time as _time
 from dataclasses import dataclass, field
 
 
@@ -27,8 +28,27 @@ class LiveState:
     flight_mode: str | None = None
     armed: bool = False
 
-    # 5G 鏈路品質（由 link source 每秒更新）
+    # 5G 鏈路品質（模擬階段由 _link_and_db_loop 更新，真機由機上 node POST 進來）
     link: dict = field(default_factory=dict)
+
+    # 鏈路狀態機的狀態（ok / degraded / lost）。放在這裡是因為模擬與真機兩條路徑
+    # 都要用它——模擬走 _link_and_db_loop，真機走 /api/link-metrics/live。
+    link_state: str = "ok"
+
+    # 最後一次收到鏈路量測的時刻（monotonic clock，不受系統時間調整影響）。
+    # 真機的即時通道會靜默失敗，前端需要據此顯示「已失聯 N 秒」——
+    # 那與 link_lost 是不同的事：link_lost 是量到訊號差，失聯是量測送不回來。
+    link_seen_mono: float | None = None
+
+    def mark_link_seen(self) -> None:
+        self.link_seen_mono = _time.monotonic()
+
+    @property
+    def link_age_s(self) -> float | None:
+        """距上次收到鏈路量測幾秒。由後端計算，避免前後端時鐘偏差。"""
+        if self.link_seen_mono is None:
+            return None
+        return round(_time.monotonic() - self.link_seen_mono, 2)
 
     def telemetry_dict(self) -> dict:
         return {
@@ -45,6 +65,8 @@ class LiveState:
             "gps_fix": self.gps_fix, "satellites": self.satellites,
             "flight_mode": self.flight_mode, "armed": self.armed,
             "link": self.link,
+            "link_state": self.link_state,
+            "link_age_s": self.link_age_s,   # None = 從未收到；大於門檻 = 失聯
         }
 
 

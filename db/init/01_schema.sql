@@ -120,6 +120,10 @@ CREATE TABLE link_metrics (
 SELECT create_hypertable('link_metrics', 'time');
 CREATE INDEX idx_link_session ON link_metrics (session_id, time);
 CREATE INDEX idx_link_drone ON link_metrics (drone_id, time DESC);
+-- 去重：真機階段機上以批次重送補傳資料，屬 at-least-once 投遞，同一批可能送達兩次。
+-- (drone_id, time) 是天然鍵，搭配 INSERT ... ON CONFLICT DO NOTHING 達成冪等。
+-- hypertable 的唯一索引必須包含分區欄位 time，此處已滿足。見 doc/onboard-telemetry.md。
+CREATE UNIQUE INDEX idx_link_dedup ON link_metrics (drone_id, time);
 
 -- ============================================================
 -- 任務與航點
