@@ -102,8 +102,10 @@ async def delete_zone(zone_id: int):
 async def list_sessions(limit: int = 50):
     rows = await db.pool.fetch(
         """
-        SELECT s.*, d.name AS drone_name FROM flight_sessions s
+        SELECT s.*, d.name AS drone_name, m.name AS mission_name
+        FROM flight_sessions s
         JOIN drones d ON d.id = s.drone_id
+        LEFT JOIN missions m ON m.id = s.mission_id
         ORDER BY s.started_at DESC LIMIT $1
         """,
         limit,
@@ -113,13 +115,86 @@ async def list_sessions(limit: int = 50):
 
 @router.get("/sessions/{session_id}/track")
 async def session_track(session_id: str):
-    """回放用：一個架次的飛行軌跡 + 鏈路品質時序，前端據此畫上色軌跡與圖表。"""
+    """回放用：一條航線的軌跡 + 鏈路時序 + 關聯任務（供疊預計路徑）。"""
+    sess = await db.pool.fetchrow(
+        """SELECT s.id, s.mission_id, s.started_at, s.ended_at, m.name AS mission_name
+           FROM flight_sessions s LEFT JOIN missions m ON m.id = s.mission_id
+           WHERE s.id = $1""", session_id)
     telemetry = await db.pool.fetch(
         "SELECT * FROM telemetry WHERE session_id = $1 ORDER BY time", session_id)
     link = await db.pool.fetch(
         "SELECT * FROM link_metrics WHERE session_id = $1 ORDER BY time", session_id)
-    return {"telemetry": [dict(r) for r in telemetry],
+    return {"session": dict(sess) if sess else None,
+            "telemetry": [dict(r) for r in telemetry],
             "link": [dict(r) for r in link]}
+
+
+@router.get("/sessions/{session_id}/export")
+async def export_session(session_id: str):
+    """整條航線匯出成單一 JSON（lossless，可離線分析或封存）。
+    配合 30 天 retention：要長期保留原始資料就先匯出；
+    匯出後可呼叫 DELETE 移除 DB 內的資料（UI 的「匯出並移除」流程）。"""
+    sess = await db.pool.fetchrow(
+        """SELECT s.*, d.name AS drone_name, m.name AS mission_name
+           FROM flight_sessions s
+           JOIN drones d ON d.id = s.drone_id
+           LEFT JOIN missions m ON m.id = s.mission_id WHERE s.id = $1""", session_id)
+    if sess is None:
+        raise HTTPException(404, "無此航線")
+    payload = {
+        "format": "uav-system-session-export",
+        "version": 1,
+        "session": dict(sess),
+        "telemetry": [dict(r) for r in await db.pool.fetch(
+            "SELECT * FROM telemetry WHERE session_id = $1 ORDER BY time", session_id)],
+        "link_metrics": [dict(r) for r in await db.pool.fetch(
+            "SELECT * FROM link_metrics WHERE session_id = $1 ORDER BY time", session_id)],
+        "events": [dict(r) for r in await db.pool.fetch(
+            "SELECT * FROM events WHERE session_id = $1 ORDER BY time", session_id)],
+    }
+    started = sess["started_at"].strftime("%Y%m%d-%H%M")
+    from fastapi.responses import JSONResponse
+    return JSONResponse(
+        jsonable(payload),
+        headers={"Content-Disposition":
+                 f'attachment; filename="flight-{started}-{session_id[:8]}.json"'})
+
+
+def jsonable(o):
+    """asyncpg Row 值轉 JSON 可序列化（datetime→ISO、UUID→str、JSONB字串→物件）。"""
+    import uuid as _uuid
+    if isinstance(o, dict):
+        return {k: jsonable(v) for k, v in o.items()}
+    if isinstance(o, list):
+        return [jsonable(v) for v in o]
+    if isinstance(o, datetime):
+        return o.isoformat()
+    if isinstance(o, _uuid.UUID):
+        return str(o)
+    if isinstance(o, str) and o[:1] in "[{":
+        try:
+            import json as _json
+            return _json.loads(o)
+        except Exception:
+            return o
+    return o
+
+
+@router.delete("/sessions/{session_id}")
+async def delete_session(session_id: str):
+    """刪除一條航線與其全部時序資料。搭配匯出使用（匯出後移除）。"""
+    if live.session_id == session_id:
+        raise HTTPException(409, "此航線正在飛行中")
+    async with db.pool.acquire() as con:
+        async with con.transaction():
+            counts = {}
+            for table in ("telemetry", "link_metrics", "events"):
+                r = await con.execute(f"DELETE FROM {table} WHERE session_id = $1", session_id)
+                counts[table] = int(r.split()[-1])
+            r = await con.execute("DELETE FROM flight_sessions WHERE id = $1", session_id)
+    if r.split()[-1] == "0":
+        raise HTTPException(404, "無此航線")
+    return {"deleted": counts}
 
 
 @router.get("/events")
@@ -214,6 +289,16 @@ async def active_mission():
         "SELECT seq, lat, lon, alt, action FROM waypoints WHERE mission_id = $1 ORDER BY seq",
         row["id"])
     return {"id": str(row["id"]), "name": row["name"], "waypoints": [dict(w) for w in wps]}
+
+
+@router.get("/missions/{mission_id}/waypoints")
+async def mission_waypoints(mission_id: str):
+    wps = await db.pool.fetch(
+        "SELECT seq, lat, lon, alt, action FROM waypoints WHERE mission_id = $1 ORDER BY seq",
+        mission_id)
+    if not wps:
+        raise HTTPException(404, "無此路徑或無航點")
+    return {"waypoints": [dict(w) for w in wps]}
 
 
 @router.post("/missions")

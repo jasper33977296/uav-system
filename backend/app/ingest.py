@@ -31,8 +31,8 @@ async def run() -> None:
             break
 
     await asyncio.gather(
-        _position(drone), _velocity(drone), _heading(drone), _battery(drone),
-        _gps(drone), _mode(drone), _armed(drone),
+        _position(drone), _velocity(drone), _heading(drone), _attitude(drone),
+        _battery(drone), _gps(drone), _mode(drone), _armed(drone),
     )
 
 
@@ -48,6 +48,14 @@ async def _velocity(drone: System) -> None:
     async for v in drone.telemetry.velocity_ned():
         live.ground_speed = (v.north_m_s ** 2 + v.east_m_s ** 2) ** 0.5
         live.vertical_speed = -v.down_m_s
+
+
+async def _attitude(drone: System) -> None:
+    # 姿態（roll/pitch）：飛控由 IMU 等多感測器融合算出，這裡只是讀結果。
+    # 串流頻率高（數十 Hz），只做欄位賦值，開銷可忽略。
+    async for a in drone.telemetry.attitude_euler():
+        live.roll = a.roll_deg
+        live.pitch = a.pitch_deg
 
 
 async def _heading(drone: System) -> None:

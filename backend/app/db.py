@@ -38,8 +38,13 @@ async def ensure_drone(name: str, connection_url: str) -> str:
 
 
 async def create_session(drone_id: str) -> str:
+    """開一條航線紀錄。同時關聯任務庫當下的啟用路徑（is_active）——
+    語意是「操作員宣告要飛的那條」，讓回放頁能疊出當時的預計路徑。
+    沒有啟用路徑時為 NULL（手飛／未宣告）。"""
     row = await pool.fetchrow(
-        "INSERT INTO flight_sessions (drone_id, started_at) VALUES ($1, now()) RETURNING id",
+        """INSERT INTO flight_sessions (drone_id, started_at, mission_id)
+           VALUES ($1, now(), (SELECT id FROM missions WHERE is_active LIMIT 1))
+           RETURNING id""",
         drone_id,
     )
     return str(row["id"])

@@ -70,6 +70,8 @@ export default function Replay() {
   const { sessionId } = useParams<{ sessionId: string }>();
   const router = useRouter();
   const [rows, setRows] = useState<LinkRow[]>([]);
+  const [meta, setMeta] = useState<{ mission_id: string | null; mission_name: string | null } | null>(null);
+  const [plan, setPlan] = useState<{ lat: number; lon: number; alt: number | null }[]>([]);
   const [events, setEvents] = useState<Ev[]>([]);
   const [idx, setIdx] = useState(0);
   const mapRef = useRef<maplibregl.Map | null>(null);
@@ -83,6 +85,13 @@ export default function Replay() {
         const link = (d.link ?? []).filter((r: LinkRow) => r.lat != null && r.lon != null);
         setRows(link);
         setIdx(link.length - 1);   // 預設停在終點：一眼看到整趟全貌
+        setMeta(d.session ?? null);
+        // 航線關聯了任務 → 抓航點疊預計路徑（預計 vs 實際比對）
+        if (d.session?.mission_id)
+          fetch(`${API}/api/missions/${d.session.mission_id}/waypoints`)
+            .then((r) => (r.ok ? r.json() : null))
+            .then((m) => m && setPlan(m.waypoints.filter((w: any) => w.lat && w.lon)))
+            .catch(() => {});
       })
       .catch(() => {});
     fetch(`${API}/api/events?session_id=${sessionId}`)
@@ -147,6 +156,22 @@ export default function Replay() {
           "fill-extrusion-height": ["get", "top"], "fill-extrusion-base": ["get", "base"],
           "fill-extrusion-opacity": 0.9 } });
 
+      // 預計任務路徑（航線開的當下所關聯的任務）：灰絲帶＋地面虛線
+      if (plan.length >= 2) {
+        map.addSource("plan3d", { type: "geojson",
+          data: ribbon(plan.map((w) => ({ lat: w.lat, lon: w.lon, alt: w.alt })), () => ({}), 1.0) });
+        map.addLayer({ id: "plan3d", type: "fill-extrusion", source: "plan3d",
+          paint: { "fill-extrusion-color": "#8a94a3",
+            "fill-extrusion-height": ["get", "top"], "fill-extrusion-base": ["get", "base"],
+            "fill-extrusion-opacity": 0.35 } }, "track3d");
+        map.addSource("plan-ground", { type: "geojson",
+          data: { type: "Feature", properties: {},
+            geometry: { type: "LineString", coordinates: plan.map((w) => [w.lon, w.lat]) } } });
+        map.addLayer({ id: "plan-ground", type: "line", source: "plan-ground",
+          paint: { "line-color": "#8a94a3", "line-width": 1.5,
+                   "line-dasharray": [3, 3], "line-opacity": 0.6 } }, "track");
+      }
+
       // 方向箭頭：浮在絲帶上方的小三角形，指出飛行方向
       map.addSource("arrows", { type: "geojson",
         data: pathArrows(rows.map((r) => ({ lat: r.lat, lon: r.lon, alt: r.alt_rel }))) });
@@ -163,7 +188,7 @@ export default function Replay() {
       }));
     });
     return () => { map.remove(); mapRef.current = null; };
-  }, [rows]);
+  }, [rows, plan]);
 
   // scrub → 球體游標（球體層每幀讀 cursorRef，觸發一次重繪即可）
   useEffect(() => {
@@ -179,7 +204,8 @@ export default function Replay() {
       <div className="replay-head">
         <button className="btn-plain" onClick={() => router.push("/drones")}>← 無人機</button>
         <span className="meta">
-          架次回放 · {rows.length} 筆樣本
+          航線回放 · {rows.length} 筆樣本
+          {meta?.mission_name && ` · 任務：${meta.mission_name}`}
           {rows.length > 0 &&
             ` · ${new Date(rows[0].time).toLocaleString("zh-TW", { hour12: false })}`}
         </span>

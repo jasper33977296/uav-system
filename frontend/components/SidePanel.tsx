@@ -51,6 +51,9 @@ export default function SidePanel() {
           <Metric label="電量" value={fmt(live?.battery_pct, 0)} unit="%" />
           <Metric label="衛星數" value={live?.satellites?.toString() ?? "—"} />
           <Metric label="模式" value={live?.flight_mode ?? "—"} />
+          <Metric label="橫滾 Roll" value={fmt(live?.roll)} unit="°" />
+          <Metric label="俯仰 Pitch" value={fmt(live?.pitch)} unit="°" />
+          <Metric label="航向" value={fmt(live?.heading, 0)} unit="°" />
         </div>
       </div>
 

@@ -74,3 +74,27 @@ max_alt、avg/min SINR、avg RTT、干擾區內取樣數／總取樣數。
   1 Hz 的量級下空間成本可忽略。
 - telemetry 與 link_metrics 分兩張表而非合一：兩者未來頻率可能不同
   （真機 modem 讀取可能只有 0.2–1 Hz），且 link 欄位在真機階段會擴充。
+
+## 資料生命週期（2026-08-04 定案）
+
+| 層 | 保留 | 說明 |
+|---|---|---|
+| 原始 1Hz（telemetry / link_metrics）| **30 天** | TimescaleDB retention policy 自動清除 |
+| 1 分鐘彙總（`link_metrics_1m` / `telemetry_1m`）| 永久 | continuous aggregate，每 10 分鐘自動刷新 |
+| 匯出檔 | 使用者自管 | `GET /api/sessions/{id}/export` 單一 JSON（lossless）|
+
+**要長期保留原始資料就先匯出**。UI 流程：無人機頁每條航線的「匯出」下載
+完整 JSON → 確認後「移除」從 DB 刪除。匯出格式含 session/telemetry/
+link_metrics/events 四段，可離線分析或之後寫匯入工具還原。
+
+## 航線 ↔ 任務（2026-08-04 新增）
+
+`flight_sessions.mission_id`：開航線（armed）時自動關聯任務庫**當下的
+啟用路徑**（`missions.is_active`）——語意是「操作員宣告要飛的那條」。
+回放頁據此疊出當時的預計路徑做預計 vs 實際比對。手飛／未宣告為 NULL。
+
+用詞約定：UI 稱一次飛行紀錄為「**航線**」（資料表名維持 flight_sessions，
+程式識別字不動，只有使用者可見文字用航線）。
+
+閒置欄位：`missions.drone_id` 與 `missions.status` 無資料來源，
+見 [issues/010](../issues/010-missions-idle-columns.md)。

@@ -19,6 +19,8 @@ class LiveState:
     alt_msl: float | None = None
     alt_rel: float | None = None
     heading: float | None = None
+    roll: float | None = None        # 姿態：飛控多感測器融合的結果
+    pitch: float | None = None
     ground_speed: float | None = None
     vertical_speed: float | None = None
     battery_pct: float | None = None
@@ -58,6 +60,7 @@ class LiveState:
             "lat": self.lat, "lon": self.lon,
             "alt_msl": self.alt_msl, "alt_rel": self.alt_rel,
             "heading": self.heading,
+            "roll": self.roll, "pitch": self.pitch,
             "ground_speed": self.ground_speed,
             "vertical_speed": self.vertical_speed,
             "battery_pct": self.battery_pct,

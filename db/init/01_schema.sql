@@ -53,6 +53,9 @@ CREATE TABLE interference_zones (
 CREATE TABLE flight_sessions (
   id         UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
   drone_id   UUID NOT NULL REFERENCES drones(id),
+  mission_id UUID,                   -- 開航線時任務庫的啟用路徑（操作員宣告要飛的那條）
+                                       -- 回放頁據此疊出當時的預計路徑；手飛為 NULL
+                                       -- （FK 在 missions 建表後以 ALTER 補上，見檔尾）
   started_at TIMESTAMPTZ NOT NULL,
   ended_at   TIMESTAMPTZ,
   summary    JSONB                     -- 落地後計算：航程、最大高度、SINR 統計等
@@ -174,3 +177,39 @@ INSERT INTO cells (name, lat, lon, pci, band) VALUES
 
 INSERT INTO interference_zones (name, center_lat, center_lon, radius_m, severity_db, note) VALUES
   ('sim-jammer-A', 47.3995, 8.5456, 120, 25, '模擬強干擾源：區內 SINR -25dB');
+
+ALTER TABLE flight_sessions
+  ADD CONSTRAINT fk_sessions_mission
+  FOREIGN KEY (mission_id) REFERENCES missions(id) ON DELETE SET NULL;
+
+-- ============================================================
+-- 資料生命週期（2026-08-04 定案）：
+--   原始 1Hz 資料保留 30 天（retention policy 自動清除）；
+--   1 分鐘彙總永久保留；要長期保留原始資料先用匯出功能
+--   （GET /api/sessions/{id}/export，匯出後可 DELETE 移除）。
+-- ============================================================
+CREATE MATERIALIZED VIEW link_metrics_1m
+WITH (timescaledb.continuous) AS
+SELECT time_bucket('1 minute', time) AS bucket, drone_id, session_id,
+       avg(sinr) AS avg_sinr, min(sinr) AS min_sinr, max(sinr) AS max_sinr,
+       avg(rsrp) AS avg_rsrp, avg(rtt_ms) AS avg_rtt_ms,
+       avg(packet_loss_pct) AS avg_loss_pct, count(*) AS samples
+FROM link_metrics GROUP BY 1, 2, 3 WITH NO DATA;
+
+CREATE MATERIALIZED VIEW telemetry_1m
+WITH (timescaledb.continuous) AS
+SELECT time_bucket('1 minute', time) AS bucket, drone_id, session_id,
+       avg(alt_rel) AS avg_alt_rel, max(alt_rel) AS max_alt_rel,
+       avg(ground_speed) AS avg_speed, min(battery_pct) AS min_battery_pct,
+       count(*) AS samples
+FROM telemetry GROUP BY 1, 2, 3 WITH NO DATA;
+
+SELECT add_continuous_aggregate_policy('link_metrics_1m',
+  start_offset => INTERVAL '2 hours', end_offset => INTERVAL '1 minute',
+  schedule_interval => INTERVAL '10 minutes');
+SELECT add_continuous_aggregate_policy('telemetry_1m',
+  start_offset => INTERVAL '2 hours', end_offset => INTERVAL '1 minute',
+  schedule_interval => INTERVAL '10 minutes');
+
+SELECT add_retention_policy('link_metrics', INTERVAL '30 days');
+SELECT add_retention_policy('telemetry',    INTERVAL '30 days');

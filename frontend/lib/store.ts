@@ -12,7 +12,8 @@ export interface Telemetry {
   drone_id: string; session_id: string | null; connected: boolean;
   lat: number | null; lon: number | null;
   alt_msl: number | null; alt_rel: number | null;
-  heading: number | null; ground_speed: number | null; vertical_speed: number | null;
+  heading: number | null; roll: number | null; pitch: number | null;
+  ground_speed: number | null; vertical_speed: number | null;
   battery_pct: number | null; battery_voltage: number | null;
   gps_fix: number | null; satellites: number | null;
   flight_mode: string | null; armed: boolean;
