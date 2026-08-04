@@ -14,8 +14,12 @@ from .ws import manager
 
 log = logging.getLogger(__name__)
 
+# 模組層持有 System，讓 api 的任務下載（唯讀）能共用同一條 MAVLink 連線
+drone: System | None = None
+
 
 async def run() -> None:
+    global drone
     drone = System()
     log.info("connecting MAVLink at %s ...", settings.mavlink_url)
     await drone.connect(system_address=settings.mavlink_url)

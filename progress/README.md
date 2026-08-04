@@ -12,9 +12,9 @@
 | # | 階段 | 狀態 | 備註 |
 |---|---|---|---|
 | 1 | 資料流骨架：SITL → backend → DB + WS → 前端即時地圖 | ✅ 完成並實測 | 2026-08-03 首飛跑通全鏈；2026-08-04 前端 UI 已目視確認（headless Chromium 截圖，尾跡四段上色與事件流均正常） |
-| 2 | 歷史回放頁（軌跡上色 + SINR/RTT 時序圖）| ⬜ 未開始 | 後端 `GET /api/sessions/{id}/track` 已就緒 |
-| 3 | ~~任務規劃 UI~~ → **QGC 任務擷取與疊圖** | ⬜ 未開始 | 已改寫，見 [doc/qgc-integration.md](../doc/qgc-integration.md)；整合機制已實測驗證 |
-| 4 | 前端干擾區編輯 | ⬜ 未開始 | `POST/DELETE /api/zones` 已就緒，缺前端畫圈 UI |
+| 2 | 歷史回放頁（軌跡上色 + SINR/RTT 時序圖）| ✅ 完成並實測 | /replay/[id]：3D 懸浮絲帶＋雙圖時間軸＋scrubber |
+| 3 | ~~任務規劃 UI~~ → **QGC 任務擷取與疊圖** | ✅ 完成並實測 | GET /api/mission/current 自機上唯讀讀回；灰色懸浮絲帶＋地面虛線疊圖 |
+| 4 | ~~前端干擾區編輯~~ | ✂️ 已移除 | 場域物件不存在於系統認知（2026-08-04 釐清），干擾分布由實測軌跡揭露 |
 | 5 | 真機：機上量測回傳、影像 WebRTC | 🔶 地面站側完成 | push 端點＋補傳＋失聯偵測已實測；機上 ROS node 待硬體（RB5）到位，見 [doc/onboard-telemetry.md](../doc/onboard-telemetry.md) |
 
 ## 各模組現況

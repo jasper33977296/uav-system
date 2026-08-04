@@ -4,32 +4,8 @@ import "maplibre-gl/dist/maplibre-gl.css";
 import { useParams, useRouter } from "next/navigation";
 import { useEffect, useMemo, useRef, useState } from "react";
 
+import { CANVAS, groundGrid, ngonAt, ribbon } from "@/lib/geo";
 import { API, LINK_CLASSES, classifySinr } from "@/lib/signal";
-
-/* ── 與 MapView 共用的幾何工具（回放是靜態資料，獨立實作避免耦合 live store）── */
-const CANVAS = "#14181c";
-const M_LAT = 110574;
-const mLon = (lat: number) => 111320 * Math.cos((lat * Math.PI) / 180);
-
-function groundGrid(lat: number, lon: number, halfM = 400, stepM = 50): GeoJSON.FeatureCollection {
-  const feats: GeoJSON.Feature[] = [];
-  const line = (a: [number, number], b: [number, number]): GeoJSON.Feature => ({
-    type: "Feature", properties: {}, geometry: { type: "LineString", coordinates: [a, b] },
-  });
-  for (let m = -halfM; m <= halfM; m += stepM) {
-    feats.push(line([lon + m / mLon(lat), lat - halfM / M_LAT], [lon + m / mLon(lat), lat + halfM / M_LAT]));
-    feats.push(line([lon - halfM / mLon(lat), lat + m / M_LAT], [lon + halfM / mLon(lat), lat + m / M_LAT]));
-  }
-  return { type: "FeatureCollection", features: feats };
-}
-function ngonAt(lat: number, lon: number, halfM: number, n = 4): GeoJSON.Polygon {
-  const pts: [number, number][] = [];
-  for (let i = 0; i <= n; i++) {
-    const a = (i / n) * 2 * Math.PI + Math.PI / n;
-    pts.push([lon + (halfM * Math.cos(a)) / mLon(lat), lat + (halfM * Math.sin(a)) / M_LAT]);
-  }
-  return { type: "Polygon", coordinates: [pts] };
-}
 
 interface LinkRow {
   time: string; lat: number | null; lon: number | null; alt_rel: number | null;
@@ -152,22 +128,22 @@ export default function Replay() {
           geometry: { type: "Point", coordinates: [r.lon!, r.lat!] },
         })) } });
       map.addLayer({ id: "track", type: "circle", source: "track",
-        paint: { "circle-radius": 3.5,
+        paint: { "circle-radius": 2.5, "circle-opacity": 0.45,
           "circle-color": ["match", ["get", "cls"],
             ...LINK_CLASSES.flatMap((c) => [c.key, c.color]), "#898781"] as any,
           "circle-stroke-width": 0 } });
 
-      map.addSource("track3d", { type: "geojson", data: {
-        type: "FeatureCollection",
-        features: rows.map((r) => ({
-          type: "Feature", properties: { cls: cls(r), h: r.alt_rel ?? 0 },
-          geometry: ngonAt(r.lat!, r.lon!, 1.6),
-        })) } });
+      // 懸浮絲帶：路徑本身浮在飛行高度（地面另有投影點）
+      map.addSource("track3d", { type: "geojson",
+        data: ribbon(
+          rows.map((r) => ({ lat: r.lat, lon: r.lon, alt: r.alt_rel, sinr: r.sinr })),
+          (_a, b) => ({ cls: b.sinr == null ? "unknown" : classifySinr(b.sinr).key }),
+        ) });
       map.addLayer({ id: "track3d", type: "fill-extrusion", source: "track3d",
         paint: { "fill-extrusion-color": ["match", ["get", "cls"],
             ...LINK_CLASSES.flatMap((c) => [c.key, c.color]), "#898781"] as any,
-          "fill-extrusion-height": ["get", "h"], "fill-extrusion-base": 0,
-          "fill-extrusion-opacity": 0.55 } });
+          "fill-extrusion-height": ["get", "top"], "fill-extrusion-base": ["get", "base"],
+          "fill-extrusion-opacity": 0.9 } });
 
       // 回放游標：懸浮在該時刻高度的機體
       map.addSource("cursor", { type: "geojson",

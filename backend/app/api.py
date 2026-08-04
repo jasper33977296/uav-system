@@ -1,9 +1,10 @@
+import asyncio
 from datetime import datetime
 
 from fastapi import APIRouter, HTTPException, Response
 from pydantic import BaseModel, Field
 
-from . import db
+from . import db, ingest
 from .config import settings
 from .link_events import transition as link_transition
 from .state import live
@@ -129,6 +130,37 @@ async def list_events(limit: int = 100, session_id: str | None = None):
     else:
         rows = await db.pool.fetch("SELECT * FROM events ORDER BY time DESC LIMIT $1", limit)
     return [dict(r) for r in rows]
+
+
+# ── 任務疊圖（roadmap 3）──────────────────────────────────────────────────
+# 從飛機讀回 QGC 上傳的任務。MAVLink 任務下載是**唯讀**操作，
+# 不違反「backend 對 MAVLink 只讀不寫」——上傳與啟動仍由 QGC 負責。
+
+# MAV_CMD：帶座標的導航類指令（16 WAYPOINT / 21 LAND / 22 TAKEOFF）
+_NAV_CMDS = {16, 21, 22}
+
+
+@router.get("/mission/current")
+async def current_mission():
+    if ingest.drone is None or not live.connected:
+        raise HTTPException(503, "MAVLink 未連線")
+    try:
+        items = await asyncio.wait_for(ingest.drone.mission_raw.download_mission(), timeout=10)
+    except Exception as e:
+        raise HTTPException(502, f"任務下載失敗：{e}")
+    waypoints = [
+        {
+            "seq": it.seq,
+            "command": it.command,
+            "lat": it.x / 1e7,       # mission_raw 的座標是 int32 度 ×1e7
+            "lon": it.y / 1e7,
+            "alt": it.z,             # frame 3 = 相對起飛點高度（QGC 預設）
+            "frame": it.frame,
+        }
+        for it in items
+        if it.command in _NAV_CMDS and (it.x or it.y)
+    ]
+    return {"item_count": len(items), "waypoints": waypoints}
 
 
 # ── 機上 5G 量測回傳（真機階段）────────────────────────────────────────────
