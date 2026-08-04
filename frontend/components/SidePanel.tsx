@@ -23,8 +23,11 @@ function Sparkline({ data }: { data: number[] }) {
     .map((v, i) => `${(i / (data.length - 1)) * w},${h - 4 - ((v - min) / span) * (h - 8)}`)
     .join(" ");
   return (
-    <svg className="spark" width={w} height={h} role="img" aria-label="SINR 近期趨勢">
-      <polyline points={pts} fill="none" stroke="var(--series-1)" strokeWidth="2" />
+    // viewBox + 100% 寬：側欄寬度是彈性的（clamp），寫死 px 會在縮放時爆出卡片
+    <svg className="spark" viewBox={`0 0 ${w} ${h}`} preserveAspectRatio="none"
+         role="img" aria-label="SINR 近期趨勢">
+      <polyline points={pts} fill="none" stroke="var(--series-1)" strokeWidth="2"
+                vectorEffect="non-scaling-stroke" />
     </svg>
   );
 }
@@ -33,26 +36,13 @@ const fmt = (v: number | null | undefined, digits = 1) =>
   v == null ? "—" : v.toFixed(digits);
 
 export default function SidePanel() {
-  const { live, wsConnected, events, sinrHistory } = useUavStore();
+  const { live, events, sinrHistory } = useUavStore();
   const link = live?.link;
   const cls = link?.sinr != null ? classifySinr(link.sinr) : null;
 
   return (
     <aside className="panel">
-      <div className="chips">
-        <span className="chip">
-          <span className="dot" style={{ background: wsConnected ? "#0ca30c" : "#d03b3b" }} />
-          後端 {wsConnected ? "已連線" : "斷線"}
-        </span>
-        <span className="chip">
-          <span className="dot" style={{ background: live?.connected ? "#0ca30c" : "#d03b3b" }} />
-          MAVLink {live?.connected ? "已連線" : "等待中"}
-        </span>
-        <span className="chip">
-          <span className="dot" style={{ background: live?.armed ? "#fab219" : "#898781" }} />
-          {live?.armed ? "飛行中" : "待命"}
-        </span>
-      </div>
+      {/* 連線／記錄狀態 chips 已移至頂欄（AppShell），全站可見 */}
 
       {/* 影像預留位：之後接 MediaMTX/WebRTC 時換成 <video> 即可，版面不動 */}
       <div className="card">

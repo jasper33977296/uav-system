@@ -1,5 +1,20 @@
-/* 色彩角色（light/dark 各自選定，非自動反轉）*/
+/* 色彩角色（light/dark 各自選定，非自動反轉）。
+   深色是預設與設計基準（2026-08-04 定案）：操作情境與 QGC 並排、
+   地圖深色畫布、戶外減眩光。淺色為手動 opt-in——之後要做切換鈕時
+   在 <html> 加 data-theme="light" 即可，不跟隨 OS 偏好
+   （跟隨 OS 會讓亮色 OS 的操作員拿到亮面板配深地圖的拼裝畫面）。 */
 :root {
+  color-scheme: dark;
+  --page: #0d0d0d;
+  --surface: #1a1a19;
+  --ink: #ffffff;
+  --ink-2: #c3c2b7;
+  --muted: #898781;
+  --hairline: #2c2c2a;
+  --border: rgba(255, 255, 255, 0.1);
+  --series-1: #3987e5;
+}
+:root[data-theme="light"] {
   color-scheme: light;
   --page: #f9f9f7;
   --surface: #fcfcfb;
@@ -10,19 +25,6 @@
   --border: rgba(11, 11, 11, 0.1);
   --series-1: #2a78d6;
 }
-@media (prefers-color-scheme: dark) {
-  :root {
-    color-scheme: dark;
-    --page: #0d0d0d;
-    --surface: #1a1a19;
-    --ink: #ffffff;
-    --ink-2: #c3c2b7;
-    --muted: #898781;
-    --hairline: #2c2c2a;
-    --border: rgba(255, 255, 255, 0.1);
-    --series-1: #3987e5;
-  }
-}
 
 * { margin: 0; padding: 0; box-sizing: border-box; }
 html, body { height: 100%; }
@@ -32,9 +34,49 @@ body {
   color: var(--ink);
 }
 
-.app { display: grid; grid-template-columns: 1fr 380px; height: 100vh; }
+/* App shell：頂欄固定高、內容區吃剩餘空間。
+   100dvh 而非 100vh：瀏覽器縮放／行動裝置工具列下 vh 會算錯。 */
+.shell { height: 100dvh; display: flex; flex-direction: column; }
+.content { flex: 1; min-height: 0; }
+
+/* 頂欄 */
+.nav {
+  flex: none; height: 48px;
+  display: flex; align-items: center; gap: 2px; padding: 0 14px;
+  background: var(--surface); border-bottom: 1px solid var(--hairline);
+}
+.nav .brand { font-size: 13px; font-weight: 700; letter-spacing: 0.02em; margin-right: 12px; }
+.nav a {
+  color: var(--ink-2); text-decoration: none; font-size: 13px;
+  padding: 5px 10px; border-radius: 6px; border: 1px solid transparent;
+}
+.nav a:hover { color: var(--ink); }
+.nav a.active { color: var(--ink); background: var(--page); border-color: var(--hairline); }
+.nav .spacer { flex: 1; }
+.nav .chip { flex: none; }
+.chip-rec { border-color: rgba(208, 59, 59, 0.5); }
+
+/* 即時監控頁：地圖＋側欄。
+   側欄用 clamp 而非寫死 380px——視窗縮小或瀏覽器放大（等效縮小視窗）時
+   按比例讓出空間，地圖永遠拿得到大半畫面。minmax(0,1fr) 防 grid 內容撐爆。 */
+.app { display: grid; grid-template-columns: minmax(0, 1fr) clamp(300px, 28vw, 380px); height: 100%; }
+@media (max-width: 860px) {
+  /* 窄視窗（或高倍縮放）改上下堆疊：地圖上、面板下（可捲動） */
+  .app { grid-template-columns: 1fr; grid-template-rows: minmax(280px, 52%) minmax(0, 1fr); }
+  .panel { border-left: none; border-top: 1px solid var(--hairline); }
+}
 .map-wrap { position: relative; }
 .map-wrap .maplibregl-map { position: absolute; inset: 0; }
+
+/* 佔位頁（尚未實作的 tab） */
+.page-placeholder { height: 100%; display: grid; place-items: center; padding: 24px; }
+.page-placeholder .card { max-width: 460px; }
+.page-placeholder p { font-size: 13px; color: var(--ink-2); margin-bottom: 6px; }
+.page-placeholder .hint { font-size: 12px; color: var(--muted); }
+.page-placeholder code {
+  font-size: 11px; background: var(--page); border: 1px solid var(--hairline);
+  border-radius: 4px; padding: 1px 4px;
+}
 
 /* 地圖圖例（鏈路品質分級）*/
 .legend {
@@ -81,21 +123,28 @@ body {
   display: grid; place-items: center; color: var(--muted); font-size: 13px;
 }
 
-.metrics { display: grid; grid-template-columns: repeat(3, 1fr); gap: 8px; }
-.metric { padding: 4px 0; }
+.metrics { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 8px; }
+.metric { padding: 4px 0; min-width: 0; }
 .metric .label { font-size: 11px; color: var(--muted); }
-.metric .value { font-size: 18px; font-weight: 600; font-variant-numeric: tabular-nums; }
+.metric .value {
+  font-size: 18px; font-weight: 600; font-variant-numeric: tabular-nums;
+  /* RETURN_TO_LAUNCH 這類長模式名要能斷行，不能撐爆 1/3 欄位 */
+  overflow-wrap: anywhere; line-height: 1.2;
+}
 .metric .unit { font-size: 11px; color: var(--ink-2); margin-left: 2px; }
 
-.hero { display: flex; align-items: baseline; gap: 10px; margin-bottom: 4px; }
+.hero { display: flex; align-items: baseline; gap: 10px; margin-bottom: 4px; flex-wrap: wrap; }
 .hero .num { font-size: 34px; font-weight: 700; }
 .hero .unit { color: var(--ink-2); font-size: 13px; }
 
-.spark { display: block; margin: 6px 0 10px; }
+.spark { display: block; margin: 6px 0 10px; width: 100%; height: 40px; }
 
 .events { display: flex; flex-direction: column; gap: 6px; max-height: 220px; overflow-y: auto; }
-.event { display: flex; gap: 8px; font-size: 12px; align-items: baseline; }
+.event { display: flex; gap: 8px; font-size: 12px; align-items: baseline; min-width: 0; }
 .event time { color: var(--muted); font-variant-numeric: tabular-nums; flex: none; }
-.event .type { font-weight: 600; }
-.event .detail { color: var(--ink-2); }
+.event .type { font-weight: 600; flex: none; }
+.event .detail {
+  color: var(--ink-2); flex: 1; min-width: 0;
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
 .empty { color: var(--muted); font-size: 12px; }
