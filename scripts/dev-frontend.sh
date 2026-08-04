@@ -15,4 +15,5 @@ have npm || { [[ -s "$HOME/.nvm/nvm.sh" ]] && . "$HOME/.nvm/nvm.sh"; }
 have npm || die "找不到 npm。若用 nvm：source ~/.nvm/nvm.sh"
 
 step "啟動 frontend → http://localhost:${FRONTEND_PORT}"
-exec npm run dev -- --port "${FRONTEND_PORT}"
+# -H 0.0.0.0：讓區網內其他機器能開頁面（API 位址由 signal.ts 從瀏覽器網址推導）
+exec npm run dev -- --port "${FRONTEND_PORT}" -H "${FRONTEND_HOST:-0.0.0.0}"

@@ -16,6 +16,7 @@ services:
       interval: 5s
       timeout: 3s
       retries: 10
+    restart: unless-stopped
 
   # PX4 SITL (headless Gazebo)。host network 讓 MAVLink UDP 直接打到本機 14540/14550
   sitl:
@@ -35,11 +36,17 @@ services:
       options:
         max-size: "50m"
         max-file: "3"
+    restart: unless-stopped
 
+  # 開發即在 container 內跑（掛原始碼 + reload）：dev server 的存活不再依賴
+  # 任何終端 session，機器重開也會自己回來（restart: unless-stopped）。
   backend:
     build: ./backend
     network_mode: host          # 直接收 SITL 的 UDP；API 服務於 :${BACKEND_PORT:-38000}
-    command: ["uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "${BACKEND_PORT:-38000}"]
+    command: ["uvicorn", "app.main:app", "--reload",
+              "--host", "0.0.0.0", "--port", "${BACKEND_PORT:-38000}"]
+    volumes:
+      - ./backend/app:/srv/app  # 原始碼掛進去，改檔案 reload 立即生效
     environment:
       DATABASE_URL: postgresql://uav:uav@localhost:${DB_PORT:-35432}/uav
       MAVLINK_URL: udpin://0.0.0.0:14540
@@ -49,6 +56,25 @@ services:
       db:
         condition: service_healthy
     restart: unless-stopped
+    logging:
+      driver: json-file
+      options: { max-size: "50m", max-file: "3" }
+
+  frontend:
+    image: node:24-bookworm     # 對齊主機的 node 24（node_modules 是 bind mount 共用的）
+    network_mode: host
+    working_dir: /app
+    volumes:
+      - ./frontend:/app
+    # 用主機的 uid 跑，否則 .next/ 會被寫成 root 擁有，主機端 npm 之後會炸
+    user: "1000:1000"
+    environment:
+      HOME: /tmp
+    command: ["npm", "run", "dev", "--", "--port", "${FRONTEND_PORT:-33000}", "-H", "0.0.0.0"]
+    restart: unless-stopped
+    logging:
+      driver: json-file
+      options: { max-size: "50m", max-file: "3" }
 
 volumes:
   dbdata:

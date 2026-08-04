@@ -19,4 +19,6 @@ ok "DATABASE_URL=$DATABASE_URL"
 ok "MAVLINK_URL=$MAVLINK_URL"
 step "啟動 backend → http://localhost:${BACKEND_PORT}"
 
-exec .venv/bin/uvicorn app.main:app --reload --port "${BACKEND_PORT}"
+# --host 0.0.0.0：讓區網內其他機器（操作員自己的電腦）能直連。
+# uvicorn 預設只綁 127.0.0.1，區網開頁面會連不上 API/WS。
+exec .venv/bin/uvicorn app.main:app --reload --host "${BACKEND_HOST:-0.0.0.0}" --port "${BACKEND_PORT}"

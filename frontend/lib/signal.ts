@@ -22,5 +22,12 @@ export function classifySinr(sinr: number): (typeof LINK_CLASSES)[number] {
   return LINK_CLASSES.find((c) => sinr >= c.min) ?? LINK_CLASSES[3];
 }
 
-export const API = process.env.NEXT_PUBLIC_API_URL ?? "http://localhost:38000";
-export const WS_URL = process.env.NEXT_PUBLIC_WS_URL ?? "ws://localhost:38000/ws/telemetry";
+// API/WS 位址：未以環境變數指定時，從瀏覽器網址推導 host——
+// 寫死 localhost 的話，從區網其他機器開頁面會連到「那台機器自己」。
+// backend 與 frontend 約定跑在同一台主機（分工見 doc/architecture.md），
+// 只有 port 不同，因此拿 window.location.hostname 換 port 即可。
+// SSR 階段沒有 window，給 localhost 佔位——實際請求都在 client 端發生。
+const host = typeof window === "undefined" ? "localhost" : window.location.hostname;
+
+export const API = process.env.NEXT_PUBLIC_API_URL ?? `http://${host}:38000`;
+export const WS_URL = process.env.NEXT_PUBLIC_WS_URL ?? `ws://${host}:38000/ws/telemetry`;

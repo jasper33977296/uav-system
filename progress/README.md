@@ -38,7 +38,8 @@
 | Docker Engine 29.7.1 + compose v5.3.1 | ✅ 已裝，daemon 運行中 |
 | TimescaleDB 容器 | ✅ `:35432`，9 張表 + seed（2 gNB、1 干擾區）|
 | PX4 SITL 容器 | ✅ MAVLink → 127.0.0.1:14540（需 [#005](../issues/005-sitl-mavlink-target-ip.md) 的修正）|
-| `backend/.venv` | ✅ Python 3.12.3、mavsdk 3.17.2 |
+| `backend/.venv` | ✅ Python 3.12.3、mavsdk 3.17.2（host 端腳本用；服務本體改跑 container）|
+| backend / frontend containers | ✅ 掛原始碼 + reload，restart: unless-stopped，綁 0.0.0.0（區網可達）|
 | `frontend/node_modules` | ✅ 已安裝 |
 | 前端 UI 目視確認 | ⬜ 尚未做（backend 資料已驗證正確）|
 
