@@ -206,6 +206,13 @@ class Buffer:
 
 
 # ── HTTP（標準庫即可，1Hz 的量丟進執行緒足夠）─────────────────
+async def to_thread(fn, *args):
+    """asyncio.to_thread 是 3.9 才有；用 executor 相容到 3.7。"""
+    if hasattr(asyncio, "to_thread"):
+        return await asyncio.to_thread(fn, *args)
+    return await asyncio.get_event_loop().run_in_executor(None, lambda: fn(*args))
+
+
 def _ping_once(host: str):
     return subprocess.run(["ping", "-c", "1", "-W", "1", host],
                           capture_output=True, text=True)
@@ -221,7 +228,7 @@ def _post(url: str, payload: dict, timeout: float = 3.0):
 
 
 async def post_json(url: str, payload: dict, timeout: float = 3.0):
-    return await asyncio.to_thread(_post, url, payload, timeout)
+    return await to_thread(_post, url, payload, timeout)
 
 
 # ── 主迴圈 ───────────────────────────────────────────────────
@@ -243,14 +250,14 @@ async def run() -> None:
         t0 = time.monotonic()
 
         # 1) modem RF 指標
-        m = await asyncio.to_thread(modem.cmd, 'AT+QENG="servingcell"')
+        m = await to_thread(modem.cmd, 'AT+QENG="servingcell"')
         sample = parse_qeng(m)
 
         # 2) RTT／丟包（ping 對頻寬影響極小；吞吐量的主動測試刻意不做——
         #    它會消耗被量測的頻寬本身，見設計文件）
         rtt = None
         if PING_HOST:
-            out = await asyncio.to_thread(_ping_once, PING_HOST)
+            out = await to_thread(_ping_once, PING_HOST)
             rtt = parse_ping(out.stdout) if out.returncode == 0 else None
         ping_results.append(rtt is not None)
         ping_results[:] = ping_results[-PING_LOSS_WINDOW:]

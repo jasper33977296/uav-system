@@ -12,7 +12,9 @@ RF 指標（`AT+QENG="servingcell"`，含 SINR/RSRP/PCI）、從機上 PX4 取
 
 ## 需求
 
-- Python **3.8+**（`python3 --version` 先確認；RB5 原廠 18.04 映像可能是 3.6，需另裝）
+- Python **3.7+**（含 PX4 位置需 **3.8+**——mavsdk 的要求；未安裝 mavsdk 時
+  自動退化為無座標採樣）。RB5 原廠 18.04 映像可能是 3.6：先回報
+  `python3 --version`，若真是 3.6 有替代方案（見開發端）
 - modem AT 埠可讀（RM500Q 通常是 `/dev/ttyUSB2`；`ls /dev/ttyUSB*` 確認）
 - 機上 PX4 的 MAVLink 可達（預設 `udpin://0.0.0.0:14540`，依機上路由設定調整）
 
