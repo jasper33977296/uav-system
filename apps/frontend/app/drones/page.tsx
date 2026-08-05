@@ -84,9 +84,13 @@ export default function Drones() {
 
   return (
     <div className="page-pad">
-      {/* 註冊：真機階段用；模擬機由 backend 啟動時自動註冊 */}
+      {/* 註冊表單為多機未來預留（issues/011）：目前僅建立資料列 */}
       <div className="card">
         <h3>註冊無人機</h3>
+        <p className="hint-line">
+          單機部署的「加入無人機」＝改 .env 的 DRONE_NAME（啟動時自動註冊並綁定
+          MAVLink）。此表單目前僅建立資料列，多機接入待 ingest 多實例化（issues/011）。
+        </p>
         <div className="form-row">
           <input
             placeholder="名稱（如 rb5-uav-1）"
