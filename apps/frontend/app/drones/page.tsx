@@ -6,7 +6,7 @@ import { API } from "@/lib/signal";
 import { useUavStore } from "@/lib/store";
 
 interface Drone {
-  id: string; name: string; is_simulated: boolean;
+  id: string; name: string; is_simulated: boolean; is_primary: boolean;
   connection_url: string | null; status: string | null;
 }
 interface Session {
@@ -84,12 +84,12 @@ export default function Drones() {
 
   return (
     <div className="page-pad">
-      {/* 註冊表單為多機未來預留（issues/011）：目前僅建立資料列 */}
       <div className="card">
         <h3>註冊無人機</h3>
         <p className="hint-line">
-          單機部署的「加入無人機」＝改 .env 的 DRONE_NAME（啟動時自動註冊並綁定
-          MAVLink）。此表單目前僅建立資料列，多機接入待 ingest 多實例化（issues/011）。
+          機的身分由系統端管理：註冊 → 「設為主機」後，MAVLink（14540）收到的
+          遙測就記在這台名下；也可直接對現有的機「改名」。
+          多機同時接入待 ingest 多實例化（issues/011）。
         </p>
         <div className="form-row">
           <input
@@ -114,6 +114,8 @@ export default function Drones() {
           <div className="card" key={d.id}>
             <div className="drone-head">
               <span className="name">{d.name}</span>
+              {d.is_primary && <span className="chip">
+                <span className="dot" style={{ background: "#0ca30c" }} />主機</span>}
               {d.is_simulated && <span className="chip">模擬</span>}
               {isLive && live?.armed && (
                 <span className="chip">
@@ -125,6 +127,28 @@ export default function Drones() {
                 {d.connection_url ?? ""} · 共 {mine.length} 條航線
               </span>
               <span className="spacer" />
+              <button className="btn-plain btn-sm"
+                onClick={async () => {
+                  const name = window.prompt("新名稱", d.name);
+                  if (!name || name === d.name) return;
+                  const res = await fetch(`${API}/api/drones/${d.id}`, {
+                    method: "PATCH",
+                    headers: { "Content-Type": "application/json" },
+                    body: JSON.stringify({ name }),
+                  });
+                  if (!res.ok) setErr((await res.json()).detail ?? "改名失敗");
+                  reload();
+                }}>改名</button>{" "}
+              {!d.is_primary && !d.name.startsWith("swarm-") && (
+                <button className="btn-plain btn-sm"
+                  title="MAVLink 收到的遙測記在這台名下（飛行中無法切換）"
+                  onClick={async () => {
+                    const res = await fetch(`${API}/api/drones/${d.id}/primary`,
+                      { method: "POST" });
+                    if (!res.ok) setErr((await res.json()).detail ?? "切換失敗");
+                    reload();
+                  }}>設為主機</button>
+              )}{" "}
               <button
                 className="btn-danger"
                 disabled={isLive}

@@ -60,6 +60,25 @@ async def recover_orphan_sessions() -> int:
     return n
 
 
+async def get_primary_drone() -> dict | None:
+    """主機（MAVLink 資料記在哪台名下）由系統端指定：drones.is_primary。"""
+    row = await pool.fetchrow(
+        "SELECT id::text AS id, name FROM drones WHERE is_primary LIMIT 1")
+    return dict(row) if row else None
+
+
+async def create_default_primary(is_simulated: bool, connection_url: str) -> dict:
+    """全新環境沒有任何主機時自動建一台（名稱可在無人機頁改）——
+    資料記錄不等使用者設定，先以預設身分開錄。"""
+    row = await pool.fetchrow(
+        """INSERT INTO drones (name, serial_no, is_simulated, connection_url, status, is_primary)
+           VALUES ('uav-1', 'uav-1', $1, $2, 'idle', true)
+           ON CONFLICT (serial_no) DO UPDATE SET is_primary = true
+           RETURNING id::text AS id, name""",
+        is_simulated, connection_url)
+    return dict(row)
+
+
 async def create_session(drone_id: str, link_mission: bool = True,
                          mission_id: str | None = None) -> str:
     """開一條航線紀錄。mission_id 指定時直接關聯（群飛模擬飛指定任務）；

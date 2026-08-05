@@ -48,15 +48,18 @@ FRONTEND_PORT=33000  # 前端
 
 ### 1.2 設定真機模式
 
-**全部設定集中在根目錄 `.env`**（`setup.sh` 會產生；範本與逐項說明見
-`.env.example`）。真機部署改兩行：
+**網路層設定集中在根目錄 `.env`**（`setup.sh` 會產生；範本見 `.env.example`）。
+真機部署改一行：
 
 ```bash
 LINK_SOURCE=modem        # ★ 真機模式：鏈路量測由機上 POST 進來
-DRONE_NAME=rb5-uav-1     # 你的機名（會自動註冊）
 ```
 
 改完 `docker compose up -d` 重載即生效。
+
+**機的身分在系統端設定**（不走 .env）：全新環境會自動建立預設主機
+`uav-1`，開站後到前端「無人機」頁**改名**成你的機名（如 rb5-uav-1）即可；
+之後註冊其他機、切換「主機」（MAVLink 遙測記在哪台名下）也都在該頁操作。
 
 `LINK_SOURCE` 是模擬／真機的總開關：
 
@@ -81,7 +84,6 @@ docker compose up -d db backend frontend      # 明確列出，不含 sitl
 |---|---|---|
 | `DATABASE_URL` | `postgresql://uav:uav@localhost:35432/uav` | DB 連線 |
 | `MAVLINK_URL` | `udpin://0.0.0.0:14540` | MAVLink 監聽位址 |
-| `DRONE_NAME` | `sim-uav-1` | 本機管理的無人機名（自動註冊）|
 | `LINK_SOURCE` | `simulated` | `simulated` / `modem` |
 | `BROADCAST_HZ` | `5.0` | WebSocket 推送頻率 |
 | `DB_WRITE_HZ` | `1.0` | 遙測入庫頻率（armed 時）|

@@ -70,7 +70,7 @@ write_env_file "$ROOT/.env" \
   "BACKEND_PORT=$BACKEND_PORT" \
   "FRONTEND_PORT=$FRONTEND_PORT"
 # 部署設定：缺哪個補哪個（不覆蓋既有值），完整說明見 .env.example
-for kv in "LINK_SOURCE=simulated" "DRONE_NAME=sim-uav-1" \
+for kv in "LINK_SOURCE=simulated" \
           "MAVLINK_URL=udpin://0.0.0.0:14540" \
           "SITL_BACKEND_HOST=127.0.0.1" "SITL_QGC_HOST=127.0.0.1"; do
   grep -q "^${kv%%=*}=" "$ROOT/.env" || echo "$kv" >> "$ROOT/.env"

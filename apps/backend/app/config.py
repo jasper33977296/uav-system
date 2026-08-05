@@ -4,7 +4,8 @@ from pydantic_settings import BaseSettings
 class Settings(BaseSettings):
     database_url: str = "postgresql://uav:uav@localhost:35432/uav"  # port 慣例：30000 以上
     mavlink_url: str = "udpin://0.0.0.0:14540"
-    drone_name: str = "sim-uav-1"
+    # 註：本系統管理哪台無人機（名稱/主機指定）由系統端管理（drones 表 +
+    # 無人機頁），不走環境變數——見 issues/011。
     link_source: str = "simulated"   # simulated / modem（真機階段實作 modem 讀取）
     broadcast_hz: float = 5.0        # WebSocket 推送頻率
     db_write_hz: float = 1.0         # telemetry / link_metrics 入庫頻率

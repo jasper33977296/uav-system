@@ -99,12 +99,17 @@ async def _broadcast_loop() -> None:
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     await db.init_pool()
-    live.drone_id = await db.ensure_drone(settings.drone_name, settings.mavlink_url)
-    live.drone_name = settings.drone_name
+    # 主機身分由系統端決定（無人機頁註冊/設為主機/改名），不再走環境變數
+    primary = await db.get_primary_drone()
+    if primary is None:
+        primary = await db.create_default_primary(
+            settings.link_source == "simulated", settings.mavlink_url)
+        log.info("無主機設定，自動建立預設主機 uav-1（可在無人機頁改名）")
+    live.drone_id, live.drone_name = primary["id"], primary["name"]
     recovered = await db.recover_orphan_sessions()
     if recovered:
         log.info("補結算 %d 條孤兒航線（上次執行期間中斷的飛行）", recovered)
-    log.info("drone registered: %s (%s)", settings.drone_name, live.drone_id)
+    log.info("primary drone: %s (%s)", live.drone_name, live.drone_id)
     tasks = [
         asyncio.create_task(ingest.run(), name="mavlink-ingest"),
         asyncio.create_task(_link_and_db_loop(), name="link-db-loop"),

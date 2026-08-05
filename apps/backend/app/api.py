@@ -40,6 +40,48 @@ async def register_drone(d: DroneIn):
     return dict(row)
 
 
+class DroneRename(BaseModel):
+    name: str
+
+
+@router.patch("/drones/{drone_id}")
+async def rename_drone(drone_id: str, body: DroneRename):
+    """改名（系統端管理機的身分，不走環境變數）。serial_no 保持原值當穩定鍵。"""
+    name = body.name.strip()
+    if not name:
+        raise HTTPException(422, "名稱不可為空")
+    r = await db.pool.execute("UPDATE drones SET name = $2 WHERE id = $1", drone_id, name)
+    if r.split()[-1] == "0":
+        raise HTTPException(404, "無此無人機")
+    if live.drone_id == drone_id:
+        live.drone_name = name          # 主機改名即時反映（事件標籤、側欄）
+    return {"ok": True}
+
+
+@router.post("/drones/{drone_id}/primary")
+async def set_primary(drone_id: str):
+    """指定哪台是 MAVLink 主機（14540 收到的遙測記在這台名下）。
+
+    飛行中拒切——切換身分會讓進行中的航線歸屬錯亂。
+    切換立即生效（api 與 ingest 同進程，直接改 live state），不需重啟。
+    """
+    if live.armed:
+        raise HTTPException(409, "飛行中無法切換主機")
+    row = await db.pool.fetchrow(
+        "SELECT id::text AS id, name, is_simulated FROM drones WHERE id = $1", drone_id)
+    if row is None:
+        raise HTTPException(404, "無此無人機")
+    if row["name"].startswith("swarm-"):
+        raise HTTPException(409, "群飛模擬僚機不能設為主機")
+    async with db.pool.acquire() as con:
+        async with con.transaction():
+            await con.execute("UPDATE drones SET is_primary = false WHERE is_primary")
+            await con.execute("UPDATE drones SET is_primary = true WHERE id = $1", drone_id)
+    live.drone_id, live.drone_name = row["id"], row["name"]
+    live.session_id = None
+    return {"ok": True, "primary": row["name"]}
+
+
 @router.delete("/drones/{drone_id}")
 async def delete_drone(drone_id: str):
     """刪除無人機與其**全部**架次、遙測、鏈路與事件資料。不可復原。

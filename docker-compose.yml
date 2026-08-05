@@ -51,7 +51,6 @@ services:
       # 全部由根目錄 .env 供值（見 .env.example）——新環境只改 .env
       DATABASE_URL: postgresql://uav:uav@localhost:${DB_PORT:-35432}/uav
       MAVLINK_URL: ${MAVLINK_URL:-udpin://0.0.0.0:14540}
-      DRONE_NAME: ${DRONE_NAME:-sim-uav-1}
       LINK_SOURCE: ${LINK_SOURCE:-simulated}
     depends_on:
       db:

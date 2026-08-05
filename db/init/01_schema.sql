@@ -16,8 +16,10 @@ CREATE TABLE drones (
   is_simulated   BOOLEAN NOT NULL DEFAULT true,
   connection_url TEXT,                 -- e.g. 'udpin://0.0.0.0:14540'
   status         TEXT NOT NULL DEFAULT 'offline',  -- offline / idle / in_mission / maintenance
+  is_primary     BOOLEAN NOT NULL DEFAULT false,   -- MAVLink 主機（至多一台，系統端指定）
   created_at     TIMESTAMPTZ NOT NULL DEFAULT now()
 );
+CREATE UNIQUE INDEX idx_drones_one_primary ON drones ((true)) WHERE is_primary;
 
 -- ============================================================
 -- 5G 基地台（gNB）：模擬鏈路品質的訊號源，之後也可存實網 cell 資訊
