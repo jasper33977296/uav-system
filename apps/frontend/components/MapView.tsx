@@ -110,16 +110,14 @@ export default function MapView() {
             id, lat: t.lat!, lon: t.lon!, alt: t.alt_rel ?? 0, color: colorFor(id),
           }))));
 
-      // 任務疊圖：任務庫的啟用路徑優先（路徑管理頁選的），
-      // 沒有啟用中的路徑時退回「從機上讀回目前任務」。兩者都沒有就不畫。
+      // 任務疊圖：**只**畫任務庫的啟用路徑（路徑管理頁「顯示於即時頁」）。
+      // 使用者的顯隱選擇是唯一真相——全部隱藏就什麼都不畫，
+      // 不退回機上任務（那個備援曾讓「隱藏」失效，見 2026-08-05 修正；
+      // 機上任務仍可在路徑管理頁「從機上讀回」取得）。
       try {
         let wps: any[] = [];
         const ra = await fetch(`${API}/api/missions/active`);
         if (ra.ok) wps = ((await ra.json()).waypoints ?? []);
-        if (wps.length < 2) {
-          const rv = await fetch(`${API}/api/mission/current`);
-          if (rv.ok) wps = ((await rv.json()).waypoints ?? []);
-        }
         {
           wps = wps.filter((w: any) => w.lat && w.lon);
           if (wps.length >= 2) {
