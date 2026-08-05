@@ -36,6 +36,19 @@ function Sparkline({ data }: { data: number[] }) {
 const fmt = (v: number | null | undefined, digits = 1) =>
   v == null ? "—" : v.toFixed(digits);
 
+/** 事件以人話呈現：JSON 直出是側欄最大的視覺雜訊。 */
+function evText(e: { type: string; detail: Record<string, unknown> }): string {
+  const d = e.detail as Record<string, number | string | boolean | undefined>;
+  const sinr = typeof d.sinr === "number" ? `SINR ${d.sinr.toFixed(1)} dB` : "";
+  switch (e.type) {
+    case "link_degraded": return `訊號劣化 · ${sinr}`;
+    case "link_lost":     return `訊號瀕斷 · ${sinr}`;
+    case "link_recovered":return `訊號恢復 · ${sinr}`;
+    case "mode_change":   return `模式 ${d.from ?? "?"} → ${d.to ?? "?"}`;
+    default:              return `${e.type} ${JSON.stringify(d)}`;
+  }
+}
+
 export default function SidePanel() {
   const { live, events, fleet, primaryId, selectedId, select, sinrHistories } = useUavStore();
   const link = live?.link;
@@ -124,8 +137,7 @@ export default function SidePanel() {
               />
               <time>{new Date(e.time).toLocaleTimeString("zh-TW", { hour12: false })}</time>
               {e.drone && <span className="ev-drone">{e.drone}</span>}
-              <span className="type">{e.type}</span>
-              <span className="detail">{JSON.stringify(e.detail)}</span>
+              <span className="detail">{evText(e)}</span>
             </div>
           ))}
         </div>

@@ -129,3 +129,16 @@ export function pathArrows<T extends { lat: number | null; lon: number | null; a
   }
   return { type: "FeatureCollection", features: feats };
 }
+
+/** 地面投影線：一串點 → LineString。逐點圓點在 1Hz 資料下是一串顆粒，
+    連續線（搭配 round join/cap）才是平滑的路徑投影。 */
+export function trailLineString<T extends { lat: number | null; lon: number | null }>(
+  pts: T[], props: Record<string, unknown> = {},
+): GeoJSON.Feature | null {
+  const coords = pts
+    .filter((p) => p.lat != null && p.lon != null)
+    .map((p) => [p.lon!, p.lat!]);
+  if (coords.length < 2) return null;
+  return { type: "Feature", properties: props,
+           geometry: { type: "LineString", coordinates: coords } };
+}

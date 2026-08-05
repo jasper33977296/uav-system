@@ -5,7 +5,7 @@ import { useParams, useRouter } from "next/navigation";
 import { useEffect, useMemo, useRef, useState } from "react";
 
 import { createDroneLayer, DRONE_PALETTE } from "@/components/droneLayer";
-import { CANVAS, groundGrid, ribbon } from "@/lib/geo";
+import { CANVAS, groundGrid, ribbon, trailLineString } from "@/lib/geo";
 import { API, LINK_CLASSES, classifySinr } from "@/lib/signal";
 
 /** 任務視角回放：同一條路徑的一或多條航線（可跨機、跨時間）同步重飛。
@@ -82,6 +82,9 @@ export default function MissionReplay() {
   const [plan, setPlan] = useState<{ lat: number; lon: number; alt: number | null }[]>([]);
   const [sec, setSec] = useState(0);
   const secRef = useRef(0);
+  // 顯隱切換：六條全開會互相蓋，讓使用者自己決定比對哪幾條
+  const [hidden, setHidden] = useState<string[]>([]);
+  const hiddenRef = useRef<string[]>([]);
   const mapRef = useRef<maplibregl.Map | null>(null);
   const containerRef = useRef<HTMLDivElement>(null);
 
@@ -118,10 +121,30 @@ export default function MissionReplay() {
       })
       .filter((s) => s.rows.length > 1),
     [sessions, tracks]);
+  // 軸長按**可見**航線算：隱藏一條長趟後，剩下的應填滿時間軸
   const maxDur = useMemo(() =>
-    Math.max(1, ...series.map((s) =>
-      (new Date(s.rows[s.rows.length - 1].time).getTime() - s.t0) / 1000)),
-    [series]);
+    Math.max(1, ...series
+      .filter((s) => !hidden.includes(s.sess.id))
+      .map((s) => (new Date(s.rows[s.rows.length - 1].time).getTime() - s.t0) / 1000)),
+    [series, hidden]);
+
+  function projData(ser: typeof series, hid: string[]): GeoJSON.FeatureCollection {
+    return { type: "FeatureCollection",
+      features: ser
+        .filter((s) => !hid.includes(s.sess.id))
+        .map((s) => trailLineString(
+          s.rows.map((r) => ({ lat: r.lat, lon: r.lon })), { dcolor: s.color }))
+        .filter((f): f is GeoJSON.Feature => f !== null) };
+  }
+  function ribbonData(ser: typeof series, hid: string[]): GeoJSON.FeatureCollection {
+    return { type: "FeatureCollection",
+      features: ser
+        .filter((s) => !hid.includes(s.sess.id))
+        .flatMap((s) => ribbon(
+          s.rows.map((r) => ({ lat: r.lat, lon: r.lon, alt: r.alt_rel, sinr: r.sinr })),
+          (_a, b) => ({ cls: b.sinr == null ? "unknown" : classifySinr(b.sinr).key }),
+        ).features) };
+  }
 
   /** 相對秒數 → 該航線當下樣本（1Hz 資料，時間比對取下界） */
   function rowAt(s: (typeof series)[number], t: number): LinkRow {
@@ -162,35 +185,28 @@ export default function MissionReplay() {
         paint: { "line-color": "#8a94a3", "line-width": 1.5,
                  "line-dasharray": [3, 3], "line-opacity": 0.6 } });
 
-      // 各航線：航線色地面投影 + SINR 絲帶
-      map.addSource("proj", { type: "geojson", data: {
-        type: "FeatureCollection",
-        features: series.flatMap((s) => s.rows.map((r) => ({
-          type: "Feature" as const, properties: { dcolor: s.color },
-          geometry: { type: "Point" as const, coordinates: [r.lon!, r.lat!] },
-        }))) } });
-      map.addLayer({ id: "proj", type: "circle", source: "proj",
-        paint: { "circle-radius": 2.5, "circle-color": ["get", "dcolor"],
-                 "circle-opacity": 0.8, "circle-stroke-width": 0 } });
-      map.addSource("ribbons", { type: "geojson", data: {
-        type: "FeatureCollection",
-        features: series.flatMap((s) => ribbon(
-          s.rows.map((r) => ({ lat: r.lat, lon: r.lon, alt: r.alt_rel, sinr: r.sinr })),
-          (_a, b) => ({ cls: b.sinr == null ? "unknown" : classifySinr(b.sinr).key }),
-        ).features) } });
+      // 各航線：航線色地面投影線（去顆粒）+ SINR 絲帶
+      map.addSource("proj", { type: "geojson", data: projData(series, hiddenRef.current) });
+      map.addLayer({ id: "proj", type: "line", source: "proj",
+        layout: { "line-cap": "round", "line-join": "round" },
+        paint: { "line-width": 2, "line-color": ["get", "dcolor"], "line-opacity": 0.7 } });
+      map.addSource("ribbons", { type: "geojson",
+        data: ribbonData(series, hiddenRef.current) });
       map.addLayer({ id: "ribbons", type: "fill-extrusion", source: "ribbons",
         paint: { "fill-extrusion-color": ["match", ["get", "cls"],
             ...LINK_CLASSES.flatMap((c) => [c.key, c.color]), "#898781"] as any,
           "fill-extrusion-height": ["get", "top"], "fill-extrusion-base": ["get", "base"],
           "fill-extrusion-opacity": 0.75 } });
 
-      // 回放游標：每條航線一顆球，沿相對時間同步前進
+      // 回放游標：每條可見航線一顆球，沿相對時間同步前進
       map.addLayer(createDroneLayer("cursors", () =>
-        series.map((s) => {
-          const r = rowAt(s, secRef.current);
-          return { id: s.sess.id, lat: r.lat!, lon: r.lon!,
-                   alt: r.alt_rel ?? 0, color: s.color };
-        })));
+        series
+          .filter((s) => !hiddenRef.current.includes(s.sess.id))
+          .map((s) => {
+            const r = rowAt(s, secRef.current);
+            return { id: s.sess.id, lat: r.lat!, lon: r.lon!,
+                     alt: r.alt_rel ?? 0, color: s.color };
+          })));
     });
     return () => { map.remove(); mapRef.current = null; };
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -200,6 +216,16 @@ export default function MissionReplay() {
     secRef.current = sec;
     mapRef.current?.triggerRepaint();
   }, [sec]);
+
+  useEffect(() => {
+    hiddenRef.current = hidden;
+    const map = mapRef.current;
+    if (!map || !map.getSource("proj")) return;
+    (map.getSource("proj") as maplibregl.GeoJSONSource).setData(projData(series, hidden));
+    (map.getSource("ribbons") as maplibregl.GeoJSONSource).setData(ribbonData(series, hidden));
+    map.triggerRepaint();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [hidden, series]);
 
   const mmss = (t: number) => `${Math.floor(t / 60)}:${Math.floor(t % 60).toString().padStart(2, "0")}`;
 
@@ -212,14 +238,25 @@ export default function MissionReplay() {
           {dropped > 0 && `（另有 ${dropped} 條較舊未顯示）`}
         </span>
         <span className="spacer" />
-        {series.map((s) => (
-          <button key={s.sess.id} className="chip chip-btn" title="單獨回放這條航線"
-            onClick={() => router.push(`/replay/${s.sess.id}`)}>
-            <span className="dot" style={{ background: s.color }} />
-            {s.sess.drone_name} {new Date(s.sess.started_at).toLocaleTimeString("zh-TW",
-              { hour12: false, hour: "2-digit", minute: "2-digit" })}
-          </button>
-        ))}
+        {series.map((s) => {
+          const off = hidden.includes(s.sess.id);
+          return (
+            <button key={s.sess.id}
+              className={`chip chip-btn ${off ? "chip-off" : ""}`}
+              title={off ? "顯示這條航線" : "隱藏這條航線"}
+              onClick={() => setHidden(off
+                ? hidden.filter((x) => x !== s.sess.id)
+                : [...hidden, s.sess.id])}>
+              <span className="dot" style={{ background: s.color }} />
+              {s.sess.drone_name} {new Date(s.sess.started_at).toLocaleTimeString("zh-TW",
+                { hour12: false, hour: "2-digit", minute: "2-digit" })}
+              <span className="chip-link" title="單獨回放"
+                onClick={(e) => { e.stopPropagation(); router.push(`/replay/${s.sess.id}`); }}>
+                ↗
+              </span>
+            </button>
+          );
+        })}
       </div>
 
       <div className="replay-map" ref={containerRef}>
@@ -228,16 +265,18 @@ export default function MissionReplay() {
 
       {series.length > 0 && (
         <div className="timeline">
-          <MultiChart series={series} field="sinr" height={110} yLabel="SINR (dB)"
+          <MultiChart series={series.filter((s) => !hidden.includes(s.sess.id))}
+                      field="sinr" height={110} yLabel="SINR (dB)"
                       thresholds={[5, -2]} maxDur={maxDur} sec={sec} />
-          <MultiChart series={series} field="rtt_ms" height={70} yLabel="RTT (ms)"
+          <MultiChart series={series.filter((s) => !hidden.includes(s.sess.id))}
+                      field="rtt_ms" height={70} yLabel="RTT (ms)"
                       maxDur={maxDur} sec={sec} />
           <div className="scrub-row">
-            <input type="range" min={0} max={Math.ceil(maxDur)} value={sec}
+            <input type="range" min={0} max={Math.ceil(maxDur)} value={Math.min(sec, Math.ceil(maxDur))}
                    onChange={(e) => setSec(Number(e.target.value))} />
             <span className="scrub-read">
               T+{mmss(sec)} / {mmss(maxDur)}
-              {series.map((s) => {
+              {series.filter((s) => !hidden.includes(s.sess.id)).map((s) => {
                 const r = rowAt(s, sec);
                 return (
                   <span key={s.sess.id} style={{ marginLeft: 10 }}>

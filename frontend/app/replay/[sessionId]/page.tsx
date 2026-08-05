@@ -5,7 +5,7 @@ import { useParams, useRouter } from "next/navigation";
 import { useEffect, useMemo, useRef, useState } from "react";
 
 import { createDroneLayer } from "@/components/droneLayer";
-import { CANVAS, groundGrid, pathArrows, ribbon } from "@/lib/geo";
+import { CANVAS, groundGrid, pathArrows, ribbon, trailLineString } from "@/lib/geo";
 import { API, LINK_CLASSES, classifySinr } from "@/lib/signal";
 
 interface LinkRow {
@@ -131,18 +131,14 @@ export default function Replay() {
         paint: { "circle-radius": 10, "circle-color": "transparent",
                  "circle-stroke-width": 2, "circle-stroke-color": "#898781" } });
 
-      const cls = (r: LinkRow) => (r.sinr == null ? "unknown" : classifySinr(r.sinr).key);
+      // 地面投影：中性細線（單機頁identity無歧義，投影只是把 3D 路徑釘回地面）
       map.addSource("track", { type: "geojson", data: {
         type: "FeatureCollection",
-        features: rows.map((r) => ({
-          type: "Feature", properties: { cls: cls(r) },
-          geometry: { type: "Point", coordinates: [r.lon!, r.lat!] },
-        })) } });
-      map.addLayer({ id: "track", type: "circle", source: "track",
-        paint: { "circle-radius": 2.5, "circle-opacity": 0.45,
-          "circle-color": ["match", ["get", "cls"],
-            ...LINK_CLASSES.flatMap((c) => [c.key, c.color]), "#898781"] as any,
-          "circle-stroke-width": 0 } });
+        features: [trailLineString(rows.map((r) => ({ lat: r.lat, lon: r.lon })))]
+          .filter((f): f is GeoJSON.Feature => f !== null) } });
+      map.addLayer({ id: "track", type: "line", source: "track",
+        layout: { "line-cap": "round", "line-join": "round" },
+        paint: { "line-color": "#6b7684", "line-width": 2, "line-opacity": 0.55 } });
 
       // 懸浮絲帶：路徑本身浮在飛行高度（地面另有投影點）
       map.addSource("track3d", { type: "geojson",

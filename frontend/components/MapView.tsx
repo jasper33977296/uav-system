@@ -4,7 +4,7 @@ import "maplibre-gl/dist/maplibre-gl.css";
 import { useEffect, useRef, useState } from "react";
 
 import { colorFor, createDroneLayer } from "@/components/droneLayer";
-import { CANVAS, DRONE_COLOR, groundGrid, ribbon } from "@/lib/geo";
+import { CANVAS, groundGrid, ribbon, trailLineString } from "@/lib/geo";
 import { API, LINK_CLASSES, classifySinr } from "@/lib/signal";
 import { useUavStore } from "@/lib/store";
 
@@ -26,8 +26,7 @@ export default function MapView() {
   const markerRef = useRef<maplibregl.Marker | null>(null);
   const centeredRef = useRef(false);
   const [hasMission, setHasMission] = useState(false);
-  const [fleetList, setFleetList] = useState<{ id: string; name: string }[]>([]);
-  const fleetKeyRef = useRef("");
+
 
   useEffect(() => {
     const map = new maplibregl.Map({
@@ -73,19 +72,19 @@ export default function MapView() {
       });
 
       // 地面投影：實際軌跡的垂直投影。**顏色＝機別色**（分層編碼：
-      // 空中絲帶編碼訊號品質、地面投影與球體編碼「這是哪台飛的」——
-      // 一條路徑不能同時載兩種語意，拆成兩層各自明確）。
+      // 空中絲帶編碼訊號品質、地面投影與球體編碼「這是哪台飛的」）。
+      // 用連續線而非逐點圓點——1Hz/5Hz 的點列是一串顆粒，線才平滑。
       map.addSource("trail", {
         type: "geojson",
         data: { type: "FeatureCollection", features: [] },
       });
       map.addLayer({
-        id: "trail-pt", type: "circle", source: "trail",
+        id: "trail-line", type: "line", source: "trail",
+        layout: { "line-cap": "round", "line-join": "round" },
         paint: {
-          "circle-radius": 3,
-          "circle-color": ["get", "dcolor"],
-          "circle-opacity": 0.85,
-          "circle-stroke-width": 0,
+          "line-color": ["get", "dcolor"],
+          "line-width": 2,
+          "line-opacity": 0.7,
         },
       });
 
@@ -161,13 +160,13 @@ export default function MapView() {
               filter: ["!", ["has", "pt"]],
               paint: { "line-color": "#8a94a3", "line-width": 1.5,
                        "line-dasharray": [3, 3], "line-opacity": 0.6 },
-            }, "trail-pt");
+            }, "trail-line");
             map.addLayer({
               id: "plan-ground-wp", type: "circle", source: "plan-ground",
               filter: ["has", "pt"],
               paint: { "circle-radius": 4, "circle-color": "transparent",
                        "circle-stroke-width": 1.5, "circle-stroke-color": "#8a94a3" },
-            }, "trail-pt");
+            }, "trail-line");
             setHasMission(true);
           }
         }
@@ -205,11 +204,9 @@ export default function MapView() {
         const trailEntries = Object.entries(s.trails);
         (map.getSource("trail") as maplibregl.GeoJSONSource | undefined)?.setData({
           type: "FeatureCollection",
-          features: trailEntries.flatMap(([id, tr]) => tr.map((p) => ({
-            type: "Feature" as const,
-            properties: { dcolor: colorFor(id) },
-            geometry: { type: "Point" as const, coordinates: [p.lon, p.lat] },
-          }))),
+          features: trailEntries
+            .map(([id, tr]) => trailLineString(tr, { dcolor: colorFor(id) }))
+            .filter((f): f is GeoJSON.Feature => f !== null),
         });
 
         // 絲帶隔 2 點取一段：5Hz 下段長約 2m，視覺連續
@@ -222,14 +219,7 @@ export default function MapView() {
             ).features),
         });
 
-        // 機隊圖例：成員變動時才更新 React state（5Hz 下避免無謂 re-render）
-        const key = Object.keys(s.fleet).sort().join(",");
-        if (key !== fleetKeyRef.current) {
-          fleetKeyRef.current = key;
-          setFleetList(Object.entries(s.fleet).map(([id, t2]) => ({
-            id, name: t2.drone_name ?? id.slice(0, 8),
-          })));
-        }
+
       }),
     []
   );
@@ -245,12 +235,7 @@ export default function MapView() {
             {c.label}
           </div>
         ))}
-        {fleetList.map((d) => (
-          <div className="row" key={d.id}>
-            <span className="dot" style={{ background: colorFor(d.id) }} />
-            {d.name}（球體與地面投影）
-          </div>
-        ))}
+
         {hasMission && (
           <div className="row">
             <span className="dot" style={{ background: "#8a94a3", opacity: 0.6 }} />

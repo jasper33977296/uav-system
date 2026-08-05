@@ -223,3 +223,6 @@ body {
 .chip-btn { cursor: pointer; background: var(--surface); }
 .chip-btn.chip-on { border-color: var(--ink-2); color: var(--ink); }
 .replay-head { flex-wrap: wrap; row-gap: 6px; }
+.chip-off { opacity: 0.35; }
+.chip-link { margin-left: 4px; color: var(--muted); cursor: pointer; }
+.chip-link:hover { color: var(--ink); }
