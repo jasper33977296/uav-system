@@ -70,19 +70,20 @@ services:
 
   uav-frontend:
     container_name: uav-frontend
-    image: node:24-bookworm     # 對齊主機的 node 24（node_modules 是 bind mount 共用的）
+    build: ./apps/frontend      # 依賴烤進映像：next 建構時保證存在
     network_mode: host
     working_dir: /app
     volumes:
       - ./apps/frontend:/app
+      # 匿名 volume：讓映像內建的 node_modules 不被上面的 bind mount 遮蔽。
+      # 前端依賴變更後重建：docker compose up -d --build --renew-anon-volumes
+      - /app/node_modules
     # 用主機的 uid 跑，否則 .next/ 會被寫成 root 擁有，主機端 npm 之後會炸
     user: "1000:1000"
     environment:
       HOME: /tmp
-    # 首次啟動若依賴不齊就在容器內安裝——部署純 Docker，
-    # 不依賴 host 端 npm（setup.sh 是開發工具，部署不需要）。
-    # 判斷用 next 執行檔而非目錄存在：殘缺的 node_modules（上次安裝
-    # 中斷）目錄仍在，但 next 不在，須重跑 npm ci。
+    # 保險絲：正常情況映像已含依賴，此判斷永不觸發；
+    # 僅在匿名 volume 異常殘缺時自救。
     command: sh -c "[ -x node_modules/.bin/next ] || npm ci; exec npm run dev -- --port ${FRONTEND_PORT:-33000} -H 0.0.0.0"
     restart: unless-stopped
     logging:

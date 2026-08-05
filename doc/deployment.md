@@ -280,7 +280,7 @@ DB 密碼改掉預設值。這是已知邊界，不是疏忽。
 |---|---|
 | 資料生命週期 | 原始 1Hz 資料 **30 天自動清除**；1 分鐘彙總永久保留。要長期保留原始資料：無人機頁逐航線「匯出」（單一 JSON）後可「移除」 |
 | 備份 | `docker exec uav-db pg_dump -U uav uav > backup-$(date +%F).sql`（排程丟遠端）|
-| 更新版本 | `git pull && docker compose up -d --build` |
+| 更新版本 | `git pull && docker compose up -d --build --renew-anon-volumes` |
 | 看日誌 | `docker compose logs -f uav-backend`（log 已設 50MB×3 上限，不會寫爆磁碟）|
 | 服務狀態 | `docker compose ps`；全部 `restart: unless-stopped`，重開機自動復活 |
 
