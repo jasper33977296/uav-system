@@ -10,6 +10,7 @@ from dataclasses import dataclass, field
 @dataclass
 class LiveState:
     drone_id: str | None = None
+    drone_name: str | None = None    # 事件流等 UI 顯示用（多機時必須能分辨）
     session_id: str | None = None
     connected: bool = False          # MAVLink 連線狀態
 
@@ -55,6 +56,7 @@ class LiveState:
     def telemetry_dict(self) -> dict:
         return {
             "drone_id": self.drone_id,
+            "drone_name": self.drone_name,
             "session_id": self.session_id,
             "connected": self.connected,
             "lat": self.lat, "lon": self.lon,

@@ -6,12 +6,15 @@
 """
 from . import db
 from .config import settings
-from .state import live
+from .state import LiveState
 from .ws import manager
 
 
-async def transition(m: dict) -> None:
-    """依這筆量測更新 `live.link_state`，跨級時發一次事件。
+async def transition(s: LiveState, m: dict) -> None:
+    """依這筆量測更新 `s.link_state`，跨級時發一次事件。
+
+    以 state 為參數而非全域 live：主機（MAVLink）與群飛模擬的每台僚機
+    各自持有 LiveState，共用同一個狀態機。
 
     SINR 是連續量、事件是離散點，直接比大小會在干擾區內每秒發一筆重複事件。
     這裡用 ok / degraded / lost 三態，只在真的跨級時發事件。
@@ -30,7 +33,7 @@ async def transition(m: dict) -> None:
     sinr = m.get("sinr")
     if sinr is None:             # modem 偶爾回不出 SINR，不能讓它變成狀態轉換
         return
-    state = live.link_state
+    state = s.link_state
     lost_th, deg_th = settings.sinr_lost_db, settings.sinr_degraded_db
     hyst = settings.sinr_hysteresis_db
 
@@ -45,14 +48,15 @@ async def transition(m: dict) -> None:
     else:
         return
 
-    live.link_state = new
-    if not live.session_id:      # 架次外不發事件（同 issues/004 的 gate 語意）
+    s.link_state = new
+    if not s.session_id:         # 架次外不發事件（同 issues/004 的 gate 語意）
         return
 
     ev = await db.insert_event(
-        live.drone_id, live.session_id, severity, type_,
+        s.drone_id, s.session_id, severity, type_,
         {"sinr": sinr, "in_zone": m.get("in_interference_zone"), "from": state},
     )
+    ev["drone"] = s.drone_name       # 多機時事件流要能分辨是哪台
     # 事件要巢狀包住，不能 {"type": "event", **ev} 展開——ev 自帶 type 欄位
     # （link_lost 等），會把外層的 "type": "event" 蓋掉，前端因此永遠比對不到。
     await manager.broadcast({"type": "event", "event": ev})

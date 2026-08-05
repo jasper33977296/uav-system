@@ -43,7 +43,7 @@ export default function SidePanel() {
   return (
     <aside className="panel">
       <div className="card">
-        <h3>飛行狀態</h3>
+        <h3>飛行狀態{live?.drone_name ? ` · ${live.drone_name}` : ""}</h3>
         <div className="metrics">
           <Metric label="相對高度" value={fmt(live?.alt_rel)} unit="m" />
           <Metric label="地速" value={fmt(live?.ground_speed)} unit="m/s" />
@@ -107,6 +107,7 @@ export default function SidePanel() {
                 }}
               />
               <time>{new Date(e.time).toLocaleTimeString("zh-TW", { hour12: false })}</time>
+              {e.drone && <span className="ev-drone">{e.drone}</span>}
               <span className="type">{e.type}</span>
               <span className="detail">{JSON.stringify(e.detail)}</span>
             </div>

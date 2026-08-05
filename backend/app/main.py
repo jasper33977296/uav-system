@@ -69,7 +69,7 @@ async def _link_and_db_loop() -> None:
         if simulated:
             # 鏈路事件：link_degraded / link_lost / link_recovered
             # （不發 handover——無人機等價於一台 UE，換手由 modem 與網路側處理。）
-            await link_transition(live.link)
+            await link_transition(live, live.link)
             await db.insert_link(live)
 
         await db.insert_telemetry(live)
@@ -88,7 +88,10 @@ async def _broadcast_loop() -> None:
         await asyncio.sleep(1.0 / settings.broadcast_hz)
         try:
             if manager.clients:
-                await manager.broadcast({"type": "telemetry", **live.telemetry_dict()})
+                # primary 旗標：多機廣播中標記「MAVLink 主機」，前端側欄鎖定它
+                # （否則僚機的訊息先到會被誤認成主機）
+                await manager.broadcast({"type": "telemetry", "primary": True,
+                                         **live.telemetry_dict()})
         except Exception:
             log.exception("broadcast 失敗，略過這一輪")
 
@@ -97,6 +100,7 @@ async def _broadcast_loop() -> None:
 async def lifespan(app: FastAPI):
     await db.init_pool()
     live.drone_id = await db.ensure_drone(settings.drone_name, settings.mavlink_url)
+    live.drone_name = settings.drone_name
     log.info("drone registered: %s (%s)", settings.drone_name, live.drone_id)
     tasks = [
         asyncio.create_task(ingest.run(), name="mavlink-ingest"),

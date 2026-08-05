@@ -4,7 +4,7 @@ from datetime import datetime
 from fastapi import APIRouter, HTTPException, Response
 from pydantic import BaseModel, Field
 
-from . import db, ingest
+from . import db, ingest, swarm_sim
 from .config import settings
 from .link_events import transition as link_transition
 from .state import live
@@ -342,6 +342,33 @@ async def delete_mission(mission_id: str):
     return {"ok": True}  # waypoints 由 FK CASCADE 一併刪除
 
 
+# ── 群飛模擬（開發鷹架，僅 simulated 模式）─────────────────────────────────
+
+@router.post("/swarm/start")
+async def swarm_start(count: int = 3):
+    """啟動 N 台運動學僚機沿各自路徑飛行，驗證多機資料管線。"""
+    if settings.link_source != "modem" and settings.link_source != "simulated":
+        raise HTTPException(409, "未知的 link_source")
+    if settings.link_source == "modem":
+        raise HTTPException(409, "群飛模擬僅在 simulated 模式可用")
+    try:
+        names = await swarm_sim.start(max(1, min(count, 3)))
+    except RuntimeError as e:
+        raise HTTPException(409, str(e))
+    return {"drones": names}
+
+
+@router.post("/swarm/stop")
+async def swarm_stop():
+    await swarm_sim.stop()
+    return {"ok": True}
+
+
+@router.get("/swarm/status")
+async def swarm_status():
+    return swarm_sim.status()
+
+
 # ── 機上 5G 量測回傳（真機階段）────────────────────────────────────────────
 # 設計見 doc/onboard-telemetry.md。兩條通道分工：
 #   live  即時通道：只送最新一筆、失敗不重試、只更新 live state 不入庫
@@ -428,7 +455,7 @@ async def link_metrics_live(s: LinkSample):
     m["source"] = "modem"
     live.link = m
     live.mark_link_seen()
-    await link_transition(m)
+    await link_transition(live, m)
     return Response(status_code=204)
 
 

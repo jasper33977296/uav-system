@@ -14,6 +14,13 @@ const HOME: [number, number] = [8.5456, 47.3977]; // PX4 SITL 預設起飛點
 // 實測軌跡自己揭露；離線（場域實測常態）也完全可用。
 // 要加底圖時在 style.sources 加 raster source、layers 最前面插一層即可。
 
+// 機隊配色：依首次出現順序指派（主機先出現 → 取色盤第一色）
+const _colorIdx = new Map<string, number>();
+function colorFor(id: string): string {
+  if (!_colorIdx.has(id)) _colorIdx.set(id, _colorIdx.size);
+  return DRONE_PALETTE[_colorIdx.get(id)! % DRONE_PALETTE.length];
+}
+
 const CLS_MATCH = [
   "match", ["get", "cls"],
   ...LINK_CLASSES.flatMap((c) => [c.key, c.color]),
@@ -99,16 +106,13 @@ export default function MapView() {
       });
 
       // 無人機本體：three.js 正圓球體，浮在實際高度。
-      // 層內以 drone_id 為鍵——多機群飛時 store 擴成多機，這裡不用改。
-      map.addLayer(createDroneLayer("drones", () => {
-        const t = useUavStore.getState().live;
-        if (!t || t.lat == null || t.lon == null) return [];
-        return [{
-          id: t.drone_id ?? "drone-0",
-          lat: t.lat, lon: t.lon, alt: t.alt_rel ?? 0,
-          color: DRONE_PALETTE[0],
-        }];
-      }));
+      // 讀整個 fleet——群飛時幾台就畫幾台，顏色依出現順序取機隊色盤。
+      map.addLayer(createDroneLayer("drones", () =>
+        Object.entries(useUavStore.getState().fleet)
+          .filter(([, t]) => t.lat != null && t.lon != null)
+          .map(([id, t]) => ({
+            id, lat: t.lat!, lon: t.lon!, alt: t.alt_rel ?? 0, color: colorFor(id),
+          }))));
 
       // 任務疊圖：任務庫的啟用路徑優先（路徑管理頁選的），
       // 沒有啟用中的路徑時退回「從機上讀回目前任務」。兩者都沒有就不畫。
@@ -200,22 +204,26 @@ export default function MapView() {
 
         // 球體層自己每幀從 store 讀位置（triggerRepaint 驅動），不需在此餵資料
 
+        // 全機隊的尾跡投影與懸浮絲帶（每台各自成段，顏色一律照 SINR 分級）
+        const allTrails = Object.values(s.trails);
         (map.getSource("trail") as maplibregl.GeoJSONSource | undefined)?.setData({
           type: "FeatureCollection",
-          features: s.trail.map((p) => ({
-            type: "Feature",
+          features: allTrails.flatMap((tr) => tr.map((p) => ({
+            type: "Feature" as const,
             properties: { cls: p.sinr == null ? "unknown" : classifySinr(p.sinr).key },
-            geometry: { type: "Point", coordinates: [p.lon, p.lat] },
-          })),
+            geometry: { type: "Point" as const, coordinates: [p.lon, p.lat] },
+          }))),
         });
 
         // 絲帶隔 2 點取一段：5Hz 下段長約 2m，視覺連續
-        (map.getSource("path3d") as maplibregl.GeoJSONSource | undefined)?.setData(
-          ribbon(
-            s.trail.filter((_, i) => i % 2 === 0),
-            (_a, b) => ({ cls: b.sinr == null ? "unknown" : classifySinr(b.sinr).key }),
-          ),
-        );
+        (map.getSource("path3d") as maplibregl.GeoJSONSource | undefined)?.setData({
+          type: "FeatureCollection",
+          features: allTrails.flatMap((tr) =>
+            ribbon(
+              tr.filter((_, i) => i % 2 === 0),
+              (_a, b) => ({ cls: b.sinr == null ? "unknown" : classifySinr(b.sinr).key }),
+            ).features),
+        });
       }),
     []
   );

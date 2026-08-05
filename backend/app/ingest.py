@@ -87,6 +87,7 @@ async def _mode(drone: System) -> None:
         if live.flight_mode is not None and mode != live.flight_mode:
             ev = await db.insert_event(live.drone_id, live.session_id, "info",
                                        "mode_change", {"from": live.flight_mode, "to": mode})
+            ev["drone"] = live.drone_name
             await manager.broadcast({"type": "event", "event": ev})  # 巢狀，見 link_events.py
         live.flight_mode = mode
 
