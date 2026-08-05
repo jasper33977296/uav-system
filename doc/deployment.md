@@ -123,6 +123,18 @@ curl http://localhost:38000/healthz
 
 ### 2.1 MAVLink 路由（流 ①）
 
+> **為什麼 QGC 連上了還不夠**：需求不是「QGC 能連」，是「同一條 MAVLink
+> 流要餵兩個消費者」——QGC（控制）與本系統 backend（14540，只讀記錄）。
+>
+> **快速路徑（不動機上）**：QGC 設定 → MAVLink → 啟用 Forwarding，
+> 目標 `localhost:14540`（QGC 與本系統同一台地面站）。立即可用，
+> 適合驗證期。代價：**記錄依賴 QGC 存活**——QGC 關閉或當掉，
+> 本系統即斷流停錄。
+>
+> **正式部署用本節作法**：機上路由雙端點，控制與記錄從源頭各自獨立、
+> 故障互不牽連。QGC 連得上代表機上已有路由服務在送 MAVLink——
+> 這裡只是**加一個端點**，不是裝新軟體。
+
 RB5／ModalAI 平台內建 MAVLink 路由（依 SDK 版本為 `mavlink-router` 或
 voxl-vision 設定檔，上機確認用哪套）。目標：把 PX4 的 MAVLink 同時送到
 地面站兩個埠。`mavlink-router` 設定範例（`/etc/mavlink-router/main.conf`）：
