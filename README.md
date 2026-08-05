@@ -30,9 +30,12 @@ progress/   開發進度現況 + 逐次開發紀錄 log/
 ## 快速啟動
 
 ```bash
-./scripts/setup.sh          # 裝 Docker、backend venv、frontend 套件、挑選 port
+./scripts/setup.sh          # 開發環境初始化（venv、埠偵測、啟用 sim profile）
 docker compose up -d        # 全部服務：DB + SITL + backend + frontend
 ```
+
+（部署到地面站**不需要** setup.sh——純 Docker 流程見
+[doc/deployment.md](doc/deployment.md) §1.1。）
 
 **開發也是這樣跑**（2026-08-04 起）：apps/backend/frontend 容器掛載原始碼並
 熱重載，改檔案即生效；`restart: unless-stopped` 讓服務不依賴任何終端

@@ -75,7 +75,9 @@ services:
     user: "1000:1000"
     environment:
       HOME: /tmp
-    command: ["npm", "run", "dev", "--", "--port", "${FRONTEND_PORT:-33000}", "-H", "0.0.0.0"]
+    # 首次啟動若無 node_modules 就在容器內安裝——部署純 Docker，
+    # 不依賴 host 端 npm（setup.sh 是開發工具，部署不需要）
+    command: sh -c "[ -d node_modules ] || npm ci; exec npm run dev -- --port ${FRONTEND_PORT:-33000} -H 0.0.0.0"
     restart: unless-stopped
     logging:
       driver: json-file

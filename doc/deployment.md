@@ -31,14 +31,27 @@
 
 ## 1. 地面站安裝
 
-### 1.1 取得專案並初始化
+### 1.1 取得專案並初始化（純 Docker，不需 setup.sh）
+
+前提只有 Docker 本身（含 compose plugin）：
+
+```bash
+sudo apt install -y docker.io docker-compose-v2   # 或官方安裝腳本
+sudo usermod -aG docker $USER && newgrp docker
+```
+
+然後：
 
 ```bash
 git clone <repo> uav-system && cd uav-system
-./scripts/setup.sh        # 裝 Docker、backend venv（腳本用）、frontend 套件、產生 .env
+cp .env.example .env      # 範本即部署形（不含模擬器 profile）
 ```
 
-`setup.sh` 產生根目錄 `.env`（連接埠一律 30000 以上，避開系統服務）：
+其餘一切都在容器裡（backend 依賴在映像內、frontend 首次啟動自動
+`npm ci`）。`scripts/setup.sh` 是**開發環境**工具（SITL 測試腳本的
+venv、埠衝突偵測、啟用 sim profile），部署不需要。
+
+`.env` 內容（連接埠一律 30000 以上，避開系統服務）：
 
 ```bash
 DB_PORT=35432        # TimescaleDB
@@ -53,7 +66,7 @@ FRONTEND_PORT=33000  # 前端
 
 ```bash
 LINK_SOURCE=modem        # ★ 真機模式：鏈路量測由機上 POST 進來
-# 並刪除 COMPOSE_PROFILES=sim 這行——模擬器（開發鷹架）自此不存在於本環境
+# （範本預設已無 COMPOSE_PROFILES=sim，模擬器不存在於本環境）
 ```
 
 改完 `docker compose up -d` 重載即生效。
