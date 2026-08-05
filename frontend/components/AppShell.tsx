@@ -8,7 +8,7 @@ import { useTelemetry } from "@/lib/useTelemetry";
 const TABS = [
   { href: "/", label: "即時監控" },
   { href: "/drones", label: "無人機" },
-  { href: "/missions", label: "任務" },
+  { href: "/missions", label: "路徑管理" },
 ];
 
 /** 頂欄＋內容區。WebSocket 掛在這一層，切換頁面不斷線、狀態 chips 全站可見。 */

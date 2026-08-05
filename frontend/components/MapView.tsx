@@ -3,7 +3,7 @@ import maplibregl from "maplibre-gl";
 import "maplibre-gl/dist/maplibre-gl.css";
 import { useEffect, useRef, useState } from "react";
 
-import { createDroneLayer, DRONE_PALETTE } from "@/components/droneLayer";
+import { colorFor, createDroneLayer } from "@/components/droneLayer";
 import { CANVAS, DRONE_COLOR, groundGrid, ribbon } from "@/lib/geo";
 import { API, LINK_CLASSES, classifySinr } from "@/lib/signal";
 import { useUavStore } from "@/lib/store";
@@ -13,13 +13,6 @@ const HOME: [number, number] = [8.5456, 47.3977]; // PX4 SITL 預設起飛點
 // 刻意**不放底圖**：場域物件不存在於系統認知中，鏈路品質的空間分布由
 // 實測軌跡自己揭露；離線（場域實測常態）也完全可用。
 // 要加底圖時在 style.sources 加 raster source、layers 最前面插一層即可。
-
-// 機隊配色：依首次出現順序指派（主機先出現 → 取色盤第一色）
-const _colorIdx = new Map<string, number>();
-function colorFor(id: string): string {
-  if (!_colorIdx.has(id)) _colorIdx.set(id, _colorIdx.size);
-  return DRONE_PALETTE[_colorIdx.get(id)! % DRONE_PALETTE.length];
-}
 
 const CLS_MATCH = [
   "match", ["get", "cls"],
@@ -33,6 +26,8 @@ export default function MapView() {
   const markerRef = useRef<maplibregl.Marker | null>(null);
   const centeredRef = useRef(false);
   const [hasMission, setHasMission] = useState(false);
+  const [fleetList, setFleetList] = useState<{ id: string; name: string }[]>([]);
+  const fleetKeyRef = useRef("");
 
   useEffect(() => {
     const map = new maplibregl.Map({
@@ -77,7 +72,9 @@ export default function MapView() {
         paint: { "circle-radius": 3, "circle-color": "#898781" },
       });
 
-      // 地面投影：實際軌跡的垂直投影（把 3D 路徑「釘」回地面網格）
+      // 地面投影：實際軌跡的垂直投影。**顏色＝機別色**（分層編碼：
+      // 空中絲帶編碼訊號品質、地面投影與球體編碼「這是哪台飛的」——
+      // 一條路徑不能同時載兩種語意，拆成兩層各自明確）。
       map.addSource("trail", {
         type: "geojson",
         data: { type: "FeatureCollection", features: [] },
@@ -85,9 +82,9 @@ export default function MapView() {
       map.addLayer({
         id: "trail-pt", type: "circle", source: "trail",
         paint: {
-          "circle-radius": 2.5,
-          "circle-color": CLS_MATCH,
-          "circle-opacity": 0.45,   // 投影是輔助，主角是懸浮絲帶
+          "circle-radius": 3,
+          "circle-color": ["get", "dcolor"],
+          "circle-opacity": 0.85,
           "circle-stroke-width": 0,
         },
       });
@@ -204,13 +201,13 @@ export default function MapView() {
 
         // 球體層自己每幀從 store 讀位置（triggerRepaint 驅動），不需在此餵資料
 
-        // 全機隊的尾跡投影與懸浮絲帶（每台各自成段，顏色一律照 SINR 分級）
-        const allTrails = Object.values(s.trails);
+        // 地面投影＝機別色（誰飛的）；空中絲帶＝SINR 分級（訊號如何）
+        const trailEntries = Object.entries(s.trails);
         (map.getSource("trail") as maplibregl.GeoJSONSource | undefined)?.setData({
           type: "FeatureCollection",
-          features: allTrails.flatMap((tr) => tr.map((p) => ({
+          features: trailEntries.flatMap(([id, tr]) => tr.map((p) => ({
             type: "Feature" as const,
-            properties: { cls: p.sinr == null ? "unknown" : classifySinr(p.sinr).key },
+            properties: { dcolor: colorFor(id) },
             geometry: { type: "Point" as const, coordinates: [p.lon, p.lat] },
           }))),
         });
@@ -218,12 +215,21 @@ export default function MapView() {
         // 絲帶隔 2 點取一段：5Hz 下段長約 2m，視覺連續
         (map.getSource("path3d") as maplibregl.GeoJSONSource | undefined)?.setData({
           type: "FeatureCollection",
-          features: allTrails.flatMap((tr) =>
+          features: trailEntries.flatMap(([, tr]) =>
             ribbon(
               tr.filter((_, i) => i % 2 === 0),
               (_a, b) => ({ cls: b.sinr == null ? "unknown" : classifySinr(b.sinr).key }),
             ).features),
         });
+
+        // 機隊圖例：成員變動時才更新 React state（5Hz 下避免無謂 re-render）
+        const key = Object.keys(s.fleet).sort().join(",");
+        if (key !== fleetKeyRef.current) {
+          fleetKeyRef.current = key;
+          setFleetList(Object.entries(s.fleet).map(([id, t2]) => ({
+            id, name: t2.drone_name ?? id.slice(0, 8),
+          })));
+        }
       }),
     []
   );
@@ -239,10 +245,12 @@ export default function MapView() {
             {c.label}
           </div>
         ))}
-        <div className="row">
-          <span className="dot" style={{ background: DRONE_COLOR }} />
-          無人機（懸浮於實際高度）
-        </div>
+        {fleetList.map((d) => (
+          <div className="row" key={d.id}>
+            <span className="dot" style={{ background: colorFor(d.id) }} />
+            {d.name}（球體與地面投影）
+          </div>
+        ))}
         {hasMission && (
           <div className="row">
             <span className="dot" style={{ background: "#8a94a3", opacity: 0.6 }} />

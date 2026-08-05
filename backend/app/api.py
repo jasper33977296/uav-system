@@ -99,17 +99,19 @@ async def delete_zone(zone_id: int):
 
 
 @router.get("/sessions")
-async def list_sessions(limit: int = 50):
-    rows = await db.pool.fetch(
-        """
+async def list_sessions(limit: int = 50, mission_id: str | None = None):
+    q = """
         SELECT s.*, d.name AS drone_name, m.name AS mission_name
         FROM flight_sessions s
         JOIN drones d ON d.id = s.drone_id
         LEFT JOIN missions m ON m.id = s.mission_id
+        {where}
         ORDER BY s.started_at DESC LIMIT $1
-        """,
-        limit,
-    )
+        """
+    if mission_id:
+        rows = await db.pool.fetch(q.format(where="WHERE s.mission_id = $2"), limit, mission_id)
+    else:
+        rows = await db.pool.fetch(q.format(where=""), limit)
     return [dict(r) for r in rows]
 
 

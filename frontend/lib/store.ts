@@ -37,10 +37,12 @@ interface UavStore {
   primaryId: string | null;
   fleet: Record<string, Telemetry>;          // 全部機（含群飛僚機），鍵為 drone_id
   trails: Record<string, TrailPoint[]>;      // 每機各自的尾跡
+  selectedId: string | null;                 // 側欄顯示哪台；null＝跟隨主機
   wsConnected: boolean;
   events: UavEvent[];
-  sinrHistory: number[]; // sparkline 用（主機），最近 120 筆
+  sinrHistories: Record<string, number[]>;   // 每機 sparkline，各 120 筆
   setLive: (t: Telemetry) => void;
+  select: (id: string) => void;
   setWsConnected: (v: boolean) => void;
   pushEvent: (e: UavEvent) => void;
   seedEvents: (es: UavEvent[]) => void;
@@ -49,11 +51,12 @@ interface UavStore {
 export const useUavStore = create<UavStore>((set) => ({
   live: null,
   primaryId: null,
+  selectedId: null,
   fleet: {},
   trails: {},
   wsConnected: false,
   events: [],
-  sinrHistory: [],
+  sinrHistories: {},
   setLive: (t) =>
     set((s) => {
       const id = t.drone_id ?? "unknown";
@@ -67,12 +70,18 @@ export const useUavStore = create<UavStore>((set) => ({
           [id]: [...prev, { lat: t.lat, lon: t.lon, sinr: t.link?.sinr ?? null, alt: t.alt_rel }]
             .slice(-TRAIL_MAX) };
       }
-      const isPrimary = id === primaryId;
-      const sinrHistory = isPrimary && t.link?.sinr != null
-        ? [...s.sinrHistory, t.link.sinr].slice(-120) : s.sinrHistory;
-      return { fleet, trails, primaryId,
-               live: isPrimary ? t : s.live, sinrHistory };
+      let sinrHistories = s.sinrHistories;
+      if (t.link?.sinr != null) {
+        sinrHistories = { ...s.sinrHistories,
+          [id]: [...(s.sinrHistories[id] ?? []), t.link.sinr].slice(-120) };
+      }
+      // 側欄顯示選中的那台（未選＝主機）
+      const effective = s.selectedId ?? primaryId;
+      return { fleet, trails, primaryId, sinrHistories,
+               live: id === effective ? t : s.live };
     }),
+  select: (id) =>
+    set((s) => ({ selectedId: id, live: s.fleet[id] ?? s.live })),
   setWsConnected: (v) => set({ wsConnected: v }),
   pushEvent: (e) => set((s) => ({ events: [e, ...s.events].slice(0, 100) })),
   // 開頁補歷史用：只在 WS 事件先到時去重（以 id 為準），不覆蓋已收到的

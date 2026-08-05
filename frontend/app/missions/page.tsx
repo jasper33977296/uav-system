@@ -1,11 +1,18 @@
 "use client";
+import { useRouter } from "next/navigation";
 import { useCallback, useEffect, useRef, useState } from "react";
 
+import { colorFor } from "@/components/droneLayer";
 import { API } from "@/lib/signal";
 
 interface Mission {
   id: string; name: string; source: string | null;
   created_at: string; is_active: boolean; waypoint_count: number;
+}
+interface Sess {
+  id: string; drone_id: string; drone_name: string; mission_id: string | null;
+  started_at: string; ended_at: string | null;
+  summary: { samples_total?: number; min_sinr?: number | null; avg_sinr?: number | null } | null;
 }
 
 /** 解析 QGC .plan：取出帶座標的導航項（16 WAYPOINT / 21 LAND / 22 TAKEOFF） */
@@ -26,13 +33,22 @@ function parsePlan(text: string): { seq: number; lat: number; lon: number; alt: 
 }
 
 export default function Missions() {
+  const router = useRouter();
   const [missions, setMissions] = useState<Mission[]>([]);
+  const [sessions, setSessions] = useState<Sess[]>([]);
   const [err, setErr] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
+  const [openId, setOpenId] = useState<string | null>(null);
   const fileRef = useRef<HTMLInputElement>(null);
 
   const reload = useCallback(() => {
     fetch(`${API}/api/missions`).then((r) => r.json()).then(setMissions).catch(() => {});
+    fetch(`${API}/api/sessions?limit=200`)
+      .then((r) => r.json())
+      .then((rows) => setSessions(rows.map((r: any) => ({
+        ...r, summary: typeof r.summary === "string" ? JSON.parse(r.summary) : r.summary,
+      }))))
+      .catch(() => {});
   }, []);
   useEffect(reload, [reload]);
 
@@ -100,7 +116,8 @@ export default function Missions() {
               <tr><td colSpan={6} className="empty">尚無儲存的路徑</td></tr>
             )}
             {missions.map((m) => (
-              <tr key={m.id}>
+              <tr key={m.id} className="row-link" title="展開此路徑的航線紀錄"
+                  onClick={() => setOpenId(openId === m.id ? null : m.id)}>
                 <td>
                   {m.name}
                   {m.is_active && <span className="chip" style={{ marginLeft: 8 }}>
@@ -116,7 +133,7 @@ export default function Missions() {
                     {m.is_active ? "隱藏" : "顯示於即時頁"}
                   </button>
                 </td>
-                <td>
+                <td onClick={(e) => e.stopPropagation()}>
                   <button className="btn-danger" disabled={busy}
                     onClick={() => { if (window.confirm(`刪除路徑「${m.name}」？`))
                       call(`/api/missions/${m.id}`, { method: "DELETE" }); }}>
@@ -127,6 +144,53 @@ export default function Missions() {
             ))}
           </tbody>
         </table>
+
+        {openId && (() => {
+          const mine = sessions.filter((s) => s.mission_id === openId);
+          const m = missions.find((x) => x.id === openId);
+          return (
+            <div style={{ marginTop: 12 }}>
+              <div className="drone-head">
+                <span className="meta">
+                  「{m?.name}」的航線紀錄 · 共 {mine.length} 條（跨所有無人機）
+                </span>
+                <span className="spacer" />
+                {mine.length > 1 && (
+                  <button className="btn-plain btn-sm"
+                    onClick={() => router.push(`/replay-mission/${openId}`)}>
+                    比對回放（{mine.length} 條疊圖）
+                  </button>
+                )}
+              </div>
+              <table className="table" style={{ marginTop: 6 }}>
+                <thead>
+                  <tr><th>無人機</th><th>開始時間</th><th className="num">樣本數</th>
+                      <th className="num">平均 SINR</th><th className="num">最低 SINR</th></tr>
+                </thead>
+                <tbody>
+                  {mine.length === 0 && (
+                    <tr><td colSpan={5} className="empty">
+                      尚無航線飛過此路徑——設為「顯示於即時頁」後起飛即自動關聯</td></tr>
+                  )}
+                  {mine.map((s) => (
+                    <tr key={s.id} className="row-link" title="回放這條航線"
+                        onClick={() => router.push(`/replay/${s.id}`)}>
+                      <td>
+                        <span className="dot" style={{ background: colorFor(s.drone_id),
+                          display: "inline-block", marginRight: 6 }} />
+                        {s.drone_name}
+                      </td>
+                      <td>{new Date(s.started_at).toLocaleString("zh-TW", { hour12: false })}</td>
+                      <td className="num">{s.summary?.samples_total ?? "—"}</td>
+                      <td className="num">{s.summary?.avg_sinr?.toFixed(1) ?? "—"} dB</td>
+                      <td className="num">{s.summary?.min_sinr?.toFixed(1) ?? "—"} dB</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          );
+        })()}
       </div>
     </div>
   );

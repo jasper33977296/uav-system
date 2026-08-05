@@ -101,6 +101,9 @@ async def lifespan(app: FastAPI):
     await db.init_pool()
     live.drone_id = await db.ensure_drone(settings.drone_name, settings.mavlink_url)
     live.drone_name = settings.drone_name
+    recovered = await db.recover_orphan_sessions()
+    if recovered:
+        log.info("補結算 %d 條孤兒航線（上次執行期間中斷的飛行）", recovered)
     log.info("drone registered: %s (%s)", settings.drone_name, live.drone_id)
     tasks = [
         asyncio.create_task(ingest.run(), name="mavlink-ingest"),

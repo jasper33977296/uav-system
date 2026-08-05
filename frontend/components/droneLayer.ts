@@ -24,6 +24,14 @@ export interface DronePos {
 /** 多機用色：第 1 台用系列藍，其後依序取用（色相彼此遠離） */
 export const DRONE_PALETTE = ["#3987e5", "#c65fd1", "#2fb2a5", "#d1975f"];
 
+// 機隊配色：依首次出現順序指派（主機先廣播 → 取第一色）。
+// 球體、地面投影、選擇器圓點共用同一份對應，全站一致。
+const _colorIdx = new Map<string, number>();
+export function colorFor(id: string): string {
+  if (!_colorIdx.has(id)) _colorIdx.set(id, _colorIdx.size);
+  return DRONE_PALETTE[_colorIdx.get(id)! % DRONE_PALETTE.length];
+}
+
 interface Unit { scene: THREE.Scene; mat: THREE.MeshStandardMaterial }
 
 export function createDroneLayer(

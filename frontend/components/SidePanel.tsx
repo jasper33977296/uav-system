@@ -1,4 +1,5 @@
 "use client";
+import { colorFor } from "@/components/droneLayer";
 import { classifySinr } from "@/lib/signal";
 import { useUavStore } from "@/lib/store";
 
@@ -36,12 +37,27 @@ const fmt = (v: number | null | undefined, digits = 1) =>
   v == null ? "—" : v.toFixed(digits);
 
 export default function SidePanel() {
-  const { live, events, sinrHistory } = useUavStore();
+  const { live, events, fleet, primaryId, selectedId, select, sinrHistories } = useUavStore();
   const link = live?.link;
   const cls = link?.sinr != null ? classifySinr(link.sinr) : null;
+  const effective = selectedId ?? primaryId;
+  const ids = Object.keys(fleet);
 
   return (
     <aside className="panel">
+      {/* 機隊選擇器：多機時切換側欄顯示哪台（圓點色＝該機在地圖上的球體色） */}
+      {ids.length > 1 && (
+        <div className="chips">
+          {ids.map((id) => (
+            <button key={id}
+              className={`chip chip-btn ${id === effective ? "chip-on" : ""}`}
+              onClick={() => select(id)}>
+              <span className="dot" style={{ background: colorFor(id) }} />
+              {fleet[id].drone_name ?? id.slice(0, 8)}
+            </button>
+          ))}
+        </div>
+      )}
       <div className="card">
         <h3>飛行狀態{live?.drone_name ? ` · ${live.drone_name}` : ""}</h3>
         <div className="metrics">
@@ -75,7 +91,7 @@ export default function SidePanel() {
             </span>
           )}
         </div>
-        <Sparkline data={sinrHistory} />
+        <Sparkline data={(effective && sinrHistories[effective]) || []} />
         <div className="metrics">
           <Metric label="RSRP" value={fmt(link?.rsrp)} unit="dBm" />
           <Metric label="RSRQ" value={fmt(link?.rsrq)} unit="dB" />

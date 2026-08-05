@@ -219,3 +219,7 @@ body {
   flex: none; font-size: 11px; color: var(--muted);
   border: 1px solid var(--hairline); border-radius: 4px; padding: 0 4px;
 }
+
+.chip-btn { cursor: pointer; background: var(--surface); }
+.chip-btn.chip-on { border-color: var(--ink-2); color: var(--ink); }
+.replay-head { flex-wrap: wrap; row-gap: 6px; }

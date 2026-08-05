@@ -37,6 +37,29 @@ async def ensure_drone(name: str, connection_url: str) -> str:
     return str(row["id"])
 
 
+async def recover_orphan_sessions() -> int:
+    """補結算孤兒航線：backend 在飛行中重啟時，armed→disarmed 的轉換沒人看見，
+    session 會永遠停在開放狀態（實際發生過，一天累積 6 條）。
+    啟動時把所有開放 session 用「最後一筆遙測的時間」結算；
+    完全沒資料的空殼直接刪除。"""
+    r = await pool.execute("""
+        UPDATE flight_sessions s SET
+          ended_at = (SELECT max(time) FROM telemetry t WHERE t.session_id = s.id),
+          summary = (SELECT jsonb_build_object(
+            'max_alt_rel', (SELECT max(alt_rel) FROM telemetry WHERE session_id = s.id),
+            'avg_sinr',   (SELECT avg(sinr) FROM link_metrics WHERE session_id = s.id),
+            'min_sinr',   (SELECT min(sinr) FROM link_metrics WHERE session_id = s.id),
+            'avg_rtt_ms', (SELECT avg(rtt_ms) FROM link_metrics WHERE session_id = s.id),
+            'samples_in_zone', (SELECT count(*) FILTER (WHERE in_interference_zone)
+                                FROM link_metrics WHERE session_id = s.id),
+            'samples_total', (SELECT count(*) FROM link_metrics WHERE session_id = s.id)))
+        WHERE s.ended_at IS NULL
+          AND EXISTS (SELECT 1 FROM telemetry t WHERE t.session_id = s.id)""")
+    n = int(r.split()[-1])
+    await pool.execute("DELETE FROM flight_sessions WHERE ended_at IS NULL")
+    return n
+
+
 async def create_session(drone_id: str, link_mission: bool = True) -> str:
     """開一條航線紀錄。link_mission=True 時關聯任務庫當下的啟用路徑
     （is_active）——語意是「操作員宣告要飛的那條」，回放頁據此疊預計路徑。
