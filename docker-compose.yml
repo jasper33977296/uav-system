@@ -25,7 +25,7 @@ services:
     # 必須明確指定 MAVLink 目標 IP（14540 給 backend、14550 給 QGroundControl）。
     # 映像預設拿「預設閘道」當目標，那是為 bridge 網路設計的（閘道=docker host）；
     # 在 host network 下閘道會變成區網 router，封包就飛到別台機器去了。見 issues/005。
-    command: ["127.0.0.1", "127.0.0.1"]
+    command: ["${SITL_BACKEND_HOST:-127.0.0.1}", "${SITL_QGC_HOST:-127.0.0.1}"]
     # 必須掛 TTY：沒有 TTY 時 PX4 的互動式 shell 讀 stdin 立刻 EOF，
     # 會以最高速無限重畫提示字元（pxh> + ESC[K），把磁碟寫爆。見 issues/009。
     stdin_open: true
@@ -48,10 +48,11 @@ services:
     volumes:
       - ./backend/app:/srv/app  # 原始碼掛進去，改檔案 reload 立即生效
     environment:
+      # 全部由根目錄 .env 供值（見 .env.example）——新環境只改 .env
       DATABASE_URL: postgresql://uav:uav@localhost:${DB_PORT:-35432}/uav
-      MAVLINK_URL: udpin://0.0.0.0:14540
-      DRONE_NAME: sim-uav-1
-      LINK_SOURCE: simulated
+      MAVLINK_URL: ${MAVLINK_URL:-udpin://0.0.0.0:14540}
+      DRONE_NAME: ${DRONE_NAME:-sim-uav-1}
+      LINK_SOURCE: ${LINK_SOURCE:-simulated}
     depends_on:
       db:
         condition: service_healthy

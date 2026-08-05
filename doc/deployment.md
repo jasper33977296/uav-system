@@ -48,15 +48,15 @@ FRONTEND_PORT=33000  # 前端
 
 ### 1.2 設定真機模式
 
-編輯 `docker-compose.yml` 的 `backend.environment`：
+**全部設定集中在根目錄 `.env`**（`setup.sh` 會產生；範本與逐項說明見
+`.env.example`）。真機部署改兩行：
 
-```yaml
-    environment:
-      DATABASE_URL: postgresql://uav:uav@localhost:35432/uav
-      MAVLINK_URL: udpin://0.0.0.0:14540   # 監聽機上送來的 MAVLink（不用改）
-      DRONE_NAME: rb5-uav-1                # 改成你的機名（會自動註冊）
-      LINK_SOURCE: modem                   # ★ 真機模式：鏈路量測由機上 POST 進來
+```bash
+LINK_SOURCE=modem        # ★ 真機模式：鏈路量測由機上 POST 進來
+DRONE_NAME=rb5-uav-1     # 你的機名（會自動註冊）
 ```
+
+改完 `docker compose up -d` 重載即生效。
 
 `LINK_SOURCE` 是模擬／真機的總開關：
 
@@ -283,8 +283,7 @@ docker compose up -d        # 含 sitl；backend 維持 LINK_SOURCE=simulated
 - 測試飛行：`backend/.venv/bin/python scripts/test-flight.py`（直線穿越）、
   `scripts/fly-mission.py [plan檔]`（上傳並執行任務）
 - 群飛模擬：`POST /api/swarm/start?count=3[&mission_id=...]`
-- 讓別台電腦的 QGC 連 SITL：`docker-compose.yml` sitl `command` 第二個 IP
-  改成該電腦 IP
+- 讓別台電腦的 QGC 連 SITL：`.env` 的 `SITL_QGC_HOST` 改成該電腦 IP
 
 注意：SITL 是共用的一台——測試腳本上傳任務會**覆蓋**QGC 上傳的
 （MAVLink 任務是整包替換），且 SITL 容器重啟機上任務即歸零。
