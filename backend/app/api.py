@@ -347,17 +347,16 @@ async def delete_mission(mission_id: str):
 # ── 群飛模擬（開發鷹架，僅 simulated 模式）─────────────────────────────────
 
 @router.post("/swarm/start")
-async def swarm_start(count: int = 3):
-    """啟動 N 台運動學僚機沿各自路徑飛行，驗證多機資料管線。"""
-    if settings.link_source != "modem" and settings.link_source != "simulated":
-        raise HTTPException(409, "未知的 link_source")
+async def swarm_start(count: int = 3, mission_id: str | None = None):
+    """啟動 N 台運動學僚機。mission_id 指定時多機飛同一條路徑（梯次起飛，
+    航線關聯該任務——真實情境的多機同任務）；否則各飛自己的幾何。"""
     if settings.link_source == "modem":
         raise HTTPException(409, "群飛模擬僅在 simulated 模式可用")
     try:
-        names = await swarm_sim.start(max(1, min(count, 3)))
+        names = await swarm_sim.start(max(1, min(count, 3)), mission_id)
     except RuntimeError as e:
         raise HTTPException(409, str(e))
-    return {"drones": names}
+    return {"drones": names, "mission_id": mission_id}
 
 
 @router.post("/swarm/stop")

@@ -60,16 +60,18 @@ async def recover_orphan_sessions() -> int:
     return n
 
 
-async def create_session(drone_id: str, link_mission: bool = True) -> str:
-    """開一條航線紀錄。link_mission=True 時關聯任務庫當下的啟用路徑
-    （is_active）——語意是「操作員宣告要飛的那條」，回放頁據此疊預計路徑。
-    群飛模擬的僚機飛自己的幾何路徑，傳 False 不關聯。"""
+async def create_session(drone_id: str, link_mission: bool = True,
+                         mission_id: str | None = None) -> str:
+    """開一條航線紀錄。mission_id 指定時直接關聯（群飛模擬飛指定任務）；
+    否則 link_mission=True 時關聯任務庫當下的啟用路徑（is_active）——
+    語意是「操作員宣告要飛的那條」。回放頁據此疊預計路徑。"""
     row = await pool.fetchrow(
         """INSERT INTO flight_sessions (drone_id, started_at, mission_id)
-           VALUES ($1, now(),
-                   CASE WHEN $2 THEN (SELECT id FROM missions WHERE is_active LIMIT 1) END)
+           VALUES ($1, now(), COALESCE(
+                   $3::uuid,
+                   CASE WHEN $2 THEN (SELECT id FROM missions WHERE is_active LIMIT 1) END))
            RETURNING id""",
-        drone_id, link_mission,
+        drone_id, link_mission, mission_id,
     )
     return str(row["id"])
 

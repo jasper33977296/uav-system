@@ -2,25 +2,75 @@
 import maplibregl from "maplibre-gl";
 import "maplibre-gl/dist/maplibre-gl.css";
 import { useParams, useRouter } from "next/navigation";
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 
-import { colorFor } from "@/components/droneLayer";
+import { createDroneLayer, DRONE_PALETTE } from "@/components/droneLayer";
 import { CANVAS, groundGrid, ribbon } from "@/lib/geo";
 import { API, LINK_CLASSES, classifySinr } from "@/lib/signal";
 
-/** 任務比對回放：同一條路徑的所有航線（跨機、跨時間）疊在同一張 3D 圖。
-    編碼同即時頁的約定：空中絲帶＝SINR 分級（研究），地面投影＝機別色（誰飛的）。
-    這是「可重複量測」的視覺化——同路徑多次飛行的訊號分布比對。 */
+/** 任務視角回放：同一條路徑的一或多條航線（可跨機、跨時間）同步重飛。
+ *
+ * 時間對齊用**相對時間**（各航線自起飛 t=0 起算）：不同時刻飛的同路徑
+ * 才能「一起飛」，同一秒的位置差、訊號差直接可比——重複量測的回放形式。
+ *
+ * 識別配色以**航線**為單位（同一台機多次飛同路徑時，機別色會全部同色，
+ * 分不出是哪一趟）；空中絲帶維持 SINR 分級不變。
+ */
 
 interface Sess {
-  id: string; drone_id: string; drone_name: string; started_at: string;
+  id: string; drone_id: string; drone_name: string;
+  started_at: string; mission_name?: string | null;
 }
 interface LinkRow {
   time: string; lat: number | null; lon: number | null;
-  alt_rel: number | null; sinr: number | null;
+  alt_rel: number | null; sinr: number | null; rtt_ms: number | null;
 }
 
-const MAX_OVERLAY = 6;   // 疊太多不可讀；超過取最新 6 條並明示
+const MAX_OVERLAY = 6;
+const W = 1000;
+const sessColor = (i: number) => DRONE_PALETTE[i % DRONE_PALETTE.length];
+
+/** 多航線時序圖：x＝相對秒數，每條航線一條線（航線識別色） */
+function MultiChart({
+  series, field, height, yLabel, thresholds, maxDur, sec,
+}: {
+  series: { rows: LinkRow[]; t0: number; color: string }[];
+  field: "sinr" | "rtt_ms"; height: number; yLabel: string;
+  thresholds?: number[]; maxDur: number; sec: number;
+}) {
+  const vals = series.flatMap((s) => s.rows.map((r) => r[field]))
+    .filter((v): v is number => v != null);
+  if (!vals.length) return null;
+  let lo = Math.min(...vals), hi = Math.max(...vals);
+  for (const th of thresholds ?? []) { lo = Math.min(lo, th); hi = Math.max(hi, th); }
+  const pad = (hi - lo || 1) * 0.12;
+  lo -= pad; hi += pad;
+  const x = (t: number) => (t / (maxDur || 1)) * W;
+  const y = (v: number) => height - ((v - lo) / (hi - lo)) * height;
+
+  return (
+    <div className="chart">
+      <span className="chart-label">{yLabel}</span>
+      <svg viewBox={`0 0 ${W} ${height}`} preserveAspectRatio="none">
+        {(thresholds ?? []).map((th) => (
+          <line key={th} x1={0} x2={W} y1={y(th)} y2={y(th)}
+                stroke="var(--muted)" strokeWidth="1" strokeDasharray="4 4"
+                vectorEffect="non-scaling-stroke" opacity={0.5} />
+        ))}
+        {series.map((s, i) => (
+          <polyline key={i} fill="none" stroke={s.color} strokeWidth="1.3"
+            vectorEffect="non-scaling-stroke" opacity={0.9}
+            points={s.rows
+              .filter((r) => r[field] != null)
+              .map((r) => `${x((new Date(r.time).getTime() - s.t0) / 1000)},${y(r[field] as number)}`)
+              .join(" ")} />
+        ))}
+        <line x1={x(sec)} x2={x(sec)} y1={0} y2={height} stroke="var(--ink)"
+              strokeWidth="1" vectorEffect="non-scaling-stroke" opacity={0.55} />
+      </svg>
+    </div>
+  );
+}
 
 export default function MissionReplay() {
   const { missionId } = useParams<{ missionId: string }>();
@@ -29,9 +79,11 @@ export default function MissionReplay() {
   const [sessions, setSessions] = useState<Sess[]>([]);
   const [dropped, setDropped] = useState(0);
   const [tracks, setTracks] = useState<Record<string, LinkRow[]>>({});
+  const [plan, setPlan] = useState<{ lat: number; lon: number; alt: number | null }[]>([]);
+  const [sec, setSec] = useState(0);
+  const secRef = useRef(0);
   const mapRef = useRef<maplibregl.Map | null>(null);
   const containerRef = useRef<HTMLDivElement>(null);
-  const [plan, setPlan] = useState<{ lat: number; lon: number; alt: number | null }[]>([]);
 
   useEffect(() => {
     fetch(`${API}/api/missions/${missionId}/waypoints`)
@@ -56,10 +108,30 @@ export default function MissionReplay() {
       .catch(() => {});
   }, [missionId]);
 
+  // 每條航線的相對時間基準與總長
+  const series = useMemo(() =>
+    sessions
+      .map((s, i) => {
+        const rows = tracks[s.id] ?? [];
+        return { sess: s, rows, color: sessColor(i),
+                 t0: rows.length ? new Date(rows[0].time).getTime() : 0 };
+      })
+      .filter((s) => s.rows.length > 1),
+    [sessions, tracks]);
+  const maxDur = useMemo(() =>
+    Math.max(1, ...series.map((s) =>
+      (new Date(s.rows[s.rows.length - 1].time).getTime() - s.t0) / 1000)),
+    [series]);
+
+  /** 相對秒數 → 該航線當下樣本（1Hz 資料，時間比對取下界） */
+  function rowAt(s: (typeof series)[number], t: number): LinkRow {
+    const idx = Math.min(s.rows.length - 1, Math.max(0, Math.round(t)));
+    return s.rows[idx];
+  }
+
   useEffect(() => {
-    const ids = Object.keys(tracks);
-    if (!ids.length || !plan.length || !containerRef.current || mapRef.current) return;
-    const all = ids.flatMap((id) => tracks[id]);
+    if (!series.length || !plan.length || !containerRef.current || mapRef.current) return;
+    const all = series.flatMap((s) => s.rows);
     const lats = all.map((r) => r.lat!), lons = all.map((r) => r.lon!);
     const map = new maplibregl.Map({
       container: containerRef.current,
@@ -77,7 +149,6 @@ export default function MissionReplay() {
       map.addLayer({ id: "grid", type: "line", source: "grid",
         paint: { "line-color": "#232a31", "line-width": 1 } });
 
-      // 預計路徑
       map.addSource("plan3d", { type: "geojson",
         data: ribbon(plan.map((w) => ({ lat: w.lat, lon: w.lon, alt: w.alt })), () => ({}), 1.0) });
       map.addLayer({ id: "plan3d", type: "fill-extrusion", source: "plan3d",
@@ -91,59 +162,94 @@ export default function MissionReplay() {
         paint: { "line-color": "#8a94a3", "line-width": 1.5,
                  "line-dasharray": [3, 3], "line-opacity": 0.6 } });
 
-      // 每條航線：機別色地面投影 + SINR 絲帶
-      const projFeats: GeoJSON.Feature[] = [];
-      const ribbonFeats: GeoJSON.Feature[] = [];
-      for (const s of sessions) {
-        const rows = tracks[s.id] ?? [];
-        const dcolor = colorFor(s.drone_id);
-        projFeats.push(...rows.map((r) => ({
-          type: "Feature" as const,
-          properties: { dcolor },
+      // 各航線：航線色地面投影 + SINR 絲帶
+      map.addSource("proj", { type: "geojson", data: {
+        type: "FeatureCollection",
+        features: series.flatMap((s) => s.rows.map((r) => ({
+          type: "Feature" as const, properties: { dcolor: s.color },
           geometry: { type: "Point" as const, coordinates: [r.lon!, r.lat!] },
-        })));
-        ribbonFeats.push(...ribbon(
-          rows.map((r) => ({ lat: r.lat, lon: r.lon, alt: r.alt_rel, sinr: r.sinr })),
-          (_a, b) => ({ cls: b.sinr == null ? "unknown" : classifySinr(b.sinr).key }),
-        ).features);
-      }
-      map.addSource("proj", { type: "geojson",
-        data: { type: "FeatureCollection", features: projFeats } });
+        }))) } });
       map.addLayer({ id: "proj", type: "circle", source: "proj",
         paint: { "circle-radius": 2.5, "circle-color": ["get", "dcolor"],
                  "circle-opacity": 0.8, "circle-stroke-width": 0 } });
-      map.addSource("ribbons", { type: "geojson",
-        data: { type: "FeatureCollection", features: ribbonFeats } });
+      map.addSource("ribbons", { type: "geojson", data: {
+        type: "FeatureCollection",
+        features: series.flatMap((s) => ribbon(
+          s.rows.map((r) => ({ lat: r.lat, lon: r.lon, alt: r.alt_rel, sinr: r.sinr })),
+          (_a, b) => ({ cls: b.sinr == null ? "unknown" : classifySinr(b.sinr).key }),
+        ).features) } });
       map.addLayer({ id: "ribbons", type: "fill-extrusion", source: "ribbons",
         paint: { "fill-extrusion-color": ["match", ["get", "cls"],
             ...LINK_CLASSES.flatMap((c) => [c.key, c.color]), "#898781"] as any,
           "fill-extrusion-height": ["get", "top"], "fill-extrusion-base": ["get", "base"],
           "fill-extrusion-opacity": 0.75 } });
+
+      // 回放游標：每條航線一顆球，沿相對時間同步前進
+      map.addLayer(createDroneLayer("cursors", () =>
+        series.map((s) => {
+          const r = rowAt(s, secRef.current);
+          return { id: s.sess.id, lat: r.lat!, lon: r.lon!,
+                   alt: r.alt_rel ?? 0, color: s.color };
+        })));
     });
     return () => { map.remove(); mapRef.current = null; };
-  }, [tracks, plan, sessions]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [series, plan]);
+
+  useEffect(() => {
+    secRef.current = sec;
+    mapRef.current?.triggerRepaint();
+  }, [sec]);
+
+  const mmss = (t: number) => `${Math.floor(t / 60)}:${Math.floor(t % 60).toString().padStart(2, "0")}`;
 
   return (
     <div className="replay">
       <div className="replay-head">
         <button className="btn-plain" onClick={() => router.push("/missions")}>← 路徑管理</button>
         <span className="meta">
-          任務比對回放{name && ` · ${name}`} · {sessions.length} 條航線疊圖
+          任務回放{name && ` · ${name}`} · {series.length} 條航線同步重飛（相對時間）
           {dropped > 0 && `（另有 ${dropped} 條較舊未顯示）`}
         </span>
         <span className="spacer" />
-        {sessions.map((s) => (
-          <button key={s.id} className="chip chip-btn" title="單獨回放這條航線"
-            onClick={() => router.push(`/replay/${s.id}`)}>
-            <span className="dot" style={{ background: colorFor(s.drone_id) }} />
-            {s.drone_name} {new Date(s.started_at).toLocaleTimeString("zh-TW",
+        {series.map((s) => (
+          <button key={s.sess.id} className="chip chip-btn" title="單獨回放這條航線"
+            onClick={() => router.push(`/replay/${s.sess.id}`)}>
+            <span className="dot" style={{ background: s.color }} />
+            {s.sess.drone_name} {new Date(s.sess.started_at).toLocaleTimeString("zh-TW",
               { hour12: false, hour: "2-digit", minute: "2-digit" })}
           </button>
         ))}
       </div>
+
       <div className="replay-map" ref={containerRef}>
-        {!sessions.length && <div className="empty" style={{ padding: 20 }}>載入中，或此路徑尚無已完成的航線</div>}
+        {!series.length && <div className="empty" style={{ padding: 20 }}>載入中，或此路徑尚無已完成的航線</div>}
       </div>
+
+      {series.length > 0 && (
+        <div className="timeline">
+          <MultiChart series={series} field="sinr" height={110} yLabel="SINR (dB)"
+                      thresholds={[5, -2]} maxDur={maxDur} sec={sec} />
+          <MultiChart series={series} field="rtt_ms" height={70} yLabel="RTT (ms)"
+                      maxDur={maxDur} sec={sec} />
+          <div className="scrub-row">
+            <input type="range" min={0} max={Math.ceil(maxDur)} value={sec}
+                   onChange={(e) => setSec(Number(e.target.value))} />
+            <span className="scrub-read">
+              T+{mmss(sec)} / {mmss(maxDur)}
+              {series.map((s) => {
+                const r = rowAt(s, sec);
+                return (
+                  <span key={s.sess.id} style={{ marginLeft: 10 }}>
+                    <span className="dot" style={{ background: s.color, marginRight: 3 }} />
+                    {r.sinr?.toFixed(1) ?? "—"}dB
+                  </span>
+                );
+              })}
+            </span>
+          </div>
+        </div>
+      )}
     </div>
   );
 }

@@ -21,8 +21,11 @@ export interface DronePos {
   radiusM?: number;
 }
 
-/** 多機用色：第 1 台用系列藍，其後依序取用（色相彼此遠離） */
-export const DRONE_PALETTE = ["#3987e5", "#c65fd1", "#2fb2a5", "#d1975f"];
+/** 識別用色：第 1 個用系列藍，其後依序取用。色相刻意避開狀態色
+    （綠/黃/橘/紅＝SINR 分級），identity 與 status 不互相冒充。 */
+export const DRONE_PALETTE = [
+  "#3987e5", "#c65fd1", "#2fb2a5", "#d1975f", "#e06a8c", "#8f8fd9",
+];
 
 // 機隊配色：依首次出現順序指派（主機先廣播 → 取第一色）。
 // 球體、地面投影、選擇器圓點共用同一份對應，全站一致。

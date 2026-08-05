@@ -52,8 +52,9 @@ def build_paths(count: int) -> list[tuple[str, list, float]]:
 
 
 class SimDrone:
-    def __init__(self, name: str, wps: list, speed: float):
+    def __init__(self, name: str, wps: list, speed: float, start_delay: float = 0.0):
         self.name, self.wps, self.speed = name, wps, speed
+        self.start_delay = start_delay   # 梯次起飛：延遲期間不前進也不入庫
         self.i = 1                      # wps[0] 是起點
         self.done = False
         s = self.state = LiveState()
@@ -103,23 +104,48 @@ def status() -> dict:
             "drones": [{"name": d.name, "done": d.done} for d in _drones] if running else []}
 
 
-async def start(count: int = 3) -> list[str]:
+async def _mission_paths(mission_id: str, count: int) -> list[tuple[str, list, float, float]]:
+    """多機飛同一條任務路徑（真實情境：一定是不同的機）。
+    各機地面起點橫向錯開 15m、梯次起飛（間隔 20s）——測繪接力的常見隊形；
+    尾端回自己的起點降落。"""
+    wps = await db.pool.fetch(
+        "SELECT lat, lon, alt FROM waypoints WHERE mission_id = $1 ORDER BY seq", mission_id)
+    if len(wps) < 2:
+        raise RuntimeError("此路徑沒有足夠航點")
+    route = [(w["lat"], w["lon"], float(w["alt"] or 40.0)) for w in wps]
+    out = []
+    for i in range(count):
+        east = (i - (count - 1) / 2) * 15.0
+        ground = _off(-20, east, 0.0)
+        climb = (ground[0], ground[1], route[0][2])
+        descend = (ground[0], ground[1], 0.0)
+        out.append((f"swarm-{i + 2}", [ground, climb, *route, climb, descend],
+                    8.0 + i * 0.5, i * 20.0))
+    return out
+
+
+async def start(count: int = 3, mission_id: str | None = None) -> list[str]:
     global _drones, _task
     if _task and not _task.done():
         raise RuntimeError("群飛模擬已在執行中")
     _drones = []
     cells, zones = await db.fetch_cells(), await db.fetch_zones(enabled_only=True)
-    for name, wps, speed in build_paths(count):
-        d = SimDrone(name, wps, speed)
+    if mission_id:
+        paths = await _mission_paths(mission_id, count)
+    else:
+        paths = [(*p, 0.0) for p in build_paths(count)]
+    for name, wps, speed, delay in paths:
+        d = SimDrone(name, wps, speed, start_delay=delay)
         d.state.drone_id = await db.ensure_drone(name, "swarm-sim://kinematic")
         d.state.drone_name = name
-        # 僚機飛自己的幾何路徑，不關聯任務庫的啟用路徑（那是主機宣告的）
-        d.state.session_id = await db.create_session(d.state.drone_id, link_mission=False)
+        # 任務模式：航線直接關聯該任務；自由幾何模式不關聯
+        d.state.session_id = await db.create_session(
+            d.state.drone_id, link_mission=False, mission_id=mission_id)
         d.state.armed = True
         d.source = SimulatedLinkSource(cells, zones)   # 各自的 serving-cell 記憶
         _drones.append(d)
     _task = asyncio.create_task(_run())
-    log.info("swarm started: %s", [d.name for d in _drones])
+    log.info("swarm started (mission=%s): %s", mission_id, [d.name for d in _drones])
     return [d.name for d in _drones]
 
 
@@ -148,7 +174,10 @@ async def _run() -> None:
         while any(not d.done for d in _drones):
             await asyncio.sleep(0.2)                 # 5Hz 前進與廣播
             tick += 1
+            elapsed = tick * 0.2
             for d in _drones:
+                if elapsed < d.start_delay:          # 梯次未到：地面待命不入庫
+                    continue
                 d.step(0.2)
                 s = d.state
                 if tick % 5 == 0 and not d.done:     # 1Hz 取樣與入庫（同主機節奏）
