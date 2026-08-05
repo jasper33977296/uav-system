@@ -1,0 +1,2 @@
+mavsdk>=2.0     # 機上 PX4 位置（連 localhost，不經網路）
+pyserial>=3.5   # modem AT 埠

@@ -175,14 +175,14 @@ Port = 14540
 
 ### 2.2 5G 量測 node（流 ②）
 
-機上 ROS node 目前**待實作**——`scripts/fake-onboard-node.py` 是完整原型
-（SQLite 緩衝、先落盤再送、雙通道、斷線補傳、批次確認，全部實測過），
-移植工作＝把「讀模擬器」換成讀 modem：
+機上程式在主 repo 的 **`onboard/`**（自包含資料夾，可直接推成獨立 repo
+放到機上），安裝與設定見 `onboard/README.md`。摘要：
 
-- RF 指標：`AT+QENG="servingcell"`（直接給 SINR，欄位對應見
-  [onboard-telemetry.md](onboard-telemetry.md)）
-- 位置與時間：機上 PX4（MAVSDK 連 localhost），採樣當下綁進同一筆
+- RF 指標：`AT+QENG="servingcell"`（SINR/RSRP/PCI），**第一步必為
+  `--probe`**——印出 modem 原始回應貼回校準解析，勿假設一次就對
+- 位置與時間：機上 PX4（MAVSDK 連 localhost）＋ GPS 時間，採樣當下綁定
 - RTT／丟包：`ping <GS_IP>` 實測
+- SQLite 緩衝先落盤再送、雙通道、斷點補傳（沿用已實測的原型邏輯）
 
 設定項（環境變數）：
 
