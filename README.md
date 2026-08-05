@@ -23,6 +23,7 @@ progress/   開發進度現況 + 逐次開發紀錄 log/
 | [doc/frontend.md](doc/frontend.md) | 前端版面、軌跡上色規則、即時資料流 |
 | [doc/qgc-integration.md](doc/qgc-integration.md) | QGroundControl 分工、連線拓撲、完整作業流程 |
 | [doc/onboard-telemetry.md](doc/onboard-telemetry.md) | 真機階段：機上 ROS 如何把 5G 量測送回地面站 |
+| [doc/deployment.md](doc/deployment.md) | **部署手冊**：地面站安裝、機上一次性設定、網路、驗收、維運 |
 | [progress/README.md](progress/README.md) | **目前進度、環境現況、下一步** |
 | [issues/README.md](issues/README.md) | 問題索引與狀態 |
 
