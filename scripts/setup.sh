@@ -94,10 +94,10 @@ step "4/5 Backend（uv venv + 套件）"
 if [[ "$SKIP_BACKEND" == 1 ]]; then
   warn "依參數跳過"
 else
-  [[ -d backend/.venv ]] || uv venv backend/.venv --python 3.12
-  uv pip install -r backend/requirements.txt --python backend/.venv/bin/python -q
-  ok "backend/.venv 就緒（$(backend/.venv/bin/python --version)）"
-  if backend/.venv/bin/python -c "import mavsdk, fastapi, asyncpg" 2>/dev/null; then
+  [[ -d apps/backend/.venv ]] || uv venv apps/backend/.venv --python 3.12
+  uv pip install -r apps/backend/requirements.txt --python apps/backend/.venv/bin/python -q
+  ok "apps/backend/.venv 就緒（$(apps/backend/.venv/bin/python --version)）"
+  if apps/backend/.venv/bin/python -c "import mavsdk, fastapi, asyncpg" 2>/dev/null; then
     ok "mavsdk / fastapi / asyncpg 匯入正常"
   else
     die "套件匯入失敗，請檢查上方 uv pip install 的輸出"
@@ -112,10 +112,10 @@ if [[ "$SKIP_FRONTEND" == 1 ]]; then
 else
   ( cd frontend && npm install --no-fund --no-audit )
   # 直接帶入實際的 backend port，不只是複製範例檔
-  write_env_file frontend/.env.local \
+  write_env_file apps/frontend/.env.local \
     "NEXT_PUBLIC_API_URL=http://localhost:${BACKEND_PORT}" \
     "NEXT_PUBLIC_WS_URL=ws://localhost:${BACKEND_PORT}/ws/telemetry"
-  ok "frontend/.env.local 指向 backend :${BACKEND_PORT}"
+  ok "apps/frontend/.env.local 指向 backend :${BACKEND_PORT}"
 fi
 
 # ============================================================

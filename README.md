@@ -6,8 +6,8 @@
 ## 專案結構
 
 ```
-backend/    FastAPI + MAVSDK：遙測接收、5G 鏈路模擬、WebSocket 廣播、API
-frontend/   Next.js + MapLibre + three.js：3D 即時監控、架次回放、機隊與路徑管理
+apps/backend/    FastAPI + MAVSDK：遙測接收、5G 鏈路模擬、WebSocket 廣播、API
+apps/frontend/   Next.js + MapLibre + three.js：3D 即時監控、架次回放、機隊與路徑管理
 db/init/    TimescaleDB schema（容器首次啟動自動執行）
 doc/        系統設計文件（架構、schema、前端設計、QGC 整合、機上量測回傳）
 missions/   QGroundControl .plan 航線檔（研究用固定航線）
@@ -34,7 +34,7 @@ progress/   開發進度現況 + 逐次開發紀錄 log/
 docker compose up -d        # 全部服務：DB + SITL + backend + frontend
 ```
 
-**開發也是這樣跑**（2026-08-04 起）：backend/frontend 容器掛載原始碼並
+**開發也是這樣跑**（2026-08-04 起）：apps/backend/frontend 容器掛載原始碼並
 熱重載，改檔案即生效；`restart: unless-stopped` 讓服務不依賴任何終端
 session，機器重開自動復活。前端 `http://<主機IP>:33000`（區網可直連，
 API 位址自動推導）。
@@ -44,9 +44,9 @@ host 端腳本（`scripts/dev-*.sh`）保留給需要單獨跑某個服務除錯
 測試飛行：
 
 ```bash
-backend/.venv/bin/python scripts/test-flight.py    # 直線穿越干擾區
-backend/.venv/bin/python scripts/fly-mission.py    # 以 QGC 身分上傳並執行 .plan 任務
-backend/.venv/bin/python scripts/fly-mission.py missions/complex-survey.plan  # 複雜航線
+apps/backend/.venv/bin/python scripts/test-flight.py    # 直線穿越干擾區
+apps/backend/.venv/bin/python scripts/fly-mission.py    # 以 QGC 身分上傳並執行 .plan 任務
+apps/backend/.venv/bin/python scripts/fly-mission.py missions/complex-survey.plan  # 複雜航線
 ```
 
 ### 連接埠慣例
@@ -69,7 +69,7 @@ Seed 資料在 PX4 SITL 預設起飛點（蘇黎世）旁放了兩個 gNB 和一
 起飛往北約 200m 進入干擾區，可觀察 SINR 驟降、`link_lost` 事件與軌跡變色：
 
 ```bash
-backend/.venv/bin/python scripts/test-flight.py
+apps/backend/.venv/bin/python scripts/test-flight.py
 ```
 
 腳本連 **14550** 而非 14540——backend 的 mavsdk_server 已經綁住 14540，

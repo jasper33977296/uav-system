@@ -41,12 +41,12 @@ services:
   # 開發即在 container 內跑（掛原始碼 + reload）：dev server 的存活不再依賴
   # 任何終端 session，機器重開也會自己回來（restart: unless-stopped）。
   backend:
-    build: ./backend
+    build: ./apps/backend
     network_mode: host          # 直接收 SITL 的 UDP；API 服務於 :${BACKEND_PORT:-38000}
     command: ["uvicorn", "app.main:app", "--reload",
               "--host", "0.0.0.0", "--port", "${BACKEND_PORT:-38000}"]
     volumes:
-      - ./backend/app:/srv/app  # 原始碼掛進去，改檔案 reload 立即生效
+      - ./apps/backend/app:/srv/app  # 原始碼掛進去，改檔案 reload 立即生效
     environment:
       # 全部由根目錄 .env 供值（見 .env.example）——新環境只改 .env
       DATABASE_URL: postgresql://uav:uav@localhost:${DB_PORT:-35432}/uav
@@ -66,7 +66,7 @@ services:
     network_mode: host
     working_dir: /app
     volumes:
-      - ./frontend:/app
+      - ./apps/frontend:/app
     # 用主機的 uid 跑，否則 .next/ 會被寫成 root 擁有，主機端 npm 之後會炸
     user: "1000:1000"
     environment:

@@ -9,8 +9,8 @@
 設計見 doc/onboard-telemetry.md。
 
 用法：
-    backend/.venv/bin/python scripts/fake-onboard-node.py
-    backend/.venv/bin/python scripts/fake-onboard-node.py --outage 30:20
+    apps/backend/.venv/bin/python scripts/fake-onboard-node.py
+    apps/backend/.venv/bin/python scripts/fake-onboard-node.py --outage 30:20
 
     --outage START:LEN   起動後第 START 秒開始，模擬 LEN 秒的鏈路中斷
                          （即時通道全丟、記錄通道送不出去），用來驗證補傳
@@ -26,7 +26,7 @@ import urllib.request
 from datetime import datetime, timezone
 from pathlib import Path
 
-sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "backend"))
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "apps" / "backend"))
 
 import websockets
 

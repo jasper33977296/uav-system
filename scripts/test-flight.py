@@ -10,7 +10,7 @@ MAVLink，控制指令走哪個埠都可以，所以這裡讓給 backend、自�
 見 issues/008。
 
 用法：
-    backend/.venv/bin/python scripts/test-flight.py
+    apps/backend/.venv/bin/python scripts/test-flight.py
 
 若同時開著 QGroundControl，它也會佔用 14550——擇一使用。
 """

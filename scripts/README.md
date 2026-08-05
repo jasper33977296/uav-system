@@ -51,7 +51,7 @@ BACKEND_PORT=38000
 FRONTEND_PORT=33000
 ```
 
-`docker-compose.yml`、三個 dev 腳本、以及 `frontend/.env.local` 都由這裡帶入，
+`docker-compose.yml`、三個 dev 腳本、以及 `apps/frontend/.env.local` 都由這裡帶入，
 改 port 只要改 `.env` 一處。
 
 > 為什麼 DB 不直接用本機那套 PostgreSQL 16？因為要啟用 TimescaleDB 得改

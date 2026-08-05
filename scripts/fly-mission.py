@@ -5,7 +5,7 @@
 GET /api/mission/current 唯讀讀回。真機階段這整支腳本的工作由 QGC 做。
 
 用法：
-    backend/.venv/bin/python scripts/fly-mission.py [plan檔路徑]
+    apps/backend/.venv/bin/python scripts/fly-mission.py [plan檔路徑]
 """
 import asyncio
 import sys

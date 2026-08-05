@@ -75,7 +75,7 @@ docker compose up -d db backend frontend      # 明確列出，不含 sitl
 
 ### 1.3 backend 全部設定項（環境變數）
 
-`backend/app/config.py`，皆可用環境變數覆寫（大寫同名）：
+`apps/backend/app/config.py`，皆可用環境變數覆寫（大寫同名）：
 
 | 變數 | 預設 | 說明 |
 |---|---|---|
@@ -97,7 +97,7 @@ docker compose up -d db backend frontend      # 明確列出，不含 sitl
 
 預設**零設定**：API 位址由瀏覽器網址自動推導（開 `http://<GS_IP>:33000`
 就會連 `<GS_IP>:38000`）。只有前後端分屬不同主機才需要
-`frontend/.env.local` 指定 `NEXT_PUBLIC_API_URL` / `NEXT_PUBLIC_WS_URL`。
+`apps/frontend/.env.local` 指定 `NEXT_PUBLIC_API_URL` / `NEXT_PUBLIC_WS_URL`。
 
 ### 1.5 QGC
 
@@ -280,7 +280,7 @@ DB 密碼改掉預設值。這是已知邊界，不是疏忽。
 docker compose up -d        # 含 sitl；backend 維持 LINK_SOURCE=simulated
 ```
 
-- 測試飛行：`backend/.venv/bin/python scripts/test-flight.py`（直線穿越）、
+- 測試飛行：`apps/backend/.venv/bin/python scripts/test-flight.py`（直線穿越）、
   `scripts/fly-mission.py [plan檔]`（上傳並執行任務）
 - 群飛模擬：`POST /api/swarm/start?count=3[&mission_id=...]`
 - 讓別台電腦的 QGC 連 SITL：`.env` 的 `SITL_QGC_HOST` 改成該電腦 IP

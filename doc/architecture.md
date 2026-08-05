@@ -31,7 +31,7 @@ PX4 SITL (Gazebo)          Backend (FastAPI)               Frontend (Next.js)
 ### 單機起步、保留多機擴充
 
 - 所有資料表從第一天就帶 `drone_id`。
-- MAVSDK ingest 目前是 FastAPI 內的 asyncio 背景任務（`backend/app/ingest.py`），
+- MAVSDK ingest 目前是 FastAPI 內的 asyncio 背景任務（`apps/backend/app/ingest.py`），
   **不架 MQTT broker**。
 - 多機化路徑：把 ingest 抽成獨立 gateway process、中間插 MQTT、
   `app/state.py` 的單例 `LiveState` 換成 `dict[drone_id, LiveState]`。
@@ -55,7 +55,7 @@ armed → disarmed 為一個 `flight_session`。所有 telemetry 與 link_metric
 session 下，「回放某次飛行」「比較兩次實驗」都是一個 `session_id` 條件。
 架次結束時自動統計鏈路摘要（avg/min SINR、干擾區內取樣數等）寫入 `summary`。
 
-### 鏈路事件門檻（`backend/app/config.py`）
+### 鏈路事件門檻（`apps/backend/app/config.py`）
 
 鏈路狀態是 **ok / degraded / lost 三態機**（`main.py:_link_transition`）。
 SINR 是連續量、事件是離散點，直接比大小會在干擾區內每秒發一筆重複事件，
