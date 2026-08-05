@@ -47,9 +47,11 @@ git clone <repo> uav-system && cd uav-system
 cp .env.example .env      # 範本即部署形（不含模擬器 profile）
 ```
 
-其餘一切都在容器裡（backend 依賴在映像內、frontend 首次啟動自動
-`npm ci`）。`scripts/setup.sh` 是**開發環境**工具（SITL 測試腳本的
-venv、埠衝突偵測、啟用 sim profile），部署不需要。
+其餘一切都在容器裡：backend 依賴在映像內；**frontend 是 production
+build**——`next build` 於映像建構時完成（含型別檢查），執行的是
+`next start` 服務預編譯產物，不是開發伺服器。
+`scripts/setup.sh` 是**開發環境**工具（SITL 測試腳本的 venv、埠偵測、
+啟用 sim profile 與前端熱重載覆寫），部署不需要。
 
 `.env` 內容（連接埠一律 30000 以上，避開系統服務）：
 
@@ -308,6 +310,7 @@ docker compose up -d        # 含 sitl（由 sim profile 帶起）
 （MAVLink 任務是整包替換），且 SITL 容器重啟機上任務即歸零。
 用「路徑管理 → 從機上讀回」確認機上現況。
 
-前端容器跑的是 dev server（熱重載，開發即部署）；研究用地面站可接受。
-要正式 build：`frontend` 容器 command 改
-`sh -c "npm run build && npm run start -- -p 33000 -H 0.0.0.0"`。
+前端模式由 .env 的 `COMPOSE_FILE` 決定：部署（基底檔）＝production
+build；開發加 `docker-compose.dev.yml` 覆寫＝bind mount + 熱重載。
+前端程式碼變更後，部署環境要 `docker compose up -d --build` 重建映像
+（build 產物在映像內）；開發環境改檔即生效。
