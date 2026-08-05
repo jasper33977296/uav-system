@@ -53,6 +53,7 @@ FRONTEND_PORT=33000  # 前端
 
 ```bash
 LINK_SOURCE=modem        # ★ 真機模式：鏈路量測由機上 POST 進來
+# 並刪除 COMPOSE_PROFILES=sim 這行——模擬器（開發鷹架）自此不存在於本環境
 ```
 
 改完 `docker compose up -d` 重載即生效。
@@ -68,10 +69,11 @@ LINK_SOURCE=modem        # ★ 真機模式：鏈路量測由機上 POST 進來
 | `simulated` | backend 自己模擬 5G 鏈路（開發用）；push 端點回 409 |
 | `modem` | 鏈路資料只接受機上 push；地圖不畫任何模擬假設圖層 |
 
-**真機部署時不要啟動 sitl 服務**（它會與真機搶 14540 的封包來源）：
+SITL 模擬器屬 `sim` profile，部署 .env 沒有 `COMPOSE_PROFILES=sim` 就
+**永遠不會啟動**——不需要記得排除它：
 
 ```bash
-docker compose up -d db backend frontend      # 明確列出，不含 sitl
+docker compose up -d
 ```
 
 四個服務都是 `restart: unless-stopped`——地面站重開機自動復活。
@@ -276,16 +278,18 @@ DB 密碼改掉預設值。這是已知邊界，不是疏忽。
 
 ## 附錄：模擬環境（SITL 開發）
 
-與真機部署的差異只有兩處：
+與真機部署的差異只有 .env 兩行：`LINK_SOURCE=simulated`＋`COMPOSE_PROFILES=sim`
+（setup.sh 產生的預設即開發模式）：
 
 ```bash
-docker compose up -d        # 含 sitl；backend 維持 LINK_SOURCE=simulated
+docker compose up -d        # 含 sitl（由 sim profile 帶起）
 ```
 
 - 測試飛行：`apps/backend/.venv/bin/python scripts/test-flight.py`（直線穿越）、
   `scripts/fly-mission.py [plan檔]`（上傳並執行任務）
 - 群飛模擬：`POST /api/swarm/start?count=3[&mission_id=...]`
-- 讓別台電腦的 QGC 連 SITL：`.env` 的 `SITL_QGC_HOST` 改成該電腦 IP
+- 讓別台電腦的 QGC 連 SITL（臨時環境變數，不進 .env）：
+  `SITL_QGC_HOST=<那台IP> docker compose up -d sitl`
 
 注意：SITL 是共用的一台——測試腳本上傳任務會**覆蓋**QGC 上傳的
 （MAVLink 任務是整包替換），且 SITL 容器重啟機上任務即歸零。

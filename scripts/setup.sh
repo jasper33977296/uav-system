@@ -72,7 +72,7 @@ write_env_file "$ROOT/.env" \
 # 部署設定：缺哪個補哪個（不覆蓋既有值），完整說明見 .env.example
 for kv in "LINK_SOURCE=simulated" \
           "MAVLINK_URL=udpin://0.0.0.0:14540" \
-          "SITL_BACKEND_HOST=127.0.0.1" "SITL_QGC_HOST=127.0.0.1"; do
+          "COMPOSE_PROFILES=sim"; do
   grep -q "^${kv%%=*}=" "$ROOT/.env" || echo "$kv" >> "$ROOT/.env"
 done
 ok "已寫入 $ROOT/.env（docker compose 與 dev 腳本共用；部署設定見 .env.example）"
