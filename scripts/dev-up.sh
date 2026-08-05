@@ -14,7 +14,7 @@ load_env "$ROOT/.env"
 
 require_docker
 
-if [[ $# -gt 0 ]]; then SERVICES=("$@"); else SERVICES=(db sitl); fi
+if [[ $# -gt 0 ]]; then SERVICES=("$@"); else SERVICES=(uav-db uav-sitl); fi
 
 step "啟動容器：${SERVICES[*]}"
 warn "首次執行要拉映像（TimescaleDB ~400MB、PX4 SITL ~2GB），請耐心等"
@@ -26,7 +26,7 @@ for i in $(seq 1 60); do
     ok "資料庫已就緒"
     break
   fi
-  [[ "$i" == 60 ]] && die "等待逾時，看 log：docker compose logs db"
+  [[ "$i" == 60 ]] && die "等待逾時，看 log：docker compose logs uav-db"
   sleep 2
 done
 

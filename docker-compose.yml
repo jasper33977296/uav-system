@@ -1,5 +1,6 @@
 services:
-  db:
+  uav-db:
+    container_name: uav-db
     image: timescale/timescaledb:latest-pg16
     environment:
       POSTGRES_USER: uav
@@ -19,7 +20,8 @@ services:
     restart: unless-stopped
 
   # PX4 SITL (headless Gazebo)。host network 讓 MAVLink UDP 直接打到本機 14540/14550
-  sitl:
+  uav-sitl:
+    container_name: uav-sitl
     image: jonasvautherin/px4-gazebo-headless:1.14.3
     # 開發鷹架：僅在 COMPOSE_PROFILES=sim（開發 .env）時隨 up -d 啟動；
     # 真機部署的 .env 沒有這行，`docker compose up -d` 天生不會帶起模擬器。
@@ -45,7 +47,8 @@ services:
 
   # 開發即在 container 內跑（掛原始碼 + reload）：dev server 的存活不再依賴
   # 任何終端 session，機器重開也會自己回來（restart: unless-stopped）。
-  backend:
+  uav-backend:
+    container_name: uav-backend
     build: ./apps/backend
     network_mode: host          # 直接收 SITL 的 UDP；API 服務於 :${BACKEND_PORT:-38000}
     command: ["uvicorn", "app.main:app", "--reload",
@@ -58,14 +61,15 @@ services:
       MAVLINK_URL: ${MAVLINK_URL:-udpin://0.0.0.0:14540}
       LINK_SOURCE: ${LINK_SOURCE:-simulated}
     depends_on:
-      db:
+      uav-db:
         condition: service_healthy
     restart: unless-stopped
     logging:
       driver: json-file
       options: { max-size: "50m", max-file: "3" }
 
-  frontend:
+  uav-frontend:
+    container_name: uav-frontend
     image: node:24-bookworm     # 對齊主機的 node 24（node_modules 是 bind mount 共用的）
     network_mode: host
     working_dir: /app

@@ -279,9 +279,9 @@ DB 密碼改掉預設值。這是已知邊界，不是疏忽。
 | 事項 | 作法 |
 |---|---|
 | 資料生命週期 | 原始 1Hz 資料 **30 天自動清除**；1 分鐘彙總永久保留。要長期保留原始資料：無人機頁逐航線「匯出」（單一 JSON）後可「移除」 |
-| 備份 | `docker exec uav-system-db-1 pg_dump -U uav uav > backup-$(date +%F).sql`（排程丟遠端）|
+| 備份 | `docker exec uav-db pg_dump -U uav uav > backup-$(date +%F).sql`（排程丟遠端）|
 | 更新版本 | `git pull && docker compose up -d --build` |
-| 看日誌 | `docker compose logs -f backend`（log 已設 50MB×3 上限，不會寫爆磁碟）|
+| 看日誌 | `docker compose logs -f uav-backend`（log 已設 50MB×3 上限，不會寫爆磁碟）|
 | 服務狀態 | `docker compose ps`；全部 `restart: unless-stopped`，重開機自動復活 |
 
 **已知注意事項**：backend 若在飛行中重啟，啟動時會自動補結算中斷的航線
@@ -302,7 +302,7 @@ docker compose up -d        # 含 sitl（由 sim profile 帶起）
   `scripts/fly-mission.py [plan檔]`（上傳並執行任務）
 - 群飛模擬：`POST /api/swarm/start?count=3[&mission_id=...]`
 - 讓別台電腦的 QGC 連 SITL（臨時環境變數，不進 .env）：
-  `SITL_QGC_HOST=<那台IP> docker compose up -d sitl`
+  `SITL_QGC_HOST=<那台IP> docker compose up -d uav-sitl`
 
 注意：SITL 是共用的一台——測試腳本上傳任務會**覆蓋**QGC 上傳的
 （MAVLink 任務是整包替換），且 SITL 容器重啟機上任務即歸零。
