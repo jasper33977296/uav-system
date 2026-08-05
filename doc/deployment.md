@@ -175,8 +175,9 @@ Port = 14540
 
 ### 2.2 5G 量測 node（流 ②）
 
-機上程式在主 repo 的 **`onboard/`**（自包含資料夾，可直接推成獨立 repo
-放到機上），安裝與設定見 `onboard/README.md`。摘要：
+機上程式在主 repo 的 **`onboard/`**，並鏡像為獨立 repo 供機上 clone：
+`git@github.com:jasper33977296/uav-onboard.git`（主 repo 的 onboard/ 為
+單一事實來源，修正後同步過去）。安裝與設定見其 README。摘要：
 
 - RF 指標：`AT+QENG="servingcell"`（SINR/RSRP/PCI），**第一步必為
   `--probe`**——印出 modem 原始回應貼回校準解析，勿假設一次就對
