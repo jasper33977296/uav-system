@@ -12,9 +12,9 @@ RF 指標（`AT+QENG="servingcell"`，含 SINR/RSRP/PCI）、從機上 PX4 取
 
 ## 需求
 
-- Python **3.7+**（含 PX4 位置需 **3.8+**——mavsdk 的要求；未安裝 mavsdk 時
-  自動退化為無座標採樣）。RB5 原廠 18.04 映像可能是 3.6：先回報
-  `python3 --version`，若真是 3.6 有替代方案（見開發端）
+- Python **3.6+**（RB5 原廠 Ubuntu 18.04 映像可直接跑，零環境改動）。
+  全程同步式、無 asyncio；PX4 位置用 pymavlink 被動監聽（無 mavsdk_server
+  副程序）。未安裝 pymavlink 時自動退化為無座標採樣
 - modem AT 埠可讀（RM500Q 通常是 `/dev/ttyUSB2`；`ls /dev/ttyUSB*` 確認）
 - 機上 PX4 的 MAVLink 可達（預設 `udpin://0.0.0.0:14540`，依機上路由設定調整）
 
@@ -71,5 +71,7 @@ journalctl -u uav-link-node -f     # 看運行日誌
 
 - 斷線容忍：地面站斷線期間樣本累積於緩衝，恢復後自動補傳、冪等去重
   （地面站以 `(drone_id, time)` 去重，重送安全）
-- PX4 連不上時照常採樣（樣本無座標，時序仍完整）；mavsdk 未安裝同理
+- PX4 連不上時照常採樣（樣本無座標，時序仍完整）；pymavlink 未安裝同理
+- 網路逾時不拖慢取樣：送出在獨立執行緒，主迴圈只管「讀 modem＋落盤」
+  的穩定節奏——斷線期間（最需要資料的時刻）採樣解析度不下降
 - 已送達樣本保留 7 天後清除（地面站資料庫重建時可救援）
