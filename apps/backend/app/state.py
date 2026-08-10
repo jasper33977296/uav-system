@@ -1,7 +1,8 @@
-"""單機的即時狀態。單一 asyncio event loop 內讀寫，不需要鎖。
+"""即時狀態。單一 asyncio event loop 內讀寫，不需要鎖。
 
-多機擴充時，把這裡換成 dict[drone_id, LiveState]，
-ingest 任務一機一個，其餘程式碼不變。
+多機（2026-08-10 路線 B）：`fleet` 以 drone_id 為鍵持有每台機的
+LiveState；`live` 仍是「主機」那台的 state 物件（fleet 裡同一個參照），
+既有單機程式碼（api、模擬迴圈）不需改。mavlink_rx 依 sysid 建檔。
 """
 import time as _time
 from dataclasses import dataclass, field
@@ -76,3 +77,7 @@ class LiveState:
 
 
 live = LiveState()
+
+# 全機隊：drone_id → LiveState（主機也在裡面，值就是上面的 live 物件；
+# 由 main.lifespan 放入，mavlink_rx 自動註冊的其他機隨心跳加入）
+fleet: dict[str, LiveState] = {}

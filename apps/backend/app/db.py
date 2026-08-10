@@ -32,6 +32,34 @@ async def migrate() -> None:
     await pool.execute("DROP TABLE IF EXISTS cells")
 
 
+async def drone_for_sysid(sysid: int) -> tuple[str, str]:
+    """sysid → (drone_id, name)。多機自動註冊（issues/011 定案）：
+
+    1. 已有 mav_sysid 對應 → 直接用
+    2. 主機還沒認領 sysid → 認領給主機——既有單機部署升級時，
+       不會因為多了 sysid 概念而生出一台幽靈機
+    3. 都不是 → 自動建檔（uav-s{sysid}，之後無人機頁改名）
+    """
+    row = await pool.fetchrow(
+        "SELECT id::text AS id, name FROM drones WHERE mav_sysid = $1", sysid)
+    if row:
+        return row["id"], row["name"]
+    row = await pool.fetchrow(
+        "SELECT id::text AS id, name FROM drones WHERE is_primary AND mav_sysid IS NULL")
+    if row:
+        await pool.execute("UPDATE drones SET mav_sysid = $2 WHERE id = $1",
+                           row["id"], sysid)
+        return row["id"], row["name"]
+    name = f"uav-s{sysid}"
+    row = await pool.fetchrow(
+        """INSERT INTO drones (name, serial_no, is_simulated, status, mav_sysid)
+           VALUES ($1, $1, false, 'idle', $2)
+           ON CONFLICT (serial_no) DO UPDATE SET mav_sysid = EXCLUDED.mav_sysid
+           RETURNING id::text AS id, name""",
+        name, sysid)
+    return row["id"], row["name"]
+
+
 async def ensure_drone(name: str, connection_url: str) -> str:
     row = await pool.fetchrow(
         """

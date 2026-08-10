@@ -1,5 +1,5 @@
 fastapi>=0.115
 uvicorn[standard]>=0.30
-mavsdk>=2.8
+pymavlink>=2.4.40
 asyncpg>=0.29
 pydantic-settings>=2.4

@@ -1,6 +1,8 @@
 # 011 · 「註冊無人機」表單未接線：建立資料列但系統不會連線
 
-- 狀態：open（範圍縮小：身分管理已於 2026-08-05 系統端實作，僅剩多機 ingest）
+- 狀態：in-progress（核心已落地 2026-08-10：路線 B 單迴圈多機 RX、
+  sysid 自動註冊、逐台架次、live 通道 drone_id——SITL 驗收通過；
+  剩多機實測與 swarm_sim 退役）
 - 嚴重度：low
 - 位置：`apps/frontend/app/drones/page.tsx`（表單）、`apps/backend/app/api.py`（POST /drones）
 - 建立：2026-08-05

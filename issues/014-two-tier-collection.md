@@ -20,9 +20,19 @@ ulog 100+ topic（事後回收）。
 `CAPTURE_KEEP_DAYS=30` 滾動清理、錄製失敗不拖垮資料路徑、啟動失敗
 退回直連。設定：`CAPTURE_ENABLED`/`CAPTURE_DIR`/`CAPTURE_KEEP_DAYS`。
 
-## 待做：結構層（issue 012 階段 1 的具體清單）
+## 已完成（2026-08-10，隨路線 B 落地）
 
-1. STATUSTEXT → 事件流；COMMAND_ACK/MISSION_ACK →（含原因碼）
-2. MISSION_CURRENT、SYS_STATUS 健康旗標、RC 狀態
-3. modem 擴充（鄰區/QTEMP/流量計數）、companion 健康、ulog 事後回收
-4. 錄製檔的系統內可見性（列表/下載 API 或文件化取用方式）
+- STATUSTEXT → 事件流（`mavlink_rx.py`；嚴重度對映 MAV_SEVERITY）
+- mode_change／sysid 撞號告警入事件流
+- SYS_STATUS 電量已入結構層
+
+## 待做：結構層剩餘
+
+1. **PX4 新版 Events 協定解碼**（msgid 410/411）：PX4 1.14 把多數文字
+   訊息移到 events 框架（SITL 實測 STATUSTEXT 幾乎不出現），解碼需
+   metadata JSON——原始層 tlog 有錄，不丟資料，解碼列後續
+2. COMMAND_ACK/MISSION_ACK 入流（command 服務已留痕 command_log，
+   backend 側可從 tlog 重放）
+3. MISSION_CURRENT、EKF/震動健康旗標、RC 狀態
+4. modem 擴充（鄰區/QTEMP/流量計數）、companion 健康、ulog 事後回收
+5. 錄製檔的系統內可見性（列表/下載 API 或文件化取用方式）

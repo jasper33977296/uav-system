@@ -4,7 +4,7 @@ from datetime import datetime
 from fastapi import APIRouter, HTTPException, Response
 from pydantic import BaseModel, Field
 
-from . import db, ingest, plan_check, swarm_sim
+from . import db, mavlink_rx, plan_check, swarm_sim
 from .config import settings
 from .link_events import transition as link_transition
 from .state import live
@@ -250,17 +250,17 @@ _NAV_CMDS = {16, 21, 22}
 
 @router.get("/mission/current")
 async def current_mission():
-    if ingest.drone is None or not live.connected:
+    if mavlink_rx.rx is None or not live.connected:
         raise HTTPException(503, "MAVLink 未連線")
     try:
-        items = await asyncio.wait_for(ingest.drone.mission_raw.download_mission(), timeout=10)
+        items = await asyncio.wait_for(mavlink_rx.rx.download_mission(), timeout=12)
     except Exception as e:
         raise HTTPException(502, f"任務下載失敗：{e}")
     waypoints = [
         {
             "seq": it.seq,
             "command": it.command,
-            "lat": it.x / 1e7,       # mission_raw 的座標是 int32 度 ×1e7
+            "lat": it.x / 1e7,       # MISSION_ITEM_INT 的座標是 int32 度 ×1e7
             "lon": it.y / 1e7,
             "alt": it.z,             # frame 3 = 相對起飛點高度（QGC 預設）
             "frame": it.frame,
@@ -419,6 +419,7 @@ async def swarm_status():
 
 class LinkSample(BaseModel):
     """機上一次採樣的完整結果。欄位對應 RM500Q-GL 的 AT+QENG 回應。"""
+    drone_id: str | None = None     # 多機：這筆樣本屬於哪台（不填＝主機）
     seq: int | None = None          # 機上單調遞增序號，只用於批次確認，不入庫
     time: datetime                  # 機上採樣時刻，須含時區
     lat: float | None = None        # 採樣當下位置，機上從 PX4 取得後綁進同一筆
@@ -490,13 +491,19 @@ async def link_metrics_live(s: LinkSample):
     """
     _require_modem_mode()
     _require_aware(s.time)
+    # 多機：樣本自帶 drone_id 決定更新哪台的 live state（不填＝主機）
+    from .state import fleet
+    target = fleet.get(s.drone_id) if s.drone_id else live
+    if target is None:
+        raise HTTPException(404, f"未知的 drone_id：{s.drone_id}（該機尚未註冊）")
     # mode="json" 讓 datetime 變成 ISO 字串。live.link 會被 WebSocket 廣播出去，
     # 放進 datetime 物件會讓 json.dumps 拋錯而整個廣播迴圈死掉。
     m = s.model_dump(mode="json", exclude_none=False)
+    m.pop("drone_id", None)
     m["source"] = "modem"
-    live.link = m
-    live.mark_link_seen()
-    await link_transition(live, m)
+    target.link = m
+    target.mark_link_seen()
+    await link_transition(target, m)
     return Response(status_code=204)
 
 

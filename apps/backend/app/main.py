@@ -5,12 +5,12 @@ from contextlib import asynccontextmanager
 from fastapi import FastAPI, WebSocket, WebSocketDisconnect
 from fastapi.middleware.cors import CORSMiddleware
 
-from . import capture, db, ingest
+from . import db, mavlink_rx
 from .api import router
 from .config import settings
 from .link_events import transition as link_transition
 from .link_sim import SimulatedLinkSource
-from .state import live
+from .state import fleet, live
 from .ws import manager
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(name)s %(message)s")
@@ -41,33 +41,35 @@ async def _link_and_db_loop() -> None:
         log.info("link_source=%s：鏈路資料改由機上 POST 進來，本迴圈只寫 telemetry",
                  settings.link_source)
 
-    recording = False          # 上一輪是否處於記錄狀態，用來偵測架次開始
+    recording: dict[str, bool] = {}   # 各機上一輪是否記錄中，用來偵測架次開始
     while True:
         await asyncio.sleep(1.0 / settings.db_write_hz)
-        if live.lat is None or live.lon is None:
-            continue
+        if mavlink_rx.rx:
+            mavlink_rx.rx.refresh_connected()     # 逾時未見訊息 → 失聯標記
+        for st in list(fleet.values()):
+            if st.lat is None or st.lon is None:
+                continue
 
-        if simulated:
-            live.link = source.sample(live.lat, live.lon, live.alt_rel)
-            live.mark_link_seen()   # 前端待機時仍看得到鏈路品質
+            if simulated and st is live:
+                st.link = source.sample(st.lat, st.lon, st.alt_rel)
+                st.mark_link_seen()   # 前端待機時仍看得到鏈路品質
 
-        # 同時檢查 session_id：armed 由 ingest 的另一個任務設定，剛解鎖的瞬間
-        # 可能還沒建好 session，此時寫入會產生 session_id NULL 的孤兒資料。
-        if not (live.armed and live.session_id):
-            recording = False
-            continue
+            # 同時檢查 session_id：armed 由 rx worker 設定，剛解鎖的瞬間可能
+            # 還沒建好 session，此時寫入會產生 session_id NULL 的孤兒資料。
+            if not (st.armed and st.session_id):
+                recording[st.drone_id] = False
+                continue
 
-        if not recording:      # 架次開始：狀態機重置，避免沿用上一趟的狀態
-            live.link_state = "ok"
-            recording = True
+            if not recording.get(st.drone_id):   # 架次開始：狀態機重置
+                st.link_state = "ok"
+                recording[st.drone_id] = True
 
-        if simulated:
-            # 鏈路事件：link_degraded / link_lost / link_recovered
-            # （不發 handover——無人機等價於一台 UE，換手由 modem 與網路側處理。）
-            await link_transition(live, live.link)
-            await db.insert_link(live)
+            if simulated and st is live:
+                # 鏈路事件：link_degraded / link_lost / link_recovered
+                await link_transition(st, st.link)
+                await db.insert_link(st)
 
-        await db.insert_telemetry(live)
+            await db.insert_telemetry(st)
 
 
 async def _broadcast_loop() -> None:
@@ -85,8 +87,10 @@ async def _broadcast_loop() -> None:
             if manager.clients:
                 # primary 旗標：多機廣播中標記「MAVLink 主機」，前端側欄鎖定它
                 # （否則僚機的訊息先到會被誤認成主機）
-                await manager.broadcast({"type": "telemetry", "primary": True,
-                                         **live.telemetry_dict()})
+                for st in list(fleet.values()):
+                    await manager.broadcast({"type": "telemetry",
+                                             "primary": st is live,
+                                             **st.telemetry_dict()})
         except Exception:
             log.exception("broadcast 失敗，略過這一輪")
 
@@ -102,30 +106,24 @@ async def lifespan(app: FastAPI):
             settings.link_source == "simulated", settings.mavlink_url)
         log.info("無主機設定，自動建立預設主機 uav-1（可在無人機頁改名）")
     live.drone_id, live.drone_name = primary["id"], primary["name"]
+    fleet[live.drone_id] = live      # 主機進機隊註冊表（rx 依 sysid 對回同一物件）
     recovered = await db.recover_orphan_sessions()
     if recovered:
         log.info("補結算 %d 條孤兒航線（上次執行期間中斷的飛行）", recovered)
     log.info("primary drone: %s (%s)", live.drone_name, live.drone_id)
-    # 原始層錄製（兩層收集）：tee 綁對外埠，ingest 改連內部埠。
-    # 啟動失敗時退回直連——錄製是保險絲，不能反過來成為單點故障。
-    ingest_url = settings.mavlink_url
-    cap = None
-    if settings.capture_enabled:
-        try:
-            cap = await capture.start()
-            ingest_url = f"udpin://127.0.0.1:{settings.capture_internal_port}"
-        except Exception:
-            log.exception("原始層錄製啟動失敗，ingest 直連（本次無錄製）")
+    # 路線 B（issues/011）：pymavlink 單迴圈＝原始層錄製＋解碼＋多機 demux，
+    # mavsdk 退役、零副程序
+    rx_task = await mavlink_rx.start()
     tasks = [
-        asyncio.create_task(ingest.run(ingest_url), name="mavlink-ingest"),
+        rx_task,
         asyncio.create_task(_link_and_db_loop(), name="link-db-loop"),
         asyncio.create_task(_broadcast_loop(), name="ws-broadcast"),
     ]
     yield
     for t in tasks:
         t.cancel()
-    if cap:
-        cap.close()
+    if mavlink_rx.rx and mavlink_rx.rx.rec:
+        mavlink_rx.rx.rec.close()
     await db.pool.close()
 
 

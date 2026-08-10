@@ -1,30 +1,28 @@
-"""原始層錄製：MAVLink 每一個框架先落盤，再轉發給 ingest（透明 tee）。
+"""原始層錄製器：MAVLink 框架無損落盤（tlog 格式）。
 
-「任何無人機傳出的資訊都要收集到」的字面實作——不逐種訊息挑選解析，
-先無損保留；結構層之後要什麼，從這裡重放即可（設計見
-doc/gcs-replacement.md「兩層收集」、issues/014）。
+「任何無人機傳出的資訊都要收集到」的字面實作（issues/014）——不逐種
+訊息挑選，先無損保留；結構層要什麼，從這裡重放即可。
 
-- backend 對外綁 MAVLINK_URL 的埠（14540），mavsdk 改聽內部埠；
-  機→地：錄製＋轉發；地→機（mavsdk 心跳/唯讀請求）：只轉發不錄。
+歷史註：本模組原本是「tee」（錄了轉發給 mavsdk）；2026-08-10 路線 B
+之後 mavsdk 退役，接收與解析由 mavlink_rx.py 負責，本模組只剩錄製器，
+由 mavlink_rx 在每個 datagram 落盤時呼叫。
+
 - 格式：tlog（每則訊息前綴 8-byte big-endian μs 時間戳），
   與 QGC 回放、pymavlink（mavlogdump.py）工具鏈相容。
 - 檔案依 UTC 日切檔，CAPTURE_KEEP_DAYS 滾動清理。
-  實測待機流量 ~16.5 KB/s（61 MB/hr），與 30 天 retention 同量級。
-- 錄製失敗絕不拖垮資料路徑（寫檔例外只記 log，轉發照走）。
+  實測待機流量 ~16.5 KB/s（61 MB/hr）。
+- 錄製失敗絕不拖垮資料路徑（呼叫端負責 try/except）。
 """
-import asyncio
 import logging
 import os
 import struct
 import time
 from datetime import datetime, timedelta, timezone
 
-from .config import settings
-
 log = logging.getLogger(__name__)
 
 
-def _split_frames(buf: bytes) -> list[bytes]:
+def split_frames(buf: bytes) -> list[bytes]:
     """datagram → MAVLink 框架列表。結構性切分、不驗 CRC——錄製是無損保留，
     髒資料照樣落盤；切不動的殘段整塊保留（tlog 讀取端自己會重新同步）。"""
     frames = []
@@ -42,7 +40,7 @@ def _split_frames(buf: bytes) -> list[bytes]:
     return frames
 
 
-class _Recorder:
+class Recorder:
     def __init__(self, directory: str, keep_days: int):
         self.dir = directory
         self.keep_days = keep_days
@@ -57,7 +55,7 @@ class _Recorder:
         if day != self.day:
             self._rotate(day)
         ts = struct.pack(">Q", int(now * 1e6))
-        for fr in _split_frames(data):
+        for fr in split_frames(data):
             self.f.write(ts + fr)
         if now - self._last_flush > 1.0:
             self.f.flush()
@@ -84,64 +82,3 @@ class _Recorder:
         if self.f:
             self.f.close()
             self.f = None
-
-
-class _ExtProto(asyncio.DatagramProtocol):
-    """對外（機→地）：錄製＋轉發給內部 mavsdk。"""
-    def __init__(self, tee: "Tee"):
-        self.tee = tee
-
-    def connection_made(self, transport):
-        self.tee.ext = transport
-
-    def datagram_received(self, data, addr):
-        t = self.tee
-        t.drone_addr = addr
-        try:
-            t.rec.write(data)
-        except Exception:
-            log.exception("capture 寫檔失敗（資料路徑不受影響）")
-        if t.int_t:
-            t.int_t.sendto(data, t.int_target)
-
-
-class _IntProto(asyncio.DatagramProtocol):
-    """對內（地→機，mavsdk 心跳/唯讀請求）：原路轉回，不錄。"""
-    def __init__(self, tee: "Tee"):
-        self.tee = tee
-
-    def connection_made(self, transport):
-        self.tee.int_t = transport
-
-    def datagram_received(self, data, addr):
-        t = self.tee
-        if t.ext and t.drone_addr:
-            t.ext.sendto(data, t.drone_addr)
-
-
-class Tee:
-    def __init__(self):
-        self.rec = _Recorder(settings.capture_dir, settings.capture_keep_days)
-        self.ext = None
-        self.int_t = None
-        self.drone_addr = None
-        self.int_target = ("127.0.0.1", settings.capture_internal_port)
-
-    def close(self) -> None:
-        for tr in (self.ext, self.int_t):
-            if tr:
-                tr.close()
-        self.rec.close()
-
-
-async def start() -> Tee:
-    """綁定 MAVLINK_URL 的埠開始錄製；ingest 應改連內部埠。"""
-    u = settings.mavlink_url.replace("://", ":").split(":")
-    host, port = u[-2], int(u[-1])
-    tee = Tee()
-    loop = asyncio.get_running_loop()
-    await loop.create_datagram_endpoint(lambda: _ExtProto(tee), local_addr=(host, port))
-    await loop.create_datagram_endpoint(lambda: _IntProto(tee), local_addr=("127.0.0.1", 0))
-    log.info("raw capture：udp %s:%d →（錄製）→ 127.0.0.1:%d，目錄 %s",
-             host, port, settings.capture_internal_port, settings.capture_dir)
-    return tee

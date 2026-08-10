@@ -16,7 +16,6 @@ class Settings(BaseSettings):
     geofence_margin: float = 0.7     # 超過半徑此比例即警告（Home=擺放位置的餘裕）
     capture_enabled: bool = True
     capture_dir: str = "/data/mavcap"
-    capture_internal_port: int = 14549
     capture_keep_days: int = 30
     broadcast_hz: float = 5.0        # WebSocket 推送頻率
     db_write_hz: float = 1.0         # telemetry / link_metrics 入庫頻率
