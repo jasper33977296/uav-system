@@ -323,8 +323,9 @@ DB 密碼改掉預設值。這是已知邊界，不是疏忽。
 docker compose up -d        # 含 sitl（由 sim profile 帶起）
 ```
 
-- 測試飛行：`apps/backend/.venv/bin/python scripts/test-flight.py`（直線穿越）、
-  `scripts/fly-mission.py [plan檔]`（上傳並執行任務）
+- 測試飛行（純標準庫，經 command 服務——需 `ENABLE_COMMANDS=true`）：
+  `python3 scripts/test-flight.py`（干擾區穿越）、
+  `python3 scripts/fly-mission.py <任務名稱|mission_id|plan檔>`（上傳並執行）
 - 群飛模擬：`POST /api/swarm/start?count=3[&mission_id=...]`
 - 讓別台電腦的 QGC 連 SITL（臨時環境變數，不進 .env）：
   `SITL_QGC_HOST=<那台IP> docker compose up -d uav-sitl`
