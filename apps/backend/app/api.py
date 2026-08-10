@@ -119,6 +119,16 @@ async def delete_drone(drone_id: str):
     return {"deleted": counts}
 
 
+@router.get("/live")
+async def live_snapshot():
+    """主機的即時狀態快照（與 WS 廣播同一份資料）。
+
+    給不方便開 WebSocket 的取用端：驗收腳本（scripts/check-onboard.py）、
+    curl 排查。輪詢頻率不宜超過 broadcast_hz，即時顯示請走 WS。
+    """
+    return live.telemetry_dict()
+
+
 @router.get("/sessions")
 async def list_sessions(limit: int = 50, mission_id: str | None = None):
     q = """
