@@ -37,9 +37,26 @@ export function colorFor(id: string): string {
 
 interface Unit { scene: THREE.Scene; mat: THREE.MeshStandardMaterial }
 
+/** 每台機在畫布上的位置與半徑（CSS px），render 時更新——
+    自訂層不在 queryRenderedFeatures 的世界裡，點擊命中得自己投影。 */
+export interface ScreenHit { x: number; y: number; r: number }
+
+export function pickDrone(
+  hits: Map<string, ScreenHit>, x: number, y: number, slopPx = 8,
+): string | null {
+  let best: string | null = null;
+  let bestD = Infinity;
+  for (const [id, h] of hits) {
+    const d = Math.hypot(x - h.x, y - h.y);
+    if (d <= h.r + slopPx && d < bestD) { best = id; bestD = d; }
+  }
+  return best;
+}
+
 export function createDroneLayer(
   layerId: string,
   getDrones: () => DronePos[],
+  hits?: Map<string, ScreenHit>,
 ): maplibregl.CustomLayerInterface {
   let renderer: THREE.WebGLRenderer | null = null;
   let map: maplibregl.Map | null = null;
@@ -77,6 +94,8 @@ export function createDroneLayer(
         ?.defaultProjectionData?.mainMatrix ?? (args as unknown as number[]);
       const proj = new THREE.Matrix4().fromArray(matrix as number[]);
 
+      const canvas = map.getCanvas();
+      const cw = canvas.clientWidth, ch = canvas.clientHeight;
       const seen = new Set<string>();
       for (const d of getDrones()) {
         seen.add(d.id);
@@ -90,9 +109,24 @@ export function createDroneLayer(
         camera.projectionMatrix = proj.clone().multiply(model);
         renderer.resetState();
         renderer.render(u.scene, camera);
+
+        if (hits) {
+          // 球心與球面右緣投到 NDC → CSS px（applyMatrix4 自帶除 w）
+          const c4 = new THREE.Vector4(mc.x, mc.y, mc.z ?? 0, 1).applyMatrix4(proj);
+          if (c4.w > 0) {
+            const cx = (c4.x / c4.w + 1) / 2 * cw;
+            const cy = (1 - c4.y / c4.w) / 2 * ch;
+            const e4 = new THREE.Vector4(mc.x + s, mc.y, mc.z ?? 0, 1).applyMatrix4(proj);
+            const ex = (e4.x / e4.w + 1) / 2 * cw;
+            const ey = (1 - e4.y / e4.w) / 2 * ch;
+            hits.set(d.id, { x: cx, y: cy, r: Math.max(Math.hypot(ex - cx, ey - cy), 6) });
+          } else {
+            hits.delete(d.id);   // 在相機後方
+          }
+        }
       }
       for (const [k, u] of units) {
-        if (!seen.has(k)) { u.mat.dispose(); units.delete(k); }
+        if (!seen.has(k)) { u.mat.dispose(); units.delete(k); hits?.delete(k); }
       }
       map.triggerRepaint();
     },

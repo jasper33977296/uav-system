@@ -15,6 +15,7 @@ CREATE TABLE drones (
   serial_no      TEXT UNIQUE,
   is_simulated   BOOLEAN NOT NULL DEFAULT true,
   connection_url TEXT,                 -- e.g. 'udpin://0.0.0.0:14540'
+  video_url      TEXT,                 -- 即時影像串流（WHEP / MJPEG / 直接 video src）
   status         TEXT NOT NULL DEFAULT 'offline',  -- offline / idle / in_mission / maintenance
   is_primary     BOOLEAN NOT NULL DEFAULT false,   -- MAVLink 主機（至多一台，系統端指定）
   created_at     TIMESTAMPTZ NOT NULL DEFAULT now()

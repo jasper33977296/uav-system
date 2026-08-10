@@ -24,6 +24,11 @@ async def init_pool() -> asyncpg.Pool:
             await asyncio.sleep(3)
 
 
+async def migrate() -> None:
+    """既有資料庫的增量欄位（db/init 只在全新 volume 執行）。冪等，啟動時跑。"""
+    await pool.execute("ALTER TABLE drones ADD COLUMN IF NOT EXISTS video_url TEXT")
+
+
 async def ensure_drone(name: str, connection_url: str) -> str:
     row = await pool.fetchrow(
         """

@@ -220,6 +220,22 @@ systemctl enable --now uav-link-node
 ——Quectel 論壇有 RM500Q SINR 回報異常的前例，不要假設數值正確。
 這一測同時驗證整條鏈路：modem → node → HTTP → DB → 前端。
 
+### 2.4 即時影像（選配）
+
+前端地圖點擊機體會開啟即時畫面 modal，來源是每台機的影像串流位址
+（無人機頁 →「影像」設定，存在系統端，換瀏覽器不用重設）。
+
+瀏覽器不支援 RTSP，機上相機串流需先轉成瀏覽器吃的格式。建議機上跑
+[MediaMTX](https://github.com/bluenviron/mediamtx)（單一執行檔）把 RTSP 轉 WHEP（WebRTC，延遲最低，適合 FPV）：
+
+```bash
+# 機上：mediamtx.yml 指定 source: rtsp://<相機>，跑起來後
+# 無人機頁「影像」填：http://<機IP>:8889/<路徑名>/whep
+```
+
+MJPEG（IP cam 常見）與 MP4/WebM 位址也可直接填，前端依 URL 自動選播放器。
+注意：影像走 5G 會與量測流量搶頻寬——研究量測時建議降碼率或只在需要時開啟。
+
 ---
 
 ## 3. 網路設定

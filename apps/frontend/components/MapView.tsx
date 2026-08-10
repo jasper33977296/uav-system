@@ -3,7 +3,8 @@ import maplibregl from "maplibre-gl";
 import "maplibre-gl/dist/maplibre-gl.css";
 import { useEffect, useRef, useState } from "react";
 
-import { colorFor, createDroneLayer } from "@/components/droneLayer";
+import { colorFor, createDroneLayer, pickDrone, type ScreenHit } from "@/components/droneLayer";
+import VideoModal from "@/components/VideoModal";
 import { CANVAS, groundGrid, ribbon, trailLineString } from "@/lib/geo";
 import { API, LINK_CLASSES, classifySinr } from "@/lib/signal";
 import { useUavStore } from "@/lib/store";
@@ -26,6 +27,8 @@ export default function MapView() {
   const markerRef = useRef<maplibregl.Marker | null>(null);
   const centeredRef = useRef(false);
   const [hasMission, setHasMission] = useState(false);
+  const hitsRef = useRef<Map<string, ScreenHit>>(new Map());
+  const [videoDrone, setVideoDrone] = useState<string | null>(null);
 
 
   useEffect(() => {
@@ -108,7 +111,18 @@ export default function MapView() {
           .filter(([, t]) => t.lat != null && t.lon != null)
           .map(([id, t]) => ({
             id, lat: t.lat!, lon: t.lon!, alt: t.alt_rel ?? 0, color: colorFor(id),
-          }))));
+          })), hitsRef.current));
+
+      // 點擊機體 → 即時畫面 modal（自訂層不在 queryRenderedFeatures 裡，
+      // 用 render 時算好的螢幕位置自行命中）
+      map.on("click", (e) => {
+        const id = pickDrone(hitsRef.current, e.point.x, e.point.y);
+        if (id) setVideoDrone(id);
+      });
+      map.on("mousemove", (e) => {
+        map.getCanvas().style.cursor =
+          pickDrone(hitsRef.current, e.point.x, e.point.y) ? "pointer" : "";
+      });
 
       // 任務疊圖：**只**畫任務庫的啟用路徑（路徑管理頁「顯示於即時頁」）。
       // 使用者的顯隱選擇是唯一真相——全部隱藏就什麼都不畫，
@@ -245,6 +259,15 @@ export default function MapView() {
           起飛點（地面基準）
         </div>
       </div>
+
+      {videoDrone && (
+        <VideoModal
+          droneId={videoDrone}
+          name={useUavStore.getState().fleet[videoDrone]?.drone_name ?? videoDrone}
+          color={colorFor(videoDrone)}
+          onClose={() => setVideoDrone(null)}
+        />
+      )}
     </div>
   );
 }

@@ -40,21 +40,32 @@ async def register_drone(d: DroneIn):
     return dict(row)
 
 
-class DroneRename(BaseModel):
-    name: str
+class DronePatch(BaseModel):
+    name: str | None = None
+    video_url: str | None = None      # 空字串＝清除
 
 
 @router.patch("/drones/{drone_id}")
-async def rename_drone(drone_id: str, body: DroneRename):
-    """改名（系統端管理機的身分，不走環境變數）。serial_no 保持原值當穩定鍵。"""
-    name = body.name.strip()
-    if not name:
-        raise HTTPException(422, "名稱不可為空")
-    r = await db.pool.execute("UPDATE drones SET name = $2 WHERE id = $1", drone_id, name)
+async def patch_drone(drone_id: str, body: DronePatch):
+    """改名／設定影像串流位址（系統端管理機的身分與屬性，不走環境變數）。
+    serial_no 保持原值當穩定鍵。"""
+    fields = body.model_dump(exclude_unset=True)
+    if not fields:
+        raise HTTPException(422, "沒有要更新的欄位")
+    if "name" in fields:
+        name = (fields["name"] or "").strip()
+        if not name:
+            raise HTTPException(422, "名稱不可為空")
+        fields["name"] = name
+    if "video_url" in fields:
+        fields["video_url"] = (fields["video_url"] or "").strip() or None
+    sets = ", ".join(f"{k} = ${i + 2}" for i, k in enumerate(fields))
+    r = await db.pool.execute(
+        f"UPDATE drones SET {sets} WHERE id = $1", drone_id, *fields.values())
     if r.split()[-1] == "0":
         raise HTTPException(404, "無此無人機")
-    if live.drone_id == drone_id:
-        live.drone_name = name          # 主機改名即時反映（事件標籤、側欄）
+    if live.drone_id == drone_id and "name" in fields:
+        live.drone_name = fields["name"]   # 主機改名即時反映（事件標籤、側欄）
     return {"ok": True}
 
 

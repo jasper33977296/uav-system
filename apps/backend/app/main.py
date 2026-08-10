@@ -99,6 +99,7 @@ async def _broadcast_loop() -> None:
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     await db.init_pool()
+    await db.migrate()
     # 主機身分由系統端決定（無人機頁註冊/設為主機/改名），不再走環境變數
     primary = await db.get_primary_drone()
     if primary is None:

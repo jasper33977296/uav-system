@@ -8,6 +8,7 @@ import { useUavStore } from "@/lib/store";
 interface Drone {
   id: string; name: string; is_simulated: boolean; is_primary: boolean;
   connection_url: string | null; status: string | null;
+  video_url: string | null;
 }
 interface Session {
   id: string; drone_id: string; drone_name: string;
@@ -139,6 +140,23 @@ export default function Drones() {
                   if (!res.ok) setErr((await res.json()).detail ?? "改名失敗");
                   reload();
                 }}>改名</button>{" "}
+              <button className="btn-plain btn-sm"
+                title={"即時影像串流位址（地圖點擊機體開啟）。瀏覽器不支援 RTSP：" +
+                  "機上跑 MediaMTX 轉 WHEP，填 http://<機IP>:8889/<路徑>/whep；" +
+                  "MJPEG/MP4 位址亦可。留空＝清除。"}
+                onClick={async () => {
+                  const v = window.prompt(
+                    "影像串流位址（WHEP / MJPEG / MP4，留空清除）",
+                    d.video_url ?? "http://");
+                  if (v == null) return;
+                  const res = await fetch(`${API}/api/drones/${d.id}`, {
+                    method: "PATCH",
+                    headers: { "Content-Type": "application/json" },
+                    body: JSON.stringify({ video_url: v === "http://" ? "" : v }),
+                  });
+                  if (!res.ok) setErr((await res.json()).detail ?? "設定失敗");
+                  reload();
+                }}>影像{d.video_url ? " ✓" : ""}</button>{" "}
               {!d.is_primary && !d.name.startsWith("swarm-") && (
                 <button className="btn-plain btn-sm"
                   title="MAVLink 收到的遙測記在這台名下（飛行中無法切換）"
