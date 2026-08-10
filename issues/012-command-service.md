@@ -14,8 +14,10 @@
 
 - 獨立服務、sysid 254、1Hz GCS 心跳（= PX4 datalink-loss failsafe 觸發源，
   服務存活屬飛安相關）
-- **從第一天就是多機**：連線池依 `drones` 表 connection_url 逐台建立，
-  所有 API 帶 drone_id（issue 011 的 ingest 多實例化用同一份註冊表，一併解）
+- **從第一天就是多機**：**單埠＋sysid 路由**（2026-08-10 定案，取代
+  connection_url 連線池）——14541 一個埠收發所有機，指令依
+  `drones.mav_sysid` 定址、回程依「sysid → 來源位址」路由；
+  所有 API 帶 drone_id（issue 011 的 ingest demux 用同一份 sysid 對應）
 - 指令佇列＋ACK 追蹤＋重送；無 ACK 不得顯示成功；緊急指令獨立路徑
 - 任務上傳：MAVLink 2 握手＋回讀比對
 - 指令留痕入庫；`ENABLE_COMMANDS` 預設關

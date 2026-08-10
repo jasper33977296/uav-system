@@ -36,8 +36,19 @@
 本 issue 剩餘範圍：多機**同時**接入（ingest 多實例化，逐台依 connection_url
 建立連線）。
 
-## 解法（多機時一併做）
+## 解法（多機時一併做；模型 2026-08-10 定案）
 
-1. backend 啟動：讀 `drones` 表非模擬機清單，每台 spawn ingest（各自 LiveState）
-2. 航線開啟從「主機單例」改為逐台的 armed 轉換
-3. 屆時本 issue 關閉，swarm_sim（開發鷹架）退役
+**單埠＋sysid demux**（取代原案「逐台依 connection_url 建連線」）：
+
+1. 所有機的 mavlink-router 都打地面站**同一個埠**（14540）——機上設定
+   完全相同（同一映像），只差 PX4 參數 `MAV_SYS_ID`（裝機時設唯一值）
+2. capture tee 升級為 demux：逐框架讀 sysid（v2 表頭第 5 byte），
+   per-sysid 轉發到各自內部埠與 mavsdk 實例（各自 LiveState）；
+   回程依「sysid → 最後來源位址」原路送回。原始層 tlog 天然多機安全
+   （每則訊息帶 sysid，重放時可按機拆分）
+3. `drones` 表加 `mav_sysid` 欄位承擔身分對應；「設為主機」概念退役
+   （單連線時代的過渡設計）。`connection_url` 欄位語意作廢
+4. 防呆必要：偵測「同 sysid 來自兩個不同來源位址」→ 告警
+   （撞號會靜默混料，比連不上更糟）
+5. 航線開啟從「主機單例」改為逐台的 armed 轉換
+6. 屆時本 issue 關閉，swarm_sim（開發鷹架）退役
