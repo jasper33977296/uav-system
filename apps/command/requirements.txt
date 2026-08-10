@@ -1,0 +1,5 @@
+fastapi>=0.110
+uvicorn>=0.29
+pymavlink>=2.4.40
+asyncpg>=0.29
+pydantic-settings>=2.2

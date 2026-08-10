@@ -82,6 +82,27 @@ services:
       driver: json-file
       options: { max-size: "50m", max-file: "3" }
 
+  # 指令服務（GCS 取代階段 2）：與 ingest 分離的獨立服務，sysid 254。
+  # ENABLE_COMMANDS 預設 false——顯式開啟前只觀察不指揮（也不發 GCS 心跳）。
+  uav-command:
+    container_name: uav-command
+    build: ./apps/command
+    network_mode: host
+    command: ["uvicorn", "app.main:app", "--reload",
+              "--host", "0.0.0.0", "--port", "${COMMAND_PORT:-38001}"]
+    volumes:
+      - ./apps/command/app:/srv/app
+    environment:
+      DATABASE_URL: postgresql://uav:uav@localhost:${DB_PORT:-35432}/uav
+      COMMAND_MAVLINK_URL: ${COMMAND_MAVLINK_URL:-udpin://0.0.0.0:14541}
+      ENABLE_COMMANDS: ${ENABLE_COMMANDS:-false}
+    depends_on:
+      uav-db: { condition: service_healthy }
+    logging:
+      driver: json-file
+      options: { max-size: "50m", max-file: "3" }
+    restart: unless-stopped
+
 volumes:
   dbdata:
   mavcap:

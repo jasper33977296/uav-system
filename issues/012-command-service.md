@@ -1,9 +1,24 @@
 # 012 · command 服務：自製 GCS 的指令能力（取代 QGC 作業流程）
 
-- 狀態：open
+- 狀態：in-progress（階段 2 核心 2026-08-10 落地並過 SITL 驗收；階段 3 UI 待做）
 - 嚴重度：medium（新能力，非缺陷；GCS 取代計畫的承重結構）
-- 位置：新服務（`apps/command/`，未建）；設計見 `doc/gcs-replacement.md` §1
+- 位置：`apps/command/`；設計見 `doc/gcs-replacement.md` §1
 - 建立：2026-08-10
+
+## 已落地（SITL 全流程驗收通過）
+
+`apps/command/`（獨立容器 uav-command，port 38001）：sysid 254、單埠
+多機路由（自管來源位址表，mavutil udpin 不記來源故接管 recv/send）、
+1Hz 心跳（enable 時才發）、指令 ACK 契約（重送 3 次、無 ACK 即失敗）、
+任務上傳（MISSION_ITEM_INT 握手＋**回讀逐項比對**）、模式切換
+（mission/hold/rtl/land）、`command_log` 留痕、`ENABLE_COMMANDS`
+預設關（403）。驗收：上傳 4 航點 verified → arm → mission start →
+飛行中 RTL → 降落自動上鎖，留痕 4 筆，架次自動結算。
+
+## 待做（階段 3）
+
+前端控制 UI（滑動確認解鎖、緊急鈕常駐、拒絕原因就地顯示）、
+拔心跳觸發 `COM_DL_LOSS_T` failsafe 實測、drones.mav_sysid 對應 UI。
 
 ## 需求
 

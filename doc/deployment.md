@@ -250,7 +250,9 @@ MJPEG（IP cam 常見）與 MP4/WebM 位址也可直接填，前端依 URL 自�
 | 33000 | TCP | 前端 | 操作員瀏覽器（區網）|
 | 38000 | TCP | API/WS ＋機上 push | 瀏覽器、機上 node |
 | 14550 | UDP | MAVLink → QGC | 機上 mavlink-router |
-| 14540 | UDP | MAVLink → 本系統 | 機上 mavlink-router |
+| 14540 | UDP | MAVLink → 本系統（ingest，唯讀） | 機上 mavlink-router |
+| 14541 | UDP | MAVLink ↔ command 服務（雙向，`ENABLE_COMMANDS=true` 時） | 機上 mavlink-router |
+| 38001 | TCP | command 服務 API | 瀏覽器（階段 3 UI）、curl |
 | 35432 | TCP | TimescaleDB | 僅本機（分析工具可直連）|
 
 防火牆有開的話（`ufw`）：
