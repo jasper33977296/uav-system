@@ -22,7 +22,7 @@ serial 用 termios 直開 tty；MAVLink 只聽三種訊息且只收不發，內�
 鏈路劣化（研究最想看的時刻）正是資料傳不回去的時刻——緩衝與補傳是
 資料正確性的前提。設計文件見主系統 repo 的 doc/onboard-telemetry.md。
 
-設定（環境變數）：
+設定（腳本同目錄的 .env 或環境變數，環境變數優先）：
   GROUND_API   地面站 API，如 http://192.168.55.10:38000   （必填）
   AT_PORT      modem AT 埠，預設 /dev/ttyUSB2（RM500Q 常見）
   AT_BAUD      預設 115200
@@ -47,6 +47,23 @@ import threading
 import time
 import urllib.request
 from datetime import datetime, timezone
+
+def _load_env(path):
+    """讀腳本同目錄的 .env（KEY=VALUE，# 註解）。真環境變數優先——
+    systemd 與手動執行共用同一份設定，unit 檔不需要 Environment=。"""
+    try:
+        with open(path) as f:
+            for line in f:
+                line = line.strip()
+                if not line or line.startswith("#") or "=" not in line:
+                    continue
+                k, v = line.split("=", 1)
+                os.environ.setdefault(k.strip(), v.strip())
+    except (IOError, OSError):
+        pass
+
+
+_load_env(os.path.join(os.path.dirname(os.path.abspath(__file__)), ".env"))
 
 GROUND_API = os.environ.get("GROUND_API", "").rstrip("/")
 AT_PORT = os.environ.get("AT_PORT", "/dev/ttyUSB2")

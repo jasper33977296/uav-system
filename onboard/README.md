@@ -23,7 +23,8 @@ RF 指標（`AT+QENG="servingcell"`，含 SINR/RSRP/PCI）、從機上 PX4 取
 ```bash
 sudo mkdir -p /opt/uav-onboard && sudo chown $USER /opt/uav-onboard
 # 把本資料夾內容放進 /opt/uav-onboard（git clone 你的機上 repo，或 scp）
-# 沒有然後——零依賴，不需要 venv 或 pip install
+cd /opt/uav-onboard
+cp .env.example .env    # 編輯 GROUND_API 等設定；零依賴，不需要 venv/pip
 ```
 
 ## 第一步永遠是 --probe（上機首驗）
@@ -31,7 +32,7 @@ sudo mkdir -p /opt/uav-onboard && sudo chown $USER /opt/uav-onboard
 **不要假設 AT 解析一次就對**——韌體版本間欄位有差異：
 
 ```bash
-AT_PORT=/dev/ttyUSB2 python3 onboard_node.py --probe
+python3 onboard_node.py --probe        # AT_PORT 非預設時在 .env 設定
 ```
 
 把整段輸出貼回開發端校準 `parse_qeng()`。
@@ -44,11 +45,11 @@ SINR 回報異常的前例）。
 ## 正式運行
 
 ```bash
-GROUND_API=http://<地面站IP>:38000 python3 onboard_node.py
+python3 onboard_node.py                # 設定讀自 .env
 ```
 
-確認地面站前端「無人機訊號品質」卡開始有數值後，裝成開機自啟：
-編輯 `uav-link-node.service` 的路徑與 `GROUND_API`，然後
+確認地面站前端「無人機訊號品質」卡開始有數值後，裝成開機自啟
+（設定都在 `.env`，unit 檔只有安裝路徑不同才要改）：
 
 ```bash
 sudo cp uav-link-node.service /etc/systemd/system/
@@ -56,7 +57,7 @@ sudo systemctl daemon-reload && sudo systemctl enable --now uav-link-node
 journalctl -u uav-link-node -f     # 看運行日誌
 ```
 
-## 設定（環境變數）
+## 設定（`.env`，真環境變數優先）
 
 | 變數 | 預設 | 說明 |
 |---|---|---|
