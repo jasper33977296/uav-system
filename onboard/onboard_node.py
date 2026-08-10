@@ -2,8 +2,10 @@
 # -*- coding: utf-8 -*-
 """機上 5G 量測節點（跑在無人機的 companion computer 上）。
 
-Python 3.6+（RB5 原廠 Ubuntu 18.04 映像可直接跑，零環境改動）。
-同步式設計、無 asyncio；PX4 位置用 pymavlink 直讀（不需 mavsdk_server 副程序）。
+Python 3.6+、**零第三方依賴（純標準庫）**——RB5 上不需要 venv、不需要 pip：
+serial 用 termios 直開 tty；MAVLink 只聽三種訊息且只收不發，內建迷你解析器
+（框架＋X.25 CRC 驗證），不值得為此拉整包 pymavlink。
+同步式設計、無 asyncio。
 
 每秒：讀 modem 的 RF 指標（AT+QENG）＋ 當下 PX4 位置與 GPS 時間 ＋ ping 地面站
 量 RTT → 先寫入本地 SQLite 緩衝（先落盤再送）→ 兩條通道送往地面站：
@@ -15,7 +17,7 @@ Python 3.6+（RB5 原廠 Ubuntu 18.04 映像可直接跑，零環境改動）。
   main    讀 modem ＋ 組樣本 ＋ 落盤（穩定 1Hz，不受網路影響）
   sender  live/batch 送出（逾時只拖慢送出，不拖慢取樣）
   ping    RTT／丟包量測
-  px4     pymavlink 讀 GLOBAL_POSITION_INT 與 SYSTEM_TIME（只聽不發）
+  px4     讀 GLOBAL_POSITION_INT / SYSTEM_TIME / GPS_RAW_INT（只聽不發）
 
 鏈路劣化（研究最想看的時刻）正是資料傳不回去的時刻——緩衝與補傳是
 資料正確性的前提。設計文件見主系統 repo 的 doc/onboard-telemetry.md。
@@ -35,9 +37,12 @@ Python 3.6+（RB5 原廠 Ubuntu 18.04 映像可直接跑，零環境改動）。
 import json
 import os
 import re
+import socket
 import sqlite3
+import struct
 import subprocess
 import sys
+import termios
 import threading
 import time
 import urllib.request
@@ -109,21 +114,91 @@ def parse_ping(output):
     return float(m.group(1)) if m else None
 
 
-# ── modem ────────────────────────────────────────────────────
+# ── modem（termios 直開 tty，不需要 pyserial）─────────────────
 class Modem(object):
     def __init__(self, port, baud):
-        import serial                          # 延遲載入：--selftest 不需要
-        self.ser = serial.Serial(port, baud, timeout=1.0)
+        self.fd = os.open(port, os.O_RDWR | os.O_NOCTTY | os.O_NONBLOCK)
+        a = termios.tcgetattr(self.fd)
+        a[0] = 0                                   # iflag：關掉所有輸入處理
+        a[1] = 0                                   # oflag：raw 輸出
+        a[2] = termios.CS8 | termios.CREAD | termios.CLOCAL
+        a[3] = 0                                   # lflag：非 canonical、無 echo
+        speed = getattr(termios, "B{}".format(baud), termios.B115200)
+        a[4] = a[5] = speed                        # RM500Q 是 USB CDC，實際忽略 baud
+        termios.tcsetattr(self.fd, termios.TCSANOW, a)
 
     def cmd(self, at, wait=0.6):
         """送一條 AT 指令、收完回應。AT 介面一問一答，不必並發。"""
-        self.ser.reset_input_buffer()
-        self.ser.write((at + "\r").encode())
+        termios.tcflush(self.fd, termios.TCIFLUSH)
+        os.write(self.fd, (at + "\r").encode())
         time.sleep(wait)
-        return self.ser.read(self.ser.in_waiting or 1).decode(errors="replace")
+        chunks = []
+        while True:
+            try:
+                b = os.read(self.fd, 4096)
+            except OSError:                        # EAGAIN＝目前沒資料了
+                break
+            if not b:
+                break
+            chunks.append(b)
+        return b"".join(chunks).decode(errors="replace")
 
 
-# ── PX4（pymavlink 直讀，只聽不發——read-only 原則）────────────
+# ── 迷你 MAVLink 解析器（只收不發，只認三種訊息）──────────────
+# 拉整包 pymavlink 只為了聽三種訊息不值得（且要 pip）。框架格式與 CRC
+# 演算法是 MAVLink 規格的穩定部分；CRC_EXTRA 是各訊息定義的常數。
+MAV_CRC_EXTRA = {2: 137, 24: 24, 33: 104}   # SYSTEM_TIME, GPS_RAW_INT, GLOBAL_POSITION_INT
+
+
+def _x25(data, crc=0xFFFF):
+    for b in data:
+        t = (b ^ crc) & 0xFF
+        t = (t ^ (t << 4)) & 0xFF
+        crc = ((crc >> 8) ^ (t << 8) ^ (t << 3) ^ (t >> 4)) & 0xFFFF
+    return crc
+
+
+def mav_frames(buf):
+    """從一個 UDP datagram 取出 (msgid, payload)。v1/v2 都認；
+    只對我們認識的 msgid 驗 CRC，其他依框架長度跳過。
+    MAVLink 2 會截掉 payload 尾端的 0，使用前要補回。"""
+    out = []
+    i, n = 0, len(buf)
+    while i < n:
+        m = buf[i]
+        if m == 0xFD and i + 12 <= n:              # v2: FD len incompat compat seq sys comp msgid×3
+            plen = buf[i + 1]
+            sig = 13 if (buf[i + 2] & 1) else 0
+            end = i + 10 + plen + 2 + sig
+            if end > n:
+                break
+            msgid = buf[i + 7] | (buf[i + 8] << 8) | (buf[i + 9] << 16)
+            if msgid in MAV_CRC_EXTRA:
+                crc = buf[i + 10 + plen] | (buf[i + 11 + plen] << 8)
+                if _x25(bytes(buf[i + 1:i + 10 + plen]) + bytes([MAV_CRC_EXTRA[msgid]])) == crc:
+                    out.append((msgid, bytes(buf[i + 10:i + 10 + plen])))
+            i = end
+        elif m == 0xFE and i + 8 <= n:             # v1: FE len seq sys comp msgid
+            plen = buf[i + 1]
+            end = i + 6 + plen + 2
+            if end > n:
+                break
+            msgid = buf[i + 5]
+            if msgid in MAV_CRC_EXTRA:
+                crc = buf[i + 6 + plen] | (buf[i + 7 + plen] << 8)
+                if _x25(bytes(buf[i + 1:i + 6 + plen]) + bytes([MAV_CRC_EXTRA[msgid]])) == crc:
+                    out.append((msgid, bytes(buf[i + 6:i + 6 + plen])))
+            i = end
+        else:
+            i += 1                                 # 不是框架開頭，逐位元組重新同步
+    return out
+
+
+def _pad(payload, size):
+    return payload + b"\x00" * (size - len(payload)) if len(payload) < size else payload
+
+
+# ── PX4（UDP 被動監聽——read-only 原則）───────────────────────
 class Px4State(object):
     def __init__(self):
         self.lat = None
@@ -138,39 +213,50 @@ class Px4State(object):
         return datetime.now(timezone.utc).isoformat()
 
 
+def _apply_mav(state, msgid, payload):
+    if msgid == 33:                                # GLOBAL_POSITION_INT
+        _, lat, lon, _, rel = struct.unpack_from("<Iiiii", _pad(payload, 20))
+        state.lat = lat / 1e7
+        state.lon = lon / 1e7
+        state.alt_rel = rel / 1000.0
+    elif msgid == 2:                               # SYSTEM_TIME
+        usec = struct.unpack_from("<Q", _pad(payload, 8))[0]
+        if usec:
+            state.gps_offset = usec / 1e6 - time.monotonic()
+    elif msgid == 24:                              # GPS_RAW_INT
+        usec = struct.unpack_from("<Q", _pad(payload, 8))[0]
+        # 規格：time_usec 可能是 epoch 或開機時間，以數量級判別
+        # （>1e15 μs ≈ 2001 年之後才視為 epoch）；SITL 給的是開機時間
+        if usec > 1e15:
+            state.gps_offset = usec / 1e6 - time.monotonic()
+
+
 def px4_thread(state):
     """背景執行緒：GLOBAL_POSITION_INT → 位置、SYSTEM_TIME／GPS_RAW_INT → GPS 時間。
     連不上時節點照常運行（樣本無座標，仍具時序價值）。"""
-    try:
-        from pymavlink import mavutil
-    except ImportError:
-        print("[px4] 未安裝 pymavlink，樣本將不含位置（pip install pymavlink）", flush=True)
-        return
-    url = PX4_URL.replace("://", ":")          # 接受 mavsdk 式 udpin://host:port 寫法
+    # 接受 udpin://host:port（mavsdk 式）與 udpin:host:port 兩種寫法
+    hp = PX4_URL.replace("://", ":").split(":")
+    host, port = hp[-2], int(hp[-1])
     while True:
+        sock = None
         try:
-            conn = mavutil.mavlink_connection(url)
-            print("[px4] listening {}".format(url), flush=True)
+            sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+            sock.bind((host, port))
+            sock.settimeout(5)
+            print("[px4] listening udp {}:{}".format(host, port), flush=True)
             while True:
-                msg = conn.recv_match(
-                    type=["GLOBAL_POSITION_INT", "SYSTEM_TIME", "GPS_RAW_INT"],
-                    blocking=True, timeout=5)
-                if msg is None:
+                try:
+                    data, _ = sock.recvfrom(4096)
+                except socket.timeout:
                     continue
-                t = msg.get_type()
-                if t == "GLOBAL_POSITION_INT":
-                    state.lat = msg.lat / 1e7
-                    state.lon = msg.lon / 1e7
-                    state.alt_rel = msg.relative_alt / 1000.0
-                elif t == "SYSTEM_TIME" and msg.time_unix_usec:
-                    state.gps_offset = msg.time_unix_usec / 1e6 - time.monotonic()
-                elif t == "GPS_RAW_INT" and msg.time_usec > 1e15:
-                    # 規格：time_usec 可能是 epoch 或開機時間，以數量級判別
-                    # （>1e15 μs ≈ 2001 年之後才視為 epoch）；SITL 給的是開機時間
-                    state.gps_offset = msg.time_usec / 1e6 - time.monotonic()
+                for msgid, payload in mav_frames(data):
+                    _apply_mav(state, msgid, payload)
         except Exception as e:
             print("[px4] 中斷（{}: {}），5 秒後重連".format(type(e).__name__, e), flush=True)
             time.sleep(5)
+        finally:
+            if sock:
+                sock.close()
 
 
 # ── ping（獨立執行緒：RTT 逾時不拖慢取樣節奏）─────────────────
@@ -342,6 +428,27 @@ def selftest():
     r = parse_qeng(nsa)
     assert r["nr_mode"] == "NSA" and r["sinr"] == 15.0 and r["pci"] == 205, r
     assert parse_ping("64 bytes from x: icmp_seq=1 ttl=64 time=23.4 ms") == 23.4
+
+    # MAVLink 解析：組一個 GLOBAL_POSITION_INT v2 框架（含 MAVLink2 的
+    # 尾端零截斷），CRC 用同一套 _x25——與真 PX4 的互通由 SITL 整合測試把關
+    def frame(msgid, payload):
+        p = payload.rstrip(b"\x00") or b"\x00"     # v2 零截斷
+        hdr = bytes([0xFD, len(p), 0, 0, 7, 1, 1, msgid & 0xFF, (msgid >> 8) & 0xFF, msgid >> 16])
+        crc = _x25(hdr[1:] + p + bytes([MAV_CRC_EXTRA[msgid]]))
+        return hdr + p + bytes([crc & 0xFF, crc >> 8])
+
+    st = Px4State()
+    gpi = struct.pack("<IiiiihhhH", 1000, 251234567, 1215554433, 0, 12500, 0, 0, 0, 0)
+    for msgid, payload in mav_frames(b"\x00garbage" + frame(33, gpi) + frame(2, struct.pack("<QI", 1754800000000000, 99))):
+        _apply_mav(st, msgid, payload)
+    assert st.lat == 25.1234567 and st.lon == 121.5554433 and st.alt_rel == 12.5, vars(st)
+    assert st.gps_offset is not None
+    st2 = Px4State()
+    for msgid, payload in mav_frames(frame(24, struct.pack("<Q", 4698204000))):
+        _apply_mav(st2, msgid, payload)
+    assert st2.gps_offset is None      # GPS_RAW_INT 的開機時間必須被拒收
+    bad = bytearray(frame(33, gpi)); bad[12] ^= 0xFF
+    assert mav_frames(bytes(bad)) == []            # CRC 錯的框架不得採用
     print("selftest OK")
 
 

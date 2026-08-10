@@ -9,7 +9,7 @@ Wants=network-online.target
 [Service]
 # 依實際安裝路徑與地面站 IP 修改：
 WorkingDirectory=/opt/uav-onboard
-ExecStart=/opt/uav-onboard/.venv/bin/python /opt/uav-onboard/onboard_node.py
+ExecStart=/usr/bin/python3 /opt/uav-onboard/onboard_node.py
 Environment=GROUND_API=http://192.168.55.10:38000
 # Environment=AT_PORT=/dev/ttyUSB2
 # Environment=PX4_URL=udpin://0.0.0.0:14540

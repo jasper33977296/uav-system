@@ -12,9 +12,9 @@ RF 指標（`AT+QENG="servingcell"`，含 SINR/RSRP/PCI）、從機上 PX4 取
 
 ## 需求
 
-- Python **3.6+**（RB5 原廠 Ubuntu 18.04 映像可直接跑，零環境改動）。
-  全程同步式、無 asyncio；PX4 位置用 pymavlink 被動監聽（無 mavsdk_server
-  副程序）。未安裝 pymavlink 時自動退化為無座標採樣
+- Python **3.6+**、**零第三方依賴（純標準庫）**——不需要 venv、不需要 pip，
+  RB5 原廠 Ubuntu 18.04 映像 clone 完直接跑。serial 用 termios 直開 tty；
+  PX4 位置用內建迷你 MAVLink 解析器被動監聽（只認三種訊息，X.25 CRC 驗證）
 - modem AT 埠可讀（RM500Q 通常是 `/dev/ttyUSB2`；`ls /dev/ttyUSB*` 確認）
 - 機上 PX4 的 MAVLink 可達（預設 `udpin://0.0.0.0:14540`，依機上路由設定調整）
 
@@ -22,9 +22,8 @@ RF 指標（`AT+QENG="servingcell"`，含 SINR/RSRP/PCI）、從機上 PX4 取
 
 ```bash
 sudo mkdir -p /opt/uav-onboard && sudo chown $USER /opt/uav-onboard
-cd /opt/uav-onboard
-# 把本資料夾內容放進來（git clone 你的機上 repo，或 scp）
-python3 -m venv .venv && .venv/bin/pip install -r requirements.txt
+# 把本資料夾內容放進 /opt/uav-onboard（git clone 你的機上 repo，或 scp）
+# 沒有然後——零依賴，不需要 venv 或 pip install
 ```
 
 ## 第一步永遠是 --probe（上機首驗）
@@ -32,7 +31,7 @@ python3 -m venv .venv && .venv/bin/pip install -r requirements.txt
 **不要假設 AT 解析一次就對**——韌體版本間欄位有差異：
 
 ```bash
-AT_PORT=/dev/ttyUSB2 .venv/bin/python onboard_node.py --probe
+AT_PORT=/dev/ttyUSB2 python3 onboard_node.py --probe
 ```
 
 把整段輸出貼回開發端校準 `parse_qeng()`。同時做設計文件要求的首驗：
@@ -42,7 +41,7 @@ SINR 回報異常的前例）。
 ## 正式運行
 
 ```bash
-GROUND_API=http://<地面站IP>:38000 .venv/bin/python onboard_node.py
+GROUND_API=http://<地面站IP>:38000 python3 onboard_node.py
 ```
 
 確認地面站前端「無人機訊號品質」卡開始有數值後，裝成開機自啟：
@@ -71,7 +70,7 @@ journalctl -u uav-link-node -f     # 看運行日誌
 
 - 斷線容忍：地面站斷線期間樣本累積於緩衝，恢復後自動補傳、冪等去重
   （地面站以 `(drone_id, time)` 去重，重送安全）
-- PX4 連不上時照常採樣（樣本無座標，時序仍完整）；pymavlink 未安裝同理
+- PX4 連不上時照常採樣（樣本無座標，時序仍完整）
 - 網路逾時不拖慢取樣：送出在獨立執行緒，主迴圈只管「讀 modem＋落盤」
   的穩定節奏——斷線期間（最需要資料的時刻）採樣解析度不下降
 - 已送達樣本保留 7 天後清除（地面站資料庫重建時可救援）

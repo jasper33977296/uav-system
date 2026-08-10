@@ -1,2 +1,0 @@
-pymavlink>=2.4  # 機上 PX4 位置（被動監聽，不發任何指令）
-pyserial>=3.5   # modem AT 埠
