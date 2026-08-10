@@ -119,43 +119,6 @@ async def delete_drone(drone_id: str):
     return {"deleted": counts}
 
 
-@router.get("/cells")
-async def list_cells():
-    return await db.fetch_cells()
-
-
-@router.get("/zones")
-async def list_zones():
-    return await db.fetch_zones()
-
-
-class ZoneIn(BaseModel):
-    name: str
-    center_lat: float
-    center_lon: float
-    radius_m: float
-    severity_db: float
-    note: str | None = None
-
-
-@router.post("/zones")
-async def create_zone(z: ZoneIn):
-    row = await db.pool.fetchrow(
-        """
-        INSERT INTO interference_zones (name, center_lat, center_lon, radius_m, severity_db, note)
-        VALUES ($1, $2, $3, $4, $5, $6) RETURNING *
-        """,
-        z.name, z.center_lat, z.center_lon, z.radius_m, z.severity_db, z.note,
-    )
-    return dict(row)
-
-
-@router.delete("/zones/{zone_id}")
-async def delete_zone(zone_id: int):
-    await db.pool.execute("DELETE FROM interference_zones WHERE id = $1", zone_id)
-    return {"ok": True}
-
-
 @router.get("/sessions")
 async def list_sessions(limit: int = 50, mission_id: str | None = None):
     q = """

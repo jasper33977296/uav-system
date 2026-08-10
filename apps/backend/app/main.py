@@ -34,21 +34,16 @@ async def _link_and_db_loop() -> None:
     simulated = settings.link_source == "simulated"
     source = None
     if simulated:
+        # 場景（gNB/干擾區）是模擬器內建常數（link_sim.DEFAULT_*），不讀 DB
         source = SimulatedLinkSource(
-            await db.fetch_cells(), await db.fetch_zones(enabled_only=True),
             handover_margin_db=settings.handover_margin_db)
     else:
         log.info("link_source=%s：鏈路資料改由機上 POST 進來，本迴圈只寫 telemetry",
                  settings.link_source)
 
     recording = False          # 上一輪是否處於記錄狀態，用來偵測架次開始
-    tick = 0
     while True:
         await asyncio.sleep(1.0 / settings.db_write_hz)
-        tick += 1
-        if simulated and tick % 30 == 0:  # 每 30 秒重讀干擾區，前端新增/刪除立即生效
-            source.zones = await db.fetch_zones(enabled_only=True)
-            source.cells = await db.fetch_cells()
         if live.lat is None or live.lon is None:
             continue
 

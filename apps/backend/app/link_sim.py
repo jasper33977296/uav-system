@@ -38,10 +38,26 @@ def _clamp(v: float, lo: float, hi: float) -> float:
     return max(lo, min(hi, v))
 
 
+# 模擬場景（開發鷹架自帶）：兩個 gNB＋一個強干擾源。
+# 原為 cells / interference_zones 兩張表，2026-08-10 拆除——場景是模擬器的
+# 內部細節，不佔正式 schema；真機階段的「已知干擾源」由實測資料自己揭露
+# （樣本帶 cell_id/PCI 與座標，事後可歸因，不需要預先標注表）。
+DEFAULT_CELLS = [
+    {"name": "sim-gnb-1", "lat": 47.3970, "lon": 8.5450, "pci": 101, "band": "n78"},
+    {"name": "sim-gnb-2", "lat": 47.4010, "lon": 8.5490, "pci": 205, "band": "n78"},
+]
+DEFAULT_ZONES = [
+    {"name": "sim-jammer-A", "center_lat": 47.3995, "center_lon": 8.5456,
+     "radius_m": 120.0, "severity_db": 25.0},   # 區內 SINR 最深 -25dB
+]
+
+
 class SimulatedLinkSource:
-    def __init__(self, cells: list[dict], zones: list[dict], handover_margin_db: float = 6.0):
-        self.cells = cells
-        self.zones = zones
+    def __init__(self, cells: list[dict] | None = None,
+                 zones: list[dict] | None = None,
+                 handover_margin_db: float = 6.0):
+        self.cells = cells if cells is not None else DEFAULT_CELLS
+        self.zones = zones if zones is not None else DEFAULT_ZONES
         self.handover_margin_db = handover_margin_db
         self._serving_pci: int | None = None
 

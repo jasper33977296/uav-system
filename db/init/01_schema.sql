@@ -25,30 +25,8 @@ CREATE UNIQUE INDEX idx_drones_one_primary ON drones ((true)) WHERE is_primary;
 -- ============================================================
 -- 5G 基地台（gNB）：模擬鏈路品質的訊號源，之後也可存實網 cell 資訊
 -- ============================================================
-CREATE TABLE cells (
-  id      SERIAL PRIMARY KEY,
-  name    TEXT NOT NULL,
-  lat     DOUBLE PRECISION NOT NULL,
-  lon     DOUBLE PRECISION NOT NULL,
-  pci     INT NOT NULL,               -- physical cell id
-  band    TEXT NOT NULL DEFAULT 'n78',
-  tx_power_dbm REAL NOT NULL DEFAULT 40
-);
-
--- ============================================================
--- 干擾區域：研究場景的核心設定。模擬器據此劣化鏈路品質；
--- 真機階段保留此表作為「已知干擾源」的標注。
--- ============================================================
-CREATE TABLE interference_zones (
-  id           SERIAL PRIMARY KEY,
-  name         TEXT NOT NULL,
-  center_lat   DOUBLE PRECISION NOT NULL,
-  center_lon   DOUBLE PRECISION NOT NULL,
-  radius_m     REAL NOT NULL,
-  severity_db  REAL NOT NULL,          -- 區內 SINR 額外衰減量 (dB)
-  enabled      BOOLEAN NOT NULL DEFAULT true,
-  note         TEXT
-);
+-- （cells / interference_zones 已於 2026-08-10 拆除：模擬場景是模擬器的
+--   內部細節，改為 link_sim.py 內建常數；真機的已知干擾源由實測資料歸因）
 
 -- ============================================================
 -- 飛行架次：armed → disarmed 為一個 session
@@ -169,17 +147,8 @@ CREATE TABLE events (
 );
 CREATE INDEX idx_events_time ON events (time DESC);
 
--- ============================================================
--- Seed：PX4 SITL 預設起飛點在蘇黎世 (47.397742, 8.545594)。
--- 放一個 gNB 和一個干擾區，起飛往北飛約 200m 就會進入干擾區，
--- 開箱即可展示「飛入干擾區 → SINR 驟降」。
--- ============================================================
-INSERT INTO cells (name, lat, lon, pci, band) VALUES
-  ('sim-gnb-1', 47.3970, 8.5450, 101, 'n78'),
-  ('sim-gnb-2', 47.4010, 8.5490, 205, 'n78');
-
-INSERT INTO interference_zones (name, center_lat, center_lon, radius_m, severity_db, note) VALUES
-  ('sim-jammer-A', 47.3995, 8.5456, 120, 25, '模擬強干擾源：區內 SINR -25dB');
+-- （模擬場景 seed 已隨 cells / interference_zones 拆除，
+--   場景常數見 apps/backend/app/link_sim.py 的 DEFAULT_CELLS / DEFAULT_ZONES）
 
 ALTER TABLE flight_sessions
   ADD CONSTRAINT fk_sessions_mission

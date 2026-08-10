@@ -25,8 +25,11 @@ async def init_pool() -> asyncpg.Pool:
 
 
 async def migrate() -> None:
-    """既有資料庫的增量欄位（db/init 只在全新 volume 執行）。冪等，啟動時跑。"""
+    """既有資料庫的增量變更（db/init 只在全新 volume 執行）。冪等，啟動時跑。"""
     await pool.execute("ALTER TABLE drones ADD COLUMN IF NOT EXISTS video_url TEXT")
+    # 2026-08-10：模擬場景改為 link_sim 內建常數，拆除模擬器專用表
+    await pool.execute("DROP TABLE IF EXISTS interference_zones")
+    await pool.execute("DROP TABLE IF EXISTS cells")
 
 
 async def ensure_drone(name: str, connection_url: str) -> str:
@@ -217,12 +220,3 @@ async def insert_event(drone_id: str, session_id: str | None,
             "severity": severity, "type": type_, "detail": detail}
 
 
-async def fetch_cells() -> list[dict]:
-    return [dict(r) for r in await pool.fetch("SELECT * FROM cells ORDER BY id")]
-
-
-async def fetch_zones(enabled_only: bool = False) -> list[dict]:
-    q = "SELECT * FROM interference_zones"
-    if enabled_only:
-        q += " WHERE enabled"
-    return [dict(r) for r in await pool.fetch(q + " ORDER BY id")]

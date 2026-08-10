@@ -33,13 +33,8 @@ done
 step "檢查 schema"
 tables="$(docker compose exec -T db psql -U uav -d uav -tAc \
   "SELECT count(*) FROM information_schema.tables WHERE table_schema='public';" 2>/dev/null || echo 0)"
-if [[ "${tables//[!0-9]/}" -ge 8 ]]; then
-  ok "已建立 $tables 張表"
-  zones="$(docker compose exec -T db psql -U uav -d uav -tAc \
-    "SELECT count(*) FROM interference_zones;" 2>/dev/null || echo 0)"
-  cells="$(docker compose exec -T db psql -U uav -d uav -tAc \
-    "SELECT count(*) FROM cells;" 2>/dev/null || echo 0)"
-  ok "seed 場景：${cells//[!0-9]/} 個 gNB、${zones//[!0-9]/} 個干擾區"
+if [[ "${tables//[!0-9]/}" -ge 7 ]]; then
+  ok "已建立 $tables 張表（模擬場景不佔表，內建於 link_sim.py）"
 else
   warn "只找到 $tables 張表。init SQL 只在資料卷第一次建立時執行——"
   warn "若之前起過失敗的 DB，清掉重來：docker compose down -v && ./scripts/dev-up.sh"

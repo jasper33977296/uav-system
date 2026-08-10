@@ -150,3 +150,88 @@ modem 模式下入庫改由 API endpoint 負責。
 機上硬體為 **Qualcomm Flight RB5 5G Platform**（QRB5165 + Quectel RM500Q-GL
 modem，預裝 ROS 2 與 PX4）。modem 的 `AT+QENG="servingcell"` 直接回報 SINR，
 且欄位與 `link_metrics` 幾乎一對一對應，schema 不需為真機階段修改。
+
+## 資料模型（ERD）
+
+2026-08-10 拆除模擬器專用表（`cells`、`interference_zones`——場景改為
+`link_sim.py` 內建常數）後的完整 schema，7 張表＋2 個連續彙總：
+
+```mermaid
+erDiagram
+    drones {
+        uuid id PK
+        text name
+        text serial_no UK "穩定鍵（改名不變）"
+        boolean is_simulated
+        boolean is_primary "MAVLink 主機（至多一台，partial unique）"
+        text connection_url
+        text video_url "即時影像串流位址"
+    }
+    flight_sessions {
+        uuid id PK
+        uuid drone_id FK
+        uuid mission_id FK "任務刪除時 SET NULL"
+        timestamptz started_at
+        timestamptz ended_at
+        jsonb summary "結算摘要"
+    }
+    missions {
+        uuid id PK
+        text name
+        uuid drone_id FK "可 NULL：路徑不綁機"
+        text status
+        boolean is_active "顯示於即時頁（至多一條）"
+    }
+    waypoints {
+        uuid mission_id FK
+        int seq
+        double lat
+        double lon
+        double alt
+        text action
+    }
+    telemetry {
+        timestamptz time "hypertable，30 天 retention"
+        uuid drone_id "無 FK：hypertable 寫入效能"
+        uuid session_id "無 FK，邏輯關聯"
+        double lat
+        double lon
+        double alt_rel
+    }
+    link_metrics {
+        timestamptz time "hypertable，(drone_id,time) 唯一＝冪等"
+        uuid drone_id "無 FK"
+        uuid session_id "無 FK"
+        real sinr
+        real rsrp
+        real rtt_ms
+        jsonb raw "modem AT 原文"
+    }
+    events {
+        bigserial id PK
+        timestamptz time
+        uuid drone_id "無 FK"
+        uuid session_id "無 FK"
+        text severity
+        text type
+        jsonb detail
+    }
+
+    drones ||--o{ flight_sessions : "架次歸屬"
+    drones |o..o{ missions : "選擇性關聯（刪機時解除）"
+    missions ||--o{ waypoints : "ON DELETE CASCADE"
+    missions |o..o{ flight_sessions : "刪任務 SET NULL"
+    flight_sessions ||..o{ telemetry : "session_id（邏輯關聯）"
+    flight_sessions ||..o{ link_metrics : "session_id（邏輯關聯）"
+    flight_sessions ||..o{ events : "session_id（邏輯關聯）"
+```
+
+補充（不在 ERD 裡的資料面）：
+
+- **連續彙總**：`telemetry_1m`、`link_metrics_1m`（TimescaleDB continuous
+  aggregate）——原始 1Hz 資料 30 天清除後永久保留的那份。
+- **虛線關聯＝刻意無 FK**：兩張 hypertable 與 events 的 `drone_id`/
+  `session_id` 不設外鍵（高頻寫入路徑不做關聯檢查），一致性由寫入端保證
+  （armed gate＋`find_session_at` 反查）。
+- **MAVLink 原始層（tlog）**不在 DB：`mavcap` volume 檔案，UTC 日切、
+  30 天滾動（見 `app/capture.py`）。
