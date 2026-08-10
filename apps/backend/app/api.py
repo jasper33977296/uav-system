@@ -1,4 +1,5 @@
 import asyncio
+import json
 from datetime import datetime
 
 from fastapi import APIRouter, HTTPException, Response
@@ -264,6 +265,7 @@ async def current_mission():
             "lon": it.y / 1e7,
             "alt": it.z,             # frame 3 = 相對起飛點高度（QGC 預設）
             "frame": it.frame,
+            "p1": it.param1, "p2": it.param2, "p3": it.param3, "p4": it.param4,
         }
         for it in items
         if it.command in _NAV_CMDS and (it.x or it.y)
@@ -277,10 +279,19 @@ async def current_mission():
 
 class WaypointIn(BaseModel):
     seq: int
-    lat: float
+    lat: float                       # DO_* 設定類（無座標）以 0 表示
     lon: float
     alt: float | None = None
     action: str | None = "waypoint"
+    # MAVLink 保真度（2026-08-10）：.plan 的原始 command/frame/p1–p4 全保留，
+    # 上傳到機時原樣送出——與現場工具 upload_mission.py 的行為一致。
+    # 舊資料沒有這些欄位時由 action 推回（見 plan_check._cmd／command 服務）。
+    command: int | None = None
+    frame: int | None = None
+    p1: float | None = None
+    p2: float | None = None
+    p3: float | None = None
+    p4: float | None = None
 
 
 class MissionIn(BaseModel):
@@ -296,10 +307,14 @@ async def _store_mission(name: str, source: str, wps: list[dict]) -> str:
                 "INSERT INTO missions (name, created_by) VALUES ($1, $2) RETURNING id",
                 name, source)
             await con.executemany(
-                """INSERT INTO waypoints (mission_id, seq, lat, lon, alt, action)
-                   VALUES ($1, $2, $3, $4, $5, $6)""",
+                """INSERT INTO waypoints (mission_id, seq, lat, lon, alt, action, params)
+                   VALUES ($1, $2, $3, $4, $5, $6, $7)""",
                 [(row["id"], w["seq"], w["lat"], w["lon"], w.get("alt"),
-                  w.get("action", "waypoint")) for w in wps])
+                  w.get("action", "waypoint"),
+                  # MAVLink 保真度塞 params JSONB（閒置欄位正好承接）
+                  json.dumps({k: w[k] for k in ("command", "frame", "p1", "p2", "p3", "p4")
+                              if w.get(k) is not None}) if w.get("command") is not None else None)
+                 for w in wps])
     return str(row["id"])
 
 
@@ -353,7 +368,9 @@ async def import_mission_from_vehicle(name: str | None = None):
     if len(wps) < 2:
         raise HTTPException(404, "機上沒有可儲存的任務（航點少於 2）")
     stored = [{"seq": w["seq"], "lat": w["lat"], "lon": w["lon"], "alt": w["alt"],
-               "action": {22: "takeoff", 21: "land"}.get(w["command"], "waypoint")}
+               "action": {22: "takeoff", 21: "land"}.get(w["command"], "waypoint"),
+               "command": w["command"], "frame": w.get("frame"),
+               "p1": w.get("p1"), "p2": w.get("p2"), "p3": w.get("p3"), "p4": w.get("p4")}
               for w in wps]
     mid = await _store_mission(
         name or f"機上任務 {datetime.now().strftime('%m/%d %H:%M')}", "vehicle", stored)

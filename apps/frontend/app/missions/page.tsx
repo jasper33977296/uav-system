@@ -19,18 +19,32 @@ interface Sess {
   summary: { samples_total?: number; min_sinr?: number | null; avg_sinr?: number | null } | null;
 }
 
-/** 解析 QGC .plan：取出帶座標的導航項（16 WAYPOINT / 21 LAND / 22 TAKEOFF） */
-function parsePlan(text: string): { seq: number; lat: number; lon: number; alt: number | null; action: string }[] {
+/** 解析 QGC .plan：**全部 SimpleItem 保留**（含 DO_* 設定類與 RTL），
+ * 原始 command/frame/p1–p4 一併存——上傳到機時原樣送出，跟 QGC 上傳
+ * 同一份任務（保真度對齊實戰工具 upload_mission.py）。
+ * DO_* 無座標以 0 表示（去衝突檢查與地圖疊圖都會略過 0 座標）。 */
+const NAV_CMDS = new Set([16, 17, 18, 19, 20, 21, 22]);
+interface PlanWp {
+  seq: number; lat: number; lon: number; alt: number | null; action: string;
+  command: number; frame: number | null;
+  p1: number | null; p2: number | null; p3: number | null; p4: number | null;
+}
+function parsePlan(text: string): PlanWp[] {
   const j = JSON.parse(text);
+  if (j?.fileType !== "Plan") throw new Error("not a plan");
   const items = j?.mission?.items ?? [];
-  const out = [];
+  const out: PlanWp[] = [];
   for (const it of items) {
-    const [ , , , , lat, lon, alt] = it.params ?? [];
-    if (![16, 21, 22].includes(it.command) || lat == null || lon == null) continue;
+    if (it.type !== "SimpleItem") continue;   // 複雜項（測繪格網等）暫不支援
+    const [p1, p2, p3, p4, lat, lon, alt] = it.params ?? [];
     out.push({
-      seq: out.length, lat, lon,
+      seq: out.length,
+      lat: lat ?? 0, lon: lon ?? 0,
       alt: it.Altitude ?? alt ?? null,
-      action: it.command === 22 ? "takeoff" : it.command === 21 ? "land" : "waypoint",
+      action: it.command === 22 ? "takeoff" : it.command === 21 ? "land"
+        : it.command === 20 ? "rtl" : NAV_CMDS.has(it.command) ? "waypoint" : "do",
+      command: it.command, frame: it.frame ?? null,
+      p1: p1 ?? null, p2: p2 ?? null, p3: p3 ?? null, p4: p4 ?? null,
     });
   }
   return out;
@@ -79,7 +93,8 @@ export default function Missions() {
     } catch {
       setErr("不是有效的 QGC .plan 檔"); return;
     }
-    if (wps.length < 2) { setErr("檔案內找不到足夠的導航航點"); return; }
+    const navCount = wps.filter((w) => NAV_CMDS.has(w.command) && w.lat && w.lon).length;
+    if (navCount < 2) { setErr("檔案內找不到足夠的導航航點"); return; }
     setBusy(true);
     try {
       const res = await fetch(`${API}/api/missions`, {

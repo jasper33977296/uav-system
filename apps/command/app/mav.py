@@ -176,38 +176,59 @@ def job_set_mode(r: MavRouter, sysid: int, mode: str) -> dict:
 
 
 def job_upload_mission(r: MavRouter, sysid: int, items: list) -> dict:
-    """完整上傳握手 → 機端 ACK → 回讀下載逐項比對。比對不符即失敗。"""
+    """完整上傳握手 → 機端 ACK → 回讀逐項比對 → 收 PX4 廣播的驗證訊息。
+
+    丟包韌性（對齊實戰工具 upload_mission.py v3，戶外 5G 實測經驗）：
+    - MISSION_COUNT 每 2 秒重送直到機端開始請求（握手能不能開始的關鍵）
+    - 項目遺失由機端重複請求同 seq 自然補（協定內建），總期限 30 秒
+    - 回讀的 REQUEST_LIST 重試 3 次、逐項重試 2 次
+    """
     n = len(items)
     mt = M.MAV_MISSION_TYPE_MISSION
     r._sendto(sysid, lambda m: m.mission_count_encode(sysid, 1, n, mt))
+    last_count_tx = time.monotonic()
+    handshake_started = False
     ack = None
-    deadline = time.monotonic() + 20
+    deadline = time.monotonic() + 30
     while time.monotonic() < deadline:
         msg = r._wait(sysid, ("MISSION_REQUEST_INT", "MISSION_REQUEST", "MISSION_ACK"),
-                      timeout=3.0)
+                      timeout=1.0)
         if msg is None:
-            raise CommandError("任務上傳逾時（機端停止請求項目）")
+            # 沒動靜且握手未開始 → COUNT 可能丟包，重送
+            if not handshake_started and time.monotonic() - last_count_tx >= 2.0:
+                r._sendto(sysid, lambda m: m.mission_count_encode(sysid, 1, n, mt))
+                last_count_tx = time.monotonic()
+            continue
         if msg.get_type() == "MISSION_ACK":
             ack = msg
             break
+        handshake_started = True
         it = items[msg.seq]
         r._sendto(sysid, lambda m, it=it: m.mission_item_int_encode(
             sysid, 1, it["seq"], it["frame"], it["command"], 0, 1,
             it["p1"], it["p2"], it["p3"], it["p4"], it["x"], it["y"], it["z"], mt))
     if ack is None:
-        raise CommandError("任務上傳逾時（未收到 MISSION_ACK）")
+        raise CommandError("30 秒內未完成上傳（排查：鏈路丟包／機端 MAVLink 實例）")
     if ack.type != M.MAV_MISSION_ACCEPTED:
         raise CommandError(
             f"機端拒絕任務：{M.enums['MAV_MISSION_RESULT'][ack.type].name}")
 
     # 回讀比對：上傳成功的定義是「機上任務與我們要上傳的一致」，不是收到 ACK
-    r._sendto(sysid, lambda m: m.mission_request_list_encode(sysid, 1, mt))
-    cnt = r._wait(sysid, ("MISSION_COUNT",), timeout=3.0)
+    cnt = None
+    for _ in range(3):
+        r._sendto(sysid, lambda m: m.mission_request_list_encode(sysid, 1, mt))
+        cnt = r._wait(sysid, ("MISSION_COUNT",), timeout=3.0)
+        if cnt is not None:
+            break
     if cnt is None or cnt.count != n:
         raise CommandError(f"回讀筆數不符：機上 {getattr(cnt, 'count', '無回應')}，預期 {n}")
     for seq in range(n):
-        r._sendto(sysid, lambda m, s=seq: m.mission_request_int_encode(sysid, 1, s, mt))
-        it = r._wait(sysid, ("MISSION_ITEM_INT",), lambda msg, s=seq: msg.seq == s, 3.0)
+        it = None
+        for _ in range(2):
+            r._sendto(sysid, lambda m, s=seq: m.mission_request_int_encode(sysid, 1, s, mt))
+            it = r._wait(sysid, ("MISSION_ITEM_INT",), lambda msg, s=seq: msg.seq == s, 3.0)
+            if it is not None:
+                break
         if it is None:
             raise CommandError(f"回讀第 {seq} 項逾時")
         o = items[seq]
@@ -215,4 +236,13 @@ def job_upload_mission(r: MavRouter, sysid: int, items: list) -> dict:
                 or abs(it.y - o["y"]) > 2 or abs(it.z - o["z"]) > 0.5):
             raise CommandError(f"回讀比對不符（seq {seq}）：機上內容與上傳不一致")
     r._sendto(sysid, lambda m: m.mission_ack_encode(sysid, 1, M.MAV_MISSION_ACCEPTED, mt))
-    return {"uploaded": n, "verified": True}
+
+    # 聽 3 秒 PX4 廣播的任務驗證結果（被拒原因直接看得到；
+    # PX4 1.14 多走 Events 協定，STATUSTEXT 可能為空——有就帶回）
+    notes = []
+    t_end = time.monotonic() + 3.0
+    while time.monotonic() < t_end:
+        s = r._wait(sysid, ("STATUSTEXT",), timeout=0.5)
+        if s is not None:
+            notes.append(s.text.strip())
+    return {"uploaded": n, "verified": True, "px4_notes": notes}

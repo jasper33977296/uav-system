@@ -14,8 +14,6 @@
 import asyncio
 import json
 import logging
-import math
-
 import asyncpg
 from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
@@ -30,22 +28,27 @@ log = logging.getLogger("command")
 router: mav.MavRouter | None = None
 pool: asyncpg.Pool | None = None
 
-# waypoints.action → MAV_CMD
-ACTION_CMD = {"takeoff": 22, "waypoint": 16, "land": 21}
+# waypoints.action → MAV_CMD（舊資料沒存原始 command 時的推回）
+ACTION_CMD = {"takeoff": 22, "waypoint": 16, "land": 21, "rtl": 20}
 
 
 def build_items(wps: list[dict]) -> list[dict]:
+    """MAVLink 保真度（對齊實戰工具 upload_mission.py）：新資料帶 .plan 的
+    原始 command/frame/p1–p4，原樣送出；舊資料由 action 推回、frame 3
+    （GLOBAL_RELATIVE_ALT，QGC 預設）、params 補 0。"""
     items = []
     for i, w in enumerate(wps):
-        cmd = ACTION_CMD.get((w.get("action") or "waypoint"), 16)
+        p = w.get("params")
+        p = json.loads(p) if isinstance(p, str) else (p or {})
+        cmd = p.get("command") or ACTION_CMD.get((w.get("action") or "waypoint"), 16)
         items.append({
             "seq": i,
-            "frame": 6,                     # GLOBAL_RELATIVE_ALT_INT
-            "command": cmd,
-            "p1": 0.0, "p2": 0.0, "p3": 0.0,
-            "p4": math.nan,                 # yaw：不指定
-            "x": int(round(w["lat"] * 1e7)),
-            "y": int(round(w["lon"] * 1e7)),
+            "frame": p.get("frame", 3),
+            "command": int(cmd),
+            "p1": float(p.get("p1") or 0.0), "p2": float(p.get("p2") or 0.0),
+            "p3": float(p.get("p3") or 0.0), "p4": float(p.get("p4") or 0.0),
+            "x": int(round((w["lat"] or 0.0) * 1e7)),
+            "y": int(round((w["lon"] or 0.0) * 1e7)),
             "z": float(w["alt"] or 0.0),
         })
     return items
@@ -142,11 +145,17 @@ class UploadIn(BaseModel):
 async def mission_upload(sysid: int, body: UploadIn):
     _require_enabled()
     rows = await pool.fetch(
-        "SELECT seq, lat, lon, alt, action FROM waypoints "
+        "SELECT seq, lat, lon, alt, action, params FROM waypoints "
         "WHERE mission_id = $1 ORDER BY seq", body.mission_id)
     if not rows:
         raise HTTPException(404, "任務不存在或沒有航點")
-    wps = [dict(r) for r in rows]
+    wps = []
+    for r in rows:
+        w = dict(r)
+        p = w.get("params")
+        p = json.loads(p) if isinstance(p, str) else (p or {})
+        w["command"] = p.get("command")      # plan_check 用原始 command 判導航類
+        wps.append(w)
     # 幾何預檢＝上傳的擋門：超圍欄/超高的任務不出手（PX4 也會拒，
     # 但在地面就擋下，拒絕原因比 MAV_MISSION_ERROR 可讀得多）
     report = plan_check.check_waypoints(

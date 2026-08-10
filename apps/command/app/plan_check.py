@@ -25,30 +25,52 @@ def _dist_m(lat1: float, lon1: float, lat2: float, lon2: float) -> float:
     return math.hypot(dx, dy)
 
 
+# 導航類指令（有實際飛行位置）；DO_*（如 178 改速度）是設定類，
+# 可出現在任何位置、不計距離——與現場工具 check_plan.py 的語意一致
+NAV_CMDS = {16, 17, 18, 19, 20, 21, 22}
+_TAKEOFF, _RTL, _LAND = 22, 20, 21
+
+
+def _cmd(w: dict) -> int | None:
+    """航點的 MAV_CMD：新資料帶原始 command；舊資料從 action 推回。"""
+    if w.get("command") is not None:
+        return int(w["command"])
+    return {"takeoff": 22, "land": 21, "rtl": 20,
+            "waypoint": 16}.get(w.get("action") or "waypoint")
+
+
+def _is_nav(w: dict) -> bool:
+    c = _cmd(w)
+    return c is None or c in NAV_CMDS
+
+
 def check_waypoints(wps: list[dict], fence_r: float, fence_alt: float,
                     margin: float = 0.7) -> dict:
-    """wps：本系統 waypoints 模型 [{seq, lat, lon, alt, action}]（帶座標導航項）。
-    回傳 {ok, problems, warnings, max_dist_m, fence_r, fence_alt}。"""
+    """wps：本系統 waypoints 模型 [{seq, lat, lon, alt, action, command?}]。
+    DO_* 設定類不計距離；回傳 {ok, problems, warnings, max_dist_m, ...}。"""
     problems: list[str] = []
     warnings: list[str] = []
     if not wps:
         return {"ok": False, "problems": ["沒有航點"], "warnings": [],
                 "max_dist_m": 0.0, "fence_r": fence_r, "fence_alt": fence_alt}
 
-    if (wps[0].get("action") or "waypoint") != "takeoff":
-        problems.append(f"第一個導航項不是起飛（action={wps[0].get('action')}）")
-    last = wps[-1].get("action") or "waypoint"
-    if last != "land":
-        warnings.append(f"最後一項不是降落（action={last}）——"
-                        "若 .plan 以 RTL 結尾屬正常（RTL 不入庫）")
+    nav = [w for w in wps if _is_nav(w)]
+    if not nav:
+        problems.append("沒有任何導航項目")
+    else:
+        if _cmd(nav[0]) != _TAKEOFF:
+            problems.append(f"第一個導航項不是起飛（command={_cmd(nav[0])}）")
+        if _cmd(nav[-1]) not in (_RTL, _LAND):
+            warnings.append(f"最後一個導航項不是返航/降落（command={_cmd(nav[-1])}）")
 
-    home = next((w for w in wps if w.get("lat") and w.get("lon")), None)
+    home = next((w for w in nav if w.get("lat") and w.get("lon")), None)
     if home is None:
-        return {"ok": False, "problems": ["找不到帶座標的航點"], "warnings": warnings,
-                "max_dist_m": 0.0, "fence_r": fence_r, "fence_alt": fence_alt}
+        return {"ok": False, "problems": problems + ["找不到帶座標的導航項"],
+                "warnings": warnings, "max_dist_m": 0.0,
+                "fence_r": fence_r, "fence_alt": fence_alt}
 
     max_d = 0.0
-    for w in wps:
+    for w in nav:
         seq = w.get("seq")
         if w.get("lat") and w.get("lon"):
             d = _dist_m(home["lat"], home["lon"], w["lat"], w["lon"])
