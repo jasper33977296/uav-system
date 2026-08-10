@@ -31,6 +31,56 @@ export default function CommandPanel() {
   const [open, setOpen] = useState(true);
   const live = useUavStore((s) => s.live);
 
+  // 可拖曳：抓標題列移動，貼齊邊緣，位置記在 localStorage（重整不跑位）
+  const panelRef = useRef<HTMLDivElement>(null);
+  const [pos, setPos] = useState<{ x: number; y: number } | null>(null);
+  const posRef = useRef(pos);
+  const dragRef = useRef<{ dx: number; dy: number; moved: boolean } | null>(null);
+  useEffect(() => {
+    try {
+      const saved = localStorage.getItem("cmd-panel-pos");
+      if (saved) setPos(JSON.parse(saved));
+    } catch { /* 壞值就用預設位置 */ }
+  }, []);
+  useEffect(() => { posRef.current = pos; }, [pos]);
+
+  function dragStart(e: React.PointerEvent) {
+    const el = panelRef.current;
+    if (!el) return;
+    const r = el.getBoundingClientRect();
+    dragRef.current = { dx: e.clientX - r.left, dy: e.clientY - r.top, moved: false };
+    (e.currentTarget as Element).setPointerCapture(e.pointerId);
+  }
+  function dragMove(e: React.PointerEvent) {
+    const d = dragRef.current;
+    const el = panelRef.current;
+    if (!d || !el) return;
+    const parent = el.offsetParent as HTMLElement | null;
+    if (!parent) return;
+    const pr = parent.getBoundingClientRect();
+    const w = el.offsetWidth, h = el.offsetHeight;
+    let x = e.clientX - pr.left - d.dx;
+    let y = e.clientY - pr.top - d.dy;
+    x = Math.max(8, Math.min(x, pr.width - w - 8));
+    y = Math.max(8, Math.min(y, pr.height - h - 8));
+    if (x < 28) x = 8;                                // 貼齊邊緣
+    if (pr.width - (x + w) < 28) x = pr.width - w - 8;
+    if (y < 28) y = 8;
+    if (pr.height - (y + h) < 28) y = pr.height - h - 8;
+    d.moved = d.moved || Math.abs(x - (posRef.current?.x ?? -1)) > 4
+      || Math.abs(y - (posRef.current?.y ?? -1)) > 4;
+    setPos({ x, y });
+  }
+  function dragEnd() {
+    const d = dragRef.current;
+    dragRef.current = null;
+    if (!d) return;
+    if (!d.moved) setOpen((o) => !o);                 // 沒拖動＝點擊：收合/展開
+    else if (posRef.current) {
+      localStorage.setItem("cmd-panel-pos", JSON.stringify(posRef.current));
+    }
+  }
+
   useEffect(() => {
     let stop = false;
     const poll = async () => {
@@ -101,8 +151,11 @@ export default function CommandPanel() {
   );
 
   return (
-    <div className="cmd-panel">
-      <div className="cmd-head" onClick={() => setOpen(!open)}>
+    <div className="cmd-panel" ref={panelRef}
+      style={pos ? { left: pos.x, top: pos.y, bottom: "auto" } : undefined}>
+      <div className="cmd-head" title="拖曳移動；點擊收合"
+        onPointerDown={dragStart} onPointerMove={dragMove}
+        onPointerUp={dragEnd} onPointerCancel={dragEnd}>
         <span className="name">任務控制</span>
         {!health.enabled && <span className="meta">未啟用</span>}
         {health.enabled && sid && (

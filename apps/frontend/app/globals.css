@@ -300,7 +300,7 @@ body {
 }
 .cmd-head {
   display: flex; align-items: center; gap: 8px;
-  padding: 8px 12px; cursor: pointer; user-select: none;
+  padding: 8px 12px; cursor: grab; user-select: none; touch-action: none;
 }
 .cmd-head .name { font-weight: 700; }
 .cmd-head .meta { font-size: 12px; color: var(--muted); }
