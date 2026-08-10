@@ -120,14 +120,23 @@ class MavRouter(threading.Thread):
             if (d is None and msg.get_type() == "HEARTBEAT"
                     and msg.type != M.MAV_TYPE_GCS
                     and msg.autopilot != M.MAV_AUTOPILOT_INVALID):
-                d = self.drones.setdefault(sysid, {})
+                d = self.drones.setdefault(sysid, {"texts": []})
             if d is not None:
                 d["addr"] = self.conn.last_address   # 單埠多機的回程路由表
                 d["seen_mono"] = time.monotonic()
                 if msg.get_type() == "HEARTBEAT" and msg.type != M.MAV_TYPE_GCS:
                     d["armed"] = bool(msg.base_mode & M.MAV_MODE_FLAG_SAFETY_ARMED)
                     d["custom_mode"] = msg.custom_mode
+                elif msg.get_type() == "STATUSTEXT":
+                    # PX4 的解釋（"Arming denied: ..."）——被拒時要能拿出來給人看。
+                    # 實戰教訓：沒有這段文字，操作員只看到 result code 乾瞪眼
+                    d.setdefault("texts", []).append((time.monotonic(), msg.text.strip()))
+                    del d["texts"][:-20]
         return msg
+
+    def texts_since(self, sysid: int, t0: float) -> list:
+        d = self.drones.get(sysid) or {}
+        return [txt for ts, txt in d.get("texts", []) if ts >= t0]
 
     def _sendto(self, sysid: int, encode_fn):
         """encode + 直接 sendto 該 sysid 的來源位址（不經 mavutil 的廣播式 write）。"""
@@ -153,20 +162,37 @@ class MavRouter(threading.Thread):
 
 # ── 工作函式（在 router 執行緒內執行）─────────────────────────
 
+# result code → 操作指引（來自現場工具 start_mission.py 的實戰註解）
+RESULT_HINTS = {
+    M.MAV_RESULT_TEMPORARILY_REJECTED: "暫時拒絕——EKF/GPS 暖機中，稍等 30–60 秒再試",
+    M.MAV_RESULT_DENIED: "被拒——看 px4_notes 的具體原因（GPS/校準/RC/任務狀態）",
+    M.MAV_RESULT_UNSUPPORTED: "不支援此指令",
+    M.MAV_RESULT_FAILED: "執行失敗",
+}
+
+
 def job_command(r: MavRouter, sysid: int, command: int, params: list,
                 retries: int = 3, ack_timeout: float = 2.0) -> dict:
-    """COMMAND_LONG → 等 ACK → 重送。無 ACK 一律例外，不得視為成功。"""
+    """COMMAND_LONG → 等 ACK → 重送。無 ACK 一律例外，不得視為成功。
+    被拒時帶回同時段 PX4 的 STATUSTEXT——原因要能給人看。"""
     p = (list(params) + [0.0] * 7)[:7]
+    t0 = time.monotonic()
     for attempt in range(1, retries + 1):
         r._sendto(sysid, lambda m: m.command_long_encode(sysid, 1, command, 0, *p))
         ack = r._wait(sysid, ("COMMAND_ACK",),
                       lambda msg: msg.command == command, ack_timeout)
         if ack is not None:
-            name = M.enums["MAV_RESULT"][ack.result].name
-            return {"result": name,
-                    "accepted": ack.result == M.MAV_RESULT_ACCEPTED,
-                    "attempts": attempt}
-    raise CommandError(f"指令 {command} 無 ACK（重試 {retries} 次）")
+            accepted = ack.result == M.MAV_RESULT_ACCEPTED
+            res = {"result": M.enums["MAV_RESULT"][ack.result].name,
+                   "accepted": accepted, "attempts": attempt}
+            if not accepted:
+                # 多等 1.5 秒收 PX4 的解釋文字（拒絕原因常在 ACK 之後才廣播）
+                r._wait(sysid, ("_none_",), timeout=1.5)
+                res["hint"] = RESULT_HINTS.get(ack.result, "")
+                res["px4_notes"] = r.texts_since(sysid, t0)
+            return res
+    raise CommandError(f"指令 {command} 無 ACK（重試 {retries} 次）"
+                       f"｜px4_notes={r.texts_since(sysid, t0)}")
 
 
 def job_set_mode(r: MavRouter, sysid: int, mode: str) -> dict:

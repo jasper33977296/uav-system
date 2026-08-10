@@ -82,7 +82,13 @@ async def _run(sysid: int, action: str, fn, *args, params=None):
     ok = res.get("accepted", True) and res.get("verified", True)
     await _audit(sysid, action, params, "accepted" if ok else "rejected", json.dumps(res))
     if not ok:
-        raise HTTPException(409, f"機端拒絕：{res}")
+        # 結構化拒絕：result code＋操作指引＋PX4 的解釋文字（實戰教訓：
+        # 只給 code 操作員無從排查——"Arming denied: ..." 那行才是答案）
+        raise HTTPException(409, {
+            "msg": f"機端拒絕（{res.get('result')}）",
+            "hint": res.get("hint", ""),
+            "px4_notes": res.get("px4_notes", []),
+        })
     return res
 
 

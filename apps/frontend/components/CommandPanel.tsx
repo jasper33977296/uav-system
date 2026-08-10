@@ -126,10 +126,12 @@ export default function CommandPanel() {
       });
       const body = await res.json().catch(() => ({}));
       if (!res.ok) {
-        // detail 可能是字串或結構化報告（幾何預檢的 problems 清單）
+        // detail 可能是字串或結構化報告（預檢 problems／機端拒絕＋PX4 原因文字）
         const d = body.detail;
+        const notes = d?.px4_notes?.length ? `｜PX4：${d.px4_notes.join("；")}` : "";
         const text = typeof d === "string" ? d
           : d?.problems?.length ? `${d.msg ?? "被拒"}：${d.problems.join("；")}`
+          : d?.msg ? `${d.msg}${d.hint ? `——${d.hint}` : ""}${notes}`
           : JSON.stringify(d ?? `失敗（HTTP ${res.status}）`);
         setResult({ ok: false, text });
       } else {
@@ -184,6 +186,12 @@ export default function CommandPanel() {
 
       {open && health.enabled && (
         <div className="cmd-body">
+          {live && (
+            <div className="hint-line">
+              起飛前狀態：GPS fix {live.gps_fix ?? "—"}（需≥3）·
+              衛星 {live.satellites ?? "—"} 顆 · 電量 {live.battery_pct ?? "—"}%
+            </div>
+          )}
           {sysids.length > 1 && (
             <div className="cmd-row">
               {sysids.map((s) => (
