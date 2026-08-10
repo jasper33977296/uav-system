@@ -153,28 +153,26 @@ curl http://localhost:38000/healthz
 > 適合驗證期。代價：**記錄依賴 QGC 存活**——QGC 關閉或當掉，
 > 本系統即斷流停錄。
 >
-> **正式部署用本節作法**：機上路由雙端點，控制與記錄從源頭各自獨立、
-> 故障互不牽連。QGC 連得上代表機上已有路由服務在送 MAVLink——
-> 這裡只是**加一個端點**，不是裝新軟體。
+> **正式部署（2026-08-10 定案：PX4 多實例，不裝 router）**：
+> RB5 上 PX4 走 UDP，原生就能開多個 mavlink 實例——通道固定為兩條
+> （資料/指令）時不需要額外路由軟體，符合原廠映像零改動原則。
 
-RB5／ModalAI 平台內建 MAVLink 路由（依 SDK 版本為 `mavlink-router` 或
-voxl-vision 設定檔，上機確認用哪套）。目標：把 PX4 的 MAVLink 同時送到
-地面站兩個埠。`mavlink-router` 設定範例（`/etc/mavlink-router/main.conf`）：
+PX4 的 MAVLink 輸出共三個消費者（前兩條對地、第三條機內），
+在 PX4 啟動設定裡各開一個實例：
 
-```ini
-[UdpEndpoint qgc]
-Mode = Normal
-Address = 192.168.55.10     # <GS_IP>
-Port = 14550
-
-[UdpEndpoint uav-system]
-Mode = Normal
-Address = 192.168.55.10     # <GS_IP>
-Port = 14540
+```
+mavlink start -x -u <空埠1> -o 14540 -t <GS_IP>   -m onboard   # 資料（ingest，唯讀）
+mavlink start -x -u <空埠2> -o 14541 -t <GS_IP>   -m normal    # 指令（ENABLE_COMMANDS 時）
+mavlink start -x -u <空埠3> -o 14540 -t 127.0.0.1 -m onboard   # 機內：onboard node 綁座標用
 ```
 
-改完 `systemctl restart mavlink-router`。驗證：地面站 `curl .../healthz`
-的 `mavlink_connected` 轉 `true`、QGC 自動出現載具。
+驗證：地面站 `curl :38000/healthz` 的 `mavlink_connected` 轉 `true`（資料）、
+`curl :38001/healthz` 的 `drones` 出現 sysid（指令）、
+`scripts/check-onboard.py` 第 4 項樣本帶座標（機內）。
+
+> mavlink-router 何時才值得裝：PX4 走**串列埠**（單程序獨佔，必須有人
+> 分流）、消費者常變動、或需要動態 TCP 口讓 QGC 臨時接入。
+> 目前部署皆不適用；日後需要時把上述實例目標改回本機、由 router 分流即可。
 
 ### 2.2 5G 量測 node（流 ②）
 
