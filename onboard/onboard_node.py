@@ -424,6 +424,12 @@ def selftest():
     assert r["nr_mode"] == "SA" and r["sinr"] == 13.0 and r["pci"] == 101, r
     assert r["rsrp"] == -85.0 and r["band"] == "n78", r
     assert r["cell_id"] == int("690BB01", 16), r
+    # 實機首驗樣本（2026-08-10，RM502Q-AE R11A04，私網 PLMN 999/66，n79）
+    real = ('+QENG: "servingcell","NOCONN","NR5G-SA","TDD",999,66,000214001,'
+            '133,8D,720288,79,12,-68,-11,32,1,-')
+    r = parse_qeng(real)
+    assert r["nr_mode"] == "SA" and r["pci"] == 133 and r["sinr"] == 32.0, r
+    assert r["band"] == "n79" and r["rsrp"] == -68.0 and r["cell_id"] == 0x214001, r
     nsa = '+QENG: "NR5G-NSA",466,92,205,-88,15,-12,633984,78,12,1'
     r = parse_qeng(nsa)
     assert r["nr_mode"] == "NSA" and r["sinr"] == 15.0 and r["pci"] == 205, r

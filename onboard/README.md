@@ -15,7 +15,7 @@ RF 指標（`AT+QENG="servingcell"`，含 SINR/RSRP/PCI）、從機上 PX4 取
 - Python **3.6+**、**零第三方依賴（純標準庫）**——不需要 venv、不需要 pip，
   RB5 原廠 Ubuntu 18.04 映像 clone 完直接跑。serial 用 termios 直開 tty；
   PX4 位置用內建迷你 MAVLink 解析器被動監聽（只認三種訊息，X.25 CRC 驗證）
-- modem AT 埠可讀（RM500Q 通常是 `/dev/ttyUSB2`；`ls /dev/ttyUSB*` 確認）
+- modem AT 埠可讀（Quectel RM50xQ 通常是 `/dev/ttyUSB2`；`ls /dev/ttyUSB*` 確認）
 - 機上 PX4 的 MAVLink 可達（預設 `udpin://0.0.0.0:14540`，依機上路由設定調整）
 
 ## 一次性安裝（SSH 進機上，之後不再需要）
@@ -34,7 +34,10 @@ sudo mkdir -p /opt/uav-onboard && sudo chown $USER /opt/uav-onboard
 AT_PORT=/dev/ttyUSB2 python3 onboard_node.py --probe
 ```
 
-把整段輸出貼回開發端校準 `parse_qeng()`。同時做設計文件要求的首驗：
+把整段輸出貼回開發端校準 `parse_qeng()`。
+（2026-08-10 已對實機 RM502Q-AE R11A04 首驗：SA 格式逐欄命中、與
+AT+QNWINFO 交叉驗證一致，該樣本已固化進 `--selftest`。）
+另一項首驗仍待做：
 在已知干擾源附近確認 **SINR 值會隨干擾下降**（Quectel 論壇有 RM500Q
 SINR 回報異常的前例）。
 
