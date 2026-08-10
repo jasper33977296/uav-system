@@ -16,16 +16,36 @@ RF 指標（`AT+QENG="servingcell"`，含 SINR/RSRP/PCI）、從機上 PX4 取
   RB5 原廠 Ubuntu 18.04 映像 clone 完直接跑。serial 用 termios 直開 tty；
   PX4 位置用內建迷你 MAVLink 解析器被動監聽（只認三種訊息，X.25 CRC 驗證）
 - modem AT 埠可讀（Quectel RM50xQ 通常是 `/dev/ttyUSB2`；`ls /dev/ttyUSB*` 確認）
-- 機上 PX4 的 MAVLink 可達（預設 `udpin://0.0.0.0:14540`，依機上路由設定調整）
+- 機上 PX4 有一條 mavlink 實例送到**本機** 14540（見下節）
+
+## 機上 MAVLink 前置（PX4 原生多實例，無 router／無 QGC）
+
+PX4 的 MAVLink 輸出共三個消費者，全部用 PX4 原生實例
+（voxl 平台在 `/usr/bin/voxl-px4-start` 加行；`-u` 各用不同空埠）：
+
+```
+mavlink start -x -u 14560 -o 14540 -t <地面站IP> -m onboard -r 50000      # 資料 → 地面站
+mavlink start -x -u 14561 -o 14541 -t <地面站IP> -m minimal -r 20000     # 指令 → 地面站
+mavlink start -x -u 14562 -o 14540 -t 127.0.0.1 -m onboard -n lo -r 100000  # 機內 → 本 node
+```
+
+注意：`-m normal` 不是合法模式名（normal 是預設，不可指定——會靜默
+啟動失敗）；PX4 實例有上限（通常 4 條），超額時把沒觀眾的既有實例
+（如餵 voxl-mavlink-server 的）註解掉。改完 `systemctl restart voxl-px4`，
+用 `ss -ulnp | grep 1456` 確認每條都有 bind。
 
 ## 一次性安裝（SSH 進機上，之後不再需要）
 
+clone 在哪個路徑都行，`install.sh` 會依實際位置生成 systemd 服務：
+
 ```bash
-sudo mkdir -p /opt/uav-onboard && sudo chown $USER /opt/uav-onboard
-# 把本資料夾內容放進 /opt/uav-onboard（git clone 你的機上 repo，或 scp）
-cd /opt/uav-onboard
-cp .env.example .env    # 編輯 GROUND_API 等設定；零依賴，不需要 venv/pip
+git clone git@github.com:jasper33977296/uav-onboard.git && cd uav-onboard
+cp .env.example .env      # 編輯 GROUND_API（零依賴，不需要 venv/pip）
+sudo ./install.sh         # selftest → 生成服務檔 → 開機自啟 → 立即啟動
 ```
+
+**手動 `python3 onboard_node.py` 只當測試用**——機身重啟手動程序就沒了
+（實際發生過：量測靜默中斷一小時）。部署一律走 systemd。
 
 ## 第一步永遠是 --probe（上機首驗）
 
@@ -42,20 +62,15 @@ AT+QNWINFO 交叉驗證一致，該樣本已固化進 `--selftest`。）
 在已知干擾源附近確認 **SINR 值會隨干擾下降**（Quectel 論壇有 RM500Q
 SINR 回報異常的前例）。
 
-## 正式運行
+## 正式運行＝systemd（`install.sh` 已裝好）
 
 ```bash
-python3 onboard_node.py                # 設定讀自 .env
+journalctl -u uav-link-node -f        # 看運行日誌（每秒取樣、HTTP 錯誤帶原因）
+sudo systemctl restart uav-link-node  # 改 .env 後重啟生效
 ```
 
-確認地面站前端「無人機訊號品質」卡開始有數值後，裝成開機自啟
-（設定都在 `.env`，unit 檔只有安裝路徑不同才要改）：
-
-```bash
-sudo cp uav-link-node.service /etc/systemd/system/
-sudo systemctl daemon-reload && sudo systemctl enable --now uav-link-node
-journalctl -u uav-link-node -f     # 看運行日誌
-```
+驗收在**地面站**做：`python3 scripts/check-onboard.py`（六項完整性檢查，
+每個失敗附排查指引）；前端「無人機訊號品質」卡應有數值。
 
 ## 設定（`.env`，真環境變數優先）
 
