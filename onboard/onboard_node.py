@@ -45,6 +45,7 @@ import sys
 import termios
 import threading
 import time
+import urllib.error
 import urllib.request
 from datetime import datetime, timezone
 
@@ -380,10 +381,20 @@ def sender_thread(latest):
                     body["drone_id"] = DRONE_ID
                 res = post_json(GROUND_API + "/api/link-metrics/batch", body)
                 buf.mark_sent(res["accepted_seq"])
+            except urllib.error.HTTPError as e:
+                # 伺服器有回應＝拒絕帶原因，必須讓人看得到（409 常見：
+                # 地面站 .env 的 LINK_SOURCE 還是 simulated）
+                if n % 15 == 0:
+                    try:
+                        detail = e.read().decode(errors="replace")[:200]
+                    except Exception:
+                        detail = ""
+                    print("[batch] 伺服器拒絕 HTTP {}：{}（累積 {} 筆待補傳）".format(
+                        e.code, detail, buf.pending()), flush=True)
             except Exception as e:
                 if n % 15 == 0:
-                    print("[batch] 送出失敗（{}），累積 {} 筆待補傳".format(
-                        type(e).__name__, buf.pending()), flush=True)
+                    print("[batch] 送出失敗（{}: {}），累積 {} 筆待補傳".format(
+                        type(e).__name__, e, buf.pending()), flush=True)
         n += 1
         if n % 600 == 0:
             buf.prune()

@@ -70,6 +70,14 @@ journalctl -u uav-link-node -f     # 看運行日誌
 | `PING_HOST` | 取自 GROUND_API | RTT 目標 |
 | `DRONE_ID` | （不填）| 不填＝記在地面站的「主機」名下（單機正確預設）|
 
+## 常見拒絕原因
+
+| 機上日誌 | 原因與解法 |
+|---|---|
+| `伺服器拒絕 HTTP 409：link_source=simulated...` | 地面站 `.env` 改 `LINK_SOURCE=modem` 後 `docker compose up -d` |
+| `伺服器拒絕 HTTP 422：時間戳必須含時區...` | 不應發生（本程式一律送含時區時間），回報開發端 |
+| `送出失敗（URLError: ...）` | 連不到地面站：確認 GROUND_API 的 IP/埠與 5G 路由 |
+
 ## 驗證行為
 
 - 斷線容忍：地面站斷線期間樣本累積於緩衝，恢復後自動補傳、冪等去重
