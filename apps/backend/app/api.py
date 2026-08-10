@@ -4,7 +4,7 @@ from datetime import datetime
 from fastapi import APIRouter, HTTPException, Response
 from pydantic import BaseModel, Field
 
-from . import db, ingest, swarm_sim
+from . import db, ingest, plan_check, swarm_sim
 from .config import settings
 from .link_events import transition as link_transition
 from .state import live
@@ -336,8 +336,13 @@ async def mission_waypoints(mission_id: str):
 
 @router.post("/missions")
 async def save_mission(m: MissionIn):
-    mid = await _store_mission(m.name, m.source, [w.model_dump() for w in m.waypoints])
-    return {"id": mid}
+    """存入任務庫並附上幾何預檢報告。**不因預檢失敗而拒存**——任務庫
+    可放草稿；真正的擋門在 command 服務上傳到機那一步。"""
+    wps = [w.model_dump() for w in m.waypoints]
+    mid = await _store_mission(m.name, m.source, wps)
+    return {"id": mid, "check": plan_check.check_waypoints(
+        wps, settings.geofence_radius_m, settings.geofence_alt_m,
+        settings.geofence_margin)}
 
 
 @router.post("/missions/from-vehicle")
@@ -347,11 +352,15 @@ async def import_mission_from_vehicle(name: str | None = None):
     wps = data["waypoints"]
     if len(wps) < 2:
         raise HTTPException(404, "機上沒有可儲存的任務（航點少於 2）")
+    stored = [{"seq": w["seq"], "lat": w["lat"], "lon": w["lon"], "alt": w["alt"],
+               "action": {22: "takeoff", 21: "land"}.get(w["command"], "waypoint")}
+              for w in wps]
     mid = await _store_mission(
-        name or f"機上任務 {datetime.now().strftime('%m/%d %H:%M')}", "vehicle",
-        [{"seq": w["seq"], "lat": w["lat"], "lon": w["lon"], "alt": w["alt"],
-          "action": {22: "takeoff", 21: "land"}.get(w["command"], "waypoint")} for w in wps])
-    return {"id": mid, "waypoint_count": len(wps)}
+        name or f"機上任務 {datetime.now().strftime('%m/%d %H:%M')}", "vehicle", stored)
+    return {"id": mid, "waypoint_count": len(wps),
+            "check": plan_check.check_waypoints(
+                stored, settings.geofence_radius_m, settings.geofence_alt_m,
+                settings.geofence_margin)}
 
 
 @router.post("/missions/{mission_id}/activate")

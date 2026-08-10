@@ -126,7 +126,12 @@ export default function CommandPanel() {
       });
       const body = await res.json().catch(() => ({}));
       if (!res.ok) {
-        setResult({ ok: false, text: body.detail ?? `失敗（HTTP ${res.status}）` });
+        // detail 可能是字串或結構化報告（幾何預檢的 problems 清單）
+        const d = body.detail;
+        const text = typeof d === "string" ? d
+          : d?.problems?.length ? `${d.msg ?? "被拒"}：${d.problems.join("；")}`
+          : JSON.stringify(d ?? `失敗（HTTP ${res.status}）`);
+        setResult({ ok: false, text });
       } else {
         setResult({
           ok: true,

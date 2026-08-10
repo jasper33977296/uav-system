@@ -111,6 +111,8 @@ docker compose up -d
 | `CAPTURE_ENABLED` | `true` | 原始層錄製：MAVLink 每框架無損落盤（tlog）|
 | `CAPTURE_DIR` | `/data/mavcap` | 錄製目錄（compose 的 `mavcap` volume）|
 | `CAPTURE_KEEP_DAYS` | `30` | 錄製檔滾動保留天數（~61 MB/hr）|
+| `GEOFENCE_RADIUS_M` | `50` | 任務幾何預檢：圍欄半徑（與 QGC Geofence 一致）|
+| `GEOFENCE_ALT_M` | `15` | 同上：高度上限。匯入 .plan 回報告；上傳到機超標直接擋 |
 
 > 門檻只影響**事件通知**；研究分析以 1Hz `link_metrics` 原始資料為準，
 > 事後可用任何門檻重新計算（事件是衍生資料）。

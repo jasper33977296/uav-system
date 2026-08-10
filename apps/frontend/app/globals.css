@@ -318,3 +318,9 @@ body {
 .cmd-result { font-size: 12px; line-height: 1.5; word-break: break-all; }
 .cmd-result.ok { color: #0ca30c; }
 .cmd-result.err { color: #e05e0e; }
+
+/* .plan 匯入的幾何預檢報告 */
+.plan-report { margin-top: 8px; font-size: 12.5px; line-height: 1.7; }
+.plan-report .ok { color: #0ca30c; }
+.plan-report .bad { color: #e05e0e; }
+.plan-report .warn { color: #fab219; }

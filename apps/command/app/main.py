@@ -21,7 +21,7 @@ from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 
-from . import mav
+from . import mav, plan_check
 from .config import settings
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(name)s %(message)s")
@@ -146,6 +146,17 @@ async def mission_upload(sysid: int, body: UploadIn):
         "WHERE mission_id = $1 ORDER BY seq", body.mission_id)
     if not rows:
         raise HTTPException(404, "任務不存在或沒有航點")
-    items = build_items([dict(r) for r in rows])
-    return await _run(sysid, "mission_upload", mav.job_upload_mission, items,
-                      params={"mission_id": body.mission_id, "items": len(items)})
+    wps = [dict(r) for r in rows]
+    # 幾何預檢＝上傳的擋門：超圍欄/超高的任務不出手（PX4 也會拒，
+    # 但在地面就擋下，拒絕原因比 MAV_MISSION_ERROR 可讀得多）
+    report = plan_check.check_waypoints(
+        wps, settings.geofence_radius_m, settings.geofence_alt_m,
+        settings.geofence_margin)
+    if not report["ok"]:
+        await _audit(sysid, "mission_upload", {"mission_id": body.mission_id},
+                     "rejected_precheck", "；".join(report["problems"]))
+        raise HTTPException(409, {"msg": "任務未通過幾何預檢，未上傳", **report})
+    res = await _run(sysid, "mission_upload", mav.job_upload_mission,
+                     build_items(wps),
+                     params={"mission_id": body.mission_id, "items": len(wps)})
+    return {**res, "check": report}

@@ -61,6 +61,8 @@ services:
       DATABASE_URL: postgresql://uav:uav@localhost:${DB_PORT:-35432}/uav
       MAVLINK_URL: ${MAVLINK_URL:-udpin://0.0.0.0:14540}
       LINK_SOURCE: ${LINK_SOURCE:-simulated}
+      GEOFENCE_RADIUS_M: ${GEOFENCE_RADIUS_M:-50}
+      GEOFENCE_ALT_M: ${GEOFENCE_ALT_M:-15}
     depends_on:
       uav-db:
         condition: service_healthy
@@ -96,6 +98,8 @@ services:
       DATABASE_URL: postgresql://uav:uav@localhost:${DB_PORT:-35432}/uav
       COMMAND_MAVLINK_URL: ${COMMAND_MAVLINK_URL:-udpin://0.0.0.0:14541}
       ENABLE_COMMANDS: ${ENABLE_COMMANDS:-false}
+      GEOFENCE_RADIUS_M: ${GEOFENCE_RADIUS_M:-50}
+      GEOFENCE_ALT_M: ${GEOFENCE_ALT_M:-15}
     depends_on:
       uav-db: { condition: service_healthy }
     logging:

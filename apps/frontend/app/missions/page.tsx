@@ -9,6 +9,10 @@ interface Mission {
   id: string; name: string; source: string | null;
   created_at: string; is_active: boolean; waypoint_count: number;
 }
+interface PlanCheck {
+  ok: boolean; problems: string[]; warnings: string[];
+  max_dist_m: number; fence_r: number; fence_alt: number;
+}
 interface Sess {
   id: string; drone_id: string; drone_name: string; mission_id: string | null;
   started_at: string; ended_at: string | null;
@@ -65,8 +69,10 @@ export default function Missions() {
     }
   }
 
+  const [report, setReport] = useState<PlanCheck | null>(null);
+
   async function uploadPlan(f: File) {
-    setErr(null);
+    setErr(null); setReport(null);
     let wps;
     try {
       wps = parsePlan(await f.text());
@@ -74,11 +80,21 @@ export default function Missions() {
       setErr("不是有效的 QGC .plan 檔"); return;
     }
     if (wps.length < 2) { setErr("檔案內找不到足夠的導航航點"); return; }
-    await call("/api/missions", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ name: f.name.replace(/\.plan$/i, ""), source: "plan-file", waypoints: wps }),
-    });
+    setBusy(true);
+    try {
+      const res = await fetch(`${API}/api/missions`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ name: f.name.replace(/\.plan$/i, ""), source: "plan-file", waypoints: wps }),
+      });
+      const body = await res.json();
+      if (!res.ok) setErr(body.detail ?? `失敗（${res.status}）`);
+      else { setReport(body.check ?? null); reload(); }
+    } catch (e) {
+      setErr(String(e));
+    } finally {
+      setBusy(false);
+    }
   }
 
   return (
@@ -101,6 +117,24 @@ export default function Missions() {
             onChange={(e) => { const f = e.target.files?.[0]; if (f) uploadPlan(f); e.target.value = ""; }} />
         </div>
         {err && <div className="form-err">{err}</div>}
+        {report && (
+          <div className="plan-report">
+            {report.ok && report.warnings.length === 0 && (
+              <div className="ok">✅ 幾何預檢通過（最遠航點 {report.max_dist_m} m／
+                圍欄 {report.fence_r} m）</div>
+            )}
+            {report.problems.map((p, i) => (
+              <div className="bad" key={`p${i}`}>❌ {p}</div>
+            ))}
+            {report.warnings.map((w, i) => (
+              <div className="warn" key={`w${i}`}>⚠️ {w}</div>
+            ))}
+            {!report.ok && (
+              <div className="hint-line">已存入任務庫（草稿可留），但**上傳到機時會被擋**
+                ——修正路徑或調整圍欄設定（.env 的 GEOFENCE_*，需與 QGC 一致）</div>
+            )}
+          </div>
+        )}
       </div>
 
       <div className="card">

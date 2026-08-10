@@ -9,6 +9,11 @@ class Settings(BaseSettings):
     link_source: str = "simulated"   # simulated / modem（真機階段實作 modem 讀取）
     # 原始層錄製（兩層收集，見 doc/gcs-replacement.md）：MAVLink 每框架
     # 無損落盤（tlog）後才轉發給 ingest；~61 MB/hr，依天數滾動清理
+    # 任務幾何預檢的圍欄基準（與機上 QGC Geofence 設定保持一致；
+    # 匯入 .plan 時回報告，command 服務上傳到機時強制擋）
+    geofence_radius_m: float = 50.0
+    geofence_alt_m: float = 15.0
+    geofence_margin: float = 0.7     # 超過半徑此比例即警告（Home=擺放位置的餘裕）
     capture_enabled: bool = True
     capture_dir: str = "/data/mavcap"
     capture_internal_port: int = 14549
