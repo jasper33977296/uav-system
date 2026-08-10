@@ -11,6 +11,10 @@ Wants=network-online.target
 # 腳本自動讀取——本檔只需在安裝路徑不同時改路徑。
 WorkingDirectory=/opt/uav-onboard
 ExecStart=/usr/bin/python3 /opt/uav-onboard/onboard_node.py
+# systemd 環境預設沒有 locale（C/ASCII）——Python 3.6 的檔案讀寫與
+# stdout 會因中文炸掉（.env 註解、日誌訊息都有中文）。顯式給 UTF-8。
+Environment=LANG=C.UTF-8
+Environment=PYTHONIOENCODING=utf-8
 Restart=always
 RestartSec=5
 

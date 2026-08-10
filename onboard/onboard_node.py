@@ -51,9 +51,12 @@ from datetime import datetime, timezone
 
 def _load_env(path):
     """讀腳本同目錄的 .env（KEY=VALUE，# 註解）。真環境變數優先——
-    systemd 與手動執行共用同一份設定，unit 檔不需要 Environment=。"""
+    systemd 與手動執行共用同一份設定，unit 檔不需要 Environment=。
+
+    encoding 必須顯式指定：systemd 環境沒有 locale，Python 3.6 會用
+    ASCII 開檔，.env 的中文註解直接炸（實際發生過，服務無限重啟）。"""
     try:
-        with open(path) as f:
+        with open(path, encoding="utf-8", errors="replace") as f:
             for line in f:
                 line = line.strip()
                 if not line or line.startswith("#") or "=" not in line:

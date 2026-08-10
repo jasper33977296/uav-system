@@ -31,7 +31,8 @@ python3 "$DIR/onboard_node.py" --selftest
 # 依實際 clone 路徑生成服務檔
 sed "s|/opt/uav-onboard|$DIR|g" "$DIR/uav-link-node.service" > "$UNIT"
 systemctl daemon-reload
-systemctl enable --now uav-link-node
+systemctl enable uav-link-node
+systemctl restart uav-link-node    # 重跑本腳本＝更新 unit 後重啟（enable --now 不會）
 sleep 2
 systemctl --no-pager -l status uav-link-node | head -10
 
