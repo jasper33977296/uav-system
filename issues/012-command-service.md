@@ -1,6 +1,6 @@
 # 012 · command 服務：自製 GCS 的指令能力（取代 QGC 作業流程）
 
-- 狀態：in-progress（階段 2 核心 2026-08-10 落地並過 SITL 驗收；階段 3 UI 待做）
+- 狀態：in-progress（階段 2 核心＋階段 3 控制 UI 2026-08-10 落地；真機心跳 failsafe 實測待做）
 - 嚴重度：medium（新能力，非缺陷；GCS 取代計畫的承重結構）
 - 位置：`apps/command/`；設計見 `doc/gcs-replacement.md` §1
 - 建立：2026-08-10

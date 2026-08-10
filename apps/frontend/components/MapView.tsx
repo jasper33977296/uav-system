@@ -3,6 +3,7 @@ import maplibregl from "maplibre-gl";
 import "maplibre-gl/dist/maplibre-gl.css";
 import { useEffect, useRef, useState } from "react";
 
+import CommandPanel from "@/components/CommandPanel";
 import { colorFor, createDroneLayer, pickDrone, type ScreenHit } from "@/components/droneLayer";
 import VideoModal from "@/components/VideoModal";
 import { CANVAS, groundGrid, ribbon, trailLineString } from "@/lib/geo";
@@ -259,6 +260,8 @@ export default function MapView() {
           起飛點（地面基準）
         </div>
       </div>
+
+      <CommandPanel />
 
       {videoDrone && (
         <VideoModal

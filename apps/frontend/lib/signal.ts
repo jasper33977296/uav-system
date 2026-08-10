@@ -31,3 +31,5 @@ const host = typeof window === "undefined" ? "localhost" : window.location.hostn
 
 export const API = process.env.NEXT_PUBLIC_API_URL ?? `http://${host}:38000`;
 export const WS_URL = process.env.NEXT_PUBLIC_WS_URL ?? `ws://${host}:38000/ws/telemetry`;
+// command 服務（GCS 取代階段 2/3）：與 backend 分離的獨立服務，同主機不同 port
+export const COMMAND_API = process.env.NEXT_PUBLIC_COMMAND_API ?? `http://${host}:38001`;

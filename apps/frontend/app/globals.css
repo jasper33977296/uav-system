@@ -290,3 +290,31 @@ body {
   padding: 3px 8px; border-radius: 6px; font-size: 12px;
   background: rgba(0, 0, 0, 0.55); color: #fff;
 }
+
+/* 任務控制面板（即時頁左下，command 服務的操作 UI） */
+.cmd-panel {
+  position: absolute; left: 10px; bottom: 10px; z-index: 30;
+  width: 300px; background: var(--surface);
+  border: 1px solid var(--hairline); border-radius: 10px;
+  box-shadow: 0 4px 16px rgba(0, 0, 0, 0.35); font-size: 13px;
+}
+.cmd-head {
+  display: flex; align-items: center; gap: 8px;
+  padding: 8px 12px; cursor: pointer; user-select: none;
+}
+.cmd-head .name { font-weight: 700; }
+.cmd-head .meta { font-size: 12px; color: var(--muted); }
+.cmd-head .spacer { flex: 1; }
+.cmd-body {
+  padding: 10px 12px; border-top: 1px solid var(--hairline);
+  display: flex; flex-direction: column; gap: 8px;
+}
+.cmd-row { display: flex; gap: 6px; align-items: center; flex-wrap: wrap; }
+.cmd-row select {
+  flex: 1; min-width: 0; background: var(--page); color: var(--ink);
+  border: 1px solid var(--hairline); border-radius: 6px; padding: 4px 6px;
+}
+.cmd-emergency { padding-top: 6px; border-top: 1px dashed var(--hairline); }
+.cmd-result { font-size: 12px; line-height: 1.5; word-break: break-all; }
+.cmd-result.ok { color: #0ca30c; }
+.cmd-result.err { color: #e05e0e; }
