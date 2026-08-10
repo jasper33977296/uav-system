@@ -134,10 +134,8 @@ async def main() -> None:
     watcher = asyncio.create_task(watch_position(state))
     _keepalive.append(watcher)
 
-    cells = await get_json(f"{API}/api/cells")
-    zones = [z for z in await get_json(f"{API}/api/zones") if z.get("enabled")]
-    sim = SimulatedLinkSource(cells, zones)
-    print(f"取得 {len(cells)} 個 cell、{len(zones)} 個干擾區；緩衝 {BUFFER_DB}", flush=True)
+    sim = SimulatedLinkSource()   # 場景為 link_sim 內建常數（表已拆除）
+    print(f"模擬場景：{len(sim.cells)} 個 cell、{len(sim.zones)} 個干擾區；緩衝 {BUFFER_DB}", flush=True)
 
     t0 = time.monotonic()
     while True:

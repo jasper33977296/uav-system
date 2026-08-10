@@ -11,9 +11,10 @@ drones ──┬── flight_sessions ──┬── telemetry     (hypertable
          │                     ├── link_metrics  (hypertable, 1Hz) ← 研究核心
          │                     └── events
          └── missions ── waypoints
-cells                （gNB 基地台，模擬訊號源）
-interference_zones   （干擾區標注，研究場景設定）
 ```
+
+（模擬場景表 `cells`／`interference_zones` 已於 2026-08-10 拆除，場景改為
+`link_sim.py` 內建常數；完整 ERD 見 `doc/architecture.md`「資料模型」。）
 
 ## 各表要點
 
@@ -23,7 +24,7 @@ interference_zones   （干擾區標注，研究場景設定）
 |---|---|---|
 | RF 層 | `rsrp` `rsrq` `sinr` `cqi` | SINR 是干擾研究主指標 |
 | Cell | `pci` `cell_id` `band` `nr_mode` | `pci` 是 Physical Cell ID（會重複使用）；`cell_id` 是 modem 回報的全域識別碼 NCI/CGI，模擬資料為 NULL。換手不在研究範圍（無人機 = 一台 UE，由 modem 與網路側處理），只記錄不發事件 |
-| 干擾標注 | `in_interference_zone` | **模擬專用**：模擬器對照 `interference_zones`（它自己的輸入）標的。真機階段系統對干擾無先驗知識，此欄為 NULL；干擾的空間分布由實測 SINR 軌跡揭露，是產出不是輸入 |
+| 干擾標注 | `in_interference_zone` | **模擬專用**：模擬器對照內建干擾場景（`link_sim.DEFAULT_ZONES`，它自己的輸入）標的。真機階段系統對干擾無先驗知識，此欄為 NULL；干擾的空間分布由實測 SINR 軌跡揭露，是產出不是輸入 |
 | 端到端 | `rtt_ms` `jitter_ms` `packet_loss_pct` `throughput_up/down_kbps` | RF 劣化如何反映到應用層 |
 | 空間 | `lat` `lon` `alt_rel` | **刻意反正規化**：空間分析／熱度圖不必與 telemetry 做時間 join |
 | 標注 | `in_interference_zone` `source` | source = simulated / modem，模擬與實測資料可共存、可過濾 |
@@ -44,11 +45,11 @@ max_alt、avg/min SINR、avg RTT、干擾區內取樣數／總取樣數。
 
 `is_simulated` 與 `connection_url` 讓模擬機和真機走同一套程式路徑，只差設定。
 
-### `cells` / `interference_zones`
+### ~~`cells` / `interference_zones`~~（已拆除，2026-08-10）
 
-研究場景設定表。模擬器每 30 秒重載，前端新增/刪除干擾區即時生效。
-真機階段 `interference_zones` 轉為「已知干擾源」的 ground truth 標注，
-`cells` 存實網量到的 cell 資訊。
+模擬場景是模擬器的內部細節，不佔正式 schema——改為 `link_sim.py` 內建
+常數。真機的 cell 資訊記錄在每筆 `link_metrics`（`pci`/`cell_id`/`band`），
+已知干擾源由實測資料歸因，不需要預先標注表。
 
 ### `events`
 

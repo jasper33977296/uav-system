@@ -129,7 +129,6 @@ async def start(count: int = 3, mission_id: str | None = None) -> list[str]:
     if _task and not _task.done():
         raise RuntimeError("群飛模擬已在執行中")
     _drones = []
-    cells, zones = await db.fetch_cells(), await db.fetch_zones(enabled_only=True)
     if mission_id:
         paths = await _mission_paths(mission_id, count)
     else:
@@ -142,7 +141,7 @@ async def start(count: int = 3, mission_id: str | None = None) -> list[str]:
         d.state.session_id = await db.create_session(
             d.state.drone_id, link_mission=False, mission_id=mission_id)
         d.state.armed = True
-        d.source = SimulatedLinkSource(cells, zones)   # 各自的 serving-cell 記憶
+        d.source = SimulatedLinkSource()   # 內建場景；各自的 serving-cell 記憶
         _drones.append(d)
     _task = asyncio.create_task(_run())
     log.info("swarm started (mission=%s): %s", mission_id, [d.name for d in _drones])
