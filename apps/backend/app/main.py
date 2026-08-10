@@ -5,7 +5,7 @@ from contextlib import asynccontextmanager
 from fastapi import FastAPI, WebSocket, WebSocketDisconnect
 from fastapi.middleware.cors import CORSMiddleware
 
-from . import db, ingest
+from . import capture, db, ingest
 from .api import router
 from .config import settings
 from .link_events import transition as link_transition
@@ -111,14 +111,26 @@ async def lifespan(app: FastAPI):
     if recovered:
         log.info("補結算 %d 條孤兒航線（上次執行期間中斷的飛行）", recovered)
     log.info("primary drone: %s (%s)", live.drone_name, live.drone_id)
+    # 原始層錄製（兩層收集）：tee 綁對外埠，ingest 改連內部埠。
+    # 啟動失敗時退回直連——錄製是保險絲，不能反過來成為單點故障。
+    ingest_url = settings.mavlink_url
+    cap = None
+    if settings.capture_enabled:
+        try:
+            cap = await capture.start()
+            ingest_url = f"udpin://127.0.0.1:{settings.capture_internal_port}"
+        except Exception:
+            log.exception("原始層錄製啟動失敗，ingest 直連（本次無錄製）")
     tasks = [
-        asyncio.create_task(ingest.run(), name="mavlink-ingest"),
+        asyncio.create_task(ingest.run(ingest_url), name="mavlink-ingest"),
         asyncio.create_task(_link_and_db_loop(), name="link-db-loop"),
         asyncio.create_task(_broadcast_loop(), name="ws-broadcast"),
     ]
     yield
     for t in tasks:
         t.cancel()
+    if cap:
+        cap.close()
     await db.pool.close()
 
 

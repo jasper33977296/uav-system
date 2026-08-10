@@ -18,11 +18,14 @@ log = logging.getLogger(__name__)
 drone: System | None = None
 
 
-async def run() -> None:
+async def run(url: str | None = None) -> None:
+    """url 未指定時直連 MAVLINK_URL；原始層錄製開啟時 main 會傳入
+    內部埠（tee 轉發），見 app/capture.py。"""
     global drone
+    url = url or settings.mavlink_url
     drone = System()
-    log.info("connecting MAVLink at %s ...", settings.mavlink_url)
-    await drone.connect(system_address=settings.mavlink_url)
+    log.info("connecting MAVLink at %s ...", url)
+    await drone.connect(system_address=url)
 
     async for cs in drone.core.connection_state():
         if cs.is_connected:

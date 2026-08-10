@@ -41,10 +41,32 @@ QGC 降級為板凳工具（校準/參數/韌體）與場域緊急備援。
 - 指令留痕入庫（誰、何時、參數、ACK 結果）——同時是實驗記錄。
 - `ENABLE_COMMANDS` 預設關，部署時顯式開啟。
 
-## 2. 監看補齊（階段 1，backend，仍唯讀）
+## 2. 監看補齊（階段 1，backend，仍唯讀）＝兩層收集
+
+原則（2026-08-10 定案）：**任何無人機傳出的資訊都要收集到**。不逐種訊息
+挑選，分兩層：
+
+### 2a. 原始層（已實作，`app/capture.py`）
+
+MAVLink 每一個框架**先無損落盤再轉發**（透明 tee：backend 綁 14540，
+ingest 的 mavsdk 改聽內部埠 14549，回程原路轉回）。tlog 格式
+（QGC 回放／pymavlink 工具鏈相容），UTC 日切檔於 `mavcap` volume，
+`CAPTURE_KEEP_DAYS`（30）滾動清理。實測待機 ~16.5 KB/s（61 MB/hr）。
+
+價值：今天沒解析的訊息（ESC/震動/EKF/⋯）明天要研究時歷史還在，
+重放解析即可——與 modem 端保留 `at_qeng` raw 同一哲學。錄製失敗
+不拖垮資料路徑；啟動失敗自動退回 ingest 直連。
+
+盤點（實測）：待機 27 種週期訊息 ~368 則/s；另有事件/回應型 ~12 種
+（STATUSTEXT、COMMAND_ACK、MISSION_ACK 等——**量小值高，任務上傳
+失敗的原因碼就在 MISSION_ACK**）；ulog（機上全速率日誌，100+ topic）
+屬事後回收，列階段 2+ 待辦。
+
+### 2b. 結構層（UI 與分析用，逐步擴充）
 
 - STATUSTEXT 入事件流（PX4 警告與拒絕解鎖原因；沒有它操作員是瞎的）
 - `MISSION_CURRENT`（任務進度）、`SYS_STATUS`（感測器健康）、RC 訊號狀態
+- `COMMAND_ACK`／`MISSION_ACK`（指令與上傳結果，含原因碼）
 - 完成判準：例行飛行中 QGC 可最小化，只在下指令時打開
 
 ## 3. 群組任務（群飛同時配置飛行路徑）

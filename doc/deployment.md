@@ -108,6 +108,9 @@ docker compose up -d
 | `SINR_LOST_DB` | `-2.0` | 低於此值→瀕斷 |
 | `SINR_HYSTERESIS_DB` | `3.0` | 回升遲滯（防門檻抖動）|
 | `HANDOVER_MARGIN_DB` | `6.0` | 模擬器專用，真機不適用 |
+| `CAPTURE_ENABLED` | `true` | 原始層錄製：MAVLink 每框架無損落盤（tlog）|
+| `CAPTURE_DIR` | `/data/mavcap` | 錄製目錄（compose 的 `mavcap` volume）|
+| `CAPTURE_KEEP_DAYS` | `30` | 錄製檔滾動保留天數（~61 MB/hr）|
 
 > 門檻只影響**事件通知**；研究分析以 1Hz `link_metrics` 原始資料為準，
 > 事後可用任何門檻重新計算（事件是衍生資料）。
@@ -298,6 +301,7 @@ DB 密碼改掉預設值。這是已知邊界，不是疏忽。
 | 事項 | 作法 |
 |---|---|
 | 資料生命週期 | 原始 1Hz 資料 **30 天自動清除**；1 分鐘彙總永久保留。要長期保留原始資料：無人機頁逐航線「匯出」（單一 JSON）後可「移除」 |
+| MAVLink 原始錄製 | 機上傳出的**每一個 MAVLink 框架**無損保留於 `mavcap` volume（tlog、UTC 日切檔、30 天滾動）。取用：`docker cp uav-backend:/data/mavcap/<日期>.tlog .`，可用 QGC 回放或 pymavlink `mavlogdump.py` 解析（兩層收集設計見 `doc/gcs-replacement.md` §2）|
 | 備份 | `docker exec uav-db pg_dump -U uav uav > backup-$(date +%F).sql`（排程丟遠端）|
 | 更新版本 | `git pull && docker compose up -d --build --renew-anon-volumes` |
 | 看日誌 | `docker compose logs -f uav-backend`（log 已設 50MB×3 上限，不會寫爆磁碟）|

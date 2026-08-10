@@ -55,6 +55,7 @@ services:
               "--host", "0.0.0.0", "--port", "${BACKEND_PORT:-38000}"]
     volumes:
       - ./apps/backend/app:/srv/app  # 原始碼掛進去，改檔案 reload 立即生效
+      - mavcap:/data/mavcap          # 原始層錄製（MAVLink tlog，滾動 30 天）
     environment:
       # 全部由根目錄 .env 供值（見 .env.example）——新環境只改 .env
       DATABASE_URL: postgresql://uav:uav@localhost:${DB_PORT:-35432}/uav
@@ -83,3 +84,4 @@ services:
 
 volumes:
   dbdata:
+  mavcap:

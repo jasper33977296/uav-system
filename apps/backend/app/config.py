@@ -7,6 +7,12 @@ class Settings(BaseSettings):
     # 註：本系統管理哪台無人機（名稱/主機指定）由系統端管理（drones 表 +
     # 無人機頁），不走環境變數——見 issues/011。
     link_source: str = "simulated"   # simulated / modem（真機階段實作 modem 讀取）
+    # 原始層錄製（兩層收集，見 doc/gcs-replacement.md）：MAVLink 每框架
+    # 無損落盤（tlog）後才轉發給 ingest；~61 MB/hr，依天數滾動清理
+    capture_enabled: bool = True
+    capture_dir: str = "/data/mavcap"
+    capture_internal_port: int = 14549
+    capture_keep_days: int = 30
     broadcast_hz: float = 5.0        # WebSocket 推送頻率
     db_write_hz: float = 1.0         # telemetry / link_metrics 入庫頻率
     # 鏈路狀態門檻（ok / degraded / lost 三態，見 app/main.py:_link_transition）
