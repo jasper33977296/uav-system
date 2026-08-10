@@ -2,6 +2,7 @@
 import { useRouter } from "next/navigation";
 import { useCallback, useEffect, useState } from "react";
 
+import ConfirmModal from "@/components/ConfirmModal";
 import { API } from "@/lib/signal";
 import { useUavStore } from "@/lib/store";
 
@@ -69,11 +70,10 @@ export default function Drones() {
     reload();
   }
 
-  async function remove(d: Drone, sessionCount: number) {
-    const msg =
-      `刪除「${d.name}」？\n\n將一併刪除其 ${sessionCount} 條航線與全部遙測、` +
-      `鏈路量測、事件資料。此操作無法復原。`;
-    if (!window.confirm(msg)) return;
+  const [toDelete, setToDelete] = useState<Drone | null>(null);
+
+  async function remove(d: Drone) {
+    setToDelete(null);
     setErr(null);
     const res = await fetch(`${API}/api/drones/${d.id}`, { method: "DELETE" });
     if (!res.ok) {
@@ -171,7 +171,7 @@ export default function Drones() {
                 className="btn-danger"
                 disabled={isLive}
                 title={isLive ? "連線中的無人機無法刪除" : "刪除無人機與其全部資料"}
-                onClick={() => remove(d, mine.length)}
+                onClick={() => setToDelete(d)}
               >
                 刪除
               </button>
@@ -232,6 +232,23 @@ export default function Drones() {
       })}
       {drones.length === 0 && (
         <div className="card"><div className="empty">讀取中，或 backend 未連線</div></div>
+      )}
+
+      {toDelete && (
+        <ConfirmModal
+          title={`刪除「${toDelete.name}」？`}
+          onClose={() => setToDelete(null)}
+          onConfirm={() => remove(toDelete)}
+        >
+          <p>
+            將刪除其 <b>{sessions.filter((s) => s.drone_id === toDelete.id).length} 條航線</b>
+            與全部遙測、鏈路量測、事件資料，<b>此操作無法復原</b>。
+          </p>
+          <p className="hint-line">
+            關聯的任務路徑不會被刪除，僅解除與此機的關聯（路徑不綁機）。
+            若要長期保留航線資料，請先逐航線「匯出」。
+          </p>
+        </ConfirmModal>
       )}
     </div>
   );

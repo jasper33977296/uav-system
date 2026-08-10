@@ -261,3 +261,15 @@ body {
   font-size: 12px; color: var(--muted);
   overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
 }
+
+/* 危險操作確認 modal */
+.confirm-modal { width: min(460px, 92vw); }
+.modal-text {
+  padding: 14px; font-size: 13px; color: var(--ink-2); line-height: 1.7;
+  display: flex; flex-direction: column; gap: 6px;
+}
+.modal-text b { color: var(--ink); }
+.modal-actions {
+  display: flex; justify-content: flex-end; gap: 8px;
+  padding: 10px 14px; border-top: 1px solid var(--hairline);
+}

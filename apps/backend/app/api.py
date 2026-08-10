@@ -108,6 +108,11 @@ async def delete_drone(drone_id: str):
             for table in ("telemetry", "link_metrics", "events", "flight_sessions"):
                 r = await con.execute(f"DELETE FROM {table} WHERE drone_id = $1", drone_id)
                 counts[table] = int(r.split()[-1])
+            # 任務不陪葬：路徑不綁機（issue 010），只解除關聯。
+            # 不處理會踩 missions.drone_id 的 FK → 整筆交易 500。
+            r = await con.execute(
+                "UPDATE missions SET drone_id = NULL WHERE drone_id = $1", drone_id)
+            counts["missions_unlinked"] = int(r.split()[-1])
             r = await con.execute("DELETE FROM drones WHERE id = $1", drone_id)
     if r.split()[-1] == "0":
         raise HTTPException(404, "無此無人機")
