@@ -273,3 +273,20 @@ body {
   display: flex; justify-content: flex-end; gap: 8px;
   padding: 10px 14px; border-top: 1px solid var(--hairline);
 }
+
+/* 影像牆（多機同時顯示，各自獨立串流） */
+.video-modal-wide { width: min(1280px, 96vw); }
+.video-grid {
+  display: grid; gap: 8px; padding: 8px; background: var(--page);
+  grid-template-columns: repeat(auto-fit, minmax(300px, 1fr));
+  max-height: 78vh; overflow-y: auto;
+}
+.video-tile { position: relative; background: #000; border-radius: 6px; overflow: hidden; }
+.video-tile video, .video-tile img { display: block; width: 100%; aspect-ratio: 16/9; object-fit: contain; }
+.video-tile .video-empty { aspect-ratio: 16/9; padding: 0 16px; }
+.video-tile-label {
+  position: absolute; top: 6px; left: 6px; z-index: 1;
+  display: flex; align-items: center; gap: 6px;
+  padding: 3px 8px; border-radius: 6px; font-size: 12px;
+  background: rgba(0, 0, 0, 0.55); color: #fff;
+}
