@@ -156,15 +156,17 @@ async def mission_upload(sysid: int, body: UploadIn):
         p = json.loads(p) if isinstance(p, str) else (p or {})
         w["command"] = p.get("command")      # plan_check 用原始 command 判導航類
         wps.append(w)
-    # 幾何預檢＝上傳的擋門：超圍欄/超高的任務不出手（PX4 也會拒，
-    # 但在地面就擋下，拒絕原因比 MAV_MISSION_ERROR 可讀得多）
+    # 幾何預檢：報告一律附在回應與留痕；GEOFENCE_ENFORCE=true 才擋
+    # （預設不擋——2026-08-10 使用者決定；空中防線是 PX4 自己的 Geofence）
     report = plan_check.check_waypoints(
         wps, settings.geofence_radius_m, settings.geofence_alt_m,
         settings.geofence_margin)
-    if not report["ok"]:
+    if not report["ok"] and settings.geofence_enforce:
         await _audit(sysid, "mission_upload", {"mission_id": body.mission_id},
                      "rejected_precheck", "；".join(report["problems"]))
         raise HTTPException(409, {"msg": "任務未通過幾何預檢，未上傳", **report})
+    if not report["ok"]:
+        log.warning("預檢有問題但未啟用擋門，照常上傳：%s", "；".join(report["problems"]))
     res = await _run(sysid, "mission_upload", mav.job_upload_mission,
                      build_items(wps),
                      params={"mission_id": body.mission_id, "items": len(wps)})

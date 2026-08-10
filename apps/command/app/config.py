@@ -9,8 +9,11 @@ class Settings(BaseSettings):
     # 安全 gate：預設關。關閉時所有指令端點回 403，也不發 GCS 心跳
     # （不發＝不進入 PX4 的 datalink-loss 安全鏈，純觀察不擔責）。
     enable_commands: bool = False
-    # 任務幾何預檢（與 backend 共用 .env 的 GEOFENCE_*，對齊機上 QGC 設定）：
-    # 上傳到機前強制檢查，有 problem 直接 409——這裡是安全門
+    # 任務幾何預檢（與 backend 共用 .env 的 GEOFENCE_*）：
+    # 2026-08-10 使用者決定預設**不擋**——報告照附（回應的 check 欄位、
+    # command_log 留痕），GEOFENCE_ENFORCE=true 才恢復 409 擋門。
+    # 空中的真正防線仍是 PX4 自己的 Geofence（QGC 設定的那個）。
+    geofence_enforce: bool = False
     geofence_radius_m: float = 50.0
     geofence_alt_m: float = 15.0
     geofence_margin: float = 0.7

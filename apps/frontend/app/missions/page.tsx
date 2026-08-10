@@ -145,8 +145,8 @@ export default function Missions() {
               <div className="warn" key={`w${i}`}>⚠️ {w}</div>
             ))}
             {!report.ok && (
-              <div className="hint-line">已存入任務庫（草稿可留），但**上傳到機時會被擋**
-                ——修正路徑或調整圍欄設定（.env 的 GEOFENCE_*，需與 QGC 一致）</div>
+              <div className="hint-line">已存入任務庫。預檢僅供參考（不擋上傳；
+                GEOFENCE_ENFORCE=true 可恢復擋門）——空中防線是 PX4 的 Geofence</div>
             )}
           </div>
         )}
