@@ -36,6 +36,19 @@
 本 issue 剩餘範圍：多機**同時**接入（ingest 多實例化，逐台依 connection_url
 建立連線）。
 
+## HTTP 側（5G 樣本）身分現況（2026-08-10 盤點）
+
+「這筆樣本是哪台機的」不靠來源 IP（5G/NAT 不可靠），靠樣本自帶
+`drone_id`（各機 onboard node 的 `.env` 設 `DRONE_ID=<drones 表 UUID>`；
+不填＝記在主機名下，單機正確預設）。盤點：
+
+- ✅ batch 通道帶 `drone_id`、入庫冪等鍵 `(drone_id, time)`——協定就緒
+- ❌ live 通道**沒有** `drone_id`：更新的是單例 live state，多機同時
+  POST 會互相覆蓋（畫面錯，資料不受影響）
+- ❌ 架次歸戶只認主機：非主機的 batch 樣本反查不到架次被丟棄
+- 兩條流身分平行：MAVLink＝sysid→`drones.mav_sysid`、
+  HTTP＝`DRONE_ID`→`drones.id`，都收斂到 drones 表
+
 ## 解法（多機時一併做；模型 2026-08-10 定案）
 
 **單埠＋sysid demux**（取代原案「逐台依 connection_url 建連線」）：
