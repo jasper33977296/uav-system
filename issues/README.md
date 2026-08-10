@@ -34,6 +34,8 @@
 | [009](009-sitl-log-fills-disk.md) | SITL 沒掛 TTY，log 以 4.9GB/hr 寫爆磁碟 ✔實測確認 | critical | **closed** | `docker-compose.yml` |
 | [010](010-missions-idle-columns.md) | missions.drone_id / status 欄位閒置（無資料來源）| low | open | `db/init/01_schema.sql` |
 | [011](011-register-drone-not-wired.md) | 「註冊無人機」表單未接線（建立資料列但不會連線）| low | open | `apps/frontend/app/drones/page.tsx` |
+| [012](012-command-service.md) | command 服務：自製 GCS 指令能力（取代 QGC 作業流程）| medium | open | `doc/gcs-replacement.md` §1 |
+| [013](013-group-missions.md) | 群組任務：群飛 group 概念同時配置路徑 | medium | open | `doc/gcs-replacement.md` §3 |
 
 「✔實測確認」= 2026-08-03 首次實飛（SITL 起飛 → 進干擾區 → RTL）取得的實際資料佐證，
 不只是讀碼推論。詳見 [progress/log/2026-08-03.md](../progress/log/2026-08-03.md)。
