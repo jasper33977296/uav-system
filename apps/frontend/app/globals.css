@@ -367,6 +367,26 @@ body {
 .joy .sub { font-size: 10px; color: var(--muted); }
 .manual-live { font-size: 12px; color: #e05e0e; }
 
+/* 即時頁檢視切換（地圖 ↔ 即時影像；地圖保持 mounted，影像覆蓋其上） */
+.view-toggle {
+  position: absolute; top: 12px; left: 12px; z-index: 20;
+  display: flex; overflow: hidden;
+  background: var(--surface); border: 1px solid var(--hairline);
+  border-radius: 8px; box-shadow: 0 4px 16px rgba(0, 0, 0, 0.35);
+}
+.view-toggle button {
+  font-size: 12px; padding: 5px 12px; cursor: pointer;
+  background: none; border: none; color: var(--ink-2);
+}
+.view-toggle button.on { background: var(--page); color: var(--ink); }
+.video-overlay {
+  position: absolute; inset: 0; z-index: 10; background: #000;
+  display: flex; align-items: center; justify-content: center;
+}
+.video-overlay video, .video-overlay img {
+  width: 100%; height: 100%; object-fit: contain;
+}
+
 /* 航線比較頁 */
 .cmp-layout { display: grid; grid-template-columns: 300px 1fr; gap: 12px; margin-top: 12px; align-items: start; }
 .cmp-sessions { max-height: 75vh; overflow-y: auto; }

@@ -6,6 +6,7 @@ import { useEffect, useRef, useState } from "react";
 import CommandPanel from "@/components/CommandPanel";
 import { colorFor, createDroneLayer, pickDrone, type ScreenHit } from "@/components/droneLayer";
 import VideoModal from "@/components/VideoModal";
+import VideoPlayer from "@/components/VideoPlayer";
 import { CANVAS, groundGrid, ribbon, trailLineString } from "@/lib/geo";
 import { API, LINK_CLASSES, classifySinr } from "@/lib/signal";
 import { useUavStore } from "@/lib/store";
@@ -22,6 +23,8 @@ const CLS_MATCH = [
   "#898781",
 ] as any;
 
+interface DroneVideo { id: string; name: string; video_url: string | null }
+
 export default function MapView() {
   const containerRef = useRef<HTMLDivElement>(null);
   const mapRef = useRef<maplibregl.Map | null>(null);
@@ -30,6 +33,21 @@ export default function MapView() {
   const [hasMission, setHasMission] = useState(false);
   const hitsRef = useRef<Map<string, ScreenHit>>(new Map());
   const [videoDrone, setVideoDrone] = useState<string | null>(null);
+
+  // 檢視切換：地圖 ↔ 當前選擇機（側欄選的，未選＝主機）的即時影像
+  const [view, setView] = useState<"map" | "video">("map");
+  const [videoList, setVideoList] = useState<DroneVideo[] | null>(null);
+  const selId = useUavStore((s) => s.selectedId ?? s.primaryId);
+  const selName = useUavStore((s) => {
+    const id = s.selectedId ?? s.primaryId;
+    return id ? s.fleet[id]?.drone_name ?? id : null;
+  });
+  // 影像檢視才撈機清單：video_url 在無人機頁隨時可改，切進來時讀最新值
+  useEffect(() => {
+    if (view !== "video") return;
+    fetch(`${API}/api/drones`).then((r) => r.json())
+      .then(setVideoList).catch(() => setVideoList([]));
+  }, [view]);
 
 
   useEffect(() => {
@@ -260,6 +278,43 @@ export default function MapView() {
           起飛點（地面基準）
         </div>
       </div>
+
+      {/* 檢視切換鈕：地圖保持 mounted（maplibre 重建昂貴且會失去視角），
+          影像用覆蓋層蓋上去；切回地圖即卸載播放器、停掉串流 */}
+      <div className="view-toggle">
+        <button className={view === "map" ? "on" : ""}
+          onClick={() => setView("map")}>地圖</button>
+        <button className={view === "video" ? "on" : ""}
+          onClick={() => setView("video")}>影像</button>
+      </div>
+
+      {view === "video" && (
+        <div className="video-overlay">
+          {selId == null ? (
+            <div className="video-empty"><p>尚未收到無人機遙測。</p></div>
+          ) : videoList === null ? (
+            <div className="video-empty"><p>連線中…</p></div>
+          ) : (() => {
+            const url = videoList.find((d) => d.id === selId)?.video_url;
+            return url ? (
+              <VideoPlayer key={`${selId}:${url}`} url={url} />
+            ) : (
+              <div className="video-empty">
+                <p>{selName} 尚未設定影像串流位址。</p>
+                <p className="hint-line">
+                  到「無人機」頁按「影像」設定 video_url（WHEP／MJPEG／MP4）。
+                </p>
+              </div>
+            );
+          })()}
+          {selId && (
+            <div className="video-tile-label">
+              <span className="dot" style={{ background: colorFor(selId) }} />
+              {selName}
+            </div>
+          )}
+        </div>
+      )}
 
       <CommandPanel />
 
