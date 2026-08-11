@@ -36,6 +36,22 @@ async def migrate() -> None:
     # issue 020：每機「當前飛的任務」——command 上傳任務時設，create_session
     # 據此綁 session.mission_id（任務↔架次因果鏈，非一次性補丁）
     await pool.execute("ALTER TABLE drones ADD COLUMN IF NOT EXISTS current_mission_id UUID")
+    # current_mission_id → missions 的參照完整性（ON DELETE SET NULL）：少了它，
+    # 刪任務會讓 current_mission_id 變懸空指標，之後 create_session 綁 mission_id
+    # 就撞 flight_sessions_mission_id_fkey → 解鎖建 session 每次拋錯 → 該機 armed
+    # 永遠標不起來、不錄遙測（多機 bring-up 實測炸點：刪光飛行資料後殘留懸空
+    # current_mission_id）。先清懸空值再補約束（冪等；約束不存在才加）。
+    await pool.execute(
+        """DO $$ BEGIN
+             UPDATE drones d SET current_mission_id = NULL
+               WHERE current_mission_id IS NOT NULL
+                 AND NOT EXISTS (SELECT 1 FROM missions m WHERE m.id = d.current_mission_id);
+             IF NOT EXISTS (SELECT 1 FROM pg_constraint
+                            WHERE conname = 'drones_current_mission_id_fkey') THEN
+               ALTER TABLE drones ADD CONSTRAINT drones_current_mission_id_fkey
+                 FOREIGN KEY (current_mission_id) REFERENCES missions(id) ON DELETE SET NULL;
+             END IF;
+           END $$;""")
     # issue 014 STATUSTEXT Phase A：事件來源分類。'vehicle'＝自駕儀自己吐的 log
     # （STATUSTEXT，QGC vehicle-messages 面板同源）；'system'＝backend 推導的
     # （link_lost/cell_change/session…）。前端據此分「機上訊息」與「系統事件」兩流。
