@@ -87,6 +87,11 @@ def ack(target, cmd, result=0):
     enc.seq = (enc.seq + 1) % 256
 
 
+def send_to(target, msg):
+    sock.sendto(msg.pack(enc), target)
+    enc.seq = (enc.seq + 1) % 256
+
+
 threading.Thread(target=sender, daemon=True).start()
 print(f"假機 sysid={args.sysid} 上線：→ {args.gs}:{args.data_port}/{args.cmd_port}",
       flush=True)
@@ -120,3 +125,37 @@ while True:
             ack(addr, c, M.MAV_RESULT_ACCEPTED)
         elif t == "MANUAL_CONTROL":
             pass   # 接受，不跑物理（並發手動控制的路由測試足矣）
+        # ── 任務上傳握手（issue 013-B：讓假機能驗執行器的 upload 相）──────
+        elif t == "MISSION_COUNT" and m.target_system == args.sysid:
+            mt = getattr(m, "mission_type", 0)
+            with lock:
+                st["mis_exp"], st["mis_recv"], st["mis_mt"] = m.count, [], mt
+            send_to(addr, enc.mission_request_int_encode(args.sysid, 1, 0, mt))
+        elif t == "MISSION_ITEM_INT" and m.target_system == args.sysid:
+            with lock:
+                st.setdefault("mis_recv", []).append(m)
+                nxt, exp, mt = len(st["mis_recv"]), st.get("mis_exp", 0), st.get("mis_mt", 0)
+            if nxt < exp:
+                send_to(addr, enc.mission_request_int_encode(args.sysid, 1, nxt, mt))
+            else:
+                with lock:
+                    st["mission"] = st["mis_recv"]      # 存為機上任務
+                send_to(addr, enc.mission_ack_encode(args.sysid, 1,
+                                                     M.MAV_MISSION_ACCEPTED, mt))
+                print(f"  sysid{args.sysid} MISSION 上傳 {exp} 項 ACCEPTED", flush=True)
+        elif t == "MISSION_REQUEST_LIST" and m.target_system == args.sysid:
+            mt = getattr(m, "mission_type", 0)
+            with lock:
+                n = len(st.get("mission", []))
+            send_to(addr, enc.mission_count_encode(args.sysid, 1, n, mt))
+        elif t == "MISSION_REQUEST_INT" and m.target_system == args.sysid:
+            with lock:
+                items = st.get("mission", [])
+                it = items[m.seq] if m.seq < len(items) else None
+            if it is not None:                          # 回讀：原樣 echo 回存下的項
+                send_to(addr, enc.mission_item_int_encode(
+                    args.sysid, 1, it.seq, it.frame, it.command, it.current,
+                    it.autocontinue, it.param1, it.param2, it.param3, it.param4,
+                    it.x, it.y, it.z, getattr(it, "mission_type", 0)))
+        elif t == "MISSION_ACK":
+            pass   # 回讀結束，無需動作

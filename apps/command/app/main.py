@@ -22,7 +22,7 @@ from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 
-from . import mav, plan_check
+from . import group_exec, mav, plan_check
 from .config import settings
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(name)s %(message)s")
@@ -30,6 +30,7 @@ log = logging.getLogger("command")
 
 router: mav.MavRouter | None = None
 pool: asyncpg.Pool | None = None
+executor: "group_exec.GroupExecutor | None" = None
 
 # waypoints.action → MAV_CMD（舊資料沒存原始 command 時的推回）
 ACTION_CMD = {"takeoff": 22, "waypoint": 16, "land": 21, "rtl": 20}
@@ -115,7 +116,7 @@ async def _run(sysid: int, action: str, fn, *args, params=None):
 
 
 async def lifespan(app):
-    global router, pool
+    global router, pool, executor
     pool = await asyncpg.create_pool(settings.database_url, min_size=1, max_size=3)
     await pool.execute("""CREATE TABLE IF NOT EXISTS command_log (
         id BIGSERIAL PRIMARY KEY, time TIMESTAMPTZ NOT NULL DEFAULT now(),
@@ -124,9 +125,14 @@ async def lifespan(app):
     # 單埠多機的身分對應欄位（issues/011；backend migrate 也建，這裡防序）
     await pool.execute("ALTER TABLE drones ADD COLUMN IF NOT EXISTS mav_sysid INT")
     await pool.execute("ALTER TABLE drones ADD COLUMN IF NOT EXISTS current_mission_id UUID")
+    # 群組執行期即時態欄位（issue 013-B；backend migrate 也建，這裡防序）
+    await pool.execute("ALTER TABLE group_assignments ADD COLUMN IF NOT EXISTS error JSONB")
+    await pool.execute(
+        "ALTER TABLE group_assignments ADD COLUMN IF NOT EXISTS updated_at TIMESTAMPTZ")
     router = mav.MavRouter(settings.command_mavlink_url,
                            heartbeat=settings.enable_commands)
     router.start()
+    executor = group_exec.GroupExecutor(router, pool, build_items, _audit, _live)
     log.info("command 服務啟動：%s（enable_commands=%s，sysid=%d）",
              settings.command_mavlink_url, settings.enable_commands, mav.GCS_SYSID)
     yield
@@ -341,3 +347,43 @@ async def mission_upload(sysid: int, body: UploadIn):
     await pool.execute("UPDATE drones SET current_mission_id = $1 WHERE mav_sysid = $2",
                        body.mission_id, sysid)
     return {**res, "check": report}
+
+
+# ── 群組任務指令層（issue 013-B；doc/group-missions-design.md §7）────────
+# 資料層（建群組/預檢/材料化）在 backend :38000 的 /api/groups；這裡是指令層：
+# 兩階段執行＋全撤＋群組 RTL。逐台能力 gate 在 executor 內（嚴格 gate＝唯一真相）。
+@app.post("/api/command/group/{group_id}/execute", status_code=202)
+async def group_execute(group_id: str):
+    """兩階段提交（§3）。**非同步啟動**：嚴格 gate 通過→立即回 202＋群組 handle，
+    背景序列跑逐台 upload→arm→start，即時態逐步寫 DB（前端輪詢 backend GET）。
+    gate 失敗→同步 409＋逐台原因（未啟動序列）。中止只能透過 abort，不是斷 HTTP。"""
+    _require_enabled()
+    r = await executor.execute(group_id)
+    if r.get("error") == "not_found":
+        raise HTTPException(404, "無此群組")
+    if r.get("error") == "bad_status":
+        raise HTTPException(409, {"msg": f"群組狀態為 {r['status']}，非可執行狀態", **r})
+    if r.get("rejected"):
+        raise HTTPException(409, {"msg": "嚴格 gate 未通過，未啟動序列", **r})
+    return r
+
+
+@app.post("/api/command/group/{group_id}/abort")
+async def group_abort(group_id: str):
+    """操作員主動全撤（緊急全撤鈕）。冪等、依當前 phase 自動選動作：
+    起飛前→disarm 已解鎖者；已起飛→RTL。與序列偵測失敗自動全撤同終態。"""
+    _require_enabled()
+    r = await executor.abort(group_id)
+    if r.get("error") == "not_found":
+        raise HTTPException(404, "無此群組")
+    return r
+
+
+@app.post("/api/command/group/{group_id}/rtl")
+async def group_rtl(group_id: str):
+    """群組 RTL-all（空中緊急）。冪等。"""
+    _require_enabled()
+    r = await executor.rtl(group_id)
+    if r.get("error") == "not_found":
+        raise HTTPException(404, "無此群組")
+    return r

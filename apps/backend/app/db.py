@@ -58,6 +58,11 @@ async def migrate() -> None:
         phase TEXT NOT NULL DEFAULT 'idle',              -- 見 §7.1 assignment.phase
         PRIMARY KEY (group_id, drone_id))""")
     await pool.execute("ALTER TABLE flight_sessions ADD COLUMN IF NOT EXISTS group_id UUID")
+    # issue 013-B：執行期即時態。phase 已在建表；補 error（異常態的
+    # {msg,hint,autopilot_notes}，§7.1）與 updated_at（前端 1s 輪詢看新鮮度）。
+    await pool.execute("ALTER TABLE group_assignments ADD COLUMN IF NOT EXISTS error JSONB")
+    await pool.execute(
+        "ALTER TABLE group_assignments ADD COLUMN IF NOT EXISTS updated_at TIMESTAMPTZ")
 
 
 async def drone_for_sysid(sysid: int) -> tuple[str, str]:
