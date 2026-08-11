@@ -82,7 +82,10 @@ export default function SidePanel() {
           <Metric label="模式" value={live?.flight_mode ?? "—"} />
           <Metric label="橫滾 Roll" value={fmt(live?.roll)} unit="°" />
           <Metric label="俯仰 Pitch" value={fmt(live?.pitch)} unit="°" />
-          <Metric label="航向" value={fmt(live?.heading, 0)} unit="°" />
+          {/* 360°＝0°：四捨五入後也可能碰到 360（359.6°），一律正規化 */}
+          <Metric label="航向"
+            value={live?.heading == null ? "—" : (Math.round(live.heading) % 360).toString()}
+            unit="°" />
         </div>
       </div>
 

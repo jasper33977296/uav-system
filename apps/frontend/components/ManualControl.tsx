@@ -206,7 +206,7 @@ export default function ManualControl({ sid, lockedReason = null }: {
             {busy ? "⋯" : "啟用手動控制"}
           </button>
         )}
-        {enabled && <span className="manual-live">● POSCTL · 10Hz 串流中</span>}
+        {enabled && <span className="manual-live">● 手動控制中 · 10Hz 串流</span>}
       </div>
       {lockedReason && <p className="hint-line">· 手動：{lockedReason}</p>}
       {enabled ? (
@@ -217,9 +217,10 @@ export default function ManualControl({ sid, lockedReason = null }: {
             onMove={(dx, dy) => { joyRef.current.x = dy; joyRef.current.y = dx; }} />
         </div>
       ) : !lockedReason && (
+        // 動作語彙（語彙分層）：模式名（POSCTL 等）只在狀態列按機型解碼顯示
         <p className="hint-line">
-          切 POSCTL 以搖桿／鍵盤直接操控；放開回中＝定點懸停。
-          失焦或關頁自動懸停並於 2 秒後切 Hold（後端 deadman）。
+          切入手動位置模式，以搖桿／鍵盤直接操控；放開回中＝定點懸停。
+          失焦或關頁自動懸停並於 2 秒後自動切 Hold（後端 deadman）。
         </p>
       )}
       {err && <div className="cmd-result err">{err}</div>}
