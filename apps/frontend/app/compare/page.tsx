@@ -84,7 +84,8 @@ function LineChart({ series, xMax, unit, xUnit, xMin = 0 }: {
   series: Series[]; xMax: number; unit: string; xUnit: string; xMin?: number;
 }) {
   // T=18：Y 軸單位獨立一行（原 T=12 時單位與最上排刻度數字疊字）
-  const W = 640, H = 240, L = 44, R = 86, T = 18, B = 26;
+  // R=96：右邊留白放標籤欄——時間標籤固定排在繪圖區外，不再壓到線
+  const W = 640, H = 240, L = 44, R = 96, T = 18, B = 26;
   const ref = useRef<SVGSVGElement>(null);
   const [hover, setHover] = useState<number | null>(null);
 
@@ -121,14 +122,16 @@ function LineChart({ series, xMax, unit, xUnit, xMin = 0 }: {
       (b, p) => (b === null || Math.abs(p.x - x) < b.dx ? { dx: Math.abs(p.x - x), p } : b),
       null);
 
-  // 線尾直接標籤：多條線終點高度相近時會疊字（CDF 每條都在 100% 收尾，
-  // 必疊）——照終點高度排序後以 12px 最小間距往下推開，超出下緣整串上移
+  // 線尾標籤（2026-08-11 改版）：文字**固定排在繪圖區右側留白**、不進
+  // 繪圖區（原本跟著線尾座標放，會壓到其他線）；線尾畫色點、標籤前也帶
+  // 同色點，靠色點對應「哪條線是哪個時間」。高度相近時照舊以 12px 最小
+  // 間距往下推開、超出下緣整串上移
   const LB = 12;
   const endLabels = series.flatMap((s) => {
       const last = s.points[s.points.length - 1];
       return last
         ? [{ id: s.id, label: s.label, color: s.dim ? "var(--muted)" : s.color,
-             x: sx(last.x) + 5, ly: sy(last.y) + 3 }]
+             ex: sx(last.x), ey: sy(last.y), ly: sy(last.y) + 3 }]
         : [];
     }).sort((a, b) => a.ly - b.ly);
   for (let i = 1; i < endLabels.length; i++) {
@@ -163,8 +166,12 @@ function LineChart({ series, xMax, unit, xUnit, xMin = 0 }: {
             strokeLinejoin="round" />
         ))}
         {endLabels.map((e) => (
-          <text key={e.id} x={e.x} y={e.ly}
-            className="dlabel" fill={e.color}>{e.label}</text>
+          <g key={e.id}>
+            <circle cx={e.ex} cy={e.ey} r={3} fill={e.color} />
+            <circle cx={W - R + 8} cy={e.ly - 3.5} r={2.5} fill={e.color} />
+            <text x={W - R + 14} y={e.ly}
+              className="dlabel" fill={e.color}>{e.label}</text>
+          </g>
         ))}
         {hover !== null && (
           <line x1={sx(hover)} x2={sx(hover)} y1={T} y2={H - B} className="xhair" />
@@ -388,7 +395,9 @@ export default function Compare() {
             )}
             {loaded.length > 0 && path && (
               <div className="card">
-                <h4>{mUnit.label} vs 沿線里程</h4>
+                <h4>路徑訊號圖（{mUnit.label}）
+                  <span className="h3-note">x 軸＝沿計畫路徑里程</span>
+                </h4>
                 <LineChart series={chainSeries} xMax={path.total}
                   unit={mUnit.unit} xUnit="m" />
                 {legend}
