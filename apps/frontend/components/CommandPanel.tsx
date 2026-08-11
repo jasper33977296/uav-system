@@ -9,6 +9,7 @@
  */
 import { useEffect, useRef, useState } from "react";
 
+import ManualControl from "@/components/ManualControl";
 import { API, COMMAND_API } from "@/lib/signal";
 import { useUavStore } from "@/lib/store";
 
@@ -177,9 +178,7 @@ export default function CommandPanel() {
         <span className="name">任務控制</span>
         {!health.enabled && <span className="meta">未啟用</span>}
         {health.enabled && sid && (
-          <span className="meta">
-            sysid {sid} · {armed ? "已解鎖" : "待機"} · {live?.flight_mode ?? "—"}
-          </span>
+          <span className="meta">sysid {sid} · {armed ? "已解鎖" : "待機"}</span>
         )}
         {health.enabled && !sid && <span className="meta">未看到機</span>}
         <span className="spacer" />
@@ -197,44 +196,37 @@ export default function CommandPanel() {
 
       {open && health.enabled && (
         <div className="cmd-body">
-          {live && (
-            <div className={`cmd-ready ${live.ready ? "ok" : "warn"}`}>
-              {live.ready
-                ? <>✅ Ready to fly（PX4 預檢通過{live.landed_state === "in_air" ? "·飛行中" : ""}）</>
-                : <>
-                    ❌ 未就緒{live.mav_state ? `（${live.mav_state}）` : ""}
-                    {(live.not_ready_reasons ?? []).map((r, i) => (
-                      <div className="hint-line" key={i}>· {r}</div>
-                    ))}
-                  </>}
-            </div>
-          )}
-          {live && (
-            <div className="hint-line">
-              GPS fix {live.gps_fix ?? "—"}（需≥3）·
-              衛星 {live.satellites ?? "—"} 顆 · 電量 {live.battery_pct ?? "—"}%
-              {live.landed_state ? ` · ${live.landed_state}` : ""}
-            </div>
-          )}
+          {/* 狀態：就緒/模式/GPS/電量一行看完；未就緒原因才逐條展開 */}
+          <div className="cmd-status">
+            <span className={live?.ready ? "st-ok" : "st-warn"}>
+              {live ? (live.ready ? "● 就緒" : "● 未就緒") : "● 無遙測"}
+            </span>
+            <span>{live?.flight_mode ?? "—"}</span>
+            <span>GPS {live?.gps_fix ?? "—"} · {live?.satellites ?? "—"}顆</span>
+            <span>電量 {live?.battery_pct ?? "—"}%</span>
+          </div>
+          {live && !live.ready && (live.not_ready_reasons ?? []).map((r, i) => (
+            <div className="hint-line" key={i}>· {r}</div>
+          ))}
           {sysids.length > 1 && (
             <div className="cmd-row">
               {sysids.map((s) => (
                 <button key={s}
-                  className={`btn-plain btn-sm ${s === sid ? "chip-on" : ""}`}
+                  className={`btn-plain btn-sm chip-btn ${s === sid ? "chip-on" : ""}`}
                   onClick={() => setSysid(s)}>sysid {s}</button>
               ))}
             </div>
           )}
 
+          <div className="cmd-sec">任務</div>
           <div className="cmd-row">
             <select value={missionId} onChange={(e) => setMissionId(e.target.value)}>
               <option value="">選擇任務⋯</option>
               {missions.map((m) => <option key={m.id} value={m.id}>{m.name}</option>)}
             </select>
-            {btn("上傳", "上傳到機", "/mission/upload",
+            {btn("上傳", "上傳", "/mission/upload",
                  { disabled: !missionId, body: { mission_id: missionId } })}
           </div>
-
           {/* 起飛→任務：實戰教訓——地面直接啟動任務會失敗，須先到高度。
               一鍵序列：解鎖→起飛→等高度到達→切 MISSION */}
           <div className="cmd-row">
@@ -242,24 +234,28 @@ export default function CommandPanel() {
               <input type="number" min={3} max={100} step={1} value={alt}
                 onChange={(e) => setAlt(Number(e.target.value) || 10)} /> m
             </label>
-            {btn("起飛", "起飛", "/takeoff", { confirm: true, body: { alt } })}
             {btn("起飛→任務", "起飛→任務", "/mission/fly",
                  { confirm: true,
                    body: { mission_id: missionId || undefined, takeoff_alt: alt } })}
+            {btn("啟動任務", "啟動任務", "/mission/start", { confirm: true })}
           </div>
 
+          <div className="cmd-sec">飛行</div>
           <div className="cmd-row">
             {armed
               ? btn("上鎖", "上鎖", "/disarm", { confirm: true, danger: true })
               : btn("解鎖", "解鎖", "/arm", { confirm: true })}
-            {btn("啟動任務", "啟動任務（已在空中時）", "/mission/start", { confirm: true })}
+            {btn("起飛", "起飛", "/takeoff", { confirm: true, body: { alt } })}
           </div>
-
           <div className="cmd-row cmd-emergency">
             {btn("RTL", "RTL 返航", "/mode/rtl", { danger: true })}
             {btn("Hold", "Hold 懸停", "/mode/hold")}
             {btn("降落", "原地降落", "/mode/land", { confirm: true, danger: true })}
           </div>
+
+          {/* 手動：虛擬搖桿（串流/deadman 邏輯在 ManualControl 內自理） */}
+          <div className="cmd-sec">手動</div>
+          <ManualControl sid={sid} />
 
           {result && (
             <div className={`cmd-result ${result.ok ? "ok" : "err"}`}>{result.text}</div>

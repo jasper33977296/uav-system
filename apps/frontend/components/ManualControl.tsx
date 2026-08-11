@@ -1,0 +1,214 @@
+"use client";
+/** 虛擬搖桿手動控制（GCS 取代階段 3）：POSCTL 直接操控。
+ *
+ * 安全設計（與 command 服務的 deadman 配合，SITL 實測 ~12Hz 驗證）：
+ *   - 啟用期間以 10Hz 連續串流設定點（含中位）——後端 0.4s 沒收到就回中位
+ *     （懸停）、2s 沒收到自動切 Hold；瀏覽器當掉／網路斷線都安全收場。
+ *     curl 級的低速率會被 deadman 判中位而「不動」，串流頻率不能降。
+ *   - 視窗失焦、分頁隱藏、元件卸載：立即停止串流並呼叫 manual/stop
+ *   - 預設停用；啟用鈕紅色警示；啟用流程 manual/start（先送中位再切 POSCTL）
+ *
+ * 軸向（皆 -1..1）：x=俯仰(前+) y=橫滾(右+) z=油門(上+，0=定高) r=偏航(右+)
+ * 左搖桿／W S A D＝油門＋偏航；右搖桿／方向鍵＝俯仰＋橫滾。
+ */
+import { useEffect, useRef, useState } from "react";
+
+import { COMMAND_API } from "@/lib/signal";
+
+const RATE_MS = 100;  // ≥10Hz（後端 deadman 0.4s）
+const KB_GAIN = 0.5;  // 鍵盤按住的軸偏移：滿舵太猛，半舵夠用且可與搖桿疊加
+
+const clamp = (v: number) => Math.max(-1, Math.min(1, v));
+
+function Joystick({ label, sub, onMove }: {
+  label: string; sub: string;
+  onMove: (dx: number, dy: number) => void;  // dx 右+、dy 上+，皆 -1..1
+}) {
+  const padRef = useRef<HTMLDivElement>(null);
+  const draggingRef = useRef(false);
+  const [knob, setKnob] = useState({ dx: 0, dy: 0 });
+
+  const apply = (dx: number, dy: number) => { setKnob({ dx, dy }); onMove(dx, dy); };
+  const fromEvent = (e: React.PointerEvent) => {
+    const r = padRef.current!.getBoundingClientRect();
+    let dx = ((e.clientX - r.left) / r.width) * 2 - 1;
+    let dy = -(((e.clientY - r.top) / r.height) * 2 - 1);
+    const len = Math.hypot(dx, dy);
+    if (len > 1) { dx /= len; dy /= len; }   // 圓形限位
+    apply(dx, dy);
+  };
+
+  return (
+    <div className="joy">
+      <div className="joy-pad" ref={padRef}
+        onPointerDown={(e) => {
+          draggingRef.current = true;
+          (e.currentTarget as Element).setPointerCapture(e.pointerId);
+          fromEvent(e);
+        }}
+        onPointerMove={(e) => { if (draggingRef.current) fromEvent(e); }}
+        onPointerUp={() => { draggingRef.current = false; apply(0, 0); }}
+        onPointerCancel={() => { draggingRef.current = false; apply(0, 0); }}>
+        <div className="joy-knob" style={{
+          transform: `translate(calc(-50% + ${(knob.dx * 33).toFixed(1)}px),`
+            + ` calc(-50% + ${(-knob.dy * 33).toFixed(1)}px))`,
+        }} />
+      </div>
+      <span className="label">{label}</span>
+      <span className="sub">{sub}</span>
+    </div>
+  );
+}
+
+export default function ManualControl({ sid }: { sid: string | null }) {
+  const [enabled, setEnabled] = useState(false);
+  const [busy, setBusy] = useState(false);
+  const [err, setErr] = useState<string | null>(null);
+  const joyRef = useRef({ x: 0, y: 0, z: 0, r: 0 });
+  const keysRef = useRef(new Set<string>());
+  const enabledRef = useRef(false);
+  const sidRef = useRef<string | null>(sid);
+  useEffect(() => { enabledRef.current = enabled; }, [enabled]);
+
+  const postStop = (keepalive = false) => {
+    if (!sidRef.current) return;
+    fetch(`${COMMAND_API}/api/command/${sidRef.current}/manual/stop`,
+      { method: "POST", keepalive }).catch(() => {});
+  };
+
+  const stop = () => {   // 停止串流 → 後端結束手動並切 Hold
+    setEnabled(false);
+    keysRef.current.clear();
+    joyRef.current = { x: 0, y: 0, z: 0, r: 0 };
+    postStop();
+  };
+
+  // 換機（或機消失）不能帶著舊機的手動狀態：先對舊 sid 停手動再換
+  useEffect(() => {
+    if (enabledRef.current && sidRef.current !== sid) stop();
+    sidRef.current = sid;
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [sid]);
+
+  async function start() {
+    if (!sid) return;
+    setBusy(true);
+    setErr(null);
+    try {
+      // 約 0.5s 才回：後端先送中位 MANUAL_CONTROL 再切 POSCTL
+      const res = await fetch(`${COMMAND_API}/api/command/${sid}/manual/start`,
+        { method: "POST" });
+      if (!res.ok) {
+        const d = ((await res.json().catch(() => ({}))) as { detail?: unknown }).detail;
+        const msg = (d as { msg?: string } | undefined)?.msg;
+        setErr(typeof d === "string" ? d : msg ?? `啟用失敗（HTTP ${res.status}）`);
+      } else {
+        setEnabled(true);
+      }
+    } catch (e) {
+      setErr(`連線失敗：${e}`);
+    }
+    setBusy(false);
+  }
+
+  // 10Hz 設定點串流：啟用期間連續送（含中位）。持續送中位＝命令懸停並餵
+  // deadman——只有前端真的死掉（關頁/斷網）才輪到後端的自動中位與 Hold。
+  useEffect(() => {
+    if (!enabled) return;
+    const send = () => {
+      const k = keysRef.current;
+      const j = joyRef.current;
+      const kb = {
+        x: (k.has("ArrowUp") ? KB_GAIN : 0) - (k.has("ArrowDown") ? KB_GAIN : 0),
+        y: (k.has("ArrowRight") ? KB_GAIN : 0) - (k.has("ArrowLeft") ? KB_GAIN : 0),
+        z: (k.has("w") ? KB_GAIN : 0) - (k.has("s") ? KB_GAIN : 0),
+        r: (k.has("d") ? KB_GAIN : 0) - (k.has("a") ? KB_GAIN : 0),
+      };
+      fetch(`${COMMAND_API}/api/command/${sidRef.current}/manual`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          x: clamp(j.x + kb.x), y: clamp(j.y + kb.y),
+          z: clamp(j.z + kb.z), r: clamp(j.r + kb.r),
+        }),
+      }).catch(() => { /* 掉包交給後端 deadman */ });
+    };
+    send();
+    const t = setInterval(send, RATE_MS);
+    return () => clearInterval(t);
+  }, [enabled]);
+
+  // 失焦／分頁隱藏立即停用：操作者看不到畫面就不該在控
+  useEffect(() => {
+    if (!enabled) return;
+    const onBlur = () => stop();
+    const onVis = () => { if (document.hidden) stop(); };
+    window.addEventListener("blur", onBlur);
+    document.addEventListener("visibilitychange", onVis);
+    return () => {
+      window.removeEventListener("blur", onBlur);
+      document.removeEventListener("visibilitychange", onVis);
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [enabled]);
+
+  // 卸載（切頁）時仍在手動：keepalive 讓 stop 請求在拆頁後送得出去
+  useEffect(() => () => { if (enabledRef.current) postStop(true); }, []);
+
+  // 鍵盤：按住偏移、放開回中。打字目標（input/select）不攔，方向鍵防捲頁。
+  useEffect(() => {
+    if (!enabled) return;
+    const KEYS = new Set(["w", "s", "a", "d",
+      "ArrowUp", "ArrowDown", "ArrowLeft", "ArrowRight"]);
+    const norm = (e: KeyboardEvent) =>
+      e.key.length === 1 ? e.key.toLowerCase() : e.key;
+    const isTyping = (e: KeyboardEvent) => {
+      const t = e.target as HTMLElement | null;
+      return !!t && (t.tagName === "INPUT" || t.tagName === "SELECT"
+        || t.tagName === "TEXTAREA" || t.isContentEditable);
+    };
+    const down = (e: KeyboardEvent) => {
+      const k = norm(e);
+      if (!KEYS.has(k) || isTyping(e)) return;
+      e.preventDefault();
+      keysRef.current.add(k);
+    };
+    const up = (e: KeyboardEvent) => { keysRef.current.delete(norm(e)); };
+    window.addEventListener("keydown", down);
+    window.addEventListener("keyup", up);
+    return () => {
+      window.removeEventListener("keydown", down);
+      window.removeEventListener("keyup", up);
+      keysRef.current.clear();
+    };
+  }, [enabled]);
+
+  return (
+    <>
+      <div className="cmd-row">
+        {enabled ? (
+          <button className="btn-danger btn-sm" onClick={stop}>停用手動</button>
+        ) : (
+          <button className="btn-danger btn-sm" disabled={!sid || busy} onClick={start}>
+            {busy ? "⋯" : "啟用手動控制"}
+          </button>
+        )}
+        {enabled && <span className="manual-live">● POSCTL · 10Hz 串流中</span>}
+      </div>
+      {enabled ? (
+        <div className="joy-row">
+          <Joystick label="油門｜偏航" sub="W S｜A D"
+            onMove={(dx, dy) => { joyRef.current.z = dy; joyRef.current.r = dx; }} />
+          <Joystick label="俯仰｜橫滾" sub="↑ ↓｜← →"
+            onMove={(dx, dy) => { joyRef.current.x = dy; joyRef.current.y = dx; }} />
+        </div>
+      ) : (
+        <p className="hint-line">
+          切 POSCTL 以搖桿／鍵盤直接操控；放開回中＝定點懸停。
+          失焦或關頁自動懸停並於 2 秒後切 Hold（後端 deadman）。
+        </p>
+      )}
+      {err && <div className="cmd-result err">{err}</div>}
+    </>
+  );
+}

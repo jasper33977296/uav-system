@@ -337,6 +337,36 @@ body {
   border: 1px solid var(--hairline); border-radius: 6px; padding: 3px 6px;
 }
 
+/* 任務控制面板：分區標題與一行狀態列 */
+.cmd-sec {
+  font-size: 11px; font-weight: 600; color: var(--muted);
+  text-transform: uppercase; letter-spacing: 0.04em; margin-top: 2px;
+}
+.cmd-status {
+  display: flex; gap: 10px; flex-wrap: wrap; align-items: baseline;
+  font-size: 12.5px; color: var(--ink-2); font-variant-numeric: tabular-nums;
+}
+.cmd-status .st-ok { color: #0ca30c; font-weight: 600; }
+.cmd-status .st-warn { color: #e05e0e; font-weight: 600; }
+
+/* 虛擬搖桿（手動控制） */
+.joy-row { display: flex; gap: 12px; justify-content: space-around; padding: 4px 0; }
+.joy { display: flex; flex-direction: column; align-items: center; gap: 3px; }
+.joy-pad {
+  position: relative; width: 96px; height: 96px; border-radius: 50%;
+  background: var(--page); border: 1px solid var(--hairline);
+  touch-action: none; cursor: grab;
+}
+.joy-knob {
+  position: absolute; left: 50%; top: 50%; width: 30px; height: 30px;
+  border-radius: 50%; background: var(--surface); border: 1px solid var(--ink-2);
+  transform: translate(-50%, -50%); pointer-events: none;
+  box-shadow: 0 2px 6px rgba(0, 0, 0, 0.35);
+}
+.joy .label { font-size: 11px; color: var(--ink-2); }
+.joy .sub { font-size: 10px; color: var(--muted); }
+.manual-live { font-size: 12px; color: #e05e0e; }
+
 /* 航線比較頁 */
 .cmp-layout { display: grid; grid-template-columns: 300px 1fr; gap: 12px; margin-top: 12px; align-items: start; }
 .cmp-sessions { max-height: 75vh; overflow-y: auto; }
