@@ -92,6 +92,7 @@ export default function CommandPanel() {
   // 使用者反覆調整不在 DB 堆孤兒群組
   const discardDraft = () => {
     const st = useUavStore.getState();
+    st.setExecArmedUntil(0);   // 舊確認窗不得延用到新 draft（安全邊角）
     if (!st.draftGroup) return;
     fetch(`${API}/api/groups/${st.draftGroup.id}`, { method: "DELETE" }).catch(() => {});
     st.setDraftGroup(null);
@@ -120,15 +121,21 @@ export default function CommandPanel() {
 
   async function executeGroup() {
     if (!draftGroup) return;
-    // 兩段式（群組級一顆鈕）：變紅「確定起飛？」3.5s
-    if (!execConfirm) {
+    // 兩段式（群組級一顆鈕）：armed-until 存 store、**呼叫當下讀取**——
+    // 不經 closure/本地 state，任何 re-render 或重掛都清不掉確認窗
+    // （live 驗收真兇：confirm 態活不過兩擊之間的重置）
+    const st = useUavStore.getState();
+    const now = Date.now();
+    if (now > st.execArmedUntil) {
       console.debug("[013b] confirm armed");   // rig 取證：兩段式第一擊
-      setExecConfirm(true);
+      st.setExecArmedUntil(now + 3500);
+      setExecConfirm(true);                    // 純視覺（變紅）
       if (execTimer.current) clearTimeout(execTimer.current);
       execTimer.current = setTimeout(() => setExecConfirm(false), 3500);
       return;
     }
     console.debug("[013b] confirm fired");     // rig 取證：第二擊送出
+    st.setExecArmedUntil(0);
     setExecConfirm(false);
     setGroupBusy(true);
     setGateRejects(null);

@@ -88,6 +88,10 @@ interface UavStore {
   // 丟失時輪詢自癒，不依賴一次性 setState）
   runGroupId: string | null;
   setRunGroupId: (id: string | null) => void;
+  // 全部起飛的兩段式 armed-until（store＋呼叫當下讀取：confirm 窗存活
+  // 必須獨立於任何 re-render/重掛——live 驗收抓到窗跨 poll 邊界即被清）
+  execArmedUntil: number;
+  setExecArmedUntil: (t: number) => void;
   draftGroup: {
     id: string; name: string; mode: string;
     conflictOk: boolean;
@@ -136,6 +140,8 @@ export const useUavStore = create<UavStore>((set) => ({
   setFormationCfg: (p) => set((s) => ({ formationCfg: { ...s.formationCfg, ...p } })),
   runGroupId: null,
   setRunGroupId: (id) => set({ runGroupId: id }),
+  execArmedUntil: 0,
+  setExecArmedUntil: (t) => set({ execArmedUntil: t }),
   draftGroup: null,
   setDraftGroup: (g) => set({ draftGroup: g }),
   setLive: (t) =>
