@@ -33,7 +33,7 @@
 
 ## 修法建議
 
-分級設計提案見 [doc/3d-view-quality-proposal.md](../doc/3d-view-quality-proposal.md)：
+分級設計提案見 [doc/archive/3d-view-quality-proposal.md](../doc/archive/3d-view-quality-proposal.md)：
 P1 絲帶幾何修繕（join）→ P2 three.js 路徑層（圓管＋光照＋平滑）→
 P3 底圖/地形 opt-in（離線瓦片打包）。
 
@@ -49,6 +49,14 @@ P3 底圖/地形 opt-in（離線瓦片打包）。
 
 排程：P1 立即；P2/P3 為 medium，若 015/016 的前端工作因上機檢查結果
 啟動，優先序讓位。
+
+**P2 選型更新（2026-08-11）**：使用者追加反饋「顆粒感＋閃爍」後，
+工具評估（doc/archive/route-render-tool-eval.md）定案改採 **deck.gl PathLayer**
+（PM 附條件核可：self-host 零外連／效能不低於現行／與 three.js 球體層
+interop 實測）。原 three.js 圓管的**光照立體感正式移出範圍**——使用者
+未要求的加分項，不留懸念；interop 若阻斷則退回自建再議。
+閃爍根因（每 tick 整源 setData）另有 hotfix 先行：重建節流＋僅新增
+樣本時 rebuild。
 
 ## 解決方式
 

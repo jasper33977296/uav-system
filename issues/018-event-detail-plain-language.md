@@ -3,7 +3,7 @@
 - 狀態：open
 - 嚴重度：low
 - 位置：`apps/frontend`（事件流渲染）、可能涉及 backend 事件結構
-- 建立：2026-08-11（doc/ia-direction.md 定案 3 拆出）
+- 建立：2026-08-11（doc/archive/ia-direction.md 定案 3 拆出）
 
 ## 現象
 
@@ -24,6 +24,15 @@ main 4ebc8ab）：detail 帶 `{from_pci, to_pci, from_band, to_band, sinr}`
 「serving cell 換手：PCI {from_pci}（{from_band}）→ PCI {to_pci}（{to_band}）」。
 端到端驗證（實飛跨 gNB）：2026-08-11 UI/UX 以 test-flight.py 穿越飛行
 驗證中。
+
+## 追加子項：mode_change 的 origin 欄位（2026-08-11，後端設計定）
+
+RTL/LAND 模式變更時 detail 加 `origin`：`user_command`（command_log
+近 ~30s 有自家指令）／`failsafe`／`low_battery`（權威來源＝機上
+STATUSTEXT/Events）／判不出＝`auto`（不誆稱原因）。用途：簡約 UI 的
+異常浮出句「無人機自動返航中」只在非 user_command 時顯示。實作併
+事件批次（STATUSTEXT Phase A／Events Phase B 同一套關聯，單獨做會
+重工）；過渡期前端在 RTL 模式不顯示浮出句。
 
 ## 排程
 
