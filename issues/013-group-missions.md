@@ -1,9 +1,18 @@
 # 013 · 群組任務：群飛以 group 概念同時配置飛行路徑
 
-- 狀態：open
+- 狀態：功能面收官（2026-08-11）——013-A/B 完成並真機驗證；起飛 skew／RTL 錯開
+  兩項時序驗收留待多機模擬環境（§10.1，scope 討論中）
 - 嚴重度：medium（研究願景功能；QGC 做不到的部分）
-- 位置：`doc/gcs-replacement.md` §3（設計）；依賴 issue 012
+- 位置：`doc/gcs-replacement.md` §3、`doc/group-missions-design.md` §10 收官；依賴 issue 012
 - 建立：2026-08-10
+
+## 收官狀態（2026-08-11，詳見 design §10）
+
+- 013-A 資料模型＋統一路徑地面生成＋check_group：完成。
+- 013-B 執行器＋狀態機＋execute/abort/rtl：完成。in-process 14/14；前端真機確認輪過；
+  單真機時序驗過 alt-reached gating（爬升 0→10m 才切 MISSION）＋arm-ACK 細粒度
+  （arm 16ms／takeoff 8ms）＋prearm 失敗自動全撤＋RTL 落地。
+- 剩：起飛 skew／RTL 高度錯開（需 ≥2 真 PX4，併多機模擬環境收，見 design §10.1）。
 
 ## 需求
 

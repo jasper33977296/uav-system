@@ -165,3 +165,31 @@ UI 維持現狀（單機指令面板），不增認知負擔。
 | 4 | 013-C：submit_mission（併 019 MCP，實機 pending_approval） | 批3＋019 |
 
 **013 不建議跳過 011**（單埠多機路由基礎未驗，群組執行無意義）。
+
+## 10. 收官（2026-08-11）
+
+**013 宣告收官**。交付與驗證狀態：
+
+- **013-A**（資料模型＋統一路徑地面生成＋check_group）：完成。
+- **013-B**（兩階段執行器＋狀態機＋execute/abort/rtl）：完成。骨架 in-process 14/14；
+  前端**真機確認輪通過**（1真+2假：execute→逐台 phase→空中 abort→三台 RTL→全撤）；
+  **單真機時序驗收**：alt-reached gating 真爬升驗過（starting 期實際 0→10m、到 80% 才切
+  MISSION）、arm-ACK 細粒度（真 PX4 arm 16ms／takeoff 8ms／mode 12–16ms 單次 ACK）、
+  真機 prearm 失敗路徑（TEMPORARILY_REJECTED→prearm_failed→自動全撤）、RTL 落地。
+
+**剩兩項時序驗收在多機模擬環境做**（起飛 skew 實測、群組 RTL 高度錯開）：需 ≥2 台真
+PX4。**使用者 2026-08-11 裁決：多機模擬環境升為正式需求**（見下），非僅演練門——這兩項
+併入該環境交付時一起收（alt-gating 的同時起飛重構已入庫 commit 233d10e，屆時直接驗真雙機
+時序）。skew 已有 011 的 +25ms/台序列特徵、RTL 錯開是 materialized 任務內容可逐條檢查，
+故不擋 013-B 功能面收官。
+
+### 10.1 多機模擬環境（方向，scope 討論中）
+
+使用者 2026-08-11 提出方向：「模擬多台無人機**同時操控與資料蒐集**」，將成為下一條主線。
+**規模/保真度/路徑（N 台上限、bridge net＋埠重映 vs PX4 原生 multi-vehicle、逐台鏈路資料
+生成）由 PM 與使用者討論定案後正式派工**——此處僅記方向，未定稿。已知要點：各實例唯一
+MAV_SYS_ID、單埠 demux 接現有 backend/command；link_sim 需擴成逐台生成（否則僚機無研究
+資料）；起停腳本化；013-B 剩兩項時序（skew、RTL 錯開）併此環境收。
+
+> **011 收尾（swarm_sim 運動學僚機退役）**：使用者已裁決要做，但與多機模擬環境一併**暫緩、
+> 待 PM 與使用者定案**（退役順序：先斷前端群飛模擬 UI 入口、再拆 swarm_sim.py＋端點，avoid 500）。
