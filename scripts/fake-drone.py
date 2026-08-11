@@ -20,6 +20,7 @@
 """
 import argparse
 import math
+import signal
 import socket
 import sys
 import threading
@@ -91,6 +92,27 @@ def send_to(target, msg):
     sock.sendto(msg.pack(enc), target)
     enc.seq = (enc.seq + 1) % 256
 
+
+def _graceful_exit(signum, frame):
+    """收 SIGTERM：先送幾顆 disarmed 心跳讓地面站看到 disarm→關架次，再退。
+    避免「armed 假機被殺→backend 沒看到 disarm→殭屍 session」（2026-08-11 事故）。
+    teardown 腳本用 SIGTERM（非 -9）就能乾淨歸零。"""
+    with lock:
+        st["armed"] = False
+        st["alt_target"] = 0.0
+        cm = st["custom_mode"]
+    for _ in range(3):
+        try:
+            send_all(enc.heartbeat_encode(M.MAV_TYPE_QUADROTOR, M.MAV_AUTOPILOT_PX4,
+                     M.MAV_MODE_FLAG_CUSTOM_MODE_ENABLED, cm, M.MAV_STATE_STANDBY))
+        except Exception:
+            pass
+        time.sleep(0.1)
+    print(f"  sysid{args.sysid} 收 SIGTERM：已送 disarm，退出", flush=True)
+    sys.exit(0)
+
+
+signal.signal(signal.SIGTERM, _graceful_exit)
 
 threading.Thread(target=sender, daemon=True).start()
 print(f"假機 sysid={args.sysid} 上線：→ {args.gs}:{args.data_port}/{args.cmd_port}",
