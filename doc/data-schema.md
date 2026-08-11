@@ -49,6 +49,11 @@ max_alt、avg/min SINR、avg RTT、干擾區內取樣數／總取樣數。
 後補欄位：
 - `note TEXT`（比較頁 v3）：架次自訂備註，使用者標實驗條件（如「開干擾器那趟」）；
   `PATCH /api/sessions/{id}` 設定（空字串／null＝清除），`GET /api/sessions` 帶回。
+- `origin TEXT`（'research'/'test'/'unknown'，測試殘留治理，PM 定案標記不刪）：
+  回填見 `scripts/backfill-session-origin.sql`（信號優先序：X-Client 測試類 > 假機架次
+  > 零樣本；不明留 'unknown' 不強標）；前向由 `create_session` 依近 60s 的測試類 client
+  自動標 'test'。`GET /api/sessions` 預設隱藏 test（`include_test=true` 顯示全部）。
+  NULL 視為 'unknown'。**進一步刪除由使用者審過分布後自己決定**。
 
 ### `drones`
 

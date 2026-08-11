@@ -65,6 +65,10 @@ async def migrate() -> None:
         "ALTER TABLE group_assignments ADD COLUMN IF NOT EXISTS updated_at TIMESTAMPTZ")
     # 架次自訂備註（使用者要標實驗條件，如「開干擾器那趟」）：短文字，PATCH 可改
     await pool.execute("ALTER TABLE flight_sessions ADD COLUMN IF NOT EXISTS note TEXT")
+    # 架次來源分類（'research'/'test'/'unknown'）：測試殘留混研究庫的治理（PM 定案：
+    # 標記不刪除）。預設 NULL＝未定＝API 視為 'unknown'（誠實：不確定就說不確定）。
+    # 回填見 scripts/backfill-session-origin.sql；前向由 create_session 依觸發 client 標。
+    await pool.execute("ALTER TABLE flight_sessions ADD COLUMN IF NOT EXISTS origin TEXT")
 
 
 async def drone_for_sysid(sysid: int) -> tuple[str, str]:
@@ -159,12 +163,21 @@ async def create_session(drone_id: str, link_mission: bool = True,
     語意是「操作員宣告要飛的那條」。回放頁據此疊預計路徑。"""
     # 綁定序（issue 020，任務↔架次因果鏈）：明示 mission_id > 該機當前任務
     # （command 上傳時設 drones.current_mission_id，可靠事實源）> is_active 後備
+    # 前向 origin 標記：該機 sysid 近 60s 有測試類 client（rig/test/acceptance）的
+    # command_log → 'test'；否則 NULL（＝unknown，可由 backfill 再判）。用 command_log
+    # 相關性、不做跨服務 drone 欄位 plumbing（會 racy）。與 backfill 同一判準。
     row = await pool.fetchrow(
-        """INSERT INTO flight_sessions (drone_id, started_at, mission_id)
+        """INSERT INTO flight_sessions (drone_id, started_at, mission_id, origin)
            VALUES ($1, now(), COALESCE(
                    $3::uuid,
                    (SELECT current_mission_id FROM drones WHERE id = $1),
-                   CASE WHEN $2 THEN (SELECT id FROM missions WHERE is_active LIMIT 1) END))
+                   CASE WHEN $2 THEN (SELECT id FROM missions WHERE is_active LIMIT 1) END),
+                   (CASE WHEN EXISTS (
+                       SELECT 1 FROM command_log c
+                       WHERE c.sysid = (SELECT mav_sysid FROM drones WHERE id = $1)
+                         AND c.client ~* '(rig|test|acceptance)'
+                         AND c.time > now() - interval '60 seconds'
+                   ) THEN 'test' END))
            RETURNING id""",
         drone_id, link_mission, mission_id,
     )

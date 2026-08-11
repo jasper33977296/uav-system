@@ -194,13 +194,19 @@ async def delete_group(group_id: str):
 
 @router.get("/sessions")
 async def list_sessions(limit: int = 50, mission_id: str | None = None,
-                        since: str | None = None, min_samples: int | None = None):
-    """架次清單。可選 mission_id（綁定任務）／since（ISO 時間窗）／min_samples。
+                        since: str | None = None, min_samples: int | None = None,
+                        include_test: bool = False):
+    """架次清單。可選 mission_id（綁定任務）／since（ISO 時間窗）／min_samples／include_test。
 
     `min_samples`：只回鏈路樣本數 ≥ 此值的架次（場域訊號頁用，避免空/測試殘留架次
     佔滿載入窗——空架次不是「飛行」，誠實原則）。用架次結束時算好的 summary.samples_total
-    篩，不掃 link_metrics；未結束（summary NULL）視為 0、min_samples≥1 時自然排除。"""
+    篩，不掃 link_metrics；未結束（summary NULL）視為 0、min_samples≥1 時自然排除。
+
+    `include_test`：預設 False＝隱藏 origin='test' 的架次（測試殘留混研究庫的治理；
+    見 backfill-session-origin.sql）；True 顯示全部。'unknown'／'research'／NULL 一律顯示。"""
     conds, args = [], []
+    if not include_test:
+        conds.append("COALESCE(s.origin, 'unknown') <> 'test'")
     if mission_id:
         args.append(mission_id)
         conds.append(f"s.mission_id = ${len(args) + 1}")
