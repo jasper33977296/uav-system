@@ -765,6 +765,18 @@ a:focus-visible, button:focus-visible, input:focus-visible, select:focus-visible
   border: 1px solid var(--hairline); border-radius: 6px; padding: 2px 4px;
 }
 
+/* v4 場域訊號頁（/compare 重定義為全幅地圖） */
+.field-col {
+  position: absolute; top: 12px; right: 12px; z-index: 30;
+  display: flex; flex-direction: column; gap: 8px; width: 300px;
+}
+.field-panel { position: relative; width: 100%; }
+.field-card { padding: 12px; }
+.field-empty {
+  position: absolute; left: 50%; top: 45%; transform: translate(-50%, -50%);
+  z-index: 5; font-size: 13px;
+}
+
 /* v3 場域弱區分析 */
 .heatmap { width: 100%; height: auto; display: block; margin-top: 8px; background: var(--page); border-radius: 8px; }
 .hm-cell { cursor: pointer; }
