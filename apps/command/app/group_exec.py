@@ -90,6 +90,21 @@ class GroupExecutor:
         return await loop.run_in_executor(
             None, lambda: self.router.submit(fn, sysid, *args, timeout=timeout))
 
+    async def _submit_audited(self, sysid: int, action: str, fn, *args,
+                              timeout: float = 35.0):
+        """逐台指令＋留痕（指令史是實驗記錄的一部分）。群組執行器的每台
+        upload/arm/takeoff/mode 都寫 command_log，失敗一樣留痕、可事後追軌跡。"""
+        try:
+            res = await self._submit(fn, sysid, *args, timeout=timeout)
+        except Exception as e:
+            await self._audit(sysid, f"group:{action}", {}, "failed", str(e)[:400])
+            raise
+        ok = res.get("accepted", True) and res.get("verified", True)
+        await self._audit(sysid, f"group:{action}", {},
+                          "accepted" if ok else "rejected",
+                          json.dumps(res, default=str)[:400])
+        return res
+
     async def _items_for(self, mission_id: str):
         rows = await self.pool.fetch(
             "SELECT seq, lat, lon, alt, action, params FROM waypoints "
@@ -151,7 +166,8 @@ class GroupExecutor:
                 await self._set_phase(gid, m["drone_id"], "uploading")
                 try:
                     items = await self._items_for(m["mission_id"])
-                    await self._submit(mav.job_upload_mission, m["mav_sysid"], items)
+                    await self._submit_audited(m["mav_sysid"], "upload",
+                                               mav.job_upload_mission, items)
                     await self.pool.execute(
                         "UPDATE drones SET current_mission_id=$1 WHERE mav_sysid=$2",
                         m["mission_id"], m["mav_sysid"])
@@ -166,7 +182,8 @@ class GroupExecutor:
                     return
                 await self._set_phase(gid, m["drone_id"], "arming")
                 try:
-                    res = await self._submit(mav.job_command, m["mav_sysid"], 400, [1.0])
+                    res = await self._submit_audited(m["mav_sysid"], "arm",
+                                                     mav.job_command, 400, [1.0])
                     if not res.get("accepted"):
                         raise mav.CommandError(f"arm 被拒（{res.get('result')}）")
                     await self._set_phase(gid, m["drone_id"], "armed")
@@ -185,10 +202,11 @@ class GroupExecutor:
                     amsl = (ground_amsl + alt_rel) if ground_amsl is not None else alt_rel
                     # NAV_TAKEOFF：param7=AMSL、經緯/偏航 NaN=原地。[收尾] 真機逐台
                     # 地面海拔＋等到達高度 gating（單機 mission_fly 的教訓），需 per-sysid alt。
-                    await self._submit(mav.job_command, m["mav_sysid"], 22,
-                                       [0.0, 0.0, 0.0, float("nan"), float("nan"),
-                                        float("nan"), amsl])
-                    await self._submit(mav.job_set_mode, m["mav_sysid"], "mission")
+                    await self._submit_audited(
+                        m["mav_sysid"], f"takeoff:{alt_rel:.0f}m", mav.job_command, 22,
+                        [0.0, 0.0, 0.0, float("nan"), float("nan"), float("nan"), amsl])
+                    await self._submit_audited(m["mav_sysid"], "mode:mission",
+                                               mav.job_set_mode, "mission")
                     await self._set_phase(gid, m["drone_id"], "flying")
                 except Exception as e:
                     # 空中單機失敗：該台 RTL、其他續飛 → group partial（§3）
@@ -223,7 +241,8 @@ class GroupExecutor:
 
     async def _member_rtl(self, gid, m, error=None):
         try:
-            await self._submit(mav.job_set_mode, m["mav_sysid"], "rtl")
+            await self._submit_audited(m["mav_sysid"], "mode:rtl",
+                                       mav.job_set_mode, "rtl")
         except Exception:
             log.exception("member %s RTL 失敗", m["drone_id"])
         await self._set_phase(gid, m["drone_id"], "rtl", error)
@@ -240,11 +259,11 @@ class GroupExecutor:
                 continue
             try:
                 if ph in ("starting", "flying"):        # 可能在空中 → RTL（不可 disarm）
-                    await self._submit(mav.job_set_mode, sysid, "rtl")
+                    await self._submit_audited(sysid, "mode:rtl", mav.job_set_mode, "rtl")
                     await self._set_phase(gid, m["drone_id"], "rtl")
                     actions.append({"drone_id": m["drone_id"], "action": "rtl"})
                 elif ph in ("arming", "armed", "uploaded"):   # 確定在地面 → disarm
-                    await self._submit(mav.job_command, sysid, 400, [0.0])
+                    await self._submit_audited(sysid, "disarm", mav.job_command, 400, [0.0])
                     await self._set_phase(gid, m["drone_id"], "idle")
                     actions.append({"drone_id": m["drone_id"], "action": "disarm"})
                 # uploading／idle：無需動作
@@ -282,7 +301,8 @@ class GroupExecutor:
             if m["mav_sysid"] is None:
                 continue
             try:
-                await self._submit(mav.job_set_mode, m["mav_sysid"], "rtl")
+                await self._submit_audited(m["mav_sysid"], "mode:rtl",
+                                           mav.job_set_mode, "rtl")
                 await self._set_phase(gid, m["drone_id"], "rtl")
                 actions.append({"drone_id": m["drone_id"], "action": "rtl"})
             except Exception as e:
