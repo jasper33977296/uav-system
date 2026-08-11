@@ -20,6 +20,7 @@ export interface Telemetry {
   gps_fix: number | null; satellites: number | null;
   flight_mode: string | null; armed: boolean;
   autopilot?: string | null;         // "px4"|"ardupilot"|"unknown"（015 batch2）
+  mav_sysid?: number | null;         // 當下 sysid（選中機統一 ca0a472；null=非 MAVLink）
   link_state?: string | null;        // 機上鏈路狀態（ok/stale/lost）
   link_age_s?: number | null;        // 距最後一筆機上資料的秒數（失聯預警用）
   // 飛行就緒（QGC「Ready To Fly」同源訊號）

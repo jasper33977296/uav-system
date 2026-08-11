@@ -26,7 +26,6 @@ const CAP_LABELS: Record<CapKey, string> = {
   manual: "手動",
 };
 const AP_LABELS: Record<string, string> = { px4: "PX4", ardupilot: "ArduPilot" };
-const AP_SHORT: Record<string, string> = { px4: "PX4", ardupilot: "Ardu" };
 
 interface DroneHealth {
   age_s: number;
@@ -45,7 +44,6 @@ interface Mission { id: string; name: string }
 
 export default function CommandPanel() {
   const [health, setHealth] = useState<Health | "off" | null>(null);
-  const [sysid, setSysid] = useState<string | null>(null);
   const [missions, setMissions] = useState<Mission[]>([]);
   const [missionId, setMissionId] = useState("");
   const [busy, setBusy] = useState<string | null>(null);
@@ -142,10 +140,15 @@ export default function CommandPanel() {
   if (health === null) return null;
   if (health === "off") return null;           // 服務未部署/未連線：不佔版面
 
-  const sysids = Object.keys(health.drones);
-  const sid = sysid && sysids.includes(sysid) ? sysid : sysids[0] ?? null;
-  const dh = sid ? health.drones[sid] : null;
+  // 選中機統一（PM 案，後端定案 ca0a472）：sysid 由選中機的 WS 遙測即時
+  // 導出——側欄/地圖色點選誰，這裡就指揮誰，遙測與指令對象永遠同一台。
+  // WS 的 mav_sysid 是「當下事實」（DB 的持久值斷線後會漂移，不用）；
+  // null＝非 MAVLink 機＝無指令通道
+  const sid = live?.mav_sysid != null ? String(live.mav_sysid) : null;
+  const dh = sid ? health.drones[sid] ?? null : null;
   const armed = dh?.armed ?? null;
+  const noChannel = !!live && live.mav_sysid == null;
+  const unseen = !!sid && !dh;      // 有 sysid 但 command 服務還沒看到心跳
 
   // 四態推導：capabilities 缺席＝舊後端 → 退回現行全功能（feature-detect，
   // 前後端可獨立部署）；不在 healthz.drones 的機（無心跳）面板本來就不出現
@@ -240,9 +243,10 @@ export default function CommandPanel() {
             background: live.ready ? "var(--status-ok)" : "var(--status-serious)" }} />
         )}
         {!health.enabled && <span className="meta">未啟用</span>}
-        {health.enabled && !sid && <span className="meta">未看到機</span>}
+        {health.enabled && !live && <span className="meta">無遙測</span>}
+        {health.enabled && noChannel && <span className="meta">無指令通道</span>}
         <span className="spacer" />
-        {health.enabled && sid && !observeOnly && (
+        {health.enabled && sid && dh && !observeOnly && (
           <span onPointerDown={(e) => e.stopPropagation()}
             onPointerUp={(e) => e.stopPropagation()}>
             {(live?.landed_state === "in_air" || (live?.alt_rel ?? 0) > 2)
@@ -266,7 +270,11 @@ export default function CommandPanel() {
       {open && health.enabled && (
         <div className="cmd-body">
           {/* 狀態：就緒/模式/GPS/電量一行看完；未就緒原因才逐條展開 */}
+          {/* 明示對象機：遙測與指令按鈕永遠是同一台（選中機統一） */}
           <div className="cmd-status">
+            <span className="st-target">
+              {live?.drone_name ?? "—"}{sid ? `（sysid ${sid}）` : ""}
+            </span>
             <span className={live?.ready ? "st-ok" : "st-warn"}>
               {live ? (live.ready ? "● 就緒" : "● 未就緒") : "● 無遙測"}
             </span>
@@ -277,19 +285,15 @@ export default function CommandPanel() {
           {live && !live.ready && (live.not_ready_reasons ?? []).map((r, i) => (
             <div className="hint-line" key={i}>· {r}</div>
           ))}
-          {sysids.length > 1 && (
-            <div className="cmd-row">
-              {sysids.map((s) => {
-                const ap = health.drones[s].autopilot;
-                return (
-                  <button key={s}
-                    className={`btn-plain btn-sm chip-btn ${s === sid ? "chip-on" : ""}`}
-                    onClick={() => setSysid(s)}>
-                    sysid {s}{ap ? ` ·${AP_SHORT[ap] ?? "?"}` : ""}
-                  </button>
-                );
-              })}
+          {/* sysid chips 移除（選中機統一）：換機＝左上機隊色點／側欄，
+              全站單一「選中機」概念，不再有第二個選擇器 */}
+          {noChannel && (
+            <div className="hint-line">
+              此機無指令通道（非 MAVLink 機）——遙測與紀錄不受影響。
             </div>
+          )}
+          {unseen && (
+            <div className="hint-line">指令服務尚未看到此機（sysid {sid}）。</div>
           )}
 
           {/* 僅觀察（未驗證/不支援機型）：指令區整個換成鎖定橫幅——
@@ -304,7 +308,7 @@ export default function CommandPanel() {
             </div>
           )}
 
-          {!observeOnly && (<>
+          {!observeOnly && !noChannel && !unseen && !!dh && (<>
           <div className="cmd-sec">任務</div>
           <div className="cmd-row">
             <select value={missionId} onChange={(e) => setMissionId(e.target.value)}>
