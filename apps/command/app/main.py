@@ -84,6 +84,7 @@ def _require_capability(sysid: int, endpoint_key: str):
     if state != "ok":
         raise HTTPException(501, {
             "msg": f"{cap_key} 目前不可用（{state}）",
+            "hint": reasons.get(cap_key, ""),   # 前端 msg＋hint 解析直接顯示
             "autopilot": ap, "capability": cap_key, "state": state,
             "reason": reasons.get(cap_key, "")})
 
