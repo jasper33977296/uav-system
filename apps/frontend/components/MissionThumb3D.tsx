@@ -19,7 +19,7 @@ export default function MissionThumb3D({ wps, className = "" }: {
 }) {
   const clipId = useId();
   const [bearing, setBearing] = useState(-30);
-  const dragRef = useRef<{ x: number; b: number } | null>(null);
+  const dragRef = useRef<{ x: number; y: number; b: number } | null>(null);
   const movedRef = useRef(false);
 
   const pts = (wps ?? []).filter((w) => w.lat && w.lon);
@@ -72,21 +72,25 @@ export default function MissionThumb3D({ wps, className = "" }: {
       style={{ touchAction: "pan-y" }}
       onPointerDown={(e) => {
         movedRef.current = false;
-        dragRef.current = { x: e.clientX, b: bearing };
+        dragRef.current = { x: e.clientX, y: e.clientY, b: bearing };
         (e.currentTarget as Element).setPointerCapture(e.pointerId);
       }}
       onPointerMove={(e) => {
         const dr = dragRef.current;
         if (!dr) return;
         const dx = e.clientX - dr.x;
-        if (Math.abs(dx) > 3) movedRef.current = true;
+        // 位移門檻 5px（雙軸）：小抖動視為 click 放行（驗收修正）
+        if (Math.hypot(dx, e.clientY - dr.y) > 5) movedRef.current = true;
         setBearing(dr.b + dx * 0.8);
       }}
       onPointerUp={() => { dragRef.current = null; }}
       onPointerCancel={() => { dragRef.current = null; }}
       onClickCapture={(e) => {
-        // 拖曳結束的 click 不往上冒（父卡的選取/啟用行為不誤觸）
+        // 拖曳結束的 click 不往上冒（父卡的選取/啟用不誤觸）。
+        // 旗標**用過即清**：合成 click（無 pointerdown 前導）不會被
+        // 上一次拖曳的殘留旗標永久吞掉——「點縮圖選不了」的真兇
         if (movedRef.current) { e.preventDefault(); e.stopPropagation(); }
+        movedRef.current = false;
       }}>
       <defs>
         <clipPath id={clipId}><rect width="100" height="100" rx="6" /></clipPath>
