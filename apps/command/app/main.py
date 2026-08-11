@@ -70,6 +70,24 @@ def _require_enabled():
                                  "——這是刻意的安全 gate，部署時顯式開啟")
 
 
+# MAV_AUTOPILOT_PX4 = 12。模式設定/起飛序列/手動前置模式目前硬編碼 PX4 方言
+# （reference/gap-analysis.md、issue 015）；對 ArduPilot 會誤觸危險模式
+# （RTL→GUIDED、手動啟動→AUTO 跑機上任務）。跨自駕儀支援落地前，這些路徑
+# fail-closed 只放行 PX4——寧可拒絕也不誤飛。arm/disarm 與任務上傳是協定共通層，
+# 不在此限。
+def _require_px4(sysid: int):
+    ap = router.autopilot_of(sysid)
+    if ap is None:
+        raise HTTPException(409, f"sysid {sysid} 尚未收到心跳，無法確認自駕儀型別")
+    if ap != mav.M.MAV_AUTOPILOT_PX4:
+        raise HTTPException(501, {
+            "msg": "此指令目前僅支援 PX4 自駕儀",
+            "autopilot": int(ap),
+            "hint": "模式/起飛/手動控制硬編碼 PX4 方言，對 ArduPilot 會誤觸危險"
+                    "模式（RTL→GUIDED、手動→AUTO）；跨自駕儀支援見 issue 015，"
+                    "落地前對非 PX4 機拒發這些指令。"})
+
+
 async def _run(sysid: int, action: str, fn, *args, params=None):
     """執行 MAV 工作＋留痕。失敗一樣留痕——指令史是實驗記錄的一部分。"""
     _require_enabled()
@@ -138,6 +156,7 @@ async def disarm(sysid: int):
 async def set_mode(sysid: int, mode: str):
     if mode not in mav.PX4_MODES:
         raise HTTPException(422, f"mode 須為 {sorted(mav.PX4_MODES)}")
+    _require_enabled(); _require_px4(sysid)
     return await _run(sysid, f"mode:{mode}", mav.job_set_mode, mode)
 
 
@@ -199,6 +218,7 @@ async def manual_start(sysid: int):
 
     順序關鍵（PX4 雞生蛋）：POSCTL 需要「已存在的手動控制串流」才會
     engage——先送中位 MANUAL_CONTROL 建立串流，再切模式。"""
+    _require_px4(sysid)   # POSCTL＋deadman 降級是 PX4 方言（issue 015）
     router.set_manual(sysid, 0.0, 0.0, 0.0, 0.0)   # 起手中位＝懸停；先開串流
     await asyncio.sleep(0.5)                        # 讓幾筆 MANUAL_CONTROL 先出去
     return await _run(sysid, "manual_start", mav.job_set_mode, "position")
@@ -233,7 +253,7 @@ class UploadIn(BaseModel):
 async def takeoff(sysid: int, body: TakeoffIn):
     """監督式起飛：解鎖＋爬升到指定高度後自動懸停（PX4 自主執行）。
     取代「用 RC 手動飛到高度」的操作——連續操縱仍是 RC 的職權。"""
-    _require_enabled()
+    _require_enabled(); _require_px4(sysid)   # NAV_TAKEOFF 序列是 PX4 方言（issue 015）
     return await _do_takeoff(sysid, body.alt)
 
 
@@ -254,7 +274,7 @@ async def mission_fly(sysid: int, body: FlyIn):
     高度沒到就不切任務——序列在任何一步失敗都停在安全狀態
     （PX4 起飛後自動懸停），並回報卡在哪一步。
     """
-    _require_enabled()
+    _require_enabled(); _require_px4(sysid)   # 起飛序列＋AUTO.MISSION 是 PX4 方言
     steps = {}
     if body.mission_id:
         steps["upload"] = await mission_upload(sysid, UploadIn(mission_id=body.mission_id))

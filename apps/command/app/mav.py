@@ -83,6 +83,7 @@ class MavRouter(threading.Thread):
                 "age_s": round(now - d.get("seen_mono", now), 1),
                 "armed": d.get("armed"),
                 "custom_mode": d.get("custom_mode"),
+                "autopilot": d.get("autopilot"),   # MAV_AUTOPILOT_*（12=PX4）
             }
             for sysid, d in self.drones.items()
         }
@@ -182,6 +183,8 @@ class MavRouter(threading.Thread):
                 if msg.get_type() == "HEARTBEAT" and msg.type != M.MAV_TYPE_GCS:
                     d["armed"] = bool(msg.base_mode & M.MAV_MODE_FLAG_SAFETY_ARMED)
                     d["custom_mode"] = msg.custom_mode
+                    d["autopilot"] = msg.autopilot   # 飛安：模式指令是 PX4 方言
+                                                     # （issue 015／reference/gap-analysis.md）
                 elif msg.get_type() == "STATUSTEXT":
                     # PX4 的解釋（"Arming denied: ..."）——被拒時要能拿出來給人看。
                     # 實戰教訓：沒有這段文字，操作員只看到 result code 乾瞪眼
@@ -192,6 +195,11 @@ class MavRouter(threading.Thread):
     def texts_since(self, sysid: int, t0: float) -> list:
         d = self.drones.get(sysid) or {}
         return [txt for ts, txt in d.get("texts", []) if ts >= t0]
+
+    def autopilot_of(self, sysid: int):
+        """該機的 HEARTBEAT.autopilot（MAV_AUTOPILOT_*）；未見心跳時 None。"""
+        d = self.drones.get(sysid) or {}
+        return d.get("autopilot")
 
     def _sendto(self, sysid: int, encode_fn):
         """encode + 直接 sendto 該 sysid 的來源位址（不經 mavutil 的廣播式 write）。"""
