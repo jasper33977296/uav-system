@@ -51,6 +51,19 @@ export interface Telemetry {
   link: Partial<LinkMetrics>;
 }
 
+/** 機上資料 §2.8（014 Phase B 訊息登錄表）。後端契約落地前的暫定形：
+ * WS 廣播 {type:"msg_registry", drone_id, sensors, messages}，1–2Hz。
+ * fields＝該型別最新欄位值（方言原樣不翻譯）；未知型別 name=null。 */
+export interface RegistryMsg {
+  id: number;                  // MAVLink msgid
+  name?: string | null;        // 已知型別名；null＝未知 → UI 顯 #id
+  hz: number;
+  age_s: number;
+  fields?: Record<string, unknown> | null;
+}
+export interface SensorHealth { name: string; ok: boolean }
+export interface DroneRegistry { sensors: SensorHealth[]; messages: RegistryMsg[] }
+
 export interface UavEvent {
   id: number; time: string; severity: "info" | "warning" | "critical";
   type: string; detail: Record<string, unknown>;
@@ -71,6 +84,7 @@ interface UavStore {
   trails: Record<string, TrailPoint[]>;      // 每機各自的尾跡
   selectedId: string | null;                 // 側欄顯示哪台；null＝跟隨主機
   wsConnected: boolean;
+  registry: Record<string, DroneRegistry>;   // 機上資料 §2.8，鍵為 drone_id
   events: UavEvent[];
   sinrHistories: Record<string, number[]>;   // 每機 sparkline，各 120 筆
   // simple-first：專業數值面板是抽屜（預設關、點訊號格/▤ 開）
@@ -122,6 +136,7 @@ interface UavStore {
   setLive: (t: Telemetry) => void;
   select: (id: string) => void;
   setWsConnected: (v: boolean) => void;
+  setRegistry: (droneId: string, r: DroneRegistry) => void;
   pushEvent: (e: UavEvent, fold?: boolean) => void;
   seedEvents: (es: UavEvent[]) => void;
 }
@@ -133,6 +148,7 @@ export const useUavStore = create<UavStore>((set) => ({
   fleet: {},
   trails: {},
   wsConnected: false,
+  registry: {},
   events: [],
   sinrHistories: {},
   panelOpen: false,
@@ -189,6 +205,8 @@ export const useUavStore = create<UavStore>((set) => ({
   select: (id) =>
     set((s) => ({ selectedId: id, live: s.fleet[id] ?? s.live })),
   setWsConnected: (v) => set({ wsConnected: v }),
+  setRegistry: (droneId, r) =>
+    set((s) => ({ registry: { ...s.registry, [droneId]: r } })),
   // fold＝同句 STATUSTEXT 重複：就地替換同 id 那筆（count/時間更新、位置不動）；
   // 本地找不到（開頁晚於首播）就當新事件 append
   pushEvent: (e, fold = false) =>

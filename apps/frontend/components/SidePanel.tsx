@@ -1,6 +1,7 @@
 "use client";
 import { useEffect, useRef, useState } from "react";
 
+import OnboardDataCard from "@/components/OnboardData";
 import { EventsCard } from "@/components/SimpleHud";
 import { classifySinr } from "@/lib/signal";
 import { type ImuData, type Telemetry, useUavStore } from "@/lib/store";
@@ -275,6 +276,9 @@ export default function SidePanel() {
       {/* IMU 卡（§2.6，原專業數值卡改造）：就緒/模式/GPS 與面板狀態列重複
           已刪；機型 chip 移任務控制面板對象行；航向併入 Yaw */}
       <ImuCard live={live} />
+
+      {/* 機上資料（§2.8）：緊湊卡排事件卡上方；登錄表沒資料整卡不畫 */}
+      <OnboardDataCard />
 
       {/* 事件卡（使用者二次修訂）：住抽屜、IMU 卡下方 */}
       <EventsCard />
