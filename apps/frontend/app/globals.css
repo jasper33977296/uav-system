@@ -476,11 +476,14 @@ a:focus-visible, button:focus-visible, input:focus-visible, select:focus-visible
   border: 1px solid var(--hairline);
 }
 
-/* 異常 toast（ui-spec §2.2）：導覽下方中央、10s 或點擊消、附 ✕ */
+/* 異常 toast（ui-spec §2.2）：導覽下方、**地圖可視區**置中——以右上三件套
+   最大佔位（面板 300＋切換＋▤＋間距 ≈ 480px）扣除後的自由區為基準，
+   1366 窄幅不再壓到 ▤（2026-08-11 驗收發現）；寬度收窄可換行 */
 .hud-toast {
-  position: absolute; left: 50%; transform: translateX(-50%); top: 10px;
+  position: absolute; left: calc((100% - 480px) / 2); transform: translateX(-50%);
+  top: 10px; max-width: min(calc(100% - 512px), 560px);
   z-index: 40; font-size: 14px; padding: 8px 14px 8px 16px; border-radius: 10px;
-  background: var(--status-warn-bg); color: var(--status-warn); white-space: nowrap;
+  background: var(--status-warn-bg); color: var(--status-warn);
   border: none; cursor: pointer; display: flex; align-items: center; gap: 10px;
   box-shadow: 0 4px 16px rgba(0, 0, 0, 0.35);
 }
