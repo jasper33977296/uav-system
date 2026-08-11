@@ -50,6 +50,9 @@ interface UavStore {
   wsConnected: boolean;
   events: UavEvent[];
   sinrHistories: Record<string, number[]>;   // 每機 sparkline，各 120 筆
+  // simple-first：專業數值面板是抽屜（預設關、點訊號格/▤ 開）
+  panelOpen: boolean;
+  setPanelOpen: (v: boolean) => void;
   setLive: (t: Telemetry) => void;
   select: (id: string) => void;
   setWsConnected: (v: boolean) => void;
@@ -66,6 +69,8 @@ export const useUavStore = create<UavStore>((set) => ({
   wsConnected: false,
   events: [],
   sinrHistories: {},
+  panelOpen: false,
+  setPanelOpen: (v) => set({ panelOpen: v }),
   setLive: (t) =>
     set((s) => {
       const id = t.drone_id ?? "unknown";

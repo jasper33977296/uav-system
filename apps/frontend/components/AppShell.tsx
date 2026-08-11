@@ -5,11 +5,22 @@ import { usePathname } from "next/navigation";
 import { useUavStore } from "@/lib/store";
 import { useTelemetry } from "@/lib/useTelemetry";
 
+// 導覽 icon 化（simple-first）：文字語意放 title/aria-label，
+// 「UAV 監控」品牌字是頂欄唯一文字錨點
+const ic = (paths: React.ReactNode) => (
+  <svg width="18" height="18" viewBox="0 0 24 24" fill="none"
+    stroke="currentColor" strokeWidth="2" strokeLinecap="round"
+    strokeLinejoin="round" aria-hidden>{paths}</svg>
+);
 const TABS = [
-  { href: "/", label: "即時監控" },
-  { href: "/drones", label: "無人機" },
-  { href: "/missions", label: "路徑管理" },
-  { href: "/compare", label: "比較" },
+  { href: "/", label: "即時監控",
+    icon: ic(<><circle cx="12" cy="12" r="3.2" /><path d="M12 2.5v4M12 17.5v4M2.5 12h4M17.5 12h4" /></>) },
+  { href: "/drones", label: "無人機",
+    icon: ic(<><circle cx="7" cy="7" r="3" /><circle cx="17" cy="7" r="3" /><circle cx="7" cy="17" r="3" /><circle cx="17" cy="17" r="3" /><path d="M9.2 9.2l5.6 5.6M14.8 9.2l-5.6 5.6" /></>) },
+  { href: "/missions", label: "路徑管理",
+    icon: ic(<><path d="M4 19c6 0 2-10 8-10 5 0 3 7 8 5" /><circle cx="4" cy="19" r="1.8" fill="currentColor" /><circle cx="20" cy="14" r="1.8" fill="currentColor" /></>) },
+  { href: "/compare", label: "比較",
+    icon: ic(<><path d="M5 20V10M12 20V4M19 20v-7" /></>) },
 ];
 
 /** 頂欄＋內容區。WebSocket 掛在這一層，切換頁面不斷線、狀態 chips 全站可見。 */
@@ -29,11 +40,13 @@ export default function AppShell({ children }: { children: React.ReactNode }) {
           <Link
             key={t.href}
             href={t.href}
+            title={t.label}
+            aria-label={t.label}
             className={
               (t.href === "/" ? pathname === "/" : pathname.startsWith(t.href)) ? "active" : ""
             }
           >
-            {t.label}
+            {t.icon}
           </Link>
         ))}
         <span className="spacer" />

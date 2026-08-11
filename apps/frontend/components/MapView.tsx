@@ -6,6 +6,7 @@ import { useEffect, useRef, useState } from "react";
 
 import CommandPanel from "@/components/CommandPanel";
 import { colorFor, createDroneLayer, pickDrone, type ScreenHit } from "@/components/droneLayer";
+import SimpleHud from "@/components/SimpleHud";
 import VideoModal from "@/components/VideoModal";
 import VideoPlayer from "@/components/VideoPlayer";
 import { routeLayer } from "@/lib/deckRoute";
@@ -32,6 +33,13 @@ export default function MapView() {
   const coordRef = useRef<HTMLDivElement>(null);
   const overlayRef = useRef<MapboxOverlay | null>(null);
   const ribbonGateRef = useRef({ t: 0, n: -1 });   // 地面投影重建節流
+
+  // simple-first：專業面板抽屜（legend 跟著）、完整控制面板（⌃ 展開）
+  const panelOpen = useUavStore((s) => s.panelOpen);
+  const [cmdOpen, setCmdOpen] = useState(false);
+  // 機隊點：只訂閱成員 id 字串（fleet 物件 5Hz 換新，直接訂會整頁重渲染）
+  const fleetIds = useUavStore((s) => Object.keys(s.fleet).join(","));
+  const dotIds = fleetIds ? fleetIds.split(",") : [];
 
   // 檢視切換：地圖 ↔ 當前選擇機（側欄選的，未選＝主機）的即時影像
   const [view, setView] = useState<"map" | "video">("map");
@@ -259,7 +267,25 @@ export default function MapView() {
     <div className="map-wrap">
       <div ref={containerRef} style={{ position: "absolute", inset: 0 }} />
       <div className="coord-read" ref={coordRef} />
-      <div className="legend">
+
+      {/* simple-first：左上機隊色點（>1 機才出現，點擊切換選中機） */}
+      {dotIds.length > 1 && (
+        <div className="fleet-dots">
+          {dotIds.map((id) => (
+            <button key={id} className={id === selId ? "on" : ""}
+              title={useUavStore.getState().fleet[id]?.drone_name ?? id}
+              style={{ background: colorFor(id) }}
+              onClick={() => useUavStore.getState().select(id)} />
+          ))}
+        </div>
+      )}
+      {/* 右上：專業數值抽屜開關（▤）——數值不刪除只隱藏 */}
+      <div className="hud-top-right">
+        <button className={panelOpen ? "on" : ""} title="詳細數值面板"
+          onClick={() => useUavStore.getState().setPanelOpen(!panelOpen)}>▤</button>
+      </div>
+
+      {panelOpen && <div className="legend">
         <h4>鏈路品質（SINR）</h4>
         {LINK_CLASSES.map((c) => (
           <div className="row" key={c.key}>
@@ -278,7 +304,7 @@ export default function MapView() {
           <span className="dot" style={{ background: "transparent", border: "1.5px solid #8f8b80" }} />
           起飛點（地面基準）
         </div>
-      </div>
+      </div>}
 
       {/* 檢視切換鈕：地圖保持 mounted（maplibre 重建昂貴且會失去視角），
           影像用覆蓋層蓋上去；切回地圖即卸載播放器、停掉串流 */}
@@ -317,7 +343,10 @@ export default function MapView() {
         </div>
       )}
 
-      <CommandPanel />
+      {/* simple-first HUD：底部數值列＋情境主按鈕＋事件單行；
+          完整控制面板（任務/手動/全部按鈕）由 ⌃ 展開，不刪除只隱藏 */}
+      <SimpleHud onExpand={() => setCmdOpen((o) => !o)} />
+      {cmdOpen && <CommandPanel />}
 
       {videoDrone && (
         <VideoModal

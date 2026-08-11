@@ -94,6 +94,14 @@ export default function CompareMap3D({
       zoom: 15,
       pitch: 55,
       maxPitch: 75,
+      // 嵌在可捲動頁面裡的地圖必開（2026-08-11 取景懸案真兇）：滾輪捲頁
+      // 經過卡片會被攔成地圖縮放——rig 每輪捲等量滾輪，才會四修都得到
+      // 一模一樣的 zoom 12.15。Ctrl+滾輪才縮放，捲頁歸捲頁
+      cooperativeGestures: true,
+      locale: {
+        "CooperativeGesturesHandler.WindowsHelpText": "按住 Ctrl 並滾動以縮放地圖",
+        "CooperativeGesturesHandler.MacHelpText": "按住 ⌘ 並滾動以縮放地圖",
+      },
       style: {
         version: 8,
         sources: {},
