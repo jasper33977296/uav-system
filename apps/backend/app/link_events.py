@@ -30,6 +30,27 @@ async def transition(s: LiveState, m: dict) -> None:
     不發 handover 事件——無人機等價於一台 UE，換手由 modem 與網路側處理，
     應用層不參與也不研究它。服務 cell 仍以 pci 欄位記錄在 link_metrics。
     """
+    # serving cell 變更（換手）事件——5G 細節收摺疊區後，操作者靠事件流看
+    # cell 變化（issue 018 restyle 配套）。**防抖是這裡的核心**（issue 002：
+    # 當年 handover 事件無邊際防抖狂噴被整個移除）：上游已有 link_sim 6dB 換手
+    # 邊際／真機 modem 硬體滯後；事件層再確認一次——新 PCI 連續 2 次才算換手。
+    pci = m.get("pci")
+    if pci is not None:
+        if pci == s.serving_pci:
+            s.pci_pending = None               # 現任穩住，取消候選
+        elif pci == s.pci_pending:             # 連續第 2 次見到 → 確認換手
+            if s.serving_pci is not None and s.session_id:
+                ev = await db.insert_event(
+                    s.drone_id, s.session_id, "info", "cell_change",
+                    {"from_pci": s.serving_pci, "to_pci": pci,
+                     "from_band": s.serving_band, "to_band": m.get("band"),
+                     "sinr": m.get("sinr")})
+                ev["drone"] = s.drone_name
+                await manager.broadcast({"type": "event", "event": ev})
+            s.serving_pci, s.serving_band, s.pci_pending = pci, m.get("band"), None
+        else:
+            s.pci_pending = pci                # 第 1 次見到新 PCI，設為候選
+
     sinr = m.get("sinr")
     if sinr is None:             # modem 偶爾回不出 SINR，不能讓它變成狀態轉換
         return
