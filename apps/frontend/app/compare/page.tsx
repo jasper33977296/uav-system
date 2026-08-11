@@ -69,10 +69,11 @@ function projectChainage(path: ReturnType<typeof buildPath>, lat: number, lon: n
 // ── 折線圖（SVG 手刻，遵循 mark 規範）────────────────────────
 interface Series { label: string; color: string; points: { x: number; y: number }[] }
 
-function LineChart({ series, xMax, unit, xUnit }: {
-  series: Series[]; xMax: number; unit: string; xUnit: string;
+function LineChart({ series, xMax, unit, xUnit, xMin = 0 }: {
+  series: Series[]; xMax: number; unit: string; xUnit: string; xMin?: number;
 }) {
-  const W = 640, H = 240, L = 44, R = 86, T = 12, B = 26;
+  // T=18：Y 軸單位獨立一行（原 T=12 時單位與最上排刻度數字疊字）
+  const W = 640, H = 240, L = 44, R = 86, T = 18, B = 26;
   const ref = useRef<SVGSVGElement>(null);
   const [hover, setHover] = useState<number | null>(null);
 
@@ -82,7 +83,10 @@ function LineChart({ series, xMax, unit, xUnit }: {
   if (yMax - yMin < 1e-6) { yMax += 1; yMin -= 1; }
   const pad = (yMax - yMin) * 0.08;
   yMin -= pad; yMax += pad;
-  const sx = (x: number) => L + (x / (xMax || 1)) * (W - L - R);
+  // x 域帶 xMin：CDF 的 x 是量測值本身，SINR/RSRP 常為負——寫死 0 起點
+  // 會把負值畫到 Y 軸左邊、壓在刻度文字上
+  const xSpan = xMax - xMin || 1;
+  const sx = (x: number) => L + ((x - xMin) / xSpan) * (W - L - R);
   const sy = (y: number) => T + (1 - (y - yMin) / (yMax - yMin)) * (H - T - B);
 
   const ticksY = [0, 1, 2, 3].map((i) => yMin + ((yMax - yMin) * i) / 3);
@@ -99,12 +103,32 @@ function LineChart({ series, xMax, unit, xUnit }: {
     const r = ref.current!.getBoundingClientRect();
     const x = ((e.clientX - r.left) / r.width) * W;
     if (x < L || x > W - R) { setHover(null); return; }
-    setHover(((x - L) / (W - L - R)) * xMax);
+    setHover(xMin + ((x - L) / (W - L - R)) * xSpan);
   }
   const near = (s: Series, x: number) =>
     s.points.reduce<{ dx: number; p: Series["points"][0] } | null>(
       (b, p) => (b === null || Math.abs(p.x - x) < b.dx ? { dx: Math.abs(p.x - x), p } : b),
       null);
+
+  // 線尾直接標籤：多條線終點高度相近時會疊字（CDF 每條都在 100% 收尾，
+  // 必疊）——照終點高度排序後以 12px 最小間距往下推開，超出下緣整串上移
+  const LB = 12;
+  const endLabels = series.length <= 4
+    ? series.flatMap((s) => {
+        const last = s.points[s.points.length - 1];
+        return last
+          ? [{ label: s.label, color: s.color, x: sx(last.x) + 5, ly: sy(last.y) + 3 }]
+          : [];
+      }).sort((a, b) => a.ly - b.ly)
+    : [];
+  for (let i = 1; i < endLabels.length; i++) {
+    if (endLabels[i].ly - endLabels[i - 1].ly < LB) {
+      endLabels[i].ly = endLabels[i - 1].ly + LB;
+    }
+  }
+  const overflow = endLabels.length
+    ? endLabels[endLabels.length - 1].ly - (H - B) : 0;
+  if (overflow > 0) for (const e of endLabels) e.ly -= overflow;
 
   return (
     <div className="cmp-chartwrap">
@@ -116,23 +140,20 @@ function LineChart({ series, xMax, unit, xUnit }: {
             <text x={L - 6} y={sy(t) + 3} className="tick" textAnchor="end">{t.toFixed(0)}</text>
           </g>
         ))}
-        <text x={L - 6} y={T - 2} className="tick" textAnchor="end">{unit}</text>
+        <text x={L - 6} y={8} className="tick" textAnchor="end">{unit}</text>
         {[0, 0.5, 1].map((f, i) => (
-          <text key={i} x={sx(xMax * f)} y={H - 8} className="tick" textAnchor="middle">
-            {(xMax * f).toFixed(0)}{i === 2 ? ` ${xUnit}` : ""}
+          <text key={i} x={sx(xMin + xSpan * f)} y={H - 8} className="tick" textAnchor="middle">
+            {(xMin + xSpan * f).toFixed(0)}{i === 2 ? ` ${xUnit}` : ""}
           </text>
         ))}
         {series.map((s) => (
           <path key={s.label} d={d(s)} fill="none" stroke={s.color}
             strokeWidth={2} strokeLinejoin="round" />
         ))}
-        {series.length <= 4 && series.map((s) => {
-          const last = s.points[s.points.length - 1];
-          return last && (
-            <text key={s.label} x={sx(last.x) + 5} y={sy(last.y) + 3}
-              className="dlabel" fill={s.color}>{s.label}</text>
-          );
-        })}
+        {endLabels.map((e) => (
+          <text key={e.label + e.color} x={e.x} y={e.ly}
+            className="dlabel" fill={e.color}>{e.label}</text>
+        ))}
         {hover !== null && (
           <line x1={sx(hover)} x2={sx(hover)} y1={T} y2={H - B} className="xhair" />
         )}
@@ -142,7 +163,7 @@ function LineChart({ series, xMax, unit, xUnit }: {
           <div className="meta">{hover.toFixed(0)} {xUnit}</div>
           {series.map((s) => {
             const n = near(s, hover);
-            return n && n.dx < xMax * 0.05 && (
+            return n && n.dx < xSpan * 0.05 && (
               <div key={s.label}>
                 <span className="dot" style={{ background: s.color }} />
                 {s.label}：{n.p.y.toFixed(1)} {unit}
@@ -233,7 +254,9 @@ export default function Compare() {
     return { label: label(sid), color: color(sid), points };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }), [loaded.length, tracks, metric, selected]);
-  const cdfXMax = Math.max(...cdfSeries.flatMap((s) => s.points.map((p) => p.x)), 1);
+  const cdfXs = cdfSeries.flatMap((s) => s.points.map((p) => p.x));
+  const cdfXMin = cdfXs.length ? Math.min(...cdfXs) : 0;
+  const cdfXMax = cdfXs.length ? Math.max(...cdfXs) : 1;
 
   // Δ 摘要（vs 基準＝第一條）
   const stats = loaded.map((sid) => {
@@ -250,6 +273,17 @@ export default function Compare() {
     };
   });
   const base = stats[0];
+  // 圖例：兩張圖共用（>4 條時線尾標籤停畫，圖例是唯一辨識來源）
+  const legend = (
+    <div className="cmp-legend">
+      {loaded.map((sid) => (
+        <span key={sid}>
+          <span className="dot" style={{ background: color(sid) }} />
+          {label(sid)}{selected[0] === sid ? "（基準）" : ""}
+        </span>
+      ))}
+    </div>
+  );
   const dfmt = (v: number, b: number, unit: string, betterHigh: boolean) => {
     if (!isFinite(v) || !isFinite(b)) return "—";
     const d = v - b;
@@ -307,14 +341,7 @@ export default function Compare() {
                 <h4>{mUnit.label} vs 沿線里程</h4>
                 <LineChart series={chainSeries} xMax={path.total}
                   unit={mUnit.unit} xUnit="m" />
-                <div className="cmp-legend">
-                  {loaded.map((sid) => (
-                    <span key={sid}>
-                      <span className="dot" style={{ background: color(sid) }} />
-                      {label(sid)}{selected[0] === sid ? "（基準）" : ""}
-                    </span>
-                  ))}
-                </div>
+                {legend}
               </div>
             )}
 
@@ -348,8 +375,9 @@ export default function Compare() {
             {loaded.length > 0 && (
               <div className="card">
                 <h4>{mUnit.label} 分布（CDF）</h4>
-                <LineChart series={cdfSeries} xMax={cdfXMax} unit="%"
-                  xUnit={mUnit.unit} />
+                <LineChart series={cdfSeries} xMin={cdfXMin} xMax={cdfXMax}
+                  unit="%" xUnit={mUnit.unit} />
+                {legend}
               </div>
             )}
 
