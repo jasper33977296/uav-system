@@ -337,6 +337,17 @@ body {
   border: 1px solid var(--hairline); border-radius: 6px; padding: 3px 6px;
 }
 
+/* 游標經緯度（issue 017 P1）：與比例尺同區、等寬數字；無內容時隱藏 */
+.coord-read {
+  position: absolute; right: 12px; bottom: 40px; z-index: 5;
+  font-size: 11px; color: var(--ink-2);
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-variant-numeric: tabular-nums;
+  background: var(--surface); border: 1px solid var(--border);
+  border-radius: 4px; padding: 2px 6px; pointer-events: none;
+}
+.coord-read:empty { display: none; }
+
 /* 任務控制面板：分區標題與一行狀態列 */
 .cmd-sec {
   font-size: 11px; font-weight: 600; color: var(--muted);

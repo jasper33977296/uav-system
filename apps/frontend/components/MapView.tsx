@@ -33,6 +33,7 @@ export default function MapView() {
   const [hasMission, setHasMission] = useState(false);
   const hitsRef = useRef<Map<string, ScreenHit>>(new Map());
   const [videoDrone, setVideoDrone] = useState<string | null>(null);
+  const coordRef = useRef<HTMLDivElement>(null);
 
   // 檢視切換：地圖 ↔ 當前選擇機（側欄選的，未選＝主機）的即時影像
   const [view, setView] = useState<"map" | "video">("map");
@@ -141,6 +142,12 @@ export default function MapView() {
       map.on("mousemove", (e) => {
         map.getCanvas().style.cursor =
           pickDrone(hitsRef.current, e.point.x, e.point.y) ? "pointer" : "";
+        // 游標經緯度（issue 017 P1）：直接寫 DOM——60Hz 的 mousemove
+        // 走 React state 會整個元件重渲染
+        if (coordRef.current) {
+          coordRef.current.textContent =
+            `${e.lngLat.lat.toFixed(6)}, ${e.lngLat.lng.toFixed(6)}`;
+        }
       });
 
       // 任務疊圖：**只**畫任務庫的啟用路徑（路徑管理頁「顯示於即時頁」）。
@@ -258,6 +265,7 @@ export default function MapView() {
   return (
     <div className="map-wrap">
       <div ref={containerRef} style={{ position: "absolute", inset: 0 }} />
+      <div className="coord-read" ref={coordRef} />
       <div className="legend">
         <h4>鏈路品質（SINR）</h4>
         {LINK_CLASSES.map((c) => (

@@ -33,29 +33,6 @@ export function ngonAt(lat: number, lon: number, halfM: number, n = 4): GeoJSON.
   return { type: "Polygon", coordinates: [pts] };
 }
 
-/** 兩點間的平面段（絲帶的一節）：沿路徑方向、寬 2×halfW 公尺的四邊形。
-    搭配 fill-extrusion 的 base/top 讓它**懸浮在飛行高度**——
-    路徑本身浮在 3D 空間、下方留空，地面另有投影。
-    距離小於 0.3m（懸停）回傳 null，避免退化四邊形。 */
-export function segQuad(
-  aLat: number, aLon: number, bLat: number, bLon: number, halfW: number
-): GeoJSON.Polygon | null {
-  const k = mLon((aLat + bLat) / 2);
-  const dx = (bLon - aLon) * k, dy = (bLat - aLat) * M_LAT;
-  const len = Math.hypot(dx, dy);
-  if (len < 0.3) return null;
-  const nx = (-dy / len) * halfW, ny = (dx / len) * halfW;
-  const c = (lon: number, lat: number, sx: number, sy: number): [number, number] =>
-    [lon + sx / k, lat + sy / M_LAT];
-  return {
-    type: "Polygon",
-    coordinates: [[
-      c(aLon, aLat, nx, ny), c(bLon, bLat, nx, ny),
-      c(bLon, bLat, -nx, -ny), c(aLon, aLat, -nx, -ny), c(aLon, aLat, nx, ny),
-    ]],
-  };
-}
-
 /** 無人機 3D 本體：八角柱近似球體，浮在實際飛行高度。 */
 export function droneBall(lat: number, lon: number, alt: number): GeoJSON.Feature {
   const r = 3.2;
@@ -67,36 +44,81 @@ export function droneBall(lat: number, lon: number, alt: number): GeoJSON.Featur
 }
 
 /** 把一串帶高度的點串成懸浮絲帶（FeatureCollection of 平面段）。
-    props(a, b) 決定每一節的屬性（顏色分級等）；厚度 1m、預設寬 3m。 */
+    props(a, b) 決定每一節的屬性（顏色分級等）；厚度 1m、預設寬 3m。
+
+    相鄰段**共用 miter join 頂點**（issue 017 P1）：每個樣本點的左右
+    offset 沿角平分線計算，整條水平鏈是連續三角帶——轉角不再有逐段獨立
+    四邊形的楔形縫隙/重疊。轉角過銳時 miter 長度上限 2×halfW（bevel 退化）
+    避免尖刺。每一節仍是獨立 feature：顏色分級逐段取實際樣本、不插值
+    （誠實原則——平滑的是幾何接縫，不是資料）。 */
 export function ribbon<T extends { lat: number | null; lon: number | null; alt: number | null }>(
   pts: T[],
   props: (a: T, b: T) => Record<string, unknown>,
   halfW = 1.5,
 ): GeoJSON.FeatureCollection {
   const feats: GeoJSON.Feature[] = [];
-  for (let i = 1; i < pts.length; i++) {
-    const a = pts[i - 1], b = pts[i];
-    if (a.lat == null || a.lon == null || b.lat == null || b.lon == null) continue;
-    const quad = segQuad(a.lat, a.lon, b.lat, b.lon, halfW);
-    if (quad) {
+
+  // 一條「水平鏈」＝連續且水平位移 ≥0.3m 的樣本序列，整鏈做 miter join
+  const emitChain = (chain: T[]) => {
+    if (chain.length < 2) return;
+    const k = mLon(chain[Math.floor(chain.length / 2)].lat!);
+    const xy = chain.map((p) => ({ x: p.lon! * k, y: p.lat! * M_LAT }));
+    const norms: { x: number; y: number }[] = [];       // 每段單位法線
+    for (let i = 1; i < xy.length; i++) {
+      const dx = xy[i].x - xy[i - 1].x, dy = xy[i].y - xy[i - 1].y;
+      const len = Math.hypot(dx, dy);
+      norms.push({ x: -dy / len, y: dx / len });
+    }
+    // 每點的左右 offset：內點取相鄰兩段法線的角平分線，端點取鄰段法線
+    const offs = xy.map((_, j) => {
+      const n1 = norms[Math.max(j - 1, 0)], n2 = norms[Math.min(j, norms.length - 1)];
+      let mx = n1.x + n2.x, my = n1.y + n2.y;
+      const ml = Math.hypot(mx, my);
+      if (ml < 1e-9) { mx = n2.x; my = n2.y; }          // 180° 折返：退回段法線
+      else { mx /= ml; my /= ml; }
+      const dot = mx * n2.x + my * n2.y;                // = cos(半轉角)
+      const scale = Math.min(1 / Math.max(dot, 1e-6), 2);
+      return { x: mx * halfW * scale, y: my * halfW * scale };
+    });
+    const pt = (j: number, sign: 1 | -1): [number, number] =>
+      [(xy[j].x + sign * offs[j].x) / k, (xy[j].y + sign * offs[j].y) / M_LAT];
+    for (let i = 1; i < chain.length; i++) {
+      const a = chain[i - 1], b = chain[i];
       const alt = ((a.alt ?? 0) + (b.alt ?? 0)) / 2;
       feats.push({
         type: "Feature",
         properties: { base: Math.max(alt - 0.5, 0), top: Math.max(alt + 0.5, 0.5), ...props(a, b) },
-        geometry: quad,
+        geometry: { type: "Polygon", coordinates: [[
+          pt(i - 1, 1), pt(i, 1), pt(i, -1), pt(i - 1, -1), pt(i - 1, 1),
+        ]] },
       });
+    }
+  };
+
+  let chain: T[] = [];
+  for (let i = 0; i < pts.length; i++) {
+    const p = pts[i];
+    if (p.lat == null || p.lon == null) {               // GPS 缺值：中斷、不跨缺口連線
+      emitChain(chain); chain = [];
       continue;
     }
-    // 水平位移過小（起降／懸停中的爬升）：畫成該點的垂直段，
+    const prev = chain[chain.length - 1];
+    if (!prev) { chain = [p]; continue; }
+    const k = mLon((prev.lat! + p.lat) / 2);
+    const horiz = Math.hypot((p.lon - prev.lon!) * k, (p.lat - prev.lat!) * M_LAT);
+    if (horiz >= 0.3) { chain.push(p); continue; }
+    // 水平位移過小（起降／懸停中的爬升）：中斷水平鏈，畫成該點的垂直段，
     // 讓上升下降的路徑同樣被顏色標示，不再隱形
-    const lo = Math.min(a.alt ?? 0, b.alt ?? 0), hi = Math.max(a.alt ?? 0, b.alt ?? 0);
+    emitChain(chain); chain = [p];
+    const lo = Math.min(prev.alt ?? 0, p.alt ?? 0), hi = Math.max(prev.alt ?? 0, p.alt ?? 0);
     if (hi - lo < 0.6) continue;   // 純懸停不畫
     feats.push({
       type: "Feature",
-      properties: { base: Math.max(lo, 0), top: hi, ...props(a, b) },
-      geometry: ngonAt(b.lat, b.lon, halfW * 0.8, 8),
+      properties: { base: Math.max(lo, 0), top: hi, ...props(prev, p) },
+      geometry: ngonAt(p.lat, p.lon, halfW * 0.8, 8),
     });
   }
+  emitChain(chain);
   return { type: "FeatureCollection", features: feats };
 }
 
