@@ -764,6 +764,28 @@ a:focus-visible, button:focus-visible, input:focus-visible, select:focus-visible
   font-size: 12px; background: var(--page); color: var(--ink-2);
   border: 1px solid var(--hairline); border-radius: 6px; padding: 2px 4px;
 }
+
+/* v3 場域弱區分析 */
+.heatmap { width: 100%; height: auto; display: block; margin-top: 8px; background: var(--page); border-radius: 8px; }
+.hm-cell { cursor: pointer; }
+.hm-cell:hover rect:first-child { stroke: var(--ink); stroke-width: 1.2; }
+.hm-sparse-key {
+  background: repeating-linear-gradient(45deg,
+    transparent, transparent 2px, var(--ink-2) 2px, var(--ink-2) 3px);
+  border: 1px solid var(--hairline); border-radius: 2px !important;
+}
+.table th.sortable { cursor: pointer; user-select: none; }
+.table th.sortable:hover { color: var(--ink); }
+.note-btn {
+  background: none; border: none; color: var(--ink-2); cursor: pointer;
+  font-size: 12.5px; padding: 0; text-align: left;
+}
+.note-btn:hover { color: var(--ink); }
+.note-input {
+  font-size: 12.5px; background: var(--page); color: var(--ink);
+  border: 1px solid var(--hairline); border-radius: 6px; padding: 3px 7px;
+  width: 160px;
+}
 .cmp3d .maplibregl-map { position: absolute; inset: 0; }
 .legend-right { left: auto; right: 12px; bottom: 12px; }
 .legend-row {

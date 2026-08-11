@@ -13,7 +13,8 @@ import dynamic from "next/dynamic";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 
 import MissionThumb3D from "@/components/MissionThumb3D";
-import { API } from "@/lib/signal";
+import { API, CLIENT_HEADERS, LINK_CLASSES, classifySinr } from "@/lib/signal";
+import { aggregateCells, dropoutPct, type SignalCell } from "@/lib/signalMap";
 
 // MapLibre 依賴 window，關閉 SSR（同即時頁 MapView 作法）
 const CompareMap3D = dynamic(() => import("@/components/CompareMap3D"), { ssr: false });
@@ -34,7 +35,9 @@ const METRICS: { key: string; label: string; unit: string }[] = [
 
 interface Mission { id: string; name: string; waypoint_count: number }
 interface Sess {
-  id: string; started_at: string; ended_at: string | null; drone_name: string;
+  id: string; started_at: string; ended_at: string | null;
+  drone_id: string; drone_name: string;
+  note?: string | null;
   summary: { samples_total?: number } | null;
 }
 interface LinkRow { lat: number | null; lon: number | null; [k: string]: unknown }
@@ -78,11 +81,13 @@ function projectChainage(path: ReturnType<typeof buildPath>, lat: number, lon: n
 interface Series {
   id: string;                 // React key 用（label 可能撞名，不可當 key）
   label: string; color: string; points: { x: number; y: number }[];
+  raw?: { x: number; y: number }[];   // v3：原始淡線與平滑並存（誠實原則）
   dim?: boolean;
 }
 
-function LineChart({ series, xMax, unit, xUnit, xMin = 0 }: {
+function LineChart({ series, xMax, unit, xUnit, xMin = 0, highlight }: {
   series: Series[]; xMax: number; unit: string; xUnit: string; xMin?: number;
+  highlight?: [number, number] | null;   // 點熱區格 → 對應里程段高亮帶
 }) {
   // T=18：Y 軸單位獨立一行（原 T=12 時單位與最上排刻度數字疊字）
   // R=96：右邊留白放標籤欄——時間標籤固定排在繪圖區外，不再壓到線
@@ -160,11 +165,24 @@ function LineChart({ series, xMax, unit, xUnit, xMin = 0 }: {
             {(xMin + xSpan * f).toFixed(0)}{i === 2 ? ` ${xUnit}` : ""}
           </text>
         ))}
+        {highlight && (
+          <rect x={sx(highlight[0])} y={T}
+            width={Math.max(2, sx(highlight[1]) - sx(highlight[0]))}
+            height={H - T - B} fill="var(--ink)" opacity={0.1} />
+        )}
         {[...series].sort((a, b) => Number(!!b.dim) - Number(!!a.dim)).map((s) => (
-          <path key={s.id} d={d(s)} fill="none"
-            stroke={s.dim ? "var(--muted)" : s.color}
-            strokeWidth={s.dim ? 1 : 2} strokeOpacity={s.dim ? 0.6 : 1}
-            strokeLinejoin="round" />
+          <g key={s.id}>
+            {/* 原始淡線（1px 40%）＋平滑線（2px）並存——禁只畫平滑 */}
+            {s.raw && !s.dim && (
+              <path d={d({ ...s, points: s.raw })} fill="none"
+                stroke={s.color} strokeWidth={1} strokeOpacity={0.35}
+                strokeLinejoin="round" />
+            )}
+            <path d={d(s)} fill="none"
+              stroke={s.dim ? "var(--muted)" : s.color}
+              strokeWidth={s.dim ? 1 : 2} strokeOpacity={s.dim ? 0.6 : 1}
+              strokeLinejoin="round" />
+          </g>
         ))}
         {endLabels.map((e) => (
           <g key={e.id}>
@@ -196,6 +214,71 @@ function LineChart({ series, xMax, unit, xUnit, xMin = 0 }: {
   );
 }
 
+// ── 熱區圖（v3 主視覺）：俯視 2D、~10m 格網、P10 分級色 ────────
+const SPARSE_N = 5;   // 樣本 < 門檻＝稀疏格（斜線紋理＋降透明）
+
+function HeatMap({ cells, plan, grid, sel, onSel }: {
+  cells: SignalCell[];
+  plan: { x: number; y: number }[];
+  grid: number;
+  sel: SignalCell | null;
+  onSel: (c: SignalCell | null) => void;
+}) {
+  if (!cells.length) {
+    return <div className="empty">選中架次沒有訊號樣本</div>;
+  }
+  const xs = [...cells.map((c) => c.x), ...plan.map((p) => p.x)];
+  const ys = [...cells.map((c) => c.y), ...plan.map((p) => p.y)];
+  const x0 = Math.min(...xs) - grid, x1 = Math.max(...xs) + grid;
+  const y0 = Math.min(...ys) - grid, y1 = Math.max(...ys) + grid;
+  const W = 640;
+  const scale = (W - 20) / (x1 - x0 || 1);
+  const H = Math.max(180, (y1 - y0) * scale + 20);
+  const X = (x: number) => 10 + (x - x0) * scale;
+  const Y = (y: number) => H - 10 - (y - y0) * scale;
+  const s = grid * scale;
+  return (
+    <svg viewBox={`0 0 ${W} ${H.toFixed(0)}`} className="heatmap"
+      onClick={() => onSel(null)}>
+      <defs>
+        <pattern id="hm-sparse" patternUnits="userSpaceOnUse" width="6" height="6">
+          <path d="M0 6 L6 0" stroke="var(--ink-2)" strokeWidth="0.8" opacity="0.5" />
+        </pattern>
+      </defs>
+      {/* 計畫路徑虛線＝空間定位參考 */}
+      {plan.length >= 2 && (
+        <polyline
+          points={plan.map((p) => `${X(p.x).toFixed(1)},${Y(p.y).toFixed(1)}`).join(" ")}
+          fill="none" stroke="#8f8b80" strokeWidth="1.2"
+          strokeDasharray="4 4" opacity="0.6" />
+      )}
+      {plan.length > 0 && (
+        <circle cx={X(plan[0].x)} cy={Y(plan[0].y)} r="4" fill="none"
+          stroke="#8f8b80" strokeWidth="1.5" />
+      )}
+      {cells.map((c) => {
+        const cls = classifySinr(c.p10);
+        const sparse = c.n < SPARSE_N;
+        const isSel = sel && sel.x === c.x && sel.y === c.y;
+        return (
+          <g key={`${c.x}|${c.y}`} className="hm-cell"
+            onClick={(e) => { e.stopPropagation(); onSel(c); }}>
+            <rect x={X(c.x) - s / 2} y={Y(c.y) - s / 2} width={s} height={s}
+              fill={cls.color} opacity={sparse ? 0.3 : 0.55}
+              stroke={isSel ? "var(--ink)" : "none"} strokeWidth="1.5">
+              <title>{`樣本 ${c.n}｜P10 ${c.p10.toFixed(1)} dB｜最差 ${c.min.toFixed(1)} dB｜涵蓋 ${c.sessionIds.length} 趟`}</title>
+            </rect>
+            {sparse && (
+              <rect x={X(c.x) - s / 2} y={Y(c.y) - s / 2} width={s} height={s}
+                fill="url(#hm-sparse)" pointerEvents="none" />
+            )}
+          </g>
+        );
+      })}
+    </svg>
+  );
+}
+
 // ── 主頁 ─────────────────────────────────────────────────────
 export default function Compare() {
   const [missions, setMissions] = useState<Mission[]>([]);
@@ -207,9 +290,36 @@ export default function Compare() {
   const [metric, setMetric] = useState("sinr");
   // 同時高亮上限 3 條（design-tokens v1）：超過的退 muted，點圖例切換
   const [focus, setFocus] = useState<string[]>([]);
-  // CDF 對新手最難讀：排最後＋預設收合（展開記憶——研究工作區判準）
-  const [cdfOpen, setCdfOpen] = useState(false);
-  useEffect(() => { setCdfOpen(localStorage.getItem("cmp-cdf-open") === "1"); }, []);
+  // ── v3「場域弱區分析」（§6 使用者核准）───────────────────────
+  // 檢視切換：熱區（主視覺）↔ 軌跡 3D；記憶（工作區判準）
+  const [view3, setView3] = useState<"heat" | "3d">("heat");
+  useEffect(() => {
+    const saved = localStorage.getItem("cmp-view");
+    if (saved === "3d" || saved === "heat") setView3(saved);
+  }, []);
+  const switchView = (v: "heat" | "3d") => {
+    setView3(v);
+    localStorage.setItem("cmp-view", v);
+  };
+  // 斷訊率排序（優化前後對比用）；備註 inline 編輯；點格下鑽
+  const [sortDrop, setSortDrop] = useState<"none" | "desc" | "asc">("none");
+  const [noteEdit, setNoteEdit] = useState<{ id: string; text: string } | null>(null);
+  const [selCell, setSelCell] = useState<SignalCell | null>(null);
+  const chartCardRef = useRef<HTMLDivElement>(null);
+
+  async function saveNote(id: string, note: string) {
+    setNoteEdit(null);
+    try {
+      const res = await fetch(`${API}/api/sessions/${id}`, {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json", ...CLIENT_HEADERS },
+        body: JSON.stringify({ note }),
+      });
+      if (res.ok) {
+        setSessions((cur) => cur.map((s) => (s.id === id ? { ...s, note } : s)));
+      }
+    } catch { /* 存失敗維持原值（欄位顯示未變＝如實） */ }
+  }
 
   // v2：任務選擇＝3D 縮圖橫捲列（共用 §4 元件）——逐任務抓 waypoints、
   // 選中卡自動捲入
@@ -314,7 +424,7 @@ export default function Compare() {
   const label = (sid: string) => labelOf.get(sid) ?? sid.slice(0, 6);
   const color = (sid: string) => SERIES[selected.indexOf(sid) % SERIES.length];
 
-  // 沿線里程序列（分箱平均）
+  // 沿線里程序列（分箱）＋平滑（v3：原始淡線＋平滑線並存，禁只畫平滑）
   const chainSeries: Series[] = useMemo(() => {
     if (!path) return [];
     return loaded.map((sid) => {
@@ -327,42 +437,42 @@ export default function Compare() {
         e.sum += Number(v); e.n += 1;
         bins.set(b, e);
       }
-      const points = [...bins.entries()].sort((a, b) => a[0] - b[0])
+      const raw = [...bins.entries()].sort((a, b) => a[0] - b[0])
         .map(([x, e]) => ({ x, y: e.sum / e.n }));
-      return { id: sid, label: label(sid), color: color(sid), points, dim: isDim(sid) };
+      // 平滑＝±2 箱滑動平均（25m 窗）；raw 保留並存
+      const points = raw.map((p, i) => {
+        const w = raw.slice(Math.max(0, i - 2), i + 3);
+        return { x: p.x, y: w.reduce((t, q) => t + q.y, 0) / w.length };
+      });
+      return { id: sid, label: label(sid), color: color(sid), points, raw,
+               dim: isDim(sid) };
     });
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [loaded.length, tracks, metric, path, selected, focus]);
 
-  // CDF：值→累積比例
-  const cdfSeries: Series[] = useMemo(() => loaded.map((sid) => {
-    const vals = tracks[sid].map((r) => r[metric]).filter((v) => v != null)
-      .map(Number).sort((a, b) => a - b);
-    const points = vals.map((v, i) => ({ x: v, y: ((i + 1) / vals.length) * 100 }));
-    return { id: sid, label: label(sid), color: color(sid), points, dim: isDim(sid) };
+  // 熱區格網（§6.5 契約形狀；後端 query_signal_map 就緒前客端聚合）
+  const cells = useMemo(() => {
+    if (!path || !loaded.length) return [];
+    return aggregateCells(tracks, loaded, path.origin, 10);
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }), [loaded.length, tracks, metric, selected, focus]);
-  const cdfXs = cdfSeries.flatMap((s) => s.points.map((p) => p.x));
-  const cdfXMin = cdfXs.length ? Math.min(...cdfXs) : 0;
-  const cdfXMax = cdfXs.length ? Math.max(...cdfXs) : 1;
+  }, [loaded.length, tracks, path]);
+  // 斷訊率（已載入架次客端算；未載入顯示 —，全欄位等後端摘要）
+  const dropouts = useMemo(() => {
+    const out: Record<string, number | null> = {};
+    for (const sid of loaded) out[sid] = dropoutPct(tracks[sid] ?? []);
+    return out;
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [loaded.length, tracks]);
+  // 點格 → 對應里程段（沿線圖高亮帶）
+  const cellHl = useMemo<[number, number] | null>(() => {
+    if (!selCell || !path) return null;
+    const s = projectChainage(path, selCell.lat, selCell.lon);
+    return [Math.max(0, s - 10), s + 10];
+  }, [selCell, path]);
 
-  // Δ 摘要（vs 基準＝第一條）
-  const stats = loaded.map((sid) => {
-    const rows = tracks[sid];
-    const nums = (k: string) => rows.map((r) => r[k]).filter((v) => v != null).map(Number);
-    const avg = (a: number[]) => (a.length ? a.reduce((s, v) => s + v, 0) / a.length : NaN);
-    const sinr = nums("sinr");
-    return {
-      sid,
-      avg_sinr: avg(sinr), min_sinr: sinr.length ? Math.min(...sinr) : NaN,
-      avg_rtt: avg(nums("rtt_ms")), samples: rows.length,
-      degraded_pct: sinr.length
-        ? (sinr.filter((v) => v < 5).length / sinr.length) * 100 : NaN,
-    };
-  });
-  const base = stats[0];
-  // 圖例：兩張圖共用。>3 條時圖例是高亮切換器（點擊升亮/退暗；
-  // 顏色跟航線不跟排名——dim 只降線的視覺權重，圖例圓點保留本色）
+  // v3：CDF 曲線與 Δ 摘要（基準概念）移除——CDF 的 KPI 由架次表
+  // 「斷訊率」承接，多趟平等無基準（§6.1 使用者裁決）
+  // 沿線圖圖例：>3 條時是高亮切換器（顏色跟航線不跟排名）
   const legend = (
     <div className="cmp-legend">
       {loaded.map((sid) => (
@@ -370,7 +480,7 @@ export default function Compare() {
           onClick={() => toggleFocus(sid)}
           title={loaded.length > 3 ? "點擊切換高亮（同時最多 3 條）" : undefined}>
           <span className="dot" style={{ background: color(sid) }} />
-          {label(sid)}{selected[0] === sid ? "（基準）" : ""}
+          {label(sid)}
         </button>
       ))}
       {loaded.length > 3 && (
@@ -378,12 +488,33 @@ export default function Compare() {
       )}
     </div>
   );
-  const dfmt = (v: number, b: number, unit: string, betterHigh: boolean) => {
-    if (!isFinite(v) || !isFinite(b)) return "—";
-    const d = v - b;
-    if (Math.abs(d) < 1e-9) return "基準";
-    const better = betterHigh ? d > 0 : d < 0;
-    return `${d > 0 ? "+" : ""}${d.toFixed(1)} ${unit} ${better ? "▲" : "▼"}`;
+
+  // 疊最近 5 趟快捷：一鍵勾選（含 track 補抓）
+  function selectRecent5() {
+    const ids = sessions.slice(0, 5).map((s) => s.id);
+    for (const sid of ids) {
+      if (!tracks[sid]) {
+        fetch(`${API}/api/sessions/${sid}/track`).then((r) => r.json())
+          .then((d) => setTracks((t) => ({ ...t, [sid]: d.link })))
+          .catch(() => {});
+      }
+    }
+    setSelected(ids);
+  }
+
+  // 架次表排序：預設時間新→舊；斷訊率欄可切（未載入者無值殿後）
+  const orderedSessions = useMemo(() => {
+    if (sortDrop === "none") return sessions;
+    const val = (s: Sess) => dropouts[s.id] ?? (sortDrop === "desc" ? -1 : 1e9);
+    return [...sessions].sort((a, b) =>
+      sortDrop === "desc" ? val(b) - val(a) : val(a) - val(b));
+  }, [sessions, sortDrop, dropouts]);
+
+  const durTxt = (s: Sess) => {
+    if (!s.ended_at) return "進行中";
+    const sec = Math.round(
+      (new Date(s.ended_at).getTime() - new Date(s.started_at).getTime()) / 1000);
+    return `${Math.floor(sec / 60)}:${(sec % 60).toString().padStart(2, "0")}`;
   };
 
   return (
@@ -418,32 +549,132 @@ export default function Compare() {
 
       {missionId && (
         <>
-          {/* v2：架次膠囊列——識別色點＋時間，基準底色（無文字 chip） */}
-          <div className="sess-pills">
-            {sessions.map((s) => {
-              const on = selected.includes(s.id);
-              return (
-                <button key={s.id}
-                  className={`pill ${on ? "on" : ""} ${selected[0] === s.id ? "base" : ""}`}
-                  disabled={!on && selected.length >= MAX_SEL}
-                  onClick={() => toggle(s.id)}>
-                  <span className="dot" style={{
-                    background: on ? color(s.id) : "transparent",
-                    border: on ? "none" : "1px solid var(--hairline)",
-                  }} />
-                  {label(s.id)}
-                </button>
-              );
-            })}
-            {sessions.length === 0 && <div className="empty">此任務尚無航線</div>}
+          {/* v3 架次表：勾選＋備註 inline＋斷訊率排序；多趟平等無基準 */}
+          <div className="card">
+            <div className="drone-head" style={{ marginBottom: 6 }}>
+              <span className="meta">架次（{sessions.length}）</span>
+              <span className="spacer" />
+              <button className="btn-plain btn-sm" disabled={!sessions.length}
+                onClick={selectRecent5}>疊最近 5 趟</button>
+            </div>
+            <table className="table">
+              <thead>
+                <tr>
+                  <th></th><th>時間</th><th>機</th><th>備註</th><th>時長</th>
+                  <th className="num sortable"
+                    title="劣化門檻以下航段佔比；點擊排序（優化前後對比）"
+                    onClick={() => setSortDrop(
+                      sortDrop === "desc" ? "asc" : "desc")}>
+                    斷訊率{sortDrop === "desc" ? " ↓" : sortDrop === "asc" ? " ↑" : ""}
+                  </th>
+                </tr>
+              </thead>
+              <tbody>
+                {sessions.length === 0 && (
+                  <tr><td colSpan={6} className="empty">此任務尚無航線</td></tr>
+                )}
+                {orderedSessions.map((s) => {
+                  const on = selected.includes(s.id);
+                  const drop = dropouts[s.id];
+                  return (
+                    <tr key={s.id} className="row-link"
+                      onClick={() => toggle(s.id)}>
+                      <td onClick={(e) => e.stopPropagation()}>
+                        <input type="checkbox" checked={on}
+                          disabled={!on && selected.length >= MAX_SEL}
+                          onChange={() => toggle(s.id)} />
+                      </td>
+                      <td>
+                        <span className="dot" style={{
+                          display: "inline-block", marginRight: 6,
+                          background: on ? color(s.id) : "var(--hairline)" }} />
+                        {label(s.id)}
+                      </td>
+                      <td>{s.drone_name}</td>
+                      <td onClick={(e) => e.stopPropagation()}>
+                        {noteEdit?.id === s.id ? (
+                          <input className="note-input" autoFocus
+                            value={noteEdit.text}
+                            onChange={(e) =>
+                              setNoteEdit({ id: s.id, text: e.target.value })}
+                            onBlur={() => saveNote(s.id, noteEdit.text)}
+                            onKeyDown={(e) => {
+                              if (e.key === "Enter") saveNote(s.id, noteEdit.text);
+                              if (e.key === "Escape") setNoteEdit(null);
+                            }} />
+                        ) : (
+                          <button className="note-btn" title="編輯備註"
+                            onClick={() =>
+                              setNoteEdit({ id: s.id, text: s.note ?? "" })}>
+                            {s.note || "—"} ✎
+                          </button>
+                        )}
+                      </td>
+                      <td>{durTxt(s)}</td>
+                      <td className="num">
+                        {drop != null ? `${drop.toFixed(0)}%` : "—"}
+                      </td>
+                    </tr>
+                  );
+                })}
+              </tbody>
+            </table>
+            {loaded.length < sessions.length && sortDrop !== "none" && (
+              <div className="hint-line">斷訊率僅已勾選（已載入）架次可算；其餘待後端摘要欄</div>
+            )}
           </div>
+
+          {/* 檢視切換：熱區（主視覺）｜軌跡 3D（看高度差異用）——記憶 */}
+          {loaded.length > 0 && (
+            <div className="seg" style={{ alignSelf: "flex-start" }}>
+              <button className={view3 === "heat" ? "on" : ""}
+                onClick={() => switchView("heat")}>熱區</button>
+              <button className={view3 === "3d" ? "on" : ""}
+                onClick={() => switchView("3d")}>軌跡（3D）</button>
+            </div>
+          )}
 
           <div className="cmp-main">
             {loaded.length === 0 && (
               <div className="card"><div className="empty">勾選 2 條以上航線開始比較</div></div>
             )}
-            {/* v2：3D 疊圖升主視覺——置頂最大幅（3D 為榮） */}
-            {loaded.length > 0 && path && (
+
+            {/* 熱區圖（v3 主視覺）：找弱區 → 點格下鑽 */}
+            {loaded.length > 0 && path && view3 === "heat" && (
+              <div className="card">
+                <h4>訊號熱區
+                  <span className="h3-note">格色＝該格最差 10%（P10）· 點格下鑽</span>
+                </h4>
+                <HeatMap cells={cells} plan={path.pts} grid={10}
+                  sel={selCell}
+                  onSel={(c) => {
+                    setSelCell(c);
+                    if (c) chartCardRef.current?.scrollIntoView(
+                      { behavior: "smooth", block: "nearest" });
+                  }} />
+                <div className="cmp-legend">
+                  {LINK_CLASSES.map((c) => (
+                    <span key={c.key}>
+                      <span className="dot" style={{ background: c.color }} />
+                      {c.label}
+                    </span>
+                  ))}
+                  <span><span className="dot hm-sparse-key" />樣本不足（&lt;{SPARSE_N}）</span>
+                </div>
+                {selCell && (
+                  <div className="hint-line">
+                    選中格：樣本 {selCell.n}．P10 {selCell.p10.toFixed(1)} dB．
+                    最差 {selCell.min.toFixed(1)} dB．涵蓋 {selCell.sessionIds.length} 趟
+                    ——沿線圖已高亮對應里程段（線疊著掉＝環境性；線分岔＝時變性）
+                    <button className="btn-plain btn-sm" style={{ marginLeft: 8 }}
+                      onClick={() => setSelCell(null)}>清除</button>
+                  </div>
+                )}
+              </div>
+            )}
+
+            {/* 軌跡 3D（v2 疊圖沿用）：看高度差異時切換 */}
+            {loaded.length > 0 && path && view3 === "3d" && (
               <div className="card">
                 <h4>軌跡疊圖（3D）
                   <span className="h3-note">拖曳旋轉 · 點絲帶看訊號</span>
@@ -453,11 +684,13 @@ export default function Compare() {
                   dimIds={loaded.filter(isDim)} />
               </div>
             )}
+
+            {/* 沿線圖（下鑽視角）：回答「這格為什麼弱」 */}
             {loaded.length > 0 && path && (
-              <div className="card">
+              <div className="card" ref={chartCardRef}>
                 <h4>{mUnit.key === "sinr" ? "訊號" : mUnit.label} vs 飛行距離
-                  {/* v2：指標切換收線圖卡右上 */}
                   <span className="h3-note">
+                    原始＋平滑（25m 窗）·
                     <select className="metric-mini" value={metric}
                       onChange={(e) => setMetric(e.target.value)}>
                       {METRICS.map((m) => (
@@ -467,50 +700,9 @@ export default function Compare() {
                   </span>
                 </h4>
                 <LineChart series={chainSeries} xMax={path.total}
-                  unit={mUnit.unit} xUnit="m" />
+                  unit={mUnit.unit} xUnit="m" highlight={cellHl} />
                 {legend}
               </div>
-            )}
-
-            {loaded.length > 0 && (
-              <div className="card">
-                <h4>與第一趟相比</h4>
-                <table className="table">
-                  <thead><tr>
-                    <th>航線</th><th className="num">平均 SINR</th>
-                    <th className="num">最低 SINR</th><th className="num">平均 RTT</th>
-                    <th className="num">劣化樣本比</th><th className="num">Δ 平均 SINR</th>
-                    <th className="num">Δ 平均 RTT</th>
-                  </tr></thead>
-                  <tbody>
-                    {stats.map((st) => (
-                      <tr key={st.sid}>
-                        <td><span className="dot" style={{ background: color(st.sid) }} /> {label(st.sid)}</td>
-                        <td className="num">{st.avg_sinr.toFixed(1)} dB</td>
-                        <td className="num">{st.min_sinr.toFixed(1)} dB</td>
-                        <td className="num">{st.avg_rtt.toFixed(0)} ms</td>
-                        <td className="num">{st.degraded_pct.toFixed(0)}%</td>
-                        <td className="num">{dfmt(st.avg_sinr, base.avg_sinr, "dB", true)}</td>
-                        <td className="num">{dfmt(st.avg_rtt, base.avg_rtt, "ms", false)}</td>
-                      </tr>
-                    ))}
-                  </tbody>
-                </table>
-              </div>
-            )}
-
-            {loaded.length > 0 && (
-              <details className="card" open={cdfOpen}
-                onToggle={(e) => {
-                  const o = e.currentTarget.open;
-                  setCdfOpen(o);
-                  localStorage.setItem("cmp-cdf-open", o ? "1" : "0");
-                }}>
-                <summary>{mUnit.label} 分布（CDF）</summary>
-                <LineChart series={cdfSeries} xMin={cdfXMin} xMax={cdfXMax}
-                  unit="%" xUnit={mUnit.unit} />
-                {legend}
-              </details>
             )}
           </div>
         </>
