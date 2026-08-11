@@ -34,7 +34,9 @@ export function useTelemetry() {
       ws = new WebSocket(WS_URL);
       ws.onopen = () => setWsConnected(true);
       ws.onmessage = (e) => {
-        const msg = JSON.parse(e.data);
+        // 單則壞訊息（如後端漏出的裸 NaN——非法 JSON）不炸掉整個 handler
+        let msg;
+        try { msg = JSON.parse(e.data); } catch { return; }
         if (msg.type === "telemetry") setLive(msg);
         // fold:true＝同句 STATUSTEXT 重複的就地更新（不新增列，7127218 契約）
         else if (msg.type === "event") pushEvent(msg.event, msg.fold === true);
