@@ -65,7 +65,7 @@ const TRAIL_MAX = 1200; // 1Hz 入庫、5Hz 推送下約 4 分鐘的尾跡
 interface UavStore {
   live: Telemetry | null;                    // 主機（第一台出現的，＝MAVLink 機）
   primaryId: string | null;
-  fleet: Record<string, Telemetry>;          // 全部機（含群飛僚機），鍵為 drone_id
+  fleet: Record<string, Telemetry>;          // 全部機（多 SITL/編隊），鍵為 drone_id
   trails: Record<string, TrailPoint[]>;      // 每機各自的尾跡
   selectedId: string | null;                 // 側欄顯示哪台；null＝跟隨主機
   wsConnected: boolean;

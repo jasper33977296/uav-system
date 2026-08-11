@@ -206,7 +206,7 @@ export default function Drones() {
                   if (!res.ok) setErr((await res.json()).detail ?? "設定失敗");
                   reload();
                 }}>影像{d.video_url ? " ✓" : ""}</button>{" "}
-              {!d.is_primary && !d.name.startsWith("swarm-") && (
+              {!d.is_primary && (
                 <button className="btn-plain btn-sm"
                   title="MAVLink 收到的遙測記在這台名下（飛行中無法切換）"
                   onClick={async () => {

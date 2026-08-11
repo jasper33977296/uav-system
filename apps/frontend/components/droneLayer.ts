@@ -2,8 +2,8 @@
  *
  * MapLibre 的 fill-extrusion 只能做柱體，真正的球體需要自帶 WebGL 場景。
  * 本層從一開始就是**多機結構**：以 drone_id 為鍵維護球體，getDrones() 回傳
- * 幾台就畫幾台——群飛時 backend 擴成多機（doc/architecture.md 的
- * dict[drone_id, LiveState]），這裡不需要任何改動。
+ * 幾台就畫幾台——多機（013 編隊/多 SITL）時 backend 廣播幾台的遙測
+ * （dict[drone_id, LiveState]）這裡就畫幾台，不需要任何改動。
  *
  * 座標精度：mercator 座標是 0..1 的小數，直接餵給 float32 的 GPU 會在高
  * zoom 抖動。照 MapLibre 官方 three.js 範例的做法，把平移縮放併進

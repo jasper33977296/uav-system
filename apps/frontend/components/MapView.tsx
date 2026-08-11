@@ -186,7 +186,7 @@ export default function MapView() {
       overlayRef.current = overlay;
 
       // 無人機本體：three.js 正圓球體，浮在實際高度。
-      // 讀整個 fleet——群飛時幾台就畫幾台，顏色依出現順序取機隊色盤。
+      // 讀整個 fleet——多機時幾台就畫幾台，顏色依出現順序取機隊色盤。
       map.addLayer(createDroneLayer("drones", () =>
         Object.entries(useUavStore.getState().fleet)
           .filter(([, t]) => t.lat != null && t.lon != null)
