@@ -35,6 +35,34 @@ export default function CompareMap3D({
   const mapRef = useRef<maplibregl.Map | null>(null);
   const [ready, setReady] = useState(false);
   const fittedRef = useRef(false);
+  const pendingBoundsRef = useRef<maplibregl.LngLatBounds | null>(null);
+
+  // 初始取景（2026-08-11 三因修正）：
+  // 1) 時機——dev 下 CSS 注入晚於 map load，rAF 賭一幀仍會用 0 高視窗算
+  //    zoom（過縮 8×）；改 ResizeObserver 等容器首次非零尺寸才 fit
+  // 2) pitch——maplibre fitBounds 不把 pitch 算進視野，傾斜下內容被推向
+  //    地平線（貼頂緣裁半）；先平視 fit、再 setPitch（中心不動）
+  // 3) 離群點——長航次的 GPS 漂移會撐大 bounds（見 tryFit 呼叫端的分位數裁切）
+  const tryFit = () => {
+    const map = mapRef.current;
+    const el = containerRef.current;
+    const b = pendingBoundsRef.current;
+    if (!map || !el || !b || fittedRef.current) return;
+    if (el.clientHeight < 50) return;   // CSS 尚未套用，等下一次 resize 通知
+    fittedRef.current = true;
+    map.resize();
+    map.setPitch(0);
+    map.fitBounds(b, { padding: 48, duration: 0 });
+    map.setPitch(55);
+  };
+  useEffect(() => {
+    const el = containerRef.current;
+    if (!el) return;
+    const ro = new ResizeObserver(() => tryFit());
+    ro.observe(el);
+    return () => ro.disconnect();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
   const [sel, setSel] = useState<string | null>(null);
   const selRef = useRef(sel);
   useEffect(() => { selRef.current = sel; }, [sel]);
@@ -122,8 +150,8 @@ export default function CompareMap3D({
     const map = mapRef.current;
     if (!map || !ready) return;
     const feats: GeoJSON.Feature[] = [];
-    const bounds = new maplibregl.LngLatBounds();
-    for (const w of wps) bounds.extend([w.lon, w.lat]);
+    const allLats: number[] = [];
+    const allLons: number[] = [];
     for (const sid of loaded) {
       const rows = (tracks[sid] ?? [])
         .filter((r) => r.lat != null && r.lon != null)
@@ -139,20 +167,27 @@ export default function CompareMap3D({
           ? (b.sinr == null ? MUTED : classifySinr(b.sinr).color)
           : dim ? MUTED : colorOf(sid),
       }), dim ? 0.8 : 1.5).features);
-      for (const r of rows) bounds.extend([r.lon, r.lat]);
+      for (const r of rows) { allLats.push(r.lat); allLons.push(r.lon); }
     }
     (map.getSource("runs") as maplibregl.GeoJSONSource | undefined)
       ?.setData({ type: "FeatureCollection", features: feats });
-    if (!fittedRef.current && !bounds.isEmpty()) {
-      fittedRef.current = true;
-      // 初始 fit 曾以未定尺寸的視窗計算（dev 下 CSS 注入晚於 load，
-      // 視窗偏小 → zoom 算過低、絲帶縮成一撮）：推遲一幀等佈局定案，
-      // 先 resize 再 fit
-      requestAnimationFrame(() => {
-        map.resize();
-        map.fitBounds(bounds, { padding: 48, pitch: 55, duration: 0 });
-      });
+
+    // 取景 bounds：樣本按 P1–P99 分位數裁掉 GPS 漂移離群點（長航次會有），
+    // 計畫航點不裁（權威資料）。絲帶照常全量渲染，只有取景被裁
+    const bounds = new maplibregl.LngLatBounds();
+    for (const w of wps) bounds.extend([w.lon, w.lat]);
+    if (allLats.length) {
+      allLats.sort((a, b) => a - b);
+      allLons.sort((a, b) => a - b);
+      const q = (arr: number[], f: number) => arr[Math.round(f * (arr.length - 1))];
+      bounds.extend([q(allLons, 0.01), q(allLats, 0.01)]);
+      bounds.extend([q(allLons, 0.99), q(allLats, 0.99)]);
     }
+    if (!bounds.isEmpty()) {
+      pendingBoundsRef.current = bounds;
+      tryFit();
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [ready, loaded, tracks, dimIds, sel, wps, colorOf]);
 
   return (

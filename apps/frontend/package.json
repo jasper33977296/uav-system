@@ -8,6 +8,9 @@
     "start": "next start"
   },
   "dependencies": {
+    "@deck.gl/core": "^9.3.9",
+    "@deck.gl/layers": "^9.3.9",
+    "@deck.gl/mapbox": "^9.3.9",
     "@types/three": "^0.185.3",
     "maplibre-gl": "^4.7.1",
     "next": "^15.4.5",

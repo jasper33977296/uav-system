@@ -1,4 +1,5 @@
 "use client";
+import { MapboxOverlay } from "@deck.gl/mapbox";
 import maplibregl from "maplibre-gl";
 import "maplibre-gl/dist/maplibre-gl.css";
 import { useEffect, useRef, useState } from "react";
@@ -7,8 +8,9 @@ import CommandPanel from "@/components/CommandPanel";
 import { colorFor, createDroneLayer, pickDrone, type ScreenHit } from "@/components/droneLayer";
 import VideoModal from "@/components/VideoModal";
 import VideoPlayer from "@/components/VideoPlayer";
+import { routeLayer } from "@/lib/deckRoute";
 import { CANVAS, groundGrid, ribbon, trailLineString } from "@/lib/geo";
-import { API, LINK_CLASSES, classifySinr } from "@/lib/signal";
+import { API, LINK_CLASSES } from "@/lib/signal";
 import { useUavStore } from "@/lib/store";
 
 const HOME: [number, number] = [8.5456, 47.3977]; // PX4 SITL 預設起飛點
@@ -16,12 +18,6 @@ const HOME: [number, number] = [8.5456, 47.3977]; // PX4 SITL 預設起飛點
 // 刻意**不放底圖**：場域物件不存在於系統認知中，鏈路品質的空間分布由
 // 實測軌跡自己揭露；離線（場域實測常態）也完全可用。
 // 要加底圖時在 style.sources 加 raster source、layers 最前面插一層即可。
-
-const CLS_MATCH = [
-  "match", ["get", "cls"],
-  ...LINK_CLASSES.flatMap((c) => [c.key, c.color]),
-  "#8f8b80",
-] as any;
 
 interface DroneVideo { id: string; name: string; video_url: string | null }
 
@@ -34,7 +30,8 @@ export default function MapView() {
   const hitsRef = useRef<Map<string, ScreenHit>>(new Map());
   const [videoDrone, setVideoDrone] = useState<string | null>(null);
   const coordRef = useRef<HTMLDivElement>(null);
-  const ribbonGateRef = useRef({ t: 0, n: -1 });   // 絲帶重建節流（閃爍 hotfix）
+  const overlayRef = useRef<MapboxOverlay | null>(null);
+  const ribbonGateRef = useRef({ t: 0, n: -1 });   // 地面投影重建節流
 
   // 檢視切換：地圖 ↔ 當前選擇機（側欄選的，未選＝主機）的即時影像
   const [view, setView] = useState<"map" | "video">("map");
@@ -112,18 +109,12 @@ export default function MapView() {
         },
       });
 
-      // 實際路徑：懸浮在飛行高度的彩色平面絲帶（依 SINR 分級上色）
-      map.addSource("path3d", { type: "geojson",
-        data: { type: "FeatureCollection", features: [] } });
-      map.addLayer({
-        id: "path3d", type: "fill-extrusion", source: "path3d",
-        paint: {
-          "fill-extrusion-color": CLS_MATCH,
-          "fill-extrusion-height": ["get", "top"],
-          "fill-extrusion-base": ["get", "base"],
-          "fill-extrusion-opacity": 0.9,
-        },
-      });
+      // 實際路徑：deck.gl PathLayer（route-render-tool-eval 定案，取代
+      // fill-extrusion 絲帶）——interleaved 模式與 maplibre 同一 GL context，
+      // 與 three.js 球體自訂層共存（interop 是選型條件 3，落地後實測）
+      const overlay = new MapboxOverlay({ interleaved: true, layers: [] });
+      map.addControl(overlay as unknown as maplibregl.IControl);
+      overlayRef.current = overlay;
 
       // 無人機本體：three.js 正圓球體，浮在實際高度。
       // 讀整個 fleet——群飛時幾台就畫幾台，顏色依出現順序取機隊色盤。
@@ -239,17 +230,19 @@ export default function MapView() {
 
         // 球體層自己每幀從 store 讀位置（triggerRepaint 驅動），不需在此餵資料
 
-        // 絲帶/投影重建節流 1Hz 且僅樣本增加時執行：fill-extrusion 的
-        // setData 是整源替換（無增量更新），5Hz 全量 rebuild 是路線閃爍的
-        // 直接來源（route-render-tool-eval 的 hotfix；根治等渲染選型定案）。
-        // 機體 marker 與置中不節流——位置要跟得上 5Hz
+        // 空中航跡：deck.gl PathLayer——attribute 更新是同幀 GPU buffer
+        // 寫入（無 setData 整源替換的閃爍），5Hz 直更不需節流
+        overlayRef.current?.setProps({ layers: [routeLayer("route3d", s.trails)] });
+
+        // 地面投影仍是 maplibre setData（整源替換）：節流 1Hz 且僅樣本
+        // 增加時重建。機體 marker 與置中不節流——位置要跟得上 5Hz
         const total = Object.values(s.trails).reduce((a, tr) => a + tr.length, 0);
         const now = performance.now();
         const gate = ribbonGateRef.current;
         if (total === gate.n || now - gate.t < 1000) return;
         ribbonGateRef.current = { t: now, n: total };
 
-        // 地面投影＝機別色（誰飛的）；空中絲帶＝SINR 分級（訊號如何）
+        // 地面投影＝機別色（誰飛的）；空中航跡＝SINR 分級（訊號如何）
         const trailEntries = Object.entries(s.trails);
         (map.getSource("trail") as maplibregl.GeoJSONSource | undefined)?.setData({
           type: "FeatureCollection",
@@ -257,17 +250,6 @@ export default function MapView() {
             .map(([id, tr]) => trailLineString(tr, { dcolor: colorFor(id) }))
             .filter((f): f is GeoJSON.Feature => f !== null),
         });
-
-        // 絲帶隔 2 點取一段：5Hz 下段長約 2m，視覺連續
-        (map.getSource("path3d") as maplibregl.GeoJSONSource | undefined)?.setData({
-          type: "FeatureCollection",
-          features: trailEntries.flatMap(([, tr]) =>
-            ribbon(
-              tr.filter((_, i) => i % 2 === 0),
-              (_a, b) => ({ cls: b.sinr == null ? "unknown" : classifySinr(b.sinr).key }),
-            ).features),
-        });
-
 
       }),
     []
