@@ -487,12 +487,10 @@ a:focus-visible, button:focus-visible, input:focus-visible, select:focus-visible
   color: var(--ink-2); line-height: 1.8; font-size: 12px;
 }
 
-/* 事件卡（使用者修訂）：任務控制正下方、同寬 300px */
-.right-col { display: flex; flex-direction: column; gap: 8px; width: 300px; flex: none; }
+/* 事件卡（使用者二次修訂）：住 ▤ 抽屜、專業數值卡下方；抽屜本體可捲動 */
 .ev-card {
-  background: var(--surface); border: 1px solid var(--hairline);
-  border-radius: 14px; overflow: hidden;
-  box-shadow: 0 4px 16px rgba(0, 0, 0, 0.35);
+  background: var(--surface); border: 1px solid var(--border);
+  border-radius: 10px; overflow: hidden; flex: none;
 }
 .hud-ticker {
   display: flex; width: 100%; align-items: center; gap: 8px;

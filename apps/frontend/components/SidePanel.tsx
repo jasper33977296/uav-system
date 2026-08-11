@@ -1,6 +1,7 @@
 "use client";
 import { useEffect, useRef, useState } from "react";
 
+import { EventsCard } from "@/components/SimpleHud";
 import { classifySinr } from "@/lib/signal";
 import { useUavStore } from "@/lib/store";
 
@@ -160,6 +161,9 @@ export default function SidePanel() {
           <Metric label="俯仰 Pitch" value={fmt(live?.pitch)} unit="°" />
         </div>
       </div>
+
+      {/* 事件卡（使用者二次修訂）：住抽屜、專業數值卡下方 */}
+      <EventsCard />
     </aside>
   );
 }
