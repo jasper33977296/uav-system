@@ -250,9 +250,14 @@ MJPEG（IP cam 常見）與 MP4/WebM 位址也可直接填，前端依 URL 自�
 |---|---|---|---|
 | 33000 | TCP | 前端 | 操作員瀏覽器（區網）|
 | 38000 | TCP | API/WS ＋機上 push | 瀏覽器、機上 node |
-| 14550 | UDP | MAVLink → QGC | 機上 mavlink-router |
-| 14540 | UDP | MAVLink → 本系統（ingest，唯讀） | 機上 mavlink-router |
-| 14541 | UDP | MAVLink ↔ command 服務（雙向，`ENABLE_COMMANDS=true` 時） | 機上 mavlink-router |
+| 14550 | UDP | MAVLink → QGC（**SITL 下：command 服務改聽此埠**，見下註） | 機上 mavlink-router／PX4 SITL 廣播 |
+| 14540 | UDP | MAVLink → 本系統（ingest，唯讀） | 機上 mavlink-router／SITL |
+| 14541 | UDP | MAVLink ↔ command 服務（雙向，**生產**，`ENABLE_COMMANDS=true` 時） | 機上 mavlink-router |
+
+> **command 埠的生產 vs SITL 分歧**：上表 14541 是**生產**（onboard router 打 GS:14541）。
+> **SITL 開發**沒有 onboard router，PX4 只廣播到 14550，故 SITL 的 command 服務改聽
+> **14550**（本機 `.env` 設 `COMMAND_MAVLINK_URL=udpin://0.0.0.0:14550`）——此時 command
+> 與 QGC 同搶 14550、**同機互斥**（見 issues/016）。`config.py` 預設值仍是 14541（生產）。
 | 38001 | TCP | command 服務 API | 瀏覽器（階段 3 UI）、curl |
 | 35432 | TCP | TimescaleDB | 僅本機（分析工具可直連）|
 

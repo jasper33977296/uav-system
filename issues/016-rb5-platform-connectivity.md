@@ -28,6 +28,17 @@ RB5 的 MAVLink 對外通道由 ModalAI 平台層管理（來源快照與出處�
 - RB5 機隊「有時能控、有時不能」不可重現；5G 場景系統性失聯。
 - 多機接入時 demux 失效，資料歸屬錯亂。
 
+## 附記：SITL 下 command 服務與 QGC 同搶 14550（2026-08-11 成真）
+
+016 早先討論過「機上出廠廣播 14550＝QGC 慣用埠」的埠衝突風險，在 **SITL 開發環境**
+上具體成真：command 服務生產綁 14541，但 SITL 沒有 onboard router 拆通道、PX4 只
+廣播到 14550，故 SITL 的 command 改聽 **14550**（本機 `.env` 覆寫；見 `config.py` 註解、
+`doc/gcs-replacement.md` §1、`doc/deployment.md` 埠表）。**後果：SITL 下 command 與
+QGC 同機互斥**——兩者都要 14550，同時起只有一個收得到（UDP 單埠獨占）。驗收/開發時
+二選一：跑 command 服務就別開 QGC 連 14550，反之亦然。生產無此問題（command 在
+14541、QGC 在 14550，分開）。多台 SITL 併測時亦須把各實例導到同一組埠靠 sysid demux
+（見 §1 單埠多機），或本機 mavlink-router 轉接。
+
 ## 修法建議
 
 按 `reference/gap-analysis.md` §0 的上機檢查清單：
