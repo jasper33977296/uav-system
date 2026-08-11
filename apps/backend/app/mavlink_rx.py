@@ -304,6 +304,31 @@ class MavlinkRx:
         elif t == "ATTITUDE":
             st.roll = math.degrees(msg.roll)
             st.pitch = math.degrees(msg.pitch)
+            # IMU 卡：角速率（rad/s 原生，前端轉 °/s）
+            st.imu.update(rollspeed=msg.rollspeed, pitchspeed=msg.pitchspeed,
+                          yawspeed=msg.yawspeed)
+        elif t == "HIGHRES_IMU":
+            # IMU 卡：加速度/陀螺/磁力/溫度/氣壓。訊息結構固定、每筆都帶最新值
+            # （fields_updated 只是「本筆哪些變了」的提示、非有效性遮罩，別拿來 null
+            # 否則低頻的磁力/氣壓會被誤清）。feature-detect＝訊息層級（機上不發
+            # HIGHRES_IMU→整組 None）＋「0＝不提供」慣例（溫度）。
+            st.imu.update(
+                xacc=msg.xacc, yacc=msg.yacc, zacc=msg.zacc,          # m/s²
+                xgyro=msg.xgyro, ygyro=msg.ygyro, zgyro=msg.zgyro,    # rad/s
+                xmag=msg.xmag * 100.0, ymag=msg.ymag * 100.0,         # gauss→µT
+                zmag=msg.zmag * 100.0,
+                # abs_pressure 正規化成 hPa：MAVLink 定 hPa，但 PX4 SITL 的 Gazebo 氣壓
+                # sensor 送 Pa（實測 95605＝956 hPa@487m）。氣壓永遠 <2000 hPa，>2000 判定
+                # 是 Pa÷100——SITL 與真機（送 hPa）都正規化到 hPa。
+                abs_pressure=(msg.abs_pressure / 100.0 if msg.abs_pressure > 2000
+                              else msg.abs_pressure),
+                pressure_alt=msg.pressure_alt,                        # m
+                temperature=(msg.temperature or None))               # 0＝不提供→None
+        elif t == "VIBRATION":
+            st.imu.update(
+                vibration_x=msg.vibration_x, vibration_y=msg.vibration_y,
+                vibration_z=msg.vibration_z, clipping_0=msg.clipping_0,
+                clipping_1=msg.clipping_1, clipping_2=msg.clipping_2)
         elif t == "GPS_RAW_INT":
             st.gps_fix = msg.fix_type
             st.satellites = msg.satellites_visible

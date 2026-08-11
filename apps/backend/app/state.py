@@ -7,6 +7,19 @@ LiveState；`live` 仍是「主機」那台的 state 物件（fleet 裡同一個
 import time as _time
 from dataclasses import dataclass, field
 
+# IMU 卡欄位契約（與前端 lib/store.ts ImuData 對齊；ui-spec §2.6）。單位：角速率/陀螺
+# rad/s（前端轉 °/s 顯示）、加速度 m/s²、磁力 µT（HIGHRES_IMU 原生 gauss，後端 ×100）、
+# 溫度 °C、壓力 hPa、氣壓高度 m、振動水平、clipping 計數。缺項→None（feature-detect）。
+_IMU_KEYS = (
+    "rollspeed", "pitchspeed", "yawspeed",              # ATTITUDE，rad/s
+    "xacc", "yacc", "zacc",                             # HIGHRES_IMU，m/s²
+    "xgyro", "ygyro", "zgyro",                          # HIGHRES_IMU，rad/s
+    "xmag", "ymag", "zmag",                             # HIGHRES_IMU，µT
+    "temperature", "abs_pressure", "pressure_alt",      # HIGHRES_IMU：°C／hPa／m
+    "vibration_x", "vibration_y", "vibration_z",        # VIBRATION
+    "clipping_0", "clipping_1", "clipping_2",           # VIBRATION 計數
+)
+
 
 @dataclass
 class LiveState:
@@ -45,6 +58,10 @@ class LiveState:
     autopilot_raw: int | None = None      # MAV_AUTOPILOT_*（方言分表；issue 015）
     vehicle_type_raw: int | None = None   # MAV_TYPE_*
     sysid: int | None = None              # 該機當前 MAVLink sysid（前端選中機↔指令對象）
+    # IMU 面板（即時頁抽屜；ui-spec §2.6）：ATTITUDE 角速率＋HIGHRES_IMU 加速度/陀螺/
+    # 磁力/溫度/氣壓＋VIBRATION 振動/clipping。訊息高頻進、只在 WS 廣播率（5Hz）送最新。
+    # feature-detect：機上沒發的欄位維持缺→telemetry_dict 補 None（前端顯「無資料」）。
+    imu: dict = field(default_factory=dict)
     # serving cell 追蹤（換手事件；issue 002 教訓＝防抖）：serving_pci 是已確認的
     # 現任 PCI，pci_pending 是待確認候選（連續 2 次才算換手，事件層防抖）
     serving_pci: int | None = None
@@ -109,6 +126,8 @@ class LiveState:
             "alt_msl": self.alt_msl, "alt_rel": self.alt_rel,
             "heading": self.heading,
             "roll": self.roll, "pitch": self.pitch,
+            # IMU 卡：固定形狀（缺欄補 None，前端 feature-detect 顯「無資料」）
+            "imu": {k: self.imu.get(k) for k in _IMU_KEYS},
             "ground_speed": self.ground_speed,
             "vertical_speed": self.vertical_speed,
             "battery_pct": self.battery_pct,
