@@ -28,6 +28,7 @@ GCS_SYSID = 254
 
 # PX4 custom mode（DO_SET_MODE 的 param2/param3：main_mode/sub_mode）
 PX4_MODES = {
+    "position": (3, 0),  # POSCTL（手動位置控制：搖桿→速度，鬆手懸停）
     "mission": (4, 4),   # AUTO.MISSION
     "hold":    (4, 3),   # AUTO.LOITER
     "rtl":     (4, 5),   # AUTO.RTL
@@ -65,6 +66,9 @@ class MavRouter(threading.Thread):
         self.drones: dict[int, dict] = {}   # sysid → addr/seen_mono/armed/custom_mode
         self.jobs: queue.Queue = queue.Queue()
         self._hb_t = 0.0
+        # 手動控制（虛擬搖桿）：sysid → {sp, ts, active}。安全鏈見 _tick_manual。
+        self.manual: dict[int, dict] = {}
+        self._manual_tx = 0.0
 
     # ── API 層入口（任意執行緒呼叫；在 executor 裡跑，不阻塞事件迴圈）──
     def submit(self, fn, *args, timeout: float = 30.0):
@@ -90,12 +94,26 @@ class MavRouter(threading.Thread):
             try:
                 fn, args, fut = self.jobs.get_nowait()
             except queue.Empty:
-                self._recv(0.2)
+                # 手動控制中 → 20Hz 收發（搖桿要順）；否則 5Hz 省事
+                active = any(m.get("active") for m in self.manual.values())
+                self._recv(0.05 if active else 0.2)
                 continue
             try:
                 fut.set_result(fn(self, *args))
             except Exception as e:            # 失敗必須浮上去，不得靜默
                 fut.set_exception(e)
+
+    def set_manual(self, sysid: int, x: float, y: float, z: float, r: float):
+        """更新手動設定點（-1..1；z: 0=定高、+上−下）。API 執行緒高頻呼叫。"""
+        m = self.manual.setdefault(sysid, {})
+        m["sp"] = (x, y, z, r)
+        m["ts"] = time.monotonic()
+        m["active"] = True
+
+    def stop_manual(self, sysid: int):
+        m = self.manual.get(sysid)
+        if m:
+            m["active"] = False
 
     def _tick(self):
         now = time.monotonic()
@@ -107,6 +125,35 @@ class MavRouter(threading.Thread):
                         M.MAV_TYPE_GCS, M.MAV_AUTOPILOT_INVALID, 0, 0, 0))
                 except CommandError:
                     pass
+        self._tick_manual(now)
+
+    def _tick_manual(self, now: float):
+        """手動控制安全鏈（虛擬搖桿）：
+          age < 0.4s  → 送實際搖桿值（deadman：前端持續按才會更新 ts）
+          0.4–2s      → 送中位（位置模式＝原地懸停，鬆手即停不墜落）
+          > 2s        → 操作者失聯 → 自動切 Hold 並結束手動（自主安全懸停）
+        """
+        if now - self._manual_tx < 0.045:        # 上限 ~20Hz
+            return
+        for sysid, m in list(self.manual.items()):
+            if not m.get("active"):
+                continue
+            age = now - m.get("ts", 0)
+            if age > 2.0:
+                m["active"] = False
+                try:
+                    job_set_mode(self, sysid, "hold")   # 失聯 → 自主懸停
+                except Exception:
+                    pass
+                continue
+            x, y, z, r = m["sp"] if age < 0.4 else (0.0, 0.0, 0.0, 0.0)
+            self._manual_tx = now
+            try:
+                self._sendto(sysid, lambda mm: mm.manual_control_encode(
+                    sysid, int(x * 1000), int(y * 1000),
+                    int(500 + z * 500), int(r * 1000), 0))
+            except CommandError:
+                pass
 
     def _recv(self, timeout: float):
         msg = self.conn.recv_match(blocking=True, timeout=timeout)
