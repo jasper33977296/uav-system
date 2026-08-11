@@ -26,6 +26,7 @@ progress/   開發進度現況 + 逐次開發紀錄 log/
 | [doc/deployment.md](doc/deployment.md) | **部署手冊**：地面站安裝、機上一次性設定、網路、驗收、維運 |
 | [progress/README.md](progress/README.md) | **目前進度、環境現況、下一步** |
 | [issues/README.md](issues/README.md) | 問題索引與狀態 |
+| [doc/README.md](doc/README.md) | **文件總索引**：全部文件分類（系統/定案/設計規範/archive 歷程）|
 
 ## 快速啟動
 

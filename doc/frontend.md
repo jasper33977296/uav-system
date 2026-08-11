@@ -80,6 +80,11 @@ SINR 線用中性墨色＋淡門檻帶（5 / -2 dB 兩條參考線），**不分
 沒有底圖也成立——路徑間的幾何關係是相對的，「場域的樣子」由彩色軌跡
 自己累積揭露：那是研究產出物，不是輸入。
 
+**視覺平滑邊界（2026-08-11 定案，issues/017）**：地圖上的路徑幾何可做
+視覺平滑（spline／滑動平均），但研究圖表（回放時序、比較頁）一律用
+原始樣本；顏色分級不插值——不得產生量測點之間的假 SINR 值。絲帶是
+路徑的示意呈現，平滑只影響繪製、不改資料。
+
 ## 軌跡上色規則（研究主視覺）
 
 鏈路健康是一種**狀態**編碼，用 status palette 四段，門檻與 backend 事件門檻一致
@@ -114,11 +119,13 @@ SINR 線用中性墨色＋淡門檻帶（5 / -2 dB 兩條參考線），**不分
 - **MapLibre 依賴 `window`，必須關 SSR**：
   `dynamic(() => import("@/components/MapView"), { ssr: false })`，
   因此 `app/page.tsx` 是 client component。
-- **目前不放底圖**（2026-08-04 定案）：SITL 場景在蘇黎世，OSM 街圖沒有研究
-  意義；不抓外部 tile 讓地面站離線（場域實測常態）也完全可用；深色畫布
-  （`#14181c`）讓軌跡對比最好。`MapView.tsx` 留有插槽——台灣場域要加
-  NLSC 正射影像時，在 style.sources 加 raster source、layers 最前面插一層即可。
-  無底圖時距離感只剩比例尺，ScaleControl 必開。
+- **底圖：預設深色畫布＋opt-in 影像/地形**（2026-08-11 修訂原 08-04
+  無底圖定案，issues/017、doc/archive/3d-view-quality-proposal.md）：預設仍深色
+  畫布（`#14181c`，離線保證＋對比基準）；使用者可切衛星/正射影像層與
+  地形層，離線場域用預打包瓦片（部署手冊附錄的選配步驟），瓦片不可得時
+  自動退回深色畫布並如實顯示。影像層開啟時加暗化 overlay 維持軌跡對比，
+  狀態色盤需在影像背景重驗 CVD。**地形層在高度基準驗證通過前不對實場域
+  開放**。無底圖時距離感只剩比例尺，ScaleControl 必開。
 - 深色模式：CSS variables 在 `globals.css` 依 `prefers-color-scheme` 切換，
   色彩角色（surface/ink/hairline/series）皆為 light/dark 各自選定的值。
 - 環境變數：`NEXT_PUBLIC_API_URL`、`NEXT_PUBLIC_WS_URL`（見 `.env.local.example`）。
