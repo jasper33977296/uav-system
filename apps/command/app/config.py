@@ -14,6 +14,9 @@ class Settings(BaseSettings):
     # command_log 留痕），GEOFENCE_ENFORCE=true 才恢復 409 擋門。
     # 空中的真正防線仍是 PX4 自己的 Geofence（QGC 設定的那個）。
     geofence_enforce: bool = False
+    # 起飛→任務序列要讀高度（等實際到達才切 MISSION），來源是 backend 的
+    # live 快照（同主機不同容器）
+    backend_api: str = "http://localhost:38000"
     geofence_radius_m: float = 50.0
     geofence_alt_m: float = 15.0
     geofence_margin: float = 0.7

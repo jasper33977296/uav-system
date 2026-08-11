@@ -29,6 +29,7 @@ export default function CommandPanel() {
   const [confirm, setConfirm] = useState<string | null>(null);
   const confirmTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const [open, setOpen] = useState(true);
+  const [alt, setAlt] = useState(10);
   const live = useUavStore((s) => s.live);
 
   // 可拖曳：抓標題列移動，貼齊邊緣，位置記在 localStorage（重整不跑位）
@@ -108,7 +109,8 @@ export default function CommandPanel() {
   const sid = sysid && sysids.includes(sysid) ? sysid : sysids[0] ?? null;
   const armed = sid ? health.drones[sid].armed : null;
 
-  async function exec(action: string, path: string, needsConfirm = false) {
+  async function exec(action: string, path: string, needsConfirm = false,
+                      payload?: Record<string, unknown>) {
     if (needsConfirm && confirm !== action) {
       setConfirm(action);
       if (confirmTimer.current) clearTimeout(confirmTimer.current);
@@ -122,7 +124,7 @@ export default function CommandPanel() {
       const res = await fetch(`${COMMAND_API}/api/command/${sid}${path}`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: path.endsWith("upload") ? JSON.stringify({ mission_id: missionId }) : undefined,
+        body: payload ? JSON.stringify(payload) : undefined,
       });
       const body = await res.json().catch(() => ({}));
       if (!res.ok) {
@@ -147,11 +149,12 @@ export default function CommandPanel() {
   }
 
   const btn = (action: string, label: string, path: string,
-               opts: { confirm?: boolean; danger?: boolean; disabled?: boolean } = {}) => (
+               opts: { confirm?: boolean; danger?: boolean; disabled?: boolean;
+                       body?: Record<string, unknown> } = {}) => (
     <button
       className={opts.danger ? "btn-danger btn-sm" : "btn-plain btn-sm"}
       disabled={!sid || busy !== null || opts.disabled}
-      onClick={() => exec(action, path, opts.confirm)}
+      onClick={() => exec(action, path, opts.confirm, opts.body)}
     >
       {busy === action ? "⋯" : confirm === action ? `確認${label}？` : label}
     </button>
@@ -221,14 +224,27 @@ export default function CommandPanel() {
               {missions.map((m) => <option key={m.id} value={m.id}>{m.name}</option>)}
             </select>
             {btn("上傳", "上傳到機", "/mission/upload",
-                 { disabled: !missionId })}
+                 { disabled: !missionId, body: { mission_id: missionId } })}
+          </div>
+
+          {/* 起飛→任務：實戰教訓——地面直接啟動任務會失敗，須先到高度。
+              一鍵序列：解鎖→起飛→等高度到達→切 MISSION */}
+          <div className="cmd-row">
+            <label className="cmd-alt">高度
+              <input type="number" min={3} max={100} step={1} value={alt}
+                onChange={(e) => setAlt(Number(e.target.value) || 10)} /> m
+            </label>
+            {btn("起飛", "起飛", "/takeoff", { confirm: true, body: { alt } })}
+            {btn("起飛→任務", "起飛→任務", "/mission/fly",
+                 { confirm: true,
+                   body: { mission_id: missionId || undefined, takeoff_alt: alt } })}
           </div>
 
           <div className="cmd-row">
             {armed
               ? btn("上鎖", "上鎖", "/disarm", { confirm: true, danger: true })
               : btn("解鎖", "解鎖", "/arm", { confirm: true })}
-            {btn("啟動任務", "啟動任務", "/mission/start", { confirm: true })}
+            {btn("啟動任務", "啟動任務（已在空中時）", "/mission/start", { confirm: true })}
           </div>
 
           <div className="cmd-row cmd-emergency">

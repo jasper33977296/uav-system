@@ -14,6 +14,9 @@
 import asyncio
 import json
 import logging
+import math
+import urllib.request
+
 import asyncpg
 from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
@@ -143,8 +146,99 @@ async def mission_start(sysid: int):
     return await _run(sysid, "mission_start", mav.job_command, 300, [0.0])
 
 
+async def _live() -> dict:
+    """backend 的即時快照（高度/armed）。讀不到時丟例外——序列不盲飛。"""
+    loop = asyncio.get_running_loop()
+
+    def _get():
+        with urllib.request.urlopen(f"{settings.backend_api}/api/live",
+                                    timeout=3) as r:
+            return json.loads(r.read().decode())
+    try:
+        return await loop.run_in_executor(None, _get)
+    except Exception as e:
+        raise HTTPException(502, f"讀不到 backend 即時狀態（{e}）——"
+                                 "起飛序列需要高度回饋，中止")
+
+
+class TakeoffIn(BaseModel):
+    alt: float = 10.0                  # 相對起飛點高度（公尺）
+
+
+async def _do_takeoff(sysid: int, alt: float) -> dict:
+    """解鎖（未解鎖時）→ NAV_TAKEOFF 到指定相對高度。
+
+    PX4 的 MAV_CMD_NAV_TAKEOFF param7 是**絕對海拔**——用 live 的
+    alt_msl - alt_rel 推地面海拔再加目標高度；經緯度/偏航給 NaN＝原地。
+    """
+    d = await _live()
+    if d.get("alt_msl") is None or d.get("alt_rel") is None:
+        raise HTTPException(409, "沒有高度資料（GPS/EKF 未就緒），無法起飛")
+    target_amsl = (d["alt_msl"] - d["alt_rel"]) + alt
+    steps = {}
+    if not d.get("armed"):
+        steps["arm"] = await _run(sysid, "arm", mav.job_command, 400, [1.0])
+    steps["takeoff"] = await _run(
+        sysid, f"takeoff:{alt}m", mav.job_command, 22,
+        [0.0, 0.0, 0.0, math.nan, math.nan, math.nan, target_amsl])
+    return steps
+
+
 class UploadIn(BaseModel):
     mission_id: str
+
+
+@app.post("/api/command/{sysid}/takeoff")
+async def takeoff(sysid: int, body: TakeoffIn):
+    """監督式起飛：解鎖＋爬升到指定高度後自動懸停（PX4 自主執行）。
+    取代「用 RC 手動飛到高度」的操作——連續操縱仍是 RC 的職權。"""
+    _require_enabled()
+    return await _do_takeoff(sysid, body.alt)
+
+
+class FlyIn(BaseModel):
+    mission_id: str | None = None      # 給了就先上傳＋回讀比對；不給＝用機上現有任務
+    takeoff_alt: float = 10.0
+    alt_timeout_s: float = 60.0
+
+
+@app.post("/api/command/{sysid}/mission/fly")
+async def mission_fly(sysid: int, body: FlyIn):
+    """起飛→任務自動序列（實戰教訓 2026-08-11：地面直接 MISSION_START
+    在實機上會失敗，須先到高度）：
+
+      （上傳＋回讀比對）→ 解鎖 → NAV_TAKEOFF → **等實際到達目標高度**
+      → 切 AUTO.MISSION（已在空中，PX4 跳過任務內的 takeoff 項續飛）
+
+    高度沒到就不切任務——序列在任何一步失敗都停在安全狀態
+    （PX4 起飛後自動懸停），並回報卡在哪一步。
+    """
+    _require_enabled()
+    steps = {}
+    if body.mission_id:
+        steps["upload"] = await mission_upload(sysid, UploadIn(mission_id=body.mission_id))
+    steps.update(await _do_takeoff(sysid, body.takeoff_alt))
+
+    # 等高度實際到達（80% 即視為到位，PX4 收斂段不必等滿）
+    deadline = asyncio.get_running_loop().time() + body.alt_timeout_s
+    alt = None
+    while asyncio.get_running_loop().time() < deadline:
+        await asyncio.sleep(1.0)
+        alt = (await _live()).get("alt_rel")
+        if alt is not None and alt >= body.takeoff_alt * 0.8:
+            break
+    else:
+        await _audit(sysid, "mission_fly", body.model_dump(), "failed",
+                     f"起飛後 {body.alt_timeout_s:.0f}s 未達目標高度（目前 {alt} m）")
+        raise HTTPException(504, {
+            "msg": f"起飛後未達目標高度（目前 {alt} m / 目標 {body.takeoff_alt} m）",
+            "hint": "機停在懸停狀態，未啟動任務——檢查 RC/遙測後可重試或 RTL",
+            "steps": steps})
+    steps["alt_reached"] = {"alt_rel": alt}
+
+    steps["mission"] = await _run(sysid, "mode:mission", mav.job_set_mode, "mission")
+    await _audit(sysid, "mission_fly", body.model_dump(), "accepted", json.dumps(steps))
+    return {"ok": True, "steps": steps}
 
 
 @app.post("/api/command/{sysid}/mission/upload")
