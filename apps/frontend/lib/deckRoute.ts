@@ -18,9 +18,14 @@ import type { TrailPoint } from "@/lib/store";
 const UNKNOWN = "#8f8b80";   // 無 SINR 樣本的段落（＝muted，不造假）
 
 type Rgba = [number, number, number, number];
-export interface RouteRun { path: [number, number, number][]; color: Rgba }
+export interface RouteRun {
+  path: [number, number, number][];
+  color: Rgba;
+  width?: number;        // 公尺；預設 3
+  sid?: string;          // 拾取用（比較頁點絲帶選架次）
+}
 
-const rgba = (hex: string): Rgba => [
+export const rgba = (hex: string): Rgba => [
   parseInt(hex.slice(1, 3), 16),
   parseInt(hex.slice(3, 5), 16),
   parseInt(hex.slice(5, 7), 16),
@@ -61,17 +66,16 @@ export function sinrRuns(pts: TrailPoint[]): RouteRun[] {
   return runs.filter((r) => r.path.length >= 2);
 }
 
-/** 全機隊尾跡 → 一個 PathLayer（呼叫端每次 setProps 換新實例） */
-export function routeLayer(id: string, trails: Record<string, TrailPoint[]>) {
-  const data = Object.values(trails).flatMap((tr) => sinrRuns(tr));
+/** 泛用路徑層：per-path 色/寬（identity、dim、分級 run 都用它） */
+export function pathsLayer(id: string, data: RouteRun[], pickable = false) {
   return new PathLayer<RouteRun>({
     id,
     data,
     getPath: (d) => d.path,
     getColor: (d) => d.color,
-    getWidth: 3,             // 公尺（與原絲帶同寬）
+    getWidth: (d) => d.width ?? 3,   // 公尺（與原絲帶同寬）
     widthUnits: "meters",
-    widthMinPixels: 2,       // 遠 zoom 仍可見
+    widthMinPixels: 2,               // 遠 zoom 仍可見
     jointRounded: true,
     capRounded: true,
     // billboard:true（2026-08-11 使用者二輪反饋修正）：false 時寬度只在
@@ -79,5 +83,11 @@ export function routeLayer(id: string, trails: Record<string, TrailPoint[]>) {
     // 雜訊，帶面亂跳＝垂直段顆粒。面向相機後垂直段方向在 3D 中良定義，
     // 俯視/傾斜觀感不變
     billboard: true,
+    pickable,
   });
+}
+
+/** 全機隊尾跡 → 一個 SINR 分級 PathLayer（呼叫端每次 setProps 換新實例） */
+export function routeLayer(id: string, trails: Record<string, TrailPoint[]>) {
+  return pathsLayer(id, Object.values(trails).flatMap((tr) => sinrRuns(tr)));
 }

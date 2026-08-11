@@ -8,12 +8,14 @@
  *   - 選中單一架次（點絲帶或圖例）＝該絲帶切 SINR 分級色、其餘退 muted——
  *     單線時狀態色才有意義，這是狀態色在本頁唯一的入口
  */
+import { MapboxOverlay } from "@deck.gl/mapbox";
 import maplibregl from "maplibre-gl";
 import "maplibre-gl/dist/maplibre-gl.css";
 import { useEffect, useRef, useState } from "react";
 
+import { pathsLayer, rgba, sinrRuns, type RouteRun } from "@/lib/deckRoute";
 import { CANVAS, groundGrid, ribbon } from "@/lib/geo";
-import { LINK_CLASSES, classifySinr } from "@/lib/signal";
+import { LINK_CLASSES } from "@/lib/signal";
 
 const MUTED = "#8f8b80";   // ＝--muted（maplibre 吃不到 CSS 變數）
 
@@ -33,6 +35,7 @@ export default function CompareMap3D({
 }: Props) {
   const containerRef = useRef<HTMLDivElement>(null);
   const mapRef = useRef<maplibregl.Map | null>(null);
+  const overlayRef = useRef<MapboxOverlay | null>(null);
   const [ready, setReady] = useState(false);
   const fittedRef = useRef(false);
   const pendingBoundsRef = useRef<maplibregl.LngLatBounds | null>(null);
@@ -135,23 +138,20 @@ export default function CompareMap3D({
                    "line-dasharray": [3, 3], "line-opacity": 0.6 } });
       }
 
-      map.addSource("runs", { type: "geojson",
-        data: { type: "FeatureCollection", features: [] } });
-      map.addLayer({ id: "runs", type: "fill-extrusion", source: "runs",
-        paint: { "fill-extrusion-color": ["get", "c"],
-                 "fill-extrusion-height": ["get", "top"],
-                 "fill-extrusion-base": ["get", "base"],
-                 "fill-extrusion-opacity": 0.88 } });
+      // 架次航跡：deck.gl PathLayer（與即時/回放同一渲染，顆粒/閃爍同修）
+      const overlay = new MapboxOverlay({ interleaved: true, layers: [] });
+      map.addControl(overlay as unknown as maplibregl.IControl);
+      overlayRef.current = overlay;
 
-      // 點絲帶＝選中該架次（再點一次或點空白取消）
+      // 點絲帶＝選中該架次（再點一次或點空白取消）；拾取走 deck
       map.on("click", (e) => {
-        const hit = map.queryRenderedFeatures(e.point, { layers: ["runs"] })[0];
-        const sid = hit?.properties?.sid as string | undefined;
+        const info = overlay.pickObject({ x: e.point.x, y: e.point.y });
+        const sid = (info?.object as RouteRun | undefined)?.sid;
         setSel((cur) => (sid ? (cur === sid ? null : sid) : null));
       });
       map.on("mousemove", (e) => {
-        const hit = map.queryRenderedFeatures(e.point, { layers: ["runs"] })[0];
-        map.getCanvas().style.cursor = hit ? "pointer" : "";
+        const info = overlay.pickObject({ x: e.point.x, y: e.point.y });
+        map.getCanvas().style.cursor = info ? "pointer" : "";
       });
       // 取證：所有相機移動都記錄——zoom≈12 的覆蓋源會在這裡現形
       map.on("moveend", () => {
@@ -168,7 +168,7 @@ export default function CompareMap3D({
   useEffect(() => {
     const map = mapRef.current;
     if (!map || !ready) return;
-    const feats: GeoJSON.Feature[] = [];
+    const runs: RouteRun[] = [];
     const allLats: number[] = [];
     const allLons: number[] = [];
     for (const sid of loaded) {
@@ -180,16 +180,21 @@ export default function CompareMap3D({
                        sinr: r.sinr as number | null }));
       const active = sel === sid;
       const dim = sel ? !active : dimIds.includes(sid);
-      feats.push(...ribbon(rows, (_a, b) => ({
-        sid,
-        c: active
-          ? (b.sinr == null ? MUTED : classifySinr(b.sinr).color)
-          : dim ? MUTED : colorOf(sid),
-      }), dim ? 0.8 : 1.5).features);
+      if (active) {
+        // 選中單架次＝SINR 分級 run 分割（狀態色唯一入口）
+        runs.push(...sinrRuns(rows).map((r) => ({ ...r, sid })));
+      } else {
+        // identity（或 dim）＝整條一色一 path
+        runs.push({
+          sid,
+          path: rows.map((r) => [r.lon, r.lat, r.alt] as [number, number, number]),
+          color: rgba(dim ? MUTED : colorOf(sid)),
+          width: dim ? 1.6 : 3,
+        });
+      }
       for (const r of rows) { allLats.push(r.lat); allLons.push(r.lon); }
     }
-    (map.getSource("runs") as maplibregl.GeoJSONSource | undefined)
-      ?.setData({ type: "FeatureCollection", features: feats });
+    overlayRef.current?.setProps({ layers: [pathsLayer("cmp-runs", runs, true)] });
 
     // 取景 bounds：樣本按 P1–P99 分位數裁掉 GPS 漂移離群點（長航次會有），
     // 計畫航點不裁（權威資料）。絲帶照常全量渲染，只有取景被裁

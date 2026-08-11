@@ -1,12 +1,14 @@
 "use client";
+import { MapboxOverlay } from "@deck.gl/mapbox";
 import maplibregl from "maplibre-gl";
 import "maplibre-gl/dist/maplibre-gl.css";
 import { useParams, useRouter } from "next/navigation";
 import { useEffect, useMemo, useRef, useState } from "react";
 
 import { createDroneLayer, DRONE_PALETTE } from "@/components/droneLayer";
+import { routeLayer } from "@/lib/deckRoute";
 import { CANVAS, groundGrid, ribbon, trailLineString } from "@/lib/geo";
-import { API, LINK_CLASSES, classifySinr } from "@/lib/signal";
+import { API } from "@/lib/signal";
 
 /** 任務視角回放：同一條路徑的一或多條航線（可跨機、跨時間）同步重飛。
  *
@@ -86,6 +88,7 @@ export default function MissionReplay() {
   const [hidden, setHidden] = useState<string[]>([]);
   const hiddenRef = useRef<string[]>([]);
   const mapRef = useRef<maplibregl.Map | null>(null);
+  const overlayRef = useRef<MapboxOverlay | null>(null);
   const containerRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
@@ -136,14 +139,14 @@ export default function MissionReplay() {
           s.rows.map((r) => ({ lat: r.lat, lon: r.lon })), { dcolor: s.color }))
         .filter((f): f is GeoJSON.Feature => f !== null) };
   }
-  function ribbonData(ser: typeof series, hid: string[]): GeoJSON.FeatureCollection {
-    return { type: "FeatureCollection",
-      features: ser
-        .filter((s) => !hid.includes(s.sess.id))
-        .flatMap((s) => ribbon(
-          s.rows.map((r) => ({ lat: r.lat, lon: r.lon, alt: r.alt_rel, sinr: r.sinr })),
-          (_a, b) => ({ cls: b.sinr == null ? "unknown" : classifySinr(b.sinr).key }),
-        ).features) };
+  // 空中航跡改 deck.gl PathLayer（route-render-tool-eval）：每航線一組尾跡
+  function ribbonTrails(ser: typeof series, hid: string[]) {
+    return Object.fromEntries(ser
+      .filter((s) => !hid.includes(s.sess.id))
+      .map((s) => [s.sess.id, s.rows
+        .filter((r) => r.lat != null && r.lon != null)
+        .map((r) => ({ lat: r.lat!, lon: r.lon!,
+                       sinr: r.sinr ?? null, alt: r.alt_rel ?? null }))]));
   }
 
   /** 相對秒數 → 該航線當下樣本（1Hz 資料，時間比對取下界） */
@@ -190,13 +193,11 @@ export default function MissionReplay() {
       map.addLayer({ id: "proj", type: "line", source: "proj",
         layout: { "line-cap": "round", "line-join": "round" },
         paint: { "line-width": 2, "line-color": ["get", "dcolor"], "line-opacity": 0.7 } });
-      map.addSource("ribbons", { type: "geojson",
-        data: ribbonData(series, hiddenRef.current) });
-      map.addLayer({ id: "ribbons", type: "fill-extrusion", source: "ribbons",
-        paint: { "fill-extrusion-color": ["match", ["get", "cls"],
-            ...LINK_CLASSES.flatMap((c) => [c.key, c.color]), "#8f8b80"] as any,
-          "fill-extrusion-height": ["get", "top"], "fill-extrusion-base": ["get", "base"],
-          "fill-extrusion-opacity": 0.75 } });
+      const overlay = new MapboxOverlay({ interleaved: true, layers: [
+        routeLayer("ribbons", ribbonTrails(series, hiddenRef.current)),
+      ] });
+      map.addControl(overlay as unknown as maplibregl.IControl);
+      overlayRef.current = overlay;
 
       // 回放游標：每條可見航線一顆球，沿相對時間同步前進
       map.addLayer(createDroneLayer("cursors", () =>
@@ -222,7 +223,8 @@ export default function MissionReplay() {
     const map = mapRef.current;
     if (!map || !map.getSource("proj")) return;
     (map.getSource("proj") as maplibregl.GeoJSONSource).setData(projData(series, hidden));
-    (map.getSource("ribbons") as maplibregl.GeoJSONSource).setData(ribbonData(series, hidden));
+    overlayRef.current?.setProps({
+      layers: [routeLayer("ribbons", ribbonTrails(series, hidden))] });
     map.triggerRepaint();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [hidden, series]);

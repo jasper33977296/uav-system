@@ -1,12 +1,14 @@
 "use client";
+import { MapboxOverlay } from "@deck.gl/mapbox";
 import maplibregl from "maplibre-gl";
 import "maplibre-gl/dist/maplibre-gl.css";
 import { useParams, useRouter } from "next/navigation";
 import { useEffect, useMemo, useRef, useState } from "react";
 
 import { createDroneLayer } from "@/components/droneLayer";
+import { routeLayer } from "@/lib/deckRoute";
 import { CANVAS, groundGrid, pathArrows, ribbon, trailLineString } from "@/lib/geo";
-import { API, LINK_CLASSES, classifySinr } from "@/lib/signal";
+import { API, classifySinr } from "@/lib/signal";
 
 interface LinkRow {
   time: string; lat: number | null; lon: number | null; alt_rel: number | null;
@@ -140,17 +142,13 @@ export default function Replay() {
         layout: { "line-cap": "round", "line-join": "round" },
         paint: { "line-color": "#6b7684", "line-width": 2, "line-opacity": 0.55 } });
 
-      // 懸浮絲帶：路徑本身浮在飛行高度（地面另有投影點）
-      map.addSource("track3d", { type: "geojson",
-        data: ribbon(
-          rows.map((r) => ({ lat: r.lat, lon: r.lon, alt: r.alt_rel, sinr: r.sinr })),
-          (_a, b) => ({ cls: b.sinr == null ? "unknown" : classifySinr(b.sinr).key }),
-        ) });
-      map.addLayer({ id: "track3d", type: "fill-extrusion", source: "track3d",
-        paint: { "fill-extrusion-color": ["match", ["get", "cls"],
-            ...LINK_CLASSES.flatMap((c) => [c.key, c.color]), "#8f8b80"] as any,
-          "fill-extrusion-height": ["get", "top"], "fill-extrusion-base": ["get", "base"],
-          "fill-extrusion-opacity": 0.9 } });
+      // 懸浮航跡：deck.gl PathLayer（route-render-tool-eval，取代 fill-extrusion）
+      map.addControl(new MapboxOverlay({ interleaved: true, layers: [
+        routeLayer("track3d", { track: rows
+          .filter((r) => r.lat != null && r.lon != null)
+          .map((r) => ({ lat: r.lat!, lon: r.lon!,
+                         sinr: r.sinr ?? null, alt: r.alt_rel ?? null })) }),
+      ] }) as unknown as maplibregl.IControl);
 
       // 預計任務路徑（航線開的當下所關聯的任務）：灰絲帶＋地面虛線
       if (plan.length >= 2) {
@@ -159,7 +157,7 @@ export default function Replay() {
         map.addLayer({ id: "plan3d", type: "fill-extrusion", source: "plan3d",
           paint: { "fill-extrusion-color": "#8f8b80",
             "fill-extrusion-height": ["get", "top"], "fill-extrusion-base": ["get", "base"],
-            "fill-extrusion-opacity": 0.35 } }, "track3d");
+            "fill-extrusion-opacity": 0.35 } });
         map.addSource("plan-ground", { type: "geojson",
           data: { type: "Feature", properties: {},
             geometry: { type: "LineString", coordinates: plan.map((w) => [w.lon, w.lat]) } } });
