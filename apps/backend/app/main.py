@@ -5,7 +5,7 @@ from contextlib import asynccontextmanager
 from fastapi import FastAPI, WebSocket, WebSocketDisconnect
 from fastapi.middleware.cors import CORSMiddleware
 
-from . import db, mavlink_rx
+from . import db, mavlink_rx, msg_registry
 from .api import router
 from .config import settings
 from .link_events import transition as link_transition
@@ -32,14 +32,20 @@ async def _link_and_db_loop() -> None:
       telemetry 仍走這裡，因為它來自地面站收到的 MAVLink，不是機上送的。
     """
     simulated = settings.link_source == "simulated"
-    source = None
-    if simulated:
-        # 場景（gNB/干擾區）是模擬器內建常數（link_sim.DEFAULT_*），不讀 DB
-        source = SimulatedLinkSource(
-            handover_margin_db=settings.handover_margin_db)
-    else:
+    # 每台機各自一份 link source：SimulatedLinkSource 內帶 handover 遲滯狀態
+    # （_serving_pci），多機若共用一份，位置不同的機會互相污染服務 cell、噴假換手。
+    # 場景（gNB/干擾區）是模擬器內建常數（link_sim.DEFAULT_*），不讀 DB。
+    sources: dict[str, SimulatedLinkSource] = {}
+    if not simulated:
         log.info("link_source=%s：鏈路資料改由機上 POST 進來，本迴圈只寫 telemetry",
                  settings.link_source)
+
+    def _source_for(drone_id: str) -> SimulatedLinkSource:
+        src = sources.get(drone_id)
+        if src is None:
+            src = sources[drone_id] = SimulatedLinkSource(
+                handover_margin_db=settings.handover_margin_db)
+        return src
 
     recording: dict[str, bool] = {}   # 各機上一輪是否記錄中，用來偵測架次開始
     while True:
@@ -50,8 +56,10 @@ async def _link_and_db_loop() -> None:
             if st.lat is None or st.lon is None:
                 continue
 
-            if simulated and st is live:
-                st.link = source.sample(st.lat, st.lon, st.alt_rel)
+            if simulated:
+                # 每台依自己的位置取樣——in_interference_zone、服務 cell、SINR 全是
+                # 各機自算（多機干擾研究的核心：不同機在不同位置量到不同鏈路品質）。
+                st.link = _source_for(st.drone_id).sample(st.lat, st.lon, st.alt_rel)
                 st.mark_link_seen()   # 前端待機時仍看得到鏈路品質
 
             # 同時檢查 session_id：armed 由 rx worker 設定，剛解鎖的瞬間可能
@@ -64,8 +72,9 @@ async def _link_and_db_loop() -> None:
                 st.link_state = "ok"
                 recording[st.drone_id] = True
 
-            if simulated and st is live:
-                # 鏈路事件：link_degraded / link_lost / link_recovered
+            if simulated:
+                # 鏈路事件：link_degraded / link_lost / link_recovered（各機自己的
+                # 狀態機，st.link_state 是 per-drone；link_transition 帶 st 進去）
                 await link_transition(st, st.link)
                 await db.insert_link(st)
 
@@ -95,6 +104,23 @@ async def _broadcast_loop() -> None:
             log.exception("broadcast 失敗，略過這一輪")
 
 
+async def _msg_registry_loop() -> None:
+    """014 Phase B：per-drone 泛型訊息登錄表廣播（msg_registry_hz，低於遙測 5Hz——
+    量大、研究/除錯用，不必高頻）。序列化例外只吞這一輪，不拖垮其他廣播。"""
+    while True:
+        await asyncio.sleep(1.0 / settings.msg_registry_hz)
+        try:
+            if manager.clients:
+                for st in list(fleet.values()):
+                    if not st.connected:
+                        continue
+                    await manager.broadcast({"type": "msg_registry",
+                                             "drone_id": st.drone_id,
+                                             **msg_registry.snapshot(st)})
+        except Exception:
+            log.exception("msg_registry 廣播失敗，略過這一輪")
+
+
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     await db.init_pool()
@@ -118,6 +144,7 @@ async def lifespan(app: FastAPI):
         rx_task,
         asyncio.create_task(_link_and_db_loop(), name="link-db-loop"),
         asyncio.create_task(_broadcast_loop(), name="ws-broadcast"),
+        asyncio.create_task(_msg_registry_loop(), name="ws-msg-registry"),
     ]
     yield
     for t in tasks:

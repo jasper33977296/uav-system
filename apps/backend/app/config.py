@@ -27,6 +27,7 @@ class Settings(BaseSettings):
     capture_keep_days: int = 30
     broadcast_hz: float = 5.0        # WebSocket 推送頻率
     db_write_hz: float = 1.0         # telemetry / link_metrics 入庫頻率
+    msg_registry_hz: float = 2.0     # 014-B 泛型訊息登錄表廣播頻率（低於遙測 5Hz）
     # 鏈路狀態門檻（ok / degraded / lost 三態，見 app/main.py:_link_transition）
     sinr_degraded_db: float = 5.0    # 低於此值進入 degraded
     sinr_lost_db: float = -2.0       # 低於此值進入 lost

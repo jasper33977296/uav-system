@@ -62,6 +62,9 @@ class LiveState:
     # 磁力/溫度/氣壓＋VIBRATION 振動/clipping。訊息高頻進、只在 WS 廣播率（5Hz）送最新。
     # feature-detect：機上沒發的欄位維持缺→telemetry_dict 補 None（前端顯「無資料」）。
     imu: dict = field(default_factory=dict)
+    # 014 Phase B 泛型訊息登錄表：msgid → {msg, last(mono), hz}。mavlink_rx 對每則
+    # 收到的訊息 record()，_msg_registry_loop 定時 snapshot 廣播（見 msg_registry.py）。
+    msg_registry: dict = field(default_factory=dict)
     # serving cell 追蹤（換手事件；issue 002 教訓＝防抖）：serving_pci 是已確認的
     # 現任 PCI，pci_pending 是待確認候選（連續 2 次才算換手，事件層防抖）
     serving_pci: int | None = None

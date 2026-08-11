@@ -28,7 +28,7 @@ import time
 
 from pymavlink import mavutil
 
-from . import db
+from . import db, msg_registry
 from .capture import Recorder
 from .config import settings
 from .state import LiveState, fleet, live
@@ -258,6 +258,7 @@ class MavlinkRx:
         ent["seen"] = time.monotonic()
         st = ent["state"]
         st.connected = True
+        msg_registry.record(st, msg)     # 014-B：每則訊息進該機登錄表（型別分派前）
 
         if t == "HEARTBEAT":
             # MAV_STATE：進入 failsafe 狀態（CRITICAL/EMERGENCY）要大聲
