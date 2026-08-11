@@ -66,6 +66,9 @@ interface UavStore {
   // 喚起任務控制面板（toast 點擊展開原因用；計數器遞增觸發）
   cmdOpenReq: number;
   requestCmdPanel: () => void;
+  // 任務疊圖重刷（§4 v3：任務開始成功自動 activate → 即時頁疊圖即刻浮現）
+  planReq: number;
+  requestPlanRefresh: () => void;
   // 013-A 編隊模式（ui-spec §2.5）：targetIds（指揮誰）疊在 selectedId
   // （看誰）之上——兩者可不同機；layer_index＝targetIds 內的順序
   formation: boolean;
@@ -113,6 +116,8 @@ export const useUavStore = create<UavStore>((set) => ({
   noticeTakeoffDenied: () => set({ takeoffDeniedAt: Date.now() }),
   cmdOpenReq: 0,
   requestCmdPanel: () => set((s) => ({ cmdOpenReq: s.cmdOpenReq + 1 })),
+  planReq: 0,
+  requestPlanRefresh: () => set((s) => ({ planReq: s.planReq + 1 })),
   formation: false,
   setFormation: (v, seedTargets) =>
     set((s) => ({ formation: v, targetIds: v ? seedTargets ?? s.targetIds : s.targetIds })),

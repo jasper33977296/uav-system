@@ -275,6 +275,16 @@ export default function CommandPanel() {
           ok: true,
           text: `${action} ✓${body.verified ? "（回讀比對通過）" : ""}`,
         });
+        // §4 v3：任務開始成功 → 自動顯示於即時頁（手動切換退位到 /missions
+        // 的 ⋯ 選單）；activate 後通知地圖即刻重刷疊圖
+        if (path === "/mission/fly" || path === "/mission/start") {
+          const mid = (payload?.mission_id as string | undefined) ?? (missionId || undefined);
+          if (mid) {
+            fetch(`${API}/api/missions/${mid}/activate?active=true`, { method: "POST" })
+              .then(() => useUavStore.getState().requestPlanRefresh())
+              .catch(() => {});
+          }
+        }
       }
     } catch (e) {
       setResult({ ok: false, text: `連線失敗：${e}` });

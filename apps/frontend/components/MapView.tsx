@@ -32,6 +32,10 @@ export default function MapView() {
   const [videoDrone, setVideoDrone] = useState<string | null>(null);
   const coordRef = useRef<HTMLDivElement>(null);
   const overlayRef = useRef<MapboxOverlay | null>(null);
+  const refreshPlanRef = useRef<() => void>(() => {});
+  // 任務開始成功（CommandPanel 自動 activate）→ 疊圖即刻重刷
+  const planReq = useUavStore((s) => s.planReq);
+  useEffect(() => { refreshPlanRef.current(); }, [planReq]);
   const ribbonGateRef = useRef({ t: 0, n: -1 });   // 地面投影重建節流
 
   // simple-first：專業面板抽屜；任務控制面板恆顯（自收合，ui-spec §2）
@@ -215,60 +219,61 @@ export default function MapView() {
       // 使用者的顯隱選擇是唯一真相——全部隱藏就什麼都不畫，
       // 不退回機上任務（那個備援曾讓「隱藏」失效，見 2026-08-05 修正；
       // 機上任務仍可在路徑管理頁「從機上讀回」取得）。
-      try {
-        let wps: any[] = [];
-        const ra = await fetch(`${API}/api/missions/active`);
-        if (ra.ok) wps = ((await ra.json()).waypoints ?? []);
-        {
-          wps = wps.filter((w: any) => w.lat && w.lon);
-          if (wps.length >= 2) {
-            // 預計路徑：窄灰絲帶浮在各段目標高度（比實際路徑窄且淡，主從分明）
-            map.addSource("plan3d", {
-              type: "geojson",
-              data: ribbon(
-                wps.map((w: any) => ({ lat: w.lat, lon: w.lon, alt: w.alt })),
-                () => ({}), 1.0),
-            });
-            map.addLayer({
-              id: "plan3d", type: "fill-extrusion", source: "plan3d",
-              paint: {
-                "fill-extrusion-color": "#8f8b80",
-                "fill-extrusion-height": ["get", "top"],
-                "fill-extrusion-base": ["get", "base"],
-                "fill-extrusion-opacity": 0.35,
-              },
-            }, "path3d");
-            // 地面投影：虛線＋航點圈
-            map.addSource("plan-ground", {
-              type: "geojson",
-              data: {
-                type: "FeatureCollection",
-                features: [
-                  { type: "Feature", properties: {}, geometry: {
-                    type: "LineString",
-                    coordinates: wps.map((w: any) => [w.lon, w.lat]) } },
-                  ...wps.map((w: any) => ({
-                    type: "Feature" as const, properties: { pt: 1 },
-                    geometry: { type: "Point" as const, coordinates: [w.lon, w.lat] },
-                  })),
-                ],
-              },
-            });
-            map.addLayer({
-              id: "plan-ground-line", type: "line", source: "plan-ground",
-              filter: ["!", ["has", "pt"]],
-              paint: { "line-color": "#8f8b80", "line-width": 1.5,
-                       "line-dasharray": [3, 3], "line-opacity": 0.6 },
-            }, "trail-line");
-            map.addLayer({
-              id: "plan-ground-wp", type: "circle", source: "plan-ground",
-              filter: ["has", "pt"],
-              paint: { "circle-radius": 4, "circle-color": "transparent",
-                       "circle-stroke-width": 1.5, "circle-stroke-color": "#8f8b80" },
-            }, "trail-line");
-          }
-        }
-      } catch { /* 無任務即無疊圖 */ }
+      // sources 常駐、資料可重刷（§4 v3：任務開始成功自動 activate 後即刻
+      // 浮現，不用重整頁面）。舊寫法的 beforeId "path3d" 在 deck 遷移後
+      // 已不存在、addLayer 拋錯被 try/catch 靜默吞掉——疊圖自遷移起其實
+      // 沒畫，這次一併修正
+      const EMPTY: GeoJSON.FeatureCollection = { type: "FeatureCollection", features: [] };
+      map.addSource("plan3d", { type: "geojson", data: EMPTY });
+      map.addLayer({
+        id: "plan3d", type: "fill-extrusion", source: "plan3d",
+        paint: {
+          "fill-extrusion-color": "#8f8b80",
+          "fill-extrusion-height": ["get", "top"],
+          "fill-extrusion-base": ["get", "base"],
+          "fill-extrusion-opacity": 0.35,
+        },
+      });
+      map.addSource("plan-ground", { type: "geojson", data: EMPTY });
+      map.addLayer({
+        id: "plan-ground-line", type: "line", source: "plan-ground",
+        filter: ["!", ["has", "pt"]],
+        paint: { "line-color": "#8f8b80", "line-width": 1.5,
+                 "line-dasharray": [3, 3], "line-opacity": 0.6 },
+      }, "trail-line");
+      map.addLayer({
+        id: "plan-ground-wp", type: "circle", source: "plan-ground",
+        filter: ["has", "pt"],
+        paint: { "circle-radius": 4, "circle-color": "transparent",
+                 "circle-stroke-width": 1.5, "circle-stroke-color": "#8f8b80" },
+      }, "trail-line");
+
+      const refreshPlan = async () => {
+        try {
+          let wps: any[] = [];
+          const ra = await fetch(`${API}/api/missions/active`);
+          if (ra.ok) wps = ((await ra.json()).waypoints ?? []).filter((w: any) => w.lat && w.lon);
+          const has = wps.length >= 2;
+          (map.getSource("plan3d") as maplibregl.GeoJSONSource | undefined)?.setData(
+            has ? ribbon(wps.map((w: any) => ({ lat: w.lat, lon: w.lon, alt: w.alt })),
+                         () => ({}), 1.0) : EMPTY);
+          (map.getSource("plan-ground") as maplibregl.GeoJSONSource | undefined)?.setData(
+            has ? {
+              type: "FeatureCollection",
+              features: [
+                { type: "Feature", properties: {}, geometry: {
+                  type: "LineString",
+                  coordinates: wps.map((w: any) => [w.lon, w.lat]) } },
+                ...wps.map((w: any) => ({
+                  type: "Feature" as const, properties: { pt: 1 },
+                  geometry: { type: "Point" as const, coordinates: [w.lon, w.lat] },
+                })),
+              ],
+            } : EMPTY);
+        } catch { /* 無任務即空疊圖 */ }
+      };
+      refreshPlanRef.current = refreshPlan;
+      refreshPlan();
     });
 
     return () => map.remove();

@@ -152,11 +152,11 @@ export default function Missions() {
         {missions.map((m) => {
           const count = sessions.filter((s) => s.mission_id === m.id).length;
           return (
+            {/* v3：點卡＝展開使用紀錄（顯示於即時頁改由任務開始自動；
+                手動切換降級收 ⋯） */}
             <div key={m.id} className={`mcard ${m.is_active ? "on" : ""}`}
-              title={m.is_active ? "點擊取消顯示於即時頁" : "點擊顯示於即時頁"}
-              onClick={() => !busy && call(
-                `/api/missions/${m.id}/activate?active=${!m.is_active}`,
-                { method: "POST" })}>
+              title="點擊展開使用紀錄"
+              onClick={() => setOpenId(openId === m.id ? null : m.id)}>
               <MissionThumb3D wps={thumbs[m.id]} />
               <div className="mcard-foot">
                 <span className="mcard-name">{m.name}</span>
@@ -171,9 +171,14 @@ export default function Missions() {
               </div>
               {menuId === m.id && (
                 <div className="mcard-menu" onClick={(e) => e.stopPropagation()}>
-                  <button className="btn-plain btn-sm"
-                    onClick={() => { setOpenId(openId === m.id ? null : m.id); setMenuId(null); }}>
-                    航線紀錄（{count}）
+                  {/* 手動顯示切換（降級保留——常規路徑是任務開始自動浮現） */}
+                  <button className="btn-plain btn-sm" disabled={busy}
+                    onClick={() => {
+                      setMenuId(null);
+                      call(`/api/missions/${m.id}/activate?active=${!m.is_active}`,
+                           { method: "POST" });
+                    }}>
+                    {m.is_active ? "從即時頁隱藏" : "顯示於即時頁"}
                   </button>
                   {/* 刪除兩段式：卡上變紅「確定刪除？」（ui-spec §4.3） */}
                   <button className="btn-danger btn-sm" disabled={busy}
@@ -222,9 +227,15 @@ export default function Missions() {
           return (
             <div style={{ marginTop: 12 }}>
               <div className="drone-head">
-                <span className="meta">
-                  「{m?.name}」的航線紀錄 · 共 {mine.length} 條（跨所有無人機）
-                </span>
+                <span className="meta">「{m?.name}」被使用 {mine.length} 次</span>
+                {/* 哪幾台無人機用過（識別色點＋名） */}
+                {[...new Map(mine.map((s) => [s.drone_id, s.drone_name])).entries()]
+                  .map(([did, name]) => (
+                    <span className="chip" key={did}>
+                      <span className="dot" style={{ background: colorFor(did) }} />
+                      {name}
+                    </span>
+                  ))}
                 <span className="spacer" />
                 {mine.length > 1 && (
                   <button className="btn-plain btn-sm"
