@@ -487,22 +487,8 @@ a:focus-visible, button:focus-visible, input:focus-visible, select:focus-visible
   color: var(--ink-2); line-height: 1.8; font-size: 12px;
 }
 
-/* 事件卡（使用者二次修訂）：住 ▤ 抽屜、專業數值卡下方；抽屜本體可捲動 */
-.ev-card {
-  background: var(--surface); border: 1px solid var(--border);
-  border-radius: 10px; overflow: hidden; flex: none;
-}
-.hud-ticker {
-  display: flex; width: 100%; align-items: center; gap: 8px;
-  padding: 7px 14px; font-size: 12.5px; color: var(--ink-2);
-  background: none; border: none; cursor: pointer; text-align: left;
-}
-.hud-ev-time { color: var(--muted); font-variant-numeric: tabular-nums; }
-.hud-log {
-  max-height: 40vh; overflow-y: auto; padding: 4px 14px 10px;
-  display: flex; flex-direction: column; gap: 6px;
-  border-top: 1px solid var(--hairline);
-}
+/* 事件卡（三次修訂）：常駐展開、card-grow 填滿抽屜剩餘空間、列表內捲——
+   直接沿用既有 .card-grow/.events 機制，無專屬樣式 */
 /* 擺位：左下＝圖例＋HUD；比例尺/attribution 右下；面板/事件卡右上 */
 /* 面板平時住 top-stack flex 流（position:relative）；拖走後 inline fixed */
 .cmd-panel { position: relative; left: auto; right: auto; top: auto; bottom: auto; flex: none; }

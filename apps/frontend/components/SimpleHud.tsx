@@ -62,35 +62,27 @@ export function Battery({ pct, plain = false }: {
     : <span className="hud-item" title="電量">{body}</span>;
 }
 
-/** 事件卡（使用者修訂 2026-08-11）：住任務控制面板正下方、同寬——
- * 單行最新事件＋點擊展開 log；面板收合/拖走時跟隨右上錨位。 */
+/** 事件卡（使用者三次修訂 2026-08-11）：住 ▤ 抽屜最下、**常駐展開**——
+ * 無收合切換，flex-grow 填滿抽屜剩餘空間，列表內部捲動。 */
 export function EventsCard() {
   const events = useUavStore((s) => s.events);
-  const [logOpen, setLogOpen] = useState(false);
-  const latest = events[0];
   const evTime = (t: string) =>
     new Date(t).toLocaleTimeString("zh-TW", { hour12: false });
   return (
-    <div className="ev-card">
-      <button className="hud-ticker" onClick={() => setLogOpen(!logOpen)}>
-        {latest
-          ? <><span className="hud-ev-time">{evTime(latest.time)}</span> {evText(latest)}</>
-          : "尚無事件"}
-        <span className="hud-spacer" />{logOpen ? "▾" : "▴"}
-      </button>
-      {logOpen && (
-        <div className="hud-log">
-          {events.map((e) => (
-            <div className={`event ${e.severity === "critical" ? "ev-crit" : ""}`} key={e.id}>
-              <span className="dot" style={{
-                background: e.severity === "critical" ? "#a01818"
-                  : e.severity === "warning" ? "#fab219" : "#8f8b80" }} />
-              <time>{evTime(e.time)}</time>
-              <span className="detail">{evText(e)}</span>
-            </div>
-          ))}
-        </div>
-      )}
+    <div className="card card-grow">
+      <h3>事件</h3>
+      <div className="events">
+        {events.length === 0 && <div className="empty">尚無事件</div>}
+        {events.map((e) => (
+          <div className={`event ${e.severity === "critical" ? "ev-crit" : ""}`} key={e.id}>
+            <span className="dot" style={{
+              background: e.severity === "critical" ? "#a01818"
+                : e.severity === "warning" ? "#fab219" : "#8f8b80" }} />
+            <time>{evTime(e.time)}</time>
+            <span className="detail">{evText(e)}</span>
+          </div>
+        ))}
+      </div>
     </div>
   );
 }
