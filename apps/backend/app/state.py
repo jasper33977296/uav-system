@@ -32,6 +32,16 @@ class LiveState:
     flight_mode: str | None = None
     armed: bool = False
 
+    # 飛行就緒（QGC「Ready To Fly」的同源訊號，2026-08-11）：
+    # PX4 的 arming checks 總結果直接讀 SYS_STATUS 的 PREARM_CHECK 健康位，
+    # 不需要 events metadata；逐項失敗原因的完整清單走 PX4 Events 介面
+    # （解碼列 issues/014），這裡以感測器健康位＋EKF＋GPS 近似。
+    mav_state: str | None = None          # STANDBY / ACTIVE / CRITICAL…
+    prearm_ok: bool | None = None         # PX4 預檢總結果（None=未知）
+    sensors_unhealthy: list = field(default_factory=list)
+    ekf_ok: bool | None = None
+    landed_state: str | None = None       # on_ground / in_air / takeoff / landing
+
     # 5G 鏈路品質（模擬階段由 _link_and_db_loop 更新，真機由機上 node POST 進來）
     link: dict = field(default_factory=dict)
 
@@ -54,8 +64,31 @@ class LiveState:
             return None
         return round(_time.monotonic() - self.link_seen_mono, 2)
 
+    def readiness(self) -> tuple[bool, list]:
+        """就緒判定＋不就緒原因（給前端顯示；權威訊號是 prearm_ok）。"""
+        reasons = []
+        if self.prearm_ok is False:
+            reasons.append("PX4 預檢未過（arming checks）")
+        reasons += [f"感測器異常：{s}" for s in self.sensors_unhealthy]
+        if self.ekf_ok is False:
+            reasons.append("EKF 未就緒")
+        if self.gps_fix is not None and self.gps_fix < 3:
+            reasons.append(f"GPS 未定位（fix={self.gps_fix}）")
+        if self.mav_state in ("CRITICAL", "EMERGENCY", "FLIGHT_TERMINATION"):
+            reasons.append(f"failsafe 狀態：{self.mav_state}")
+        # prearm_ok=None＝韌體不回報 PREARM 位元，退回次級訊號判定
+        return (not reasons and self.prearm_ok is not False), reasons
+
     def telemetry_dict(self) -> dict:
+        ready, reasons = self.readiness()
         return {
+            "ready": ready,
+            "not_ready_reasons": reasons,
+            "mav_state": self.mav_state,
+            "landed_state": self.landed_state,
+            "prearm_ok": self.prearm_ok,
+            "ekf_ok": self.ekf_ok,
+            "sensors_unhealthy": self.sensors_unhealthy,
             "drone_id": self.drone_id,
             "drone_name": self.drone_name,
             "session_id": self.session_id,

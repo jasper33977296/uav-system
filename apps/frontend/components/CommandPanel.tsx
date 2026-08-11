@@ -187,9 +187,22 @@ export default function CommandPanel() {
       {open && health.enabled && (
         <div className="cmd-body">
           {live && (
+            <div className={`cmd-ready ${live.ready ? "ok" : "warn"}`}>
+              {live.ready
+                ? <>✅ Ready to fly（PX4 預檢通過{live.landed_state === "in_air" ? "·飛行中" : ""}）</>
+                : <>
+                    ❌ 未就緒{live.mav_state ? `（${live.mav_state}）` : ""}
+                    {(live.not_ready_reasons ?? []).map((r, i) => (
+                      <div className="hint-line" key={i}>· {r}</div>
+                    ))}
+                  </>}
+            </div>
+          )}
+          {live && (
             <div className="hint-line">
-              起飛前狀態：GPS fix {live.gps_fix ?? "—"}（需≥3）·
+              GPS fix {live.gps_fix ?? "—"}（需≥3）·
               衛星 {live.satellites ?? "—"} 顆 · 電量 {live.battery_pct ?? "—"}%
+              {live.landed_state ? ` · ${live.landed_state}` : ""}
             </div>
           )}
           {sysids.length > 1 && (

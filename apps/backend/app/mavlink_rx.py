@@ -60,6 +60,23 @@ def _mode_name(custom_mode: int) -> str:
 _SEVERITY = {0: "critical", 1: "critical", 2: "critical", 3: "critical",
              4: "warning", 5: "info", 6: "info"}
 
+# 飛行就緒訊號（QGC「Ready To Fly」同源；docs.px4.io pre_flight_checks）
+_MAV_STATE = {0: "UNINIT", 1: "BOOT", 2: "CALIBRATING", 3: "STANDBY",
+              4: "ACTIVE", 5: "CRITICAL", 6: "EMERGENCY", 7: "POWEROFF",
+              8: "FLIGHT_TERMINATION"}
+_FAILSAFE_STATES = ("CRITICAL", "EMERGENCY", "FLIGHT_TERMINATION")
+_SENSOR_BITS = [
+    ("陀螺儀", M.MAV_SYS_STATUS_SENSOR_3D_GYRO),
+    ("加速度計", M.MAV_SYS_STATUS_SENSOR_3D_ACCEL),
+    ("磁力計", M.MAV_SYS_STATUS_SENSOR_3D_MAG),
+    ("氣壓計", M.MAV_SYS_STATUS_SENSOR_ABSOLUTE_PRESSURE),
+    ("GPS", M.MAV_SYS_STATUS_SENSOR_GPS),
+    ("RC 接收器", M.MAV_SYS_STATUS_SENSOR_RC_RECEIVER),
+    ("AHRS 姿態解算", M.MAV_SYS_STATUS_AHRS),
+    ("電池", M.MAV_SYS_STATUS_SENSOR_BATTERY),
+]
+_LANDED = {1: "on_ground", 2: "in_air", 3: "takeoff", 4: "landing"}
+
 
 class _Proto(asyncio.DatagramProtocol):
     def __init__(self, rx: "MavlinkRx"):
@@ -179,6 +196,14 @@ class MavlinkRx:
         st.connected = True
 
         if t == "HEARTBEAT":
+            # MAV_STATE：進入 failsafe 狀態（CRITICAL/EMERGENCY）要大聲
+            state_name = _MAV_STATE.get(msg.system_status)
+            if state_name in _FAILSAFE_STATES and st.mav_state != state_name:
+                ev = await db.insert_event(st.drone_id, st.session_id, "critical",
+                                           "failsafe", {"state": state_name})
+                ev["drone"] = st.drone_name
+                await manager.broadcast({"type": "event", "event": ev})
+            st.mav_state = state_name
             mode = _mode_name(msg.custom_mode)
             if st.flight_mode is not None and mode != st.flight_mode:
                 ev = await db.insert_event(st.drone_id, st.session_id, "info",
@@ -210,6 +235,26 @@ class MavlinkRx:
                 st.battery_pct = float(msg.battery_remaining)
             if msg.voltage_battery != 65535:
                 st.battery_voltage = msg.voltage_battery / 1000.0
+            # PX4 預檢總結果：PREARM_CHECK 健康位（QGC「Ready To Fly」的核心）
+            p_, e_, h_ = (msg.onboard_control_sensors_present,
+                          msg.onboard_control_sensors_enabled,
+                          msg.onboard_control_sensors_health)
+            # 實測（SITL PX4 1.14）：PREARM 位元只出現在 health 遮罩，
+            # enabled/present 都不設——見過一次就信 health 位元（黏性），
+            # 從未見過＝韌體不支援，維持 None（就緒判定退回次級訊號）
+            pre = M.MAV_SYS_STATUS_PREARM_CHECK
+            if (p_ | e_ | h_) & pre:
+                ent["prearm_seen"] = True
+            st.prearm_ok = bool(h_ & pre) if ent.get("prearm_seen") else None
+            st.sensors_unhealthy = [
+                name for name, bit in _SENSOR_BITS
+                if (p_ & bit) and (e_ & bit) and not (h_ & bit)]
+        elif t == "ESTIMATOR_STATUS":
+            need = (M.ESTIMATOR_ATTITUDE | M.ESTIMATOR_VELOCITY_HORIZ
+                    | M.ESTIMATOR_POS_HORIZ_ABS)
+            st.ekf_ok = (msg.flags & need) == need
+        elif t == "EXTENDED_SYS_STATE":
+            st.landed_state = _LANDED.get(msg.landed_state)
         elif t == "STATUSTEXT":
             sev = _SEVERITY.get(msg.severity)
             if sev:

@@ -19,6 +19,14 @@ export interface Telemetry {
   battery_pct: number | null; battery_voltage: number | null;
   gps_fix: number | null; satellites: number | null;
   flight_mode: string | null; armed: boolean;
+  // 飛行就緒（QGC「Ready To Fly」同源訊號）
+  ready?: boolean;
+  not_ready_reasons?: string[];
+  mav_state?: string | null;            // STANDBY / ACTIVE / CRITICAL…
+  landed_state?: string | null;         // on_ground / in_air / takeoff / landing
+  prearm_ok?: boolean | null;
+  ekf_ok?: boolean | null;
+  sensors_unhealthy?: string[];
   link: Partial<LinkMetrics>;
 }
 

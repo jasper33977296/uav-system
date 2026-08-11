@@ -33,6 +33,6 @@ ulog 100+ topic（事後回收）。
    metadata JSON——原始層 tlog 有錄，不丟資料，解碼列後續
 2. COMMAND_ACK/MISSION_ACK 入流（command 服務已留痕 command_log，
    backend 側可從 tlog 重放）
-3. MISSION_CURRENT、EKF/震動健康旗標、RC 狀態
+3. ~~EKF／感測器健康旗標~~（2026-08-11 done：SYS_STATUS 位元、PREARM_CHECK、ESTIMATOR_STATUS、EXTENDED_SYS_STATE、MAV_STATE→failsafe 事件、前端 Ready to fly 橫幅）；MISSION_CURRENT、RC 狀態待做
 4. modem 擴充（鄰區/QTEMP/流量計數）、companion 健康、ulog 事後回收
 5. 錄製檔的系統內可見性（列表/下載 API 或文件化取用方式）
