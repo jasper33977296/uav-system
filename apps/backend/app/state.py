@@ -43,6 +43,7 @@ class LiveState:
     landed_state: str | None = None       # on_ground / in_air / takeoff / landing
     autopilot_raw: int | None = None      # MAV_AUTOPILOT_*（方言分表；issue 015）
     vehicle_type_raw: int | None = None   # MAV_TYPE_*
+    sysid: int | None = None              # 該機當前 MAVLink sysid（前端選中機↔指令對象）
     # serving cell 追蹤（換手事件；issue 002 教訓＝防抖）：serving_pci 是已確認的
     # 現任 PCI，pci_pending 是待確認候選（連續 2 次才算換手，事件層防抖）
     serving_pci: int | None = None
@@ -93,6 +94,7 @@ class LiveState:
             "ready": ready,
             "not_ready_reasons": reasons,
             "autopilot": autopilot_name(self.autopilot_raw),  # px4/ardupilot/unknown
+            "mav_sysid": self.sysid,          # 前端：選中機（drone_id）→ 指令對象（sysid）
             "mav_state": self.mav_state,
             "landed_state": self.landed_state,
             "prearm_ok": self.prearm_ok,

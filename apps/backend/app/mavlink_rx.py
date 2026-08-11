@@ -187,6 +187,7 @@ class MavlinkRx:
                 st.drone_name = name
             else:
                 st = LiveState(drone_id=drone_id, drone_name=name)
+            st.sysid = sysid                 # 前端「選中機統一」的事實源（issue 011）
             fleet[drone_id] = st
             ent = self.sysids[sysid] = {"drone_id": drone_id, "state": st,
                                         "addr": addr, "seen": time.monotonic()}
