@@ -65,6 +65,19 @@ interface UavStore {
   // 喚起任務控制面板（toast 點擊展開原因用；計數器遞增觸發）
   cmdOpenReq: number;
   requestCmdPanel: () => void;
+  // 013-A 編隊模式（ui-spec §2.5）：targetIds（指揮誰）疊在 selectedId
+  // （看誰）之上——兩者可不同機；layer_index＝targetIds 內的順序
+  formation: boolean;
+  setFormation: (v: boolean, seedTargets?: string[]) => void;
+  targetIds: string[];
+  toggleTarget: (id: string) => void;
+  formationCfg: {
+    mode: "unified" | "separate";
+    base: string;                      // unified：base_mission_id
+    spacing: number;                   // unified：垂直層距（GROUP_VSEP_M）
+    assign: Record<string, string>;    // separate：drone_id → mission_id
+  };
+  setFormationCfg: (p: Partial<UavStore["formationCfg"]>) => void;
   setLive: (t: Telemetry) => void;
   select: (id: string) => void;
   setWsConnected: (v: boolean) => void;
@@ -89,6 +102,18 @@ export const useUavStore = create<UavStore>((set) => ({
   noticeTakeoffDenied: () => set({ takeoffDeniedAt: Date.now() }),
   cmdOpenReq: 0,
   requestCmdPanel: () => set((s) => ({ cmdOpenReq: s.cmdOpenReq + 1 })),
+  formation: false,
+  setFormation: (v, seedTargets) =>
+    set((s) => ({ formation: v, targetIds: v ? seedTargets ?? s.targetIds : s.targetIds })),
+  targetIds: [],
+  toggleTarget: (id) =>
+    set((s) => ({
+      targetIds: s.targetIds.includes(id)
+        ? s.targetIds.filter((x) => x !== id)
+        : [...s.targetIds, id],
+    })),
+  formationCfg: { mode: "unified", base: "", spacing: 5, assign: {} },
+  setFormationCfg: (p) => set((s) => ({ formationCfg: { ...s.formationCfg, ...p } })),
   setLive: (t) =>
     set((s) => {
       const id = t.drone_id ?? "unknown";

@@ -9,6 +9,7 @@
  */
 import { useEffect, useRef, useState } from "react";
 
+import { colorFor } from "@/components/droneLayer";
 import ManualControl from "@/components/ManualControl";
 import { API, COMMAND_API } from "@/lib/signal";
 import { useUavStore } from "@/lib/store";
@@ -64,6 +65,14 @@ export default function CommandPanel() {
     if (v >= 3 && v <= 100) localStorage.setItem("takeoff-alt", String(v));
   };
   const live = useUavStore((s) => s.live);
+  // 013-A 編隊：targetIds（指揮）疊在選中機（看）之上
+  const formation = useUavStore((s) => s.formation);
+  const targetIds = useUavStore((s) => s.targetIds);
+  const cfg = useUavStore((s) => s.formationCfg);
+  const fleet = useUavStore((s) => s.fleet);
+  const selectedId = useUavStore((s) => s.selectedId);
+  const primaryId = useUavStore((s) => s.primaryId);
+  const focusId = selectedId ?? primaryId;
 
   // 可拖曳：抓標題列移動，貼齊邊緣，位置記在 localStorage（重整不跑位）
   const panelRef = useRef<HTMLDivElement>(null);
@@ -246,7 +255,7 @@ export default function CommandPanel() {
         {health.enabled && !live && <span className="meta">無遙測</span>}
         {health.enabled && noChannel && <span className="meta">無指令通道</span>}
         <span className="spacer" />
-        {health.enabled && sid && dh && !observeOnly && (
+        {health.enabled && !formation && sid && dh && !observeOnly && (
           <span onPointerDown={(e) => e.stopPropagation()}
             onPointerUp={(e) => e.stopPropagation()}>
             {(live?.landed_state === "in_air" || (live?.alt_rel ?? 0) > 2)
@@ -269,6 +278,103 @@ export default function CommandPanel() {
 
       {open && health.enabled && (
         <div className="cmd-body">
+          {/* ── 013-A 編隊視圖（§2.5）：設定＋預覽先行，執行進度視圖等 013-B ── */}
+          {formation && (() => {
+            const members = Object.entries(fleet).filter(([, t]) => t.connected);
+            // 風險擋在行動點：逐台原因（未驗證/低電/未就緒），伺服器端同步 gate
+            const riskHints = targetIds.flatMap((id) => {
+              const t = fleet[id];
+              const name = t?.drone_name ?? id.slice(0, 6);
+              if (!t || !t.connected) return [`${name}：已離線`];
+              const out: string[] = [];
+              const tsid = t.mav_sysid != null ? String(t.mav_sysid) : null;
+              const tcaps = tsid ? health.drones[tsid]?.capabilities : undefined;
+              if (tcaps && CAP_KEYS.some((k) => (tcaps[k] ?? "unsupported") !== "ok")) {
+                out.push(`${name}：機型未驗證`);
+              }
+              if (t.battery_pct != null && t.battery_pct < 20) {
+                out.push(`${name}：電量 ${Math.round(t.battery_pct)}%`);
+              }
+              if (t.ready === false) out.push(`${name}：未就緒`);
+              return out;
+            });
+            return (<>
+              <div className="cmd-status">
+                <span className="st-target">編隊 · {targetIds.length} 台</span>
+                <span className="spacer" />
+                {/* A 段：群組指令服務（013-B）上線前如實停用，不假裝可飛 */}
+                <button className="btn-accent btn-sm" disabled
+                  title="群組指令服務上線後啟用（013-B）">↑ 全部起飛</button>
+                <button className="btn-plain btn-sm" title="退出編隊模式"
+                  onClick={() => useUavStore.getState().setFormation(false)}>✕</button>
+              </div>
+              {/* 成員列：◎焦點（點地圖球切）、◉目標集（點這裡 toggle）；
+                  無指令通道機不可勾（物理上發不了指令），其餘可勾＋狀態環預警 */}
+              <div className="cmd-row">
+                {members.map(([id, t]) => {
+                  const noCh = t.mav_sysid == null;
+                  const risky = riskHints.some((h) =>
+                    h.startsWith(t.drone_name ?? id.slice(0, 6)));
+                  return (
+                    <button key={id} disabled={noCh}
+                      title={noCh ? "無指令通道（非 MAVLink）" : t.drone_name ?? id}
+                      className={`member ${targetIds.includes(id) ? "tgt" : ""}`
+                        + ` ${id === focusId ? "focus" : ""} ${risky ? "warn" : ""}`}
+                      onClick={() => useUavStore.getState().toggleTarget(id)}>
+                      <span className="dot" style={{ background: colorFor(id) }} />
+                      {t.drone_name ?? id.slice(0, 6)}
+                    </button>
+                  );
+                })}
+              </div>
+              <div className="cmd-row">
+                <div className="seg">
+                  <button className={cfg.mode === "unified" ? "on" : ""}
+                    onClick={() => useUavStore.getState().setFormationCfg({ mode: "unified" })}>
+                    同一路徑
+                  </button>
+                  <button className={cfg.mode === "separate" ? "on" : ""}
+                    onClick={() => useUavStore.getState().setFormationCfg({ mode: "separate" })}>
+                    各自路徑
+                  </button>
+                </div>
+              </div>
+              {cfg.mode === "unified" ? (
+                <div className="cmd-row">
+                  <select value={cfg.base}
+                    onChange={(e) => useUavStore.getState()
+                      .setFormationCfg({ base: e.target.value })}>
+                    <option value="">選擇任務⋯</option>
+                    {missions.map((m) => <option key={m.id} value={m.id}>{m.name}</option>)}
+                  </select>
+                  <label className="cmd-alt">層距
+                    <input type="number" min={2} max={20} step={1} value={cfg.spacing}
+                      onChange={(e) => useUavStore.getState()
+                        .setFormationCfg({ spacing: Number(e.target.value) || 5 })} /> m
+                  </label>
+                </div>
+              ) : (
+                targetIds.map((id) => (
+                  <div className="cmd-row" key={id}>
+                    <span className="dot" style={{ background: colorFor(id) }} />
+                    <select value={cfg.assign[id] ?? ""}
+                      onChange={(e) => useUavStore.getState()
+                        .setFormationCfg({ assign: { ...cfg.assign, [id]: e.target.value } })}>
+                      <option value="">選擇任務⋯</option>
+                      {missions.map((m) => <option key={m.id} value={m.id}>{m.name}</option>)}
+                    </select>
+                  </div>
+                ))
+              )}
+              {riskHints.map((h, i) => (
+                <div className="hint-line" key={i}>· {h}</div>
+              ))}
+              <div className="cmd-sec">手動</div>
+              <p className="hint-line">編隊模式中停用——手動控制限單機。</p>
+            </>);
+          })()}
+
+          {!formation && (<>
           {/* 狀態：就緒/模式/GPS/電量一行看完；未就緒原因才逐條展開 */}
           {/* 明示對象機：遙測與指令按鈕永遠是同一台（選中機統一） */}
           <div className="cmd-status">
@@ -281,6 +387,16 @@ export default function CommandPanel() {
             <span>{live?.flight_mode ?? "—"}</span>
             <span>GPS {live?.gps_fix ?? "—"} · {live?.satellites ?? "—"}顆</span>
             <span>電量 {live?.battery_pct != null ? Math.round(live.battery_pct) : "—"}%</span>
+            {/* 編隊入口（§2.5 漸進顯示）：≥2 機連線才出現，單機永遠看不到 */}
+            {Object.values(fleet).filter((t) => t.connected).length >= 2 && (
+              <button className="btn-plain btn-sm" title="進入編隊（多機）模式"
+                onClick={() => useUavStore.getState().setFormation(true,
+                  Object.entries(fleet)
+                    .filter(([, t]) => t.connected && t.mav_sysid != null)
+                    .map(([id]) => id))}>
+                ⧉ 編隊
+              </button>
+            )}
           </div>
           {live && !live.ready && (live.not_ready_reasons ?? []).map((r, i) => (
             <div className="hint-line" key={i}>· {r}</div>
@@ -349,6 +465,7 @@ export default function CommandPanel() {
           <div className="cmd-sec">手動</div>
           <ManualControl sid={sid}
             lockedReason={caps && capState("manual") !== "ok" ? capReason("manual") : null} />
+          </>)}
           </>)}
 
           {result && (

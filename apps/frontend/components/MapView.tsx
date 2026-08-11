@@ -9,7 +9,8 @@ import { colorFor, createDroneLayer, pickDrone, type ScreenHit } from "@/compone
 import SimpleHud from "@/components/SimpleHud";
 import VideoModal from "@/components/VideoModal";
 import VideoPlayer from "@/components/VideoPlayer";
-import { routeLayer } from "@/lib/deckRoute";
+import { pathsLayer, routeLayer, type RouteRun } from "@/lib/deckRoute";
+import { basePreview, separatePreview, unifiedPreview, type Wp } from "@/lib/formation";
 import { CANVAS, groundGrid, ribbon, trailLineString } from "@/lib/geo";
 import { API, LINK_CLASSES } from "@/lib/signal";
 import { useUavStore } from "@/lib/store";
@@ -38,6 +39,48 @@ export default function MapView() {
   // 機隊點：只訂閱成員 id 字串（fleet 物件 5Hz 換新，直接訂會整頁重渲染）
   const fleetIds = useUavStore((s) => Object.keys(s.fleet).join(","));
   const dotIds = fleetIds ? fleetIds.split(",") : [];
+
+  // 013-A 編隊：色點/機體球互動分支＋N 條誠實預覽（前端試算，013-B 改讀
+  // 後端 materialized assignments）
+  const formationOn = useUavStore((s) => s.formation);
+  const targetKey = useUavStore((s) => s.targetIds.join(","));
+  const fCfg = useUavStore((s) => s.formationCfg);
+  const previewRef = useRef<RouteRun[]>([]);
+  const wpCacheRef = useRef(new Map<string, Wp[]>());
+  useEffect(() => {
+    let stop = false;
+    (async () => {
+      if (!formationOn) { previewRef.current = []; return; }
+      const st = useUavStore.getState();
+      const targets = st.targetIds.filter((id) => st.fleet[id]);
+      const getWps = async (mid: string): Promise<Wp[]> => {
+        if (!wpCacheRef.current.has(mid)) {
+          const d = await fetch(`${API}/api/missions/${mid}/waypoints`)
+            .then((r) => r.json()).catch(() => null);
+          wpCacheRef.current.set(mid, d?.waypoints ?? []);
+        }
+        return wpCacheRef.current.get(mid)!;
+      };
+      let runs: RouteRun[] = [];
+      if (fCfg.mode === "unified" && fCfg.base) {
+        const wps = await getWps(fCfg.base);
+        runs = [
+          ...basePreview(wps),
+          ...unifiedPreview(wps,
+            targets.map((id) => ({ id, color: colorFor(id) })), fCfg.spacing),
+        ];
+      } else if (fCfg.mode === "separate") {
+        const per = [];
+        for (const id of targets) {
+          const mid = fCfg.assign[id];
+          if (mid) per.push({ id, color: colorFor(id), wps: await getWps(mid) });
+        }
+        runs = separatePreview(per);
+      }
+      if (!stop) previewRef.current = runs;
+    })();
+    return () => { stop = true; };
+  }, [formationOn, fCfg, targetKey]);
 
   // 檢視切換：地圖 ↔ 當前選擇機（側欄選的，未選＝主機）的即時影像
   const [view, setView] = useState<"map" | "video">("map");
@@ -138,7 +181,11 @@ export default function MapView() {
       // 用 render 時算好的螢幕位置自行命中）
       map.on("click", (e) => {
         const id = pickDrone(hitsRef.current, e.point.x, e.point.y);
-        if (id) setVideoDrone(id);
+        if (!id) return;
+        // 編隊模式：點機體球＝切焦點（看誰）；單機模式照舊開即時影像
+        const st = useUavStore.getState();
+        if (st.formation) st.select(id);
+        else setVideoDrone(id);
       });
       map.on("mousemove", (e) => {
         map.getCanvas().style.cursor =
@@ -239,8 +286,12 @@ export default function MapView() {
         // 球體層自己每幀從 store 讀位置（triggerRepaint 驅動），不需在此餵資料
 
         // 空中航跡：deck.gl PathLayer——attribute 更新是同幀 GPU buffer
-        // 寫入（無 setData 整源替換的閃爍），5Hz 直更不需節流
-        overlayRef.current?.setProps({ layers: [routeLayer("route3d", s.trails)] });
+        // 寫入（無 setData 整源替換的閃爍），5Hz 直更不需節流。
+        // 編隊預覽層一併掛上（非編隊時為空陣列，零成本）
+        overlayRef.current?.setProps({ layers: [
+          routeLayer("route3d", s.trails),
+          pathsLayer("formation-preview", previewRef.current),
+        ] });
 
         // 地面投影仍是 maplibre setData（整源替換）：節流 1Hz 且僅樣本
         // 增加時重建。機體 marker 與置中不節流——位置要跟得上 5Hz
@@ -272,10 +323,17 @@ export default function MapView() {
       {dotIds.length > 1 && (
         <div className="fleet-dots">
           {dotIds.map((id) => (
-            <button key={id} className={id === selId ? "on" : ""}
+            <button key={id}
+              className={`${id === selId ? "on" : ""}`
+                + ` ${formationOn && targetKey.split(",").includes(id) ? "tgt" : ""}`}
               title={useUavStore.getState().fleet[id]?.drone_name ?? id}
               style={{ background: colorFor(id) }}
-              onClick={() => useUavStore.getState().select(id)} />
+              onClick={() => {
+                // 編隊：點色點＝toggle 目標集（指揮誰）；單機：切焦點
+                const st = useUavStore.getState();
+                if (st.formation) st.toggleTarget(id);
+                else st.select(id);
+              }} />
           ))}
         </div>
       )}
