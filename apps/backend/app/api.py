@@ -194,8 +194,12 @@ async def delete_group(group_id: str):
 
 @router.get("/sessions")
 async def list_sessions(limit: int = 50, mission_id: str | None = None,
-                        since: str | None = None):
-    """架次清單。可選 mission_id（綁定任務）＋since（ISO 時間窗，比較頁 v4 用）。"""
+                        since: str | None = None, min_samples: int | None = None):
+    """架次清單。可選 mission_id（綁定任務）／since（ISO 時間窗）／min_samples。
+
+    `min_samples`：只回鏈路樣本數 ≥ 此值的架次（場域訊號頁用，避免空/測試殘留架次
+    佔滿載入窗——空架次不是「飛行」，誠實原則）。用架次結束時算好的 summary.samples_total
+    篩，不掃 link_metrics；未結束（summary NULL）視為 0、min_samples≥1 時自然排除。"""
     conds, args = [], []
     if mission_id:
         args.append(mission_id)
@@ -203,6 +207,10 @@ async def list_sessions(limit: int = 50, mission_id: str | None = None,
     if since:
         args.append(since)
         conds.append(f"s.started_at >= ${len(args) + 1}::text::timestamptz")
+    if min_samples is not None:
+        args.append(min_samples)
+        conds.append(
+            f"COALESCE((s.summary->>'samples_total')::int, 0) >= ${len(args) + 1}")
     where = ("WHERE " + " AND ".join(conds)) if conds else ""
     q = f"""
         SELECT s.*, d.name AS drone_name, m.name AS mission_name
