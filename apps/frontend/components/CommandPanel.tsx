@@ -75,17 +75,27 @@ export default function CommandPanel() {
   const focusId = selectedId ?? primaryId;
   const draftGroup = useUavStore((s) => s.draftGroup);
   const [groupBusy, setGroupBusy] = useState(false);
+  // draft 失效＝連伺服器端一起清（07260a6 的 DELETE，限 draft；409 不理）——
+  // 使用者反覆調整不在 DB 堆孤兒群組
+  const discardDraft = () => {
+    const st = useUavStore.getState();
+    if (!st.draftGroup) return;
+    fetch(`${API}/api/groups/${st.draftGroup.id}`, { method: "DELETE" }).catch(() => {});
+    st.setDraftGroup(null);
+  };
   // 設定/成員變更 → draft 失效（預覽退回前端試算，需重新預檢）
   const cfgKey = `${cfg.mode}|${cfg.base}|${cfg.spacing}|`
     + `${targetIds.join(",")}|${targetIds.map((id) => cfg.assign[id] ?? "").join(",")}`;
   useEffect(() => {
-    useUavStore.getState().setDraftGroup(null);
+    discardDraft();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [cfgKey]);
 
   // 013-B 前半：建群組＋預檢（POST /api/groups，backend 50c3c1a 契約）
   async function createGroup() {
     setGroupBusy(true);
     setResult(null);
+    discardDraft();   // 重新預檢＝舊 draft 作廢（伺服器端一併清）
     try {
       const res = await fetch(`${API}/api/groups`, {
         method: "POST",
@@ -354,7 +364,10 @@ export default function CommandPanel() {
                 <button className="btn-accent btn-sm" disabled
                   title="群組指令服務上線後啟用（013-B）">↑ 全部起飛</button>
                 <button className="btn-plain btn-sm" title="退出編隊模式"
-                  onClick={() => useUavStore.getState().setFormation(false)}>✕</button>
+                  onClick={() => {
+                    discardDraft();
+                    useUavStore.getState().setFormation(false);
+                  }}>✕</button>
               </div>
               {/* 成員列：◎焦點（點地圖球切）、◉目標集（點這裡 toggle）；
                   無指令通道機不可勾（物理上發不了指令），其餘可勾＋狀態環預警 */}
