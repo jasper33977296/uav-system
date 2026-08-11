@@ -175,15 +175,7 @@ export default function Drones() {
                 （刪除/匯出安全流程照舊） */}
             {open[d.id] && (<>
             <div className="drone-actions">
-              {apChip(d.autopilot) && <span className="chip">{apChip(d.autopilot)}</span>}
-              {d.is_primary && <span className="chip">主機</span>}
-              {d.is_simulated && <span className="chip">模擬</span>}
-              <span className="meta">
-                {d.connection_url ?? ""}
-                {mine[0] ? ` · 最近 ${new Date(mine[0].started_at).toLocaleString("zh-TW",
-                  { month: "numeric", day: "numeric", hour: "2-digit", minute: "2-digit",
-                    hour12: false })}` : ""}
-              </span>
+              <span className="meta">{d.connection_url ?? ""}</span>
               <span className="spacer" />
               <button className="btn-plain btn-sm"
                 onClick={async () => {
@@ -233,6 +225,20 @@ export default function Drones() {
                 刪除
               </button>
             </div>
+
+            {/* 資訊膠囊一行（不用・串接）＋最近飛行弱文字獨立行（ui-spec §3） */}
+            <div className="badges" style={{ marginTop: 8, marginBottom: 0 }}>
+              {apChip(d.autopilot) && <span className="chip">{apChip(d.autopilot)}</span>}
+              {d.is_primary && <span className="chip">主機</span>}
+              {d.is_simulated && <span className="chip">模擬</span>}
+            </div>
+            {mine[0] && (
+              <div className="hint-line" style={{ marginTop: 6 }}>
+                最近飛行 {new Date(mine[0].started_at).toLocaleString("zh-TW",
+                  { month: "numeric", day: "numeric", hour: "2-digit", minute: "2-digit",
+                    hour12: false })}
+              </div>
+            )}
 
             <table className="table" style={{ marginTop: 10 }}>
               <thead>

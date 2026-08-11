@@ -29,7 +29,7 @@ const TABS = [
 export default function AppShell({ children }: { children: React.ReactNode }) {
   useTelemetry();
   const pathname = usePathname();
-  const { live, wsConnected } = useUavStore();
+  const live = useUavStore((s) => s.live);
   // 與 backend 的入庫條件一致（armed 且已建立架次，見 issues/004）——
   // 這顆 chip 的語意就是「現在寫進資料庫的資料存不存在」，不能只看 armed
   const recording = Boolean(live?.armed && live?.session_id);
@@ -52,27 +52,14 @@ export default function AppShell({ children }: { children: React.ReactNode }) {
           </Link>
         ))}
         <span className="spacer" />
-        {/* 狀態縮成純圓點（文字 label 依需求移除），語意放 title——hover 可見。
-            記錄狀態（#004：待機時刻意不入庫）仍以紅點／空心圈區分。 */}
-        <span
-          className="status-dot"
-          title={`後端 ${wsConnected ? "已連線" : "斷線"}`}
-          style={{ background: wsConnected ? "#0ca30c" : "#a01818" }}
-        />
-        <span
-          className="status-dot"
-          title={`MAVLink ${live?.connected ? "已連線" : "等待中"}`}
-          style={{ background: live?.connected ? "#0ca30c" : "#a01818" }}
-        />
-        <span
-          className="status-dot"
-          title={recording ? "記錄中" : "待機（不記錄）"}
-          style={
-            recording
-              ? { background: "#d03b3b" }
-              : { background: "transparent", border: "1.5px solid var(--muted)" }
-          }
-        />
+        {/* 狀態燈只留記錄燈（ui-spec §1）：後端/資料流異常已由 toast 與
+            HUD 失聯樣式涵蓋。記錄＝armed 且入庫（#004：待機刻意不入庫） */}
+        <span className="rec-light" title={recording ? "記錄中（armed 且入庫）" : "待機（不記錄）"}>
+          <span className={`rec-dot ${recording ? "on" : ""}`} />
+          <span className={`rec-txt ${recording ? "on" : ""}`}>
+            {recording ? "記錄中" : "未記錄"}
+          </span>
+        </span>
       </nav>
       <div className="content">{children}</div>
     </div>

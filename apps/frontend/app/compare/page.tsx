@@ -210,9 +210,18 @@ export default function Compare() {
   const [cdfOpen, setCdfOpen] = useState(false);
   useEffect(() => { setCdfOpen(localStorage.getItem("cmp-cdf-open") === "1"); }, []);
 
+  // 任務下拉附架次數（ui-spec §6：020 重複名修好前靠架次數自明）——
+  // sessions 只有 mission_name，以名字聚合（重複名會共用計數，020 後改 id）
+  const [missionCounts, setMissionCounts] = useState<Record<string, number>>({});
   useEffect(() => {
     fetch(`${API}/api/missions`).then((r) => r.json())
       .then((ms: Mission[]) => setMissions(ms)).catch(() => {});
+    fetch(`${API}/api/sessions?limit=500`).then((r) => r.json())
+      .then((rows: { mission_name: string | null }[]) => {
+        const c: Record<string, number> = {};
+        for (const r of rows) if (r.mission_name) c[r.mission_name] = (c[r.mission_name] ?? 0) + 1;
+        setMissionCounts(c);
+      }).catch(() => {});
   }, []);
 
   useEffect(() => {
@@ -355,20 +364,17 @@ export default function Compare() {
   return (
     <div className="page-pad">
       <div className="card">
+        {/* ⓘ 整移除（ui-spec §6 使用者定案）：比較頁不放任何解釋入口，
+            里程對齊原理留在 doc/ 不進 UI */}
         <h3>航線比較</h3>
-        {/* 解釋文收 ⓘ（simple-first 文案清剪）：預設零解說 */}
-        <details className="hint-fold">
-          <summary>ⓘ 這頁怎麼比</summary>
-          <p className="hint-line">
-            同一任務的多次飛行，沿計畫路徑逐地點對齊（樣本投影到路線上，
-            比「同一地點、不同時間」的訊號）。第一條勾選＝比較基準，
-            最多 {MAX_SEL} 條。
-          </p>
-        </details>
         <div className="cmd-row" style={{ marginTop: 8 }}>
           <select value={missionId} onChange={(e) => setMissionId(e.target.value)}>
             <option value="">選擇任務⋯</option>
-            {missions.map((m) => <option key={m.id} value={m.id}>{m.name}</option>)}
+            {missions.map((m) => (
+              <option key={m.id} value={m.id}>
+                {m.name}（{missionCounts[m.name] ?? 0} 架次）
+              </option>
+            ))}
           </select>
           <select value={metric} onChange={(e) => setMetric(e.target.value)}>
             {METRICS.map((m) => <option key={m.key} value={m.key}>{m.label}</option>)}

@@ -78,10 +78,13 @@ a:focus-visible, button:focus-visible, input:focus-visible, select:focus-visible
 }
 .nav .spacer { flex: 1; }
 .nav .chip { flex: none; }
-.status-dot {
-  width: 10px; height: 10px; border-radius: 50%; flex: none;
-  margin-left: 10px; box-sizing: border-box;
-}
+/* 記錄燈（唯一導覽狀態燈，ui-spec §1）：12px 醒目點＋文字；錄製紅點呼吸 */
+.rec-light { display: inline-flex; align-items: center; gap: 6px; margin-left: 10px; }
+.rec-dot { width: 12px; height: 12px; border-radius: 50%; background: var(--muted); flex: none; }
+.rec-dot.on { background: #d03b3b; animation: rec-breath 1.6s ease-in-out infinite; }
+.rec-txt { font-size: 12px; color: var(--muted); }
+.rec-txt.on { color: #d03b3b; font-weight: 600; }
+@keyframes rec-breath { 0%, 100% { opacity: 1; } 50% { opacity: 0.35; } }
 
 /* 即時監控頁：地圖＋側欄。
    側欄用 clamp 而非寫死 380px——視窗縮小或瀏覽器放大（等效縮小視窗）時
@@ -107,7 +110,7 @@ a:focus-visible, button:focus-visible, input:focus-visible, select:focus-visible
 
 /* 地圖圖例（鏈路品質分級）*/
 .legend {
-  position: absolute; left: 12px; bottom: 24px; z-index: 5;
+  position: absolute; left: 12px; bottom: 92px; z-index: 5;   /* HUD 上方 10px（ui-spec §2） */
   background: var(--surface); border: 1px solid var(--border);
   border-radius: 14px; padding: 10px 14px; font-size: 12px;
   box-shadow: 0 4px 16px rgba(0, 0, 0, 0.35);   /* 浮動面板唯一一層柔影 */
@@ -382,7 +385,12 @@ a:focus-visible, button:focus-visible, input:focus-visible, select:focus-visible
 }
 .fleet-dots button.on { border-color: var(--ink); }
 
-.hud-top-right { position: absolute; top: 12px; right: 12px; z-index: 20; }
+/* 右上叢集：[▤][地圖|影像]，任務控制面板（初始右上）在其右側 */
+.hud-top-right {
+  position: absolute; top: 12px; right: 324px; z-index: 20;
+  display: flex; gap: 8px; align-items: stretch;
+}
+.hud-top-right .view-toggle { position: static; box-shadow: none; }
 .hud-top-right button {
   width: 36px; height: 32px; font-size: 15px; cursor: pointer;
   background: var(--surface); color: var(--ink-2);
@@ -435,12 +443,15 @@ a:focus-visible, button:focus-visible, input:focus-visible, select:focus-visible
   border: 1px solid var(--hairline);
 }
 
+/* 異常 toast（ui-spec §2.2）：導覽下方中央、10s 或點擊消、附 ✕ */
 .hud-toast {
-  position: absolute; left: 50%; transform: translateX(-50%); bottom: 112px;
-  z-index: 25; font-size: 14px; padding: 8px 16px; border-radius: 10px;
+  position: absolute; left: 50%; transform: translateX(-50%); top: 10px;
+  z-index: 40; font-size: 14px; padding: 8px 14px 8px 16px; border-radius: 10px;
   background: var(--status-warn-bg); color: var(--status-warn); white-space: nowrap;
-  border: none;
+  border: none; cursor: pointer; display: flex; align-items: center; gap: 10px;
+  box-shadow: 0 4px 16px rgba(0, 0, 0, 0.35);
 }
+.hud-toast-x { font-size: 12px; opacity: 0.7; }
 .hud-toast.err { background: var(--status-danger-bg); color: var(--status-danger); }
 .hud-toast.ok { background: var(--status-ok-bg); color: var(--status-ok); }
 .hud-toast.hud-tap { cursor: pointer; }
@@ -482,15 +493,14 @@ a:focus-visible, button:focus-visible, input:focus-visible, select:focus-visible
   max-height: 240px; overflow-y: auto; padding: 4px 14px 10px;
   display: flex; flex-direction: column; gap: 6px;
 }
-/* 擺位（第五輪定案）：左下＝HUD 專屬層——attribution 最小化移 HUD 上方、
-   比例尺＋座標移右下主按鈕上方，完整面板再讓一層 */
-.map-wrap .maplibregl-ctrl-bottom-left { bottom: 92px; }
-.map-wrap .maplibregl-ctrl-bottom-right { bottom: 92px; }
-.cmd-panel { bottom: 132px; }
+/* 擺位（ui-spec §2）：左下＝圖例＋HUD；比例尺/attribution 右下（事件列上方）；
+   任務控制面板初始右上（可拖曳、位置記憶） */
+.map-wrap .maplibregl-ctrl-bottom-right { bottom: 34px; }
+.cmd-panel { left: auto; right: 12px; top: 12px; bottom: auto; }
 
 /* 游標經緯度（issue 017 P1）：與比例尺同區、等寬數字；無內容時隱藏 */
 .coord-read {
-  position: absolute; right: 12px; bottom: 120px; z-index: 5;
+  position: absolute; right: 12px; bottom: 96px; z-index: 5;
   font-size: 11px; color: var(--ink-2);
   font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
   font-variant-numeric: tabular-nums;

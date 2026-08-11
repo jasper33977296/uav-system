@@ -1,7 +1,7 @@
 "use client";
 import { useEffect, useRef, useState } from "react";
 
-import { LINK_CLASSES, classifySinr } from "@/lib/signal";
+import { classifySinr } from "@/lib/signal";
 import { useUavStore } from "@/lib/store";
 
 const AP_LABELS: Record<string, string> = { px4: "PX4", ardupilot: "ArduPilot" };
@@ -132,24 +132,7 @@ export default function SidePanel() {
             />
           </div>
         </details>
-        {/* 軌跡顏色圖例：地圖上的常駐圖例卡移除、併入這裡（單一住所） */}
-        <div className="trail-key">
-          <h4>地圖軌跡顏色</h4>
-          {LINK_CLASSES.map((c) => (
-            <div className="row" key={c.key}>
-              <span className="dot" style={{ background: c.color }} />
-              {c.label}
-            </div>
-          ))}
-          <div className="row">
-            <span className="dot" style={{ background: "#8f8b80", opacity: 0.6 }} />
-            預計任務路徑
-          </div>
-          <div className="row">
-            <span className="dot" style={{ background: "transparent", border: "1.5px solid #8f8b80" }} />
-            起飛點
-          </div>
-        </div>
+        {/* 圖例回歸地圖左下常駐（ui-spec §2 使用者定案）——不在卡內 */}
       </div>
 
       {/* 專業數值：GPS／姿態／模式（HUD 沒有的才在這裡） */}

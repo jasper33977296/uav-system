@@ -58,6 +58,12 @@ interface UavStore {
   // deadman 已觸發（ManualControl 判定、HUD 異常句顯示）：danger 常駐至解除
   deadman: boolean;
   setDeadman: (v: boolean) => void;
+  // 起飛被拒（CommandPanel 判定 → HUD toast「點這裡看原因」）
+  takeoffDeniedAt: number;
+  noticeTakeoffDenied: () => void;
+  // 喚起任務控制面板（toast 點擊展開原因用；計數器遞增觸發）
+  cmdOpenReq: number;
+  requestCmdPanel: () => void;
   setLive: (t: Telemetry) => void;
   select: (id: string) => void;
   setWsConnected: (v: boolean) => void;
@@ -78,6 +84,10 @@ export const useUavStore = create<UavStore>((set) => ({
   setPanelOpen: (v) => set({ panelOpen: v }),
   deadman: false,
   setDeadman: (v) => set({ deadman: v }),
+  takeoffDeniedAt: 0,
+  noticeTakeoffDenied: () => set({ takeoffDeniedAt: Date.now() }),
+  cmdOpenReq: 0,
+  requestCmdPanel: () => set((s) => ({ cmdOpenReq: s.cmdOpenReq + 1 })),
   setLive: (t) =>
     set((s) => {
       const id = t.drone_id ?? "unknown";

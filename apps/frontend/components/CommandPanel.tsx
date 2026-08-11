@@ -53,6 +53,9 @@ export default function CommandPanel() {
   const [confirm, setConfirm] = useState<string | null>(null);
   const confirmTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const [open, setOpen] = useState(true);
+  // toast「點這裡看原因」喚起（ui-spec §2.4）
+  const cmdOpenReq = useUavStore((s) => s.cmdOpenReq);
+  useEffect(() => { if (cmdOpenReq) setOpen(true); }, [cmdOpenReq]);
   const [alt, setAltState] = useState(10);
   useEffect(() => {
     const saved = Number(localStorage.getItem("takeoff-alt"));
@@ -180,6 +183,9 @@ export default function CommandPanel() {
         body: payload ? JSON.stringify(payload) : undefined,
       });
       const body = await res.json().catch(() => ({}));
+      if (!res.ok && path === "/takeoff") {
+        useUavStore.getState().noticeTakeoffDenied();   // HUD toast 用
+      }
       if (!res.ok) {
         // detail 可能是字串或結構化報告（預檢 problems／機端拒絕＋自駕儀原因
         // 文字／非 PX4 機的 501 飛安 guard {msg, autopilot, hint}）。
@@ -226,15 +232,23 @@ export default function CommandPanel() {
         onPointerDown={dragStart} onPointerMove={dragMove}
         onPointerUp={dragEnd} onPointerCancel={dragEnd}>
         <span className="name">任務控制</span>
-        {!health.enabled && <span className="meta">未啟用</span>}
-        {health.enabled && sid && (
-          <span className="meta">
-            sysid {sid}{apLabel ? ` · ${apLabel}` : ""} · {armed ? "已解鎖" : "待機"}
-            {observeOnly ? " · 僅觀察" : ""}
-          </span>
+        {/* 首行＝就緒點＋主按鈕（ui-spec §2：主按鈕併入面板，HUD 不放） */}
+        {health.enabled && sid && live && (
+          <span className="dot" title={live.ready ? "就緒" : "未就緒"} style={{
+            background: live.ready ? "var(--status-ok)" : "var(--status-serious)" }} />
         )}
+        {!health.enabled && <span className="meta">未啟用</span>}
         {health.enabled && !sid && <span className="meta">未看到機</span>}
         <span className="spacer" />
+        {health.enabled && sid && !observeOnly && (
+          <span onPointerDown={(e) => e.stopPropagation()}
+            onPointerUp={(e) => e.stopPropagation()}>
+            {(live?.landed_state === "in_air" || (live?.alt_rel ?? 0) > 2)
+              ? btn("RTL", "⌂ 返航", "/mode/rtl", { danger: true, cap: "rtl" })
+              : btn("起飛", "↑ 起飛", "/takeoff",
+                    { confirm: true, body: { alt }, cap: "takeoff", accent: true })}
+          </span>
+        )}
         <span className="meta">{open ? "▾" : "▸"}</span>
       </div>
 
@@ -314,17 +328,14 @@ export default function CommandPanel() {
           </div>
           {capHints(["mission_upload", "mission_fly", "mission_start"])}
 
+          {/* 起飛/返航住標題列主按鈕（單一住所），這裡只留其餘飛行操作 */}
           <div className="cmd-sec">飛行</div>
-          <div className="cmd-row">
+          <div className="cmd-row cmd-emergency">
             {armed
               ? btn("上鎖", "上鎖", "/disarm", { confirm: true, danger: true, cap: "arm" })
               : btn("解鎖", "解鎖", "/arm", { confirm: true, cap: "arm" })}
-            {btn("起飛", "起飛", "/takeoff", { confirm: true, body: { alt }, cap: "takeoff" })}
-          </div>
-          <div className="cmd-row cmd-emergency">
-            {btn("RTL", "RTL 返航", "/mode/rtl", { danger: true, cap: "rtl" })}
-            {btn("Hold", "Hold 懸停", "/mode/hold", { cap: "hold" })}
-            {btn("降落", "原地降落", "/mode/land", { confirm: true, danger: true, cap: "land" })}
+            {btn("Hold", "懸停", "/mode/hold", { cap: "hold" })}
+            {btn("降落", "降落", "/mode/land", { confirm: true, danger: true, cap: "land" })}
           </div>
           {capHints(["arm", "takeoff", "rtl", "hold", "land"])}
 

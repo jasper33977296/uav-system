@@ -11,7 +11,7 @@ import VideoModal from "@/components/VideoModal";
 import VideoPlayer from "@/components/VideoPlayer";
 import { routeLayer } from "@/lib/deckRoute";
 import { CANVAS, groundGrid, ribbon, trailLineString } from "@/lib/geo";
-import { API } from "@/lib/signal";
+import { API, LINK_CLASSES } from "@/lib/signal";
 import { useUavStore } from "@/lib/store";
 
 const HOME: [number, number] = [8.5456, 47.3977]; // PX4 SITL 預設起飛點
@@ -33,9 +33,8 @@ export default function MapView() {
   const overlayRef = useRef<MapboxOverlay | null>(null);
   const ribbonGateRef = useRef({ t: 0, n: -1 });   // 地面投影重建節流
 
-  // simple-first：專業面板抽屜（legend 跟著）、完整控制面板（⌃ 展開）
+  // simple-first：專業面板抽屜；任務控制面板恆顯（自收合，ui-spec §2）
   const panelOpen = useUavStore((s) => s.panelOpen);
-  const [cmdOpen, setCmdOpen] = useState(false);
   // 機隊點：只訂閱成員 id 字串（fleet 物件 5Hz 換新，直接訂會整頁重渲染）
   const fleetIds = useUavStore((s) => Object.keys(s.fleet).join(","));
   const dotIds = fleetIds ? fleetIds.split(",") : [];
@@ -72,9 +71,9 @@ export default function MapView() {
           { id: "canvas", type: "background", paint: { "background-color": CANVAS } },
         ],
       },
-      attributionControl: false,   // 右下讓給主按鈕（驗收修正 2）——移左下
+      attributionControl: false,   // 左下讓給圖例＋HUD（ui-spec §2）——與比例尺同右下
     });
-    map.addControl(new maplibregl.AttributionControl({ compact: true }), "bottom-left");
+    map.addControl(new maplibregl.AttributionControl({ compact: true }), "bottom-right");
     map.addControl(new maplibregl.ScaleControl({ maxWidth: 120, unit: "metric" }), "bottom-right");
     mapRef.current = map;
 
@@ -280,23 +279,41 @@ export default function MapView() {
           ))}
         </div>
       )}
-      {/* 右上：專業數值抽屜開關（▤）——數值不刪除只隱藏 */}
+      {/* 右上叢集（ui-spec §2）：[▤ 抽屜] [地圖|影像]，任務控制面板在其右 */}
       <div className="hud-top-right">
         <button className={panelOpen ? "on" : ""} title="詳細數值面板"
           onClick={() => useUavStore.getState().setPanelOpen(!panelOpen)}>▤</button>
+        <div className="view-toggle">
+          <button className={view === "map" ? "on" : ""}
+            onClick={() => setView("map")}>地圖</button>
+          <button className={view === "video" ? "on" : ""}
+            onClick={() => setView("video")}>影像</button>
+        </div>
+      </div>
+
+      {/* 軌跡顏色圖例：回歸左下常駐（ui-spec §2 使用者定案），HUD 上方 */}
+      <div className="legend">
+        <h4>訊號品質</h4>
+        {LINK_CLASSES.map((c) => (
+          <div className="row" key={c.key}>
+            <span className="dot" style={{ background: c.color }} />
+            {c.label}
+          </div>
+        ))}
+        <div className="row">
+          <span className="dot" style={{ background: "#8f8b80", opacity: 0.6 }} />
+          預計任務路徑
+        </div>
+        <div className="row">
+          <span className="dot" style={{ background: "transparent", border: "1.5px solid #8f8b80" }} />
+          起飛點
+        </div>
       </div>
 
       {/* 圖例已併入專業抽屜的訊號品質卡（單一住所，第五輪）——地圖上不再常駐 */}
 
-      {/* 檢視切換鈕：地圖保持 mounted（maplibre 重建昂貴且會失去視角），
+      {/* 影像檢視：地圖保持 mounted（maplibre 重建昂貴且會失去視角），
           影像用覆蓋層蓋上去；切回地圖即卸載播放器、停掉串流 */}
-      <div className="view-toggle">
-        <button className={view === "map" ? "on" : ""}
-          onClick={() => setView("map")}>地圖</button>
-        <button className={view === "video" ? "on" : ""}
-          onClick={() => setView("video")}>影像</button>
-      </div>
-
       {view === "video" && (
         <div className="video-overlay">
           {selId == null ? (
@@ -325,10 +342,9 @@ export default function MapView() {
         </div>
       )}
 
-      {/* simple-first HUD：底部數值列＋情境主按鈕＋事件單行；
-          完整控制面板（任務/手動/全部按鈕）由 ⌃ 展開，不刪除只隱藏 */}
-      <SimpleHud onExpand={() => setCmdOpen((o) => !o)} />
-      {cmdOpen && <CommandPanel />}
+      {/* simple-first HUD（數值列＋toast＋事件單行）；任務控制面板恆顯自收合 */}
+      <SimpleHud />
+      <CommandPanel />
 
       {videoDrone && (
         <VideoModal
