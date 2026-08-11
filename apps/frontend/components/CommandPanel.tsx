@@ -445,9 +445,25 @@ export default function CommandPanel() {
                 {draftGroup.conflictOk ? (
                   <div className="cmd-ready ok">✅ 路徑分離足夠，無衝突</div>
                 ) : (
-                  draftGroup.conflicts.map((c, i) => (
-                    <div className="cmd-ready warn" key={i}>⚠ {c.a} × {c.b}：{c.why}</div>
-                  ))
+                  draftGroup.conflicts.map((c, i) => {
+                    // 衝突句用機名不用內部層編號（驗收微調）：L0/L1、
+                    // drone_id、sysid 三種標籤形式都映射
+                    const who = (label: string) => {
+                      const byLayer = /^L(\d+)$/i.exec(label);
+                      const hit = byLayer
+                        ? draftGroup.assignments.find(
+                            (x) => x.layer_index === Number(byLayer[1]))
+                        : draftGroup.assignments.find(
+                            (x) => x.drone_id === label
+                              || String(x.mav_sysid ?? "") === label);
+                      return hit?.drone_name ?? label;
+                    };
+                    return (
+                      <div className="cmd-ready warn" key={i}>
+                        ⚠ {who(c.a)} × {who(c.b)}：{c.why}
+                      </div>
+                    );
+                  })
                 )}
                 {draftGroup.assignments.map((a) => (
                   <div className="hint-line" key={a.drone_id}>
