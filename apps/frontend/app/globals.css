@@ -455,7 +455,16 @@ a:focus-visible, button:focus-visible, input:focus-visible, select:focus-visible
   background: var(--status-danger-bg); color: var(--status-danger);
   border-color: var(--status-danger-border);
 }
-.map-wrap .maplibregl-ctrl-bottom-left { bottom: 34px; }
+/* 軌跡顏色圖例（併入訊號品質卡，單一住所） */
+.trail-key { margin-top: 10px; border-top: 1px solid var(--hairline); padding-top: 8px; }
+.trail-key h4 {
+  font-size: 11px; font-weight: 600; color: var(--muted);
+  text-transform: uppercase; letter-spacing: 0.04em; margin-bottom: 4px;
+}
+.trail-key .row {
+  display: flex; align-items: center; gap: 6px;
+  color: var(--ink-2); line-height: 1.8; font-size: 12px;
+}
 
 .hud-events {
   position: absolute; left: 0; right: 0; bottom: 0; z-index: 26;
@@ -471,13 +480,15 @@ a:focus-visible, button:focus-visible, input:focus-visible, select:focus-visible
   max-height: 240px; overflow-y: auto; padding: 4px 14px 10px;
   display: flex; flex-direction: column; gap: 6px;
 }
-/* HUD 佔用底邊後，maplibre 比例尺與完整面板讓位 */
-.map-wrap .maplibregl-ctrl-bottom-right { bottom: 34px; }
-.cmd-panel { bottom: 96px; }
+/* 擺位（第五輪定案）：左下＝HUD 專屬層——attribution 最小化移 HUD 上方、
+   比例尺＋座標移右下主按鈕上方，完整面板再讓一層 */
+.map-wrap .maplibregl-ctrl-bottom-left { bottom: 92px; }
+.map-wrap .maplibregl-ctrl-bottom-right { bottom: 92px; }
+.cmd-panel { bottom: 132px; }
 
 /* 游標經緯度（issue 017 P1）：與比例尺同區、等寬數字；無內容時隱藏 */
 .coord-read {
-  position: absolute; right: 12px; bottom: 40px; z-index: 5;
+  position: absolute; right: 12px; bottom: 120px; z-index: 5;
   font-size: 11px; color: var(--ink-2);
   font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
   font-variant-numeric: tabular-nums;

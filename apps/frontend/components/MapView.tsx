@@ -11,7 +11,7 @@ import VideoModal from "@/components/VideoModal";
 import VideoPlayer from "@/components/VideoPlayer";
 import { routeLayer } from "@/lib/deckRoute";
 import { CANVAS, groundGrid, ribbon, trailLineString } from "@/lib/geo";
-import { API, LINK_CLASSES } from "@/lib/signal";
+import { API } from "@/lib/signal";
 import { useUavStore } from "@/lib/store";
 
 const HOME: [number, number] = [8.5456, 47.3977]; // PX4 SITL 預設起飛點
@@ -27,7 +27,6 @@ export default function MapView() {
   const mapRef = useRef<maplibregl.Map | null>(null);
   const markerRef = useRef<maplibregl.Marker | null>(null);
   const centeredRef = useRef(false);
-  const [hasMission, setHasMission] = useState(false);
   const hitsRef = useRef<Map<string, ScreenHit>>(new Map());
   const [videoDrone, setVideoDrone] = useState<string | null>(null);
   const coordRef = useRef<HTMLDivElement>(null);
@@ -208,7 +207,6 @@ export default function MapView() {
               paint: { "circle-radius": 4, "circle-color": "transparent",
                        "circle-stroke-width": 1.5, "circle-stroke-color": "#8f8b80" },
             }, "trail-line");
-            setHasMission(true);
           }
         }
       } catch { /* 無任務即無疊圖 */ }
@@ -288,26 +286,7 @@ export default function MapView() {
           onClick={() => useUavStore.getState().setPanelOpen(!panelOpen)}>▤</button>
       </div>
 
-      {panelOpen && <div className="legend">
-        <h4>鏈路品質（SINR）</h4>
-        {LINK_CLASSES.map((c) => (
-          <div className="row" key={c.key}>
-            <span className="dot" style={{ background: c.color }} />
-            {c.label}
-          </div>
-        ))}
-
-        {hasMission && (
-          <div className="row">
-            <span className="dot" style={{ background: "#8f8b80", opacity: 0.6 }} />
-            預計任務路徑（自機上讀回）
-          </div>
-        )}
-        <div className="row">
-          <span className="dot" style={{ background: "transparent", border: "1.5px solid #8f8b80" }} />
-          起飛點（地面基準）
-        </div>
-      </div>}
+      {/* 圖例已併入專業抽屜的訊號品質卡（單一住所，第五輪）——地圖上不再常駐 */}
 
       {/* 檢視切換鈕：地圖保持 mounted（maplibre 重建昂貴且會失去視角），
           影像用覆蓋層蓋上去；切回地圖即卸載播放器、停掉串流 */}

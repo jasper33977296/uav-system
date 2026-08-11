@@ -5,7 +5,7 @@ import AppShell from "@/components/AppShell";
 
 export const metadata: Metadata = {
   title: "UAV 監控系統",
-  description: "5G 鏈路品質 × 無人機飛行監控",
+  description: "5G 訊號品質 × 無人機飛行監控",
 };
 
 export default function RootLayout({ children }: { children: React.ReactNode }) {

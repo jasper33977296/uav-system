@@ -270,7 +270,7 @@ export default function Drones() {
                         onClick={() => {
                           if (window.confirm(
                             `移除航線 ${new Date(s.started_at).toLocaleString("zh-TW", { hour12: false })}？\n\n` +
-                            "將刪除其全部遙測與鏈路資料。若尚未匯出，資料將永久遺失。"))
+                            "將刪除其全部遙測與訊號資料。若尚未匯出，資料將永久遺失。"))
                             fetch(`${API}/api/sessions/${s.id}`, { method: "DELETE" }).then(reload);
                         }}>移除</button>
                     </td>
@@ -294,7 +294,7 @@ export default function Drones() {
         >
           <p>
             將刪除其 <b>{sessions.filter((s) => s.drone_id === toDelete.id).length} 條航線</b>
-            與全部遙測、鏈路量測、事件資料，<b>此操作無法復原</b>。
+            與全部遙測、訊號量測、事件資料，<b>此操作無法復原</b>。
           </p>
           <p className="hint-line">
             關聯的任務路徑不會被刪除，僅解除與此機的關聯（路徑不綁機）。

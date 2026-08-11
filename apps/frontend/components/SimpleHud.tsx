@@ -156,6 +156,8 @@ export default function SimpleHud({ onExpand }: { onExpand: () => void }) {
     prevClsRef.current = clsKey;
   }, [clsKey]);
   const droneLost = !!live && !live.connected;
+  // link_age_s > 5s＝失聯預警（warn；connected=false 才是硬斷言 danger）
+  const ageStale = !!live && live.connected && (live.link_age_s ?? 0) > 5;
   const gpsBad = !!live && live.connected && live.gps_fix != null && live.gps_fix < 3;
   useEffect(() => { if (gpsBad) epRef.current.gps = Date.now(); }, [gpsBad]);
   // failsafe：最近 30s 內的 critical failsafe 事件（自動處置進行中）
@@ -172,6 +174,7 @@ export default function SimpleHud({ onExpand }: { onExpand: () => void }) {
     : err ? { t: err, sev: "err" as const }
     : now - takeoffDeniedAt < 10000
       ? { t: "現在還不能起飛——點這裡看原因", sev: "warn" as const, onClick: onExpand }
+    : ageStale ? { t: "無人機資料延遲——顯示的可能不是最新位置", sev: "warn" as const }
     : gpsBad && now - epRef.current.gps < 10000
       ? { t: "衛星訊號變弱——位置可能不準", sev: "warn" as const }
     : clsKey === "serious" && now - epRef.current.degraded < 10000

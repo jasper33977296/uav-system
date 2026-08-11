@@ -1,9 +1,7 @@
 "use client";
 import { useEffect, useRef, useState } from "react";
 
-import { colorFor } from "@/components/droneLayer";
-import { evText } from "@/lib/evtext";
-import { classifySinr } from "@/lib/signal";
+import { LINK_CLASSES, classifySinr } from "@/lib/signal";
 import { useUavStore } from "@/lib/store";
 
 const AP_LABELS: Record<string, string> = { px4: "PX4", ardupilot: "ArduPilot" };
@@ -71,11 +69,10 @@ const fmt = (v: number | null | undefined, digits = 1) =>
   v == null ? "—" : v.toFixed(digits);
 
 export default function SidePanel() {
-  const { live, events, fleet, primaryId, selectedId, select, sinrHistories } = useUavStore();
+  const { live, primaryId, selectedId, sinrHistories } = useUavStore();
   const link = live?.link;
   const cls = link?.sinr != null ? classifySinr(link.sinr) : null;
   const effective = selectedId ?? primaryId;
-  const ids = Object.keys(fleet);
 
   // 5G 詳細摺疊：展開狀態記 localStorage（IA 定案配套，同起飛高度前例）
   const [sigOpen, setSigOpen] = useState(false);
@@ -90,65 +87,13 @@ export default function SidePanel() {
     : live.gps_fix >= 3 ? `3D·${live.satellites ?? "—"}`
     : live.gps_fix === 2 ? `2D·${live.satellites ?? "—"}` : "無定位";
 
-  // 事件流：連續同類（type+severity+機）摺疊成一列 ×N（events 新的在前）
-  const grouped = events.reduce<{ e: (typeof events)[0]; n: number }[]>((acc, e) => {
-    const last = acc[acc.length - 1];
-    if (last && last.e.type === e.type && last.e.severity === e.severity
-        && last.e.drone === e.drone) last.n += 1;
-    else acc.push({ e, n: 1 });
-    return acc;
-  }, []);
-
+  // 單一住所（simple-first 第五輪）：高度/速度/電量/訊號格住 HUD、事件住
+  // 底部單行、機隊選擇住左上色點——本抽屜只留「訊號品質」與「專業數值」，
+  // 不與畫面上任何元素重複
   return (
     <aside className="panel">
-      {/* 機隊選擇器：多機時切換側欄顯示哪台（圓點色＝該機在地圖上的球體色） */}
-      {ids.length > 1 && (
-        <div className="chips">
-          {ids.map((id) => (
-            <button key={id}
-              className={`chip chip-btn ${id === effective ? "chip-on" : ""}`}
-              onClick={() => select(id)}>
-              <span className="dot" style={{ background: colorFor(id) }} />
-              {fleet[id].drone_name ?? id.slice(0, 8)}
-            </button>
-          ))}
-        </div>
-      )}
-      {/* 飛行狀態卡（restyle §2）：徽章列 → 主數字 → 徽章列。
-          姿態角移出常駐版面（機名 hover 查——查問題資訊，不佔層級） */}
       <div className="card">
-        <div className="badges">
-          <span className="name-lg"
-            title={`姿態：Roll ${fmt(live?.roll)}° · Pitch ${fmt(live?.pitch)}°`}>
-            {live?.drone_name ?? "飛行狀態"}
-          </span>
-          {live?.autopilot && (
-            <span className="chip">{AP_LABELS[live.autopilot] ?? live.autopilot}</span>
-          )}
-          <span className="chip">
-            <span className="dot" style={{
-              background: live?.ready ? "var(--status-ok)" : "var(--status-serious)" }} />
-            {live?.ready ? "就緒" : "未就緒"}
-          </span>
-          {live?.flight_mode && <span className="chip">{live.flight_mode}</span>}
-        </div>
-        <div className="metrics">
-          <Metric label="相對高度" value={fmt(live?.alt_rel)} unit="m" />
-          <Metric label="地速" value={fmt(live?.ground_speed)} unit="m/s" />
-          <Metric label="垂直速度" value={fmt(live?.vertical_speed)} unit="m/s" />
-        </div>
-        <div className="badges sub">
-          <span className="chip">電量 {fmt(live?.battery_pct, 0)}%</span>
-          <span className="chip">GPS {gpsTxt}</span>
-          {/* 360°＝0°：四捨五入後也可能碰到 360（359.6°），一律正規化 */}
-          <span className="chip">
-            航向 {live?.heading == null ? "—" : Math.round(live.heading) % 360}°
-          </span>
-        </div>
-      </div>
-
-      <div className="card">
-        <h3>無人機訊號品質<span className="h3-note">平滑 2s 窗</span></h3>
+        <h3>訊號品質<span className="h3-note">平滑 2s 窗</span></h3>
         <div className="hero">
           <span className="num">{fmt(link?.sinr)}</span>
           <span className="unit">dB SINR</span>
@@ -187,28 +132,49 @@ export default function SidePanel() {
             />
           </div>
         </details>
-      </div>
-
-      <div className="card card-grow">
-        <h3>事件</h3>
-        <div className="events">
-          {events.length === 0 && <div className="empty">尚無事件</div>}
-          {/* critical 列標 danger 底（安全資訊不漸進揭露）；連續同類 ×N */}
-          {grouped.map(({ e, n }) => (
-            <div className={`event ${e.severity === "critical" ? "ev-crit" : ""}`} key={e.id}>
-              <span
-                className="dot"
-                style={{
-                  background:
-                    e.severity === "critical" ? "#a01818" : e.severity === "warning" ? "#fab219" : "#8f8b80",
-                }}
-              />
-              <time>{new Date(e.time).toLocaleTimeString("zh-TW", { hour12: false })}</time>
-              {e.drone && <span className="ev-drone">{e.drone}</span>}
-              <span className="detail">{evText(e)}</span>
-              {n > 1 && <span className="ev-n">×{n}</span>}
+        {/* 軌跡顏色圖例：地圖上的常駐圖例卡移除、併入這裡（單一住所） */}
+        <div className="trail-key">
+          <h4>地圖軌跡顏色</h4>
+          {LINK_CLASSES.map((c) => (
+            <div className="row" key={c.key}>
+              <span className="dot" style={{ background: c.color }} />
+              {c.label}
             </div>
           ))}
+          <div className="row">
+            <span className="dot" style={{ background: "#8f8b80", opacity: 0.6 }} />
+            預計任務路徑
+          </div>
+          <div className="row">
+            <span className="dot" style={{ background: "transparent", border: "1.5px solid #8f8b80" }} />
+            起飛點
+          </div>
+        </div>
+      </div>
+
+      {/* 專業數值：GPS／姿態／模式（HUD 沒有的才在這裡） */}
+      <div className="card">
+        <h3>專業數值</h3>
+        <div className="badges">
+          {live?.autopilot && (
+            <span className="chip">{AP_LABELS[live.autopilot] ?? live.autopilot}</span>
+          )}
+          <span className="chip">
+            <span className="dot" style={{
+              background: live?.ready ? "var(--status-ok)" : "var(--status-serious)" }} />
+            {live?.ready ? "就緒" : "未就緒"}
+          </span>
+          {live?.flight_mode && <span className="chip">{live.flight_mode}</span>}
+        </div>
+        <div className="metrics">
+          <Metric label="GPS" value={gpsTxt} />
+          {/* 360°＝0°：四捨五入後也可能碰到 360（359.6°），一律正規化 */}
+          <Metric label="航向"
+            value={live?.heading == null ? "—" : (Math.round(live.heading) % 360).toString()}
+            unit="°" />
+          <Metric label="垂直速度" value={fmt(live?.vertical_speed)} unit="m/s" />
+          <Metric label="橫滾 Roll" value={fmt(live?.roll)} unit="°" />
+          <Metric label="俯仰 Pitch" value={fmt(live?.pitch)} unit="°" />
         </div>
       </div>
     </aside>
