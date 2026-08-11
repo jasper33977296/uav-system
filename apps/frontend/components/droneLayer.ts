@@ -21,18 +21,21 @@ export interface DronePos {
   radiusM?: number;
 }
 
-/** 識別用色：第 1 個用系列藍，其後依序取用。色相刻意避開狀態色
-    （綠/黃/橘/紅＝SINR 分級），identity 與 status 不互相冒充。 */
-export const DRONE_PALETTE = [
-  "#3987e5", "#c65fd1", "#2fb2a5", "#d1975f", "#e06a8c", "#8f8fd9",
-];
+/** 識別用色（design-tokens v1 重定）：沿用圖表序列前 3 槽——原 6 色在新
+    暖畫布驗證失敗（藍↔紫 protan ΔE 4.8），前 3 槽 all-pairs 通過。
+    identity 與 status（綠/黃/橘/紅＝SINR 分級）依舊不互相冒充。 */
+export const DRONE_PALETTE = ["#3987e5", "#d95926", "#199e70"];
+const DRONE_OVERFLOW = "#8f8b80";   // 第 4 機起色相循環停止（=muted），
+                                    // 識別靠常駐 sysid chip 文字；>3 機的
+                                    // 識別設計等 013 群組任務另出
 
 // 機隊配色：依首次出現順序指派（主機先廣播 → 取第一色）。
 // 球體、地面投影、選擇器圓點共用同一份對應，全站一致。
 const _colorIdx = new Map<string, number>();
 export function colorFor(id: string): string {
   if (!_colorIdx.has(id)) _colorIdx.set(id, _colorIdx.size);
-  return DRONE_PALETTE[_colorIdx.get(id)! % DRONE_PALETTE.length];
+  const i = _colorIdx.get(id)!;
+  return i < DRONE_PALETTE.length ? DRONE_PALETTE[i] : DRONE_OVERFLOW;
 }
 
 interface Unit { scene: THREE.Scene; mat: THREE.MeshStandardMaterial }

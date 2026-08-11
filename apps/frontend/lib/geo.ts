@@ -1,6 +1,6 @@
 /** 3D 地圖的幾何工具：live（MapView）與回放頁共用。 */
 
-export const CANVAS = "#14181c";
+export const CANVAS = "#1b1a17";   // ＝--page（design-tokens v1 暖 stone；maplibre 吃不到 CSS 變數，手動同步）
 export const DRONE_COLOR = "#3987e5";
 
 export const M_LAT = 110574; // 一度緯度的公尺數

@@ -20,7 +20,7 @@ const HOME: [number, number] = [8.5456, 47.3977]; // PX4 SITL 預設起飛點
 const CLS_MATCH = [
   "match", ["get", "cls"],
   ...LINK_CLASSES.flatMap((c) => [c.key, c.color]),
-  "#898781",
+  "#8f8b80",
 ] as any;
 
 interface DroneVideo { id: string; name: string; video_url: string | null }
@@ -76,7 +76,7 @@ export default function MapView() {
       map.addSource("grid", { type: "geojson", data: groundGrid(HOME[1], HOME[0]) });
       map.addLayer({
         id: "grid", type: "line", source: "grid",
-        paint: { "line-color": "#232a31", "line-width": 1 },
+        paint: { "line-color": "#262624", "line-width": 1 },
       });
       map.addSource("home", {
         type: "geojson",
@@ -86,12 +86,12 @@ export default function MapView() {
         id: "home-ring", type: "circle", source: "home",
         paint: {
           "circle-radius": 10, "circle-color": "transparent",
-          "circle-stroke-width": 2, "circle-stroke-color": "#898781",
+          "circle-stroke-width": 2, "circle-stroke-color": "#8f8b80",
         },
       });
       map.addLayer({
         id: "home-dot", type: "circle", source: "home",
-        paint: { "circle-radius": 3, "circle-color": "#898781" },
+        paint: { "circle-radius": 3, "circle-color": "#8f8b80" },
       });
 
       // 地面投影：實際軌跡的垂直投影。**顏色＝機別色**（分層編碼：
@@ -171,7 +171,7 @@ export default function MapView() {
             map.addLayer({
               id: "plan3d", type: "fill-extrusion", source: "plan3d",
               paint: {
-                "fill-extrusion-color": "#8a94a3",
+                "fill-extrusion-color": "#8f8b80",
                 "fill-extrusion-height": ["get", "top"],
                 "fill-extrusion-base": ["get", "base"],
                 "fill-extrusion-opacity": 0.35,
@@ -196,14 +196,14 @@ export default function MapView() {
             map.addLayer({
               id: "plan-ground-line", type: "line", source: "plan-ground",
               filter: ["!", ["has", "pt"]],
-              paint: { "line-color": "#8a94a3", "line-width": 1.5,
+              paint: { "line-color": "#8f8b80", "line-width": 1.5,
                        "line-dasharray": [3, 3], "line-opacity": 0.6 },
             }, "trail-line");
             map.addLayer({
               id: "plan-ground-wp", type: "circle", source: "plan-ground",
               filter: ["has", "pt"],
               paint: { "circle-radius": 4, "circle-color": "transparent",
-                       "circle-stroke-width": 1.5, "circle-stroke-color": "#8a94a3" },
+                       "circle-stroke-width": 1.5, "circle-stroke-color": "#8f8b80" },
             }, "trail-line");
             setHasMission(true);
           }
@@ -277,12 +277,12 @@ export default function MapView() {
 
         {hasMission && (
           <div className="row">
-            <span className="dot" style={{ background: "#8a94a3", opacity: 0.6 }} />
+            <span className="dot" style={{ background: "#8f8b80", opacity: 0.6 }} />
             預計任務路徑（自機上讀回）
           </div>
         )}
         <div className="row">
-          <span className="dot" style={{ background: "transparent", border: "1.5px solid #898781" }} />
+          <span className="dot" style={{ background: "transparent", border: "1.5px solid #8f8b80" }} />
           起飛點（地面基準）
         </div>
       </div>

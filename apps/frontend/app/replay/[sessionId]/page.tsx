@@ -54,7 +54,7 @@ function Chart({
           <polygon
             key={e.id}
             points={`${x(new Date(e.time).getTime()) - 5},2 ${x(new Date(e.time).getTime()) + 5},2 ${x(new Date(e.time).getTime())},11`}
-            fill={e.severity === "critical" ? "#a01818" : e.severity === "warning" ? "#fab219" : "#898781"}
+            fill={e.severity === "critical" ? "#a01818" : e.severity === "warning" ? "#fab219" : "#8f8b80"}
           >
             <title>{e.type}</title>
           </polygon>
@@ -124,12 +124,12 @@ export default function Replay() {
     map.on("load", () => {
       map.addSource("grid", { type: "geojson", data: groundGrid(first.lat!, first.lon!) });
       map.addLayer({ id: "grid", type: "line", source: "grid",
-        paint: { "line-color": "#232a31", "line-width": 1 } });
+        paint: { "line-color": "#262624", "line-width": 1 } });
       map.addSource("home", { type: "geojson", data: {
         type: "Feature", properties: {}, geometry: { type: "Point", coordinates: [first.lon!, first.lat!] } } });
       map.addLayer({ id: "home-ring", type: "circle", source: "home",
         paint: { "circle-radius": 10, "circle-color": "transparent",
-                 "circle-stroke-width": 2, "circle-stroke-color": "#898781" } });
+                 "circle-stroke-width": 2, "circle-stroke-color": "#8f8b80" } });
 
       // 地面投影：中性細線（單機頁identity無歧義，投影只是把 3D 路徑釘回地面）
       map.addSource("track", { type: "geojson", data: {
@@ -148,7 +148,7 @@ export default function Replay() {
         ) });
       map.addLayer({ id: "track3d", type: "fill-extrusion", source: "track3d",
         paint: { "fill-extrusion-color": ["match", ["get", "cls"],
-            ...LINK_CLASSES.flatMap((c) => [c.key, c.color]), "#898781"] as any,
+            ...LINK_CLASSES.flatMap((c) => [c.key, c.color]), "#8f8b80"] as any,
           "fill-extrusion-height": ["get", "top"], "fill-extrusion-base": ["get", "base"],
           "fill-extrusion-opacity": 0.9 } });
 
@@ -157,14 +157,14 @@ export default function Replay() {
         map.addSource("plan3d", { type: "geojson",
           data: ribbon(plan.map((w) => ({ lat: w.lat, lon: w.lon, alt: w.alt })), () => ({}), 1.0) });
         map.addLayer({ id: "plan3d", type: "fill-extrusion", source: "plan3d",
-          paint: { "fill-extrusion-color": "#8a94a3",
+          paint: { "fill-extrusion-color": "#8f8b80",
             "fill-extrusion-height": ["get", "top"], "fill-extrusion-base": ["get", "base"],
             "fill-extrusion-opacity": 0.35 } }, "track3d");
         map.addSource("plan-ground", { type: "geojson",
           data: { type: "Feature", properties: {},
             geometry: { type: "LineString", coordinates: plan.map((w) => [w.lon, w.lat]) } } });
         map.addLayer({ id: "plan-ground", type: "line", source: "plan-ground",
-          paint: { "line-color": "#8a94a3", "line-width": 1.5,
+          paint: { "line-color": "#8f8b80", "line-width": 1.5,
                    "line-dasharray": [3, 3], "line-opacity": 0.6 } }, "track");
       }
 

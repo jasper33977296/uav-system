@@ -13,8 +13,9 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 
 import { API } from "@/lib/signal";
 
-// 已驗證的類別色盤（dark surface #1a1a19 全項 PASS；與地圖機隊色盤不同——
-// 這裡的實體是「航線」，固定順序指派、不循環）
+// 已驗證的類別色盤（新暖 surface #262624 重驗全過，見 doc/design-tokens.md
+// 驗證表；實體是「航線」，固定順序指派、不循環。all-pairs 只有前 3 槽通過
+// → 同時高亮上限 3 條，其餘退 muted）
 const SERIES = ["#3987e5", "#d95926", "#199e70", "#c98500", "#d55181", "#008300"];
 const MAX_SEL = 6;
 const BIN_M = 5;                      // 里程分箱（公尺）
@@ -67,7 +68,12 @@ function projectChainage(path: ReturnType<typeof buildPath>, lat: number, lon: n
 }
 
 // ── 折線圖（SVG 手刻，遵循 mark 規範）────────────────────────
-interface Series { label: string; color: string; points: { x: number; y: number }[] }
+// dim（design-tokens v1）：同時高亮上限 3 條——本色盤 all-pairs 只驗過前
+// 3 槽，多線交錯超過 3 條就難分。dim 線退 muted 細線墊底、靠線尾標名識別
+interface Series {
+  label: string; color: string; points: { x: number; y: number }[];
+  dim?: boolean;
+}
 
 function LineChart({ series, xMax, unit, xUnit, xMin = 0 }: {
   series: Series[]; xMax: number; unit: string; xUnit: string; xMin?: number;
@@ -113,14 +119,13 @@ function LineChart({ series, xMax, unit, xUnit, xMin = 0 }: {
   // 線尾直接標籤：多條線終點高度相近時會疊字（CDF 每條都在 100% 收尾，
   // 必疊）——照終點高度排序後以 12px 最小間距往下推開，超出下緣整串上移
   const LB = 12;
-  const endLabels = series.length <= 4
-    ? series.flatMap((s) => {
-        const last = s.points[s.points.length - 1];
-        return last
-          ? [{ label: s.label, color: s.color, x: sx(last.x) + 5, ly: sy(last.y) + 3 }]
-          : [];
-      }).sort((a, b) => a.ly - b.ly)
-    : [];
+  const endLabels = series.flatMap((s) => {
+      const last = s.points[s.points.length - 1];
+      return last
+        ? [{ label: s.label, color: s.dim ? "var(--muted)" : s.color,
+             x: sx(last.x) + 5, ly: sy(last.y) + 3 }]
+        : [];
+    }).sort((a, b) => a.ly - b.ly);
   for (let i = 1; i < endLabels.length; i++) {
     if (endLabels[i].ly - endLabels[i - 1].ly < LB) {
       endLabels[i].ly = endLabels[i - 1].ly + LB;
@@ -146,9 +151,11 @@ function LineChart({ series, xMax, unit, xUnit, xMin = 0 }: {
             {(xMin + xSpan * f).toFixed(0)}{i === 2 ? ` ${xUnit}` : ""}
           </text>
         ))}
-        {series.map((s) => (
-          <path key={s.label} d={d(s)} fill="none" stroke={s.color}
-            strokeWidth={2} strokeLinejoin="round" />
+        {[...series].sort((a, b) => Number(!!b.dim) - Number(!!a.dim)).map((s) => (
+          <path key={s.label} d={d(s)} fill="none"
+            stroke={s.dim ? "var(--muted)" : s.color}
+            strokeWidth={s.dim ? 1 : 2} strokeOpacity={s.dim ? 0.6 : 1}
+            strokeLinejoin="round" />
         ))}
         {endLabels.map((e) => (
           <text key={e.label + e.color} x={e.x} y={e.ly}
@@ -185,6 +192,8 @@ export default function Compare() {
   const [tracks, setTracks] = useState<Record<string, LinkRow[]>>({});
   const [wps, setWps] = useState<{ lat: number; lon: number }[]>([]);
   const [metric, setMetric] = useState("sinr");
+  // 同時高亮上限 3 條（design-tokens v1）：超過的退 muted，點圖例切換
+  const [focus, setFocus] = useState<string[]>([]);
 
   useEffect(() => {
     fetch(`${API}/api/missions`).then((r) => r.json())
@@ -219,6 +228,22 @@ export default function Compare() {
   const mUnit = METRICS.find((m) => m.key === metric)!;
 
   const loaded = selected.filter((sid) => tracks[sid]);
+  const loadedKey = loaded.join(",");
+  // loaded 變動時修剪/補位 focus：預設前 3 條，使用者的選擇盡量保留
+  useEffect(() => {
+    setFocus((cur) => {
+      const kept = cur.filter((id) => loaded.includes(id));
+      const fill = loaded.filter((id) => !kept.includes(id))
+        .slice(0, Math.max(0, 3 - kept.length));
+      return [...kept, ...fill];
+    });
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [loadedKey]);
+  const isDim = (sid: string) => loaded.length > 3 && !focus.includes(sid);
+  const toggleFocus = (sid: string) =>
+    setFocus((cur) => cur.includes(sid)
+      ? cur.filter((x) => x !== sid)
+      : [...cur, sid].slice(-3));           // 滿 3 條丟最舊的
   const label = (sid: string) => {
     const s = sessions.find((x) => x.id === sid);
     return s ? new Date(s.started_at).toLocaleString("zh-TW",
@@ -241,19 +266,19 @@ export default function Compare() {
       }
       const points = [...bins.entries()].sort((a, b) => a[0] - b[0])
         .map(([x, e]) => ({ x, y: e.sum / e.n }));
-      return { label: label(sid), color: color(sid), points };
+      return { label: label(sid), color: color(sid), points, dim: isDim(sid) };
     });
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [loaded.length, tracks, metric, path, selected]);
+  }, [loaded.length, tracks, metric, path, selected, focus]);
 
   // CDF：值→累積比例
   const cdfSeries: Series[] = useMemo(() => loaded.map((sid) => {
     const vals = tracks[sid].map((r) => r[metric]).filter((v) => v != null)
       .map(Number).sort((a, b) => a - b);
     const points = vals.map((v, i) => ({ x: v, y: ((i + 1) / vals.length) * 100 }));
-    return { label: label(sid), color: color(sid), points };
+    return { label: label(sid), color: color(sid), points, dim: isDim(sid) };
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }), [loaded.length, tracks, metric, selected]);
+  }), [loaded.length, tracks, metric, selected, focus]);
   const cdfXs = cdfSeries.flatMap((s) => s.points.map((p) => p.x));
   const cdfXMin = cdfXs.length ? Math.min(...cdfXs) : 0;
   const cdfXMax = cdfXs.length ? Math.max(...cdfXs) : 1;
@@ -273,15 +298,21 @@ export default function Compare() {
     };
   });
   const base = stats[0];
-  // 圖例：兩張圖共用（>4 條時線尾標籤停畫，圖例是唯一辨識來源）
+  // 圖例：兩張圖共用。>3 條時圖例是高亮切換器（點擊升亮/退暗；
+  // 顏色跟航線不跟排名——dim 只降線的視覺權重，圖例圓點保留本色）
   const legend = (
     <div className="cmp-legend">
       {loaded.map((sid) => (
-        <span key={sid}>
+        <button key={sid} className={`chip chip-btn ${isDim(sid) ? "chip-off" : ""}`}
+          onClick={() => toggleFocus(sid)}
+          title={loaded.length > 3 ? "點擊切換高亮（同時最多 3 條）" : undefined}>
           <span className="dot" style={{ background: color(sid) }} />
           {label(sid)}{selected[0] === sid ? "（基準）" : ""}
-        </span>
+        </button>
       ))}
+      {loaded.length > 3 && (
+        <span className="hint-line">高亮 {focus.length}/3——點圖例切換</span>
+      )}
     </div>
   );
   const dfmt = (v: number, b: number, unit: string, betterHigh: boolean) => {
@@ -409,7 +440,7 @@ function MiniMap({ path, loaded, tracks, color }: {
     pts.map((p, i) => `${i ? "L" : "M"}${sx(p.x).toFixed(1)},${sy(p.y).toFixed(1)}`).join("");
   return (
     <svg viewBox={`0 0 ${W} ${H}`} className="cmp-map">
-      <path d={line(path.pts)} fill="none" stroke="#8a94a3" strokeWidth={1.5}
+      <path d={line(path.pts)} fill="none" stroke="#8f8b80" strokeWidth={1.5}
         strokeDasharray="4 4" opacity={0.6} />
       {loaded.map((sid) => {
         const pts = tracks[sid]

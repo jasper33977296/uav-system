@@ -170,19 +170,19 @@ export default function MissionReplay() {
     map.on("load", () => {
       map.addSource("grid", { type: "geojson", data: groundGrid(plan[0].lat, plan[0].lon) });
       map.addLayer({ id: "grid", type: "line", source: "grid",
-        paint: { "line-color": "#232a31", "line-width": 1 } });
+        paint: { "line-color": "#262624", "line-width": 1 } });
 
       map.addSource("plan3d", { type: "geojson",
         data: ribbon(plan.map((w) => ({ lat: w.lat, lon: w.lon, alt: w.alt })), () => ({}), 1.0) });
       map.addLayer({ id: "plan3d", type: "fill-extrusion", source: "plan3d",
-        paint: { "fill-extrusion-color": "#8a94a3",
+        paint: { "fill-extrusion-color": "#8f8b80",
           "fill-extrusion-height": ["get", "top"], "fill-extrusion-base": ["get", "base"],
           "fill-extrusion-opacity": 0.3 } });
       map.addSource("plan-ground", { type: "geojson",
         data: { type: "Feature", properties: {},
           geometry: { type: "LineString", coordinates: plan.map((w) => [w.lon, w.lat]) } } });
       map.addLayer({ id: "plan-ground", type: "line", source: "plan-ground",
-        paint: { "line-color": "#8a94a3", "line-width": 1.5,
+        paint: { "line-color": "#8f8b80", "line-width": 1.5,
                  "line-dasharray": [3, 3], "line-opacity": 0.6 } });
 
       // 各航線：航線色地面投影線（去顆粒）+ SINR 絲帶
@@ -194,7 +194,7 @@ export default function MissionReplay() {
         data: ribbonData(series, hiddenRef.current) });
       map.addLayer({ id: "ribbons", type: "fill-extrusion", source: "ribbons",
         paint: { "fill-extrusion-color": ["match", ["get", "cls"],
-            ...LINK_CLASSES.flatMap((c) => [c.key, c.color]), "#898781"] as any,
+            ...LINK_CLASSES.flatMap((c) => [c.key, c.color]), "#8f8b80"] as any,
           "fill-extrusion-height": ["get", "top"], "fill-extrusion-base": ["get", "base"],
           "fill-extrusion-opacity": 0.75 } });
 

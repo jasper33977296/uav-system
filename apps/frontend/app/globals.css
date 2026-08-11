@@ -5,13 +5,19 @@
    （跟隨 OS 會讓亮色 OS 的操作員拿到亮面板配深地圖的拼裝畫面）。 */
 :root {
   color-scheme: dark;
-  --page: #0d0d0d;
-  --surface: #1a1a19;
-  --ink: #ffffff;
-  --ink-2: #c3c2b7;
-  --muted: #898781;
-  --hairline: #2c2c2a;
-  --border: rgba(255, 255, 255, 0.1);
+  /* design-tokens v1（doc/design-tokens.md）：暖 stone 灰階、Claude 暖色
+     語言套深色預設。accent 鐵則：只准互動 chrome，禁入地圖/圖表/狀態元件
+     （與狀態橘 ΔE 6.1 會混淆） */
+  --page: #1b1a17;
+  --surface: #262624;
+  --surface-2: #30302c;
+  --ink: #f0eee6;
+  --ink-2: #c2bfb3;
+  --muted: #8f8b80;
+  --hairline: #3a3833;
+  --border: rgba(240, 238, 230, 0.1);
+  --accent: #d97757;
+  --accent-bg: rgba(217, 119, 87, 0.12);
   --series-1: #3987e5;
   /* 狀態語意色（全站 restyle 前置：規則不再硬編色值，換膚只改這裡）。
      值＝原硬編值，兩主題共用；資料序列/分級色仍在 TS（CVD 驗證附理由），
@@ -27,13 +33,16 @@
 }
 :root[data-theme="light"] {
   color-scheme: light;
-  --page: #f9f9f7;
-  --surface: #fcfcfb;
-  --ink: #0b0b0b;
-  --ink-2: #52514e;
-  --muted: #898781;
-  --hairline: #e1e0d9;
-  --border: rgba(11, 11, 11, 0.1);
+  --page: #faf9f5;
+  --surface: #ffffff;
+  --surface-2: #f0eee6;
+  --ink: #1a1915;
+  --ink-2: #57544a;
+  --muted: #8f8b80;
+  --hairline: #e6e3da;
+  --border: rgba(26, 25, 21, 0.1);
+  --accent: #cc785c;
+  --accent-bg: rgba(204, 120, 92, 0.12);
   --series-1: #2a78d6;
 }
 
@@ -62,7 +71,10 @@ body {
   padding: 5px 10px; border-radius: 6px; border: 1px solid transparent;
 }
 .nav a:hover { color: var(--ink); }
-.nav a.active { color: var(--ink); background: var(--page); border-color: var(--hairline); }
+.nav a.active { color: var(--accent); background: var(--accent-bg); border-color: transparent; }
+a:focus-visible, button:focus-visible, input:focus-visible, select:focus-visible {
+  outline: 2px solid var(--accent); outline-offset: 1px;
+}
 .nav .spacer { flex: 1; }
 .nav .chip { flex: none; }
 .status-dot {
@@ -96,7 +108,8 @@ body {
 .legend {
   position: absolute; left: 12px; bottom: 24px; z-index: 5;
   background: var(--surface); border: 1px solid var(--border);
-  border-radius: 8px; padding: 10px 12px; font-size: 12px;
+  border-radius: 14px; padding: 10px 14px; font-size: 12px;
+  box-shadow: 0 4px 16px rgba(0, 0, 0, 0.35);   /* 浮動面板唯一一層柔影 */
 }
 .legend h4 { font-size: 12px; font-weight: 600; margin-bottom: 6px; }
 .legend .row { display: flex; align-items: center; gap: 6px; color: var(--ink-2); line-height: 1.7; }
@@ -114,15 +127,15 @@ body {
 /* 側欄 */
 .panel {
   background: var(--page); border-left: 1px solid var(--hairline);
-  overflow-y: auto; padding: 12px; display: flex; flex-direction: column; gap: 12px;
+  overflow-y: auto; padding: 14px; display: flex; flex-direction: column; gap: 14px;
 }
 .card {
   background: var(--surface); border: 1px solid var(--border);
-  border-radius: 10px; padding: 12px;
+  border-radius: 10px; padding: 14px;
 }
 .card h3 {
   font-size: 12px; font-weight: 600; color: var(--ink-2);
-  text-transform: uppercase; letter-spacing: 0.04em; margin-bottom: 8px;
+  text-transform: uppercase; letter-spacing: 0.04em; margin-bottom: 10px;
 }
 
 .chips { display: flex; gap: 6px; flex-wrap: wrap; }
@@ -132,7 +145,7 @@ body {
   border: 1px solid var(--border); border-radius: 999px; padding: 3px 10px;
 }
 
-.metrics { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 8px; }
+.metrics { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 10px; }
 .metric { padding: 4px 0; min-width: 0; }
 .metric .label { font-size: 11px; color: var(--muted); }
 .metric .value {
@@ -161,7 +174,7 @@ body {
 .empty { color: var(--muted); font-size: 12px; }
 
 /* 無人機頁 */
-.page-pad { height: 100%; overflow-y: auto; padding: 16px; display: flex; flex-direction: column; gap: 12px; }
+.page-pad { height: 100%; overflow-y: auto; padding: 20px; display: flex; flex-direction: column; gap: 14px; }
 .drone-head { display: flex; align-items: baseline; gap: 10px; flex-wrap: wrap; }
 .drone-head .name { font-size: 18px; font-weight: 700; }
 .drone-head .meta { font-size: 12px; color: var(--muted); }
@@ -177,7 +190,7 @@ body {
 }
 .table td.num { text-align: right; }
 .table th.num { text-align: right; }
-.table tr:hover td { background: var(--page); }
+.table tr:hover td { background: var(--surface-2); }
 
 /* 註冊表單 / 刪除 */
 .form-row { display: flex; gap: 8px; flex-wrap: wrap; }
@@ -218,7 +231,7 @@ body {
   text-transform: uppercase; letter-spacing: 0.04em;
 }
 .scrub-row { display: flex; align-items: center; gap: 12px; }
-.scrub-row input[type="range"] { flex: 1; accent-color: var(--series-1); }
+.scrub-row input[type="range"] { flex: 1; accent-color: var(--accent); }
 .scrub-read {
   font-size: 12px; color: var(--ink-2); font-variant-numeric: tabular-nums;
   display: inline-flex; align-items: center; white-space: nowrap;
@@ -231,7 +244,7 @@ body {
   border: 1px solid var(--hairline); border-radius: 4px; padding: 0 4px;
 }
 
-.chip-btn { cursor: pointer; background: var(--surface); }
+.chip-btn { cursor: pointer; background: var(--surface-2); }
 .chip-btn.chip-on { border-color: var(--ink-2); color: var(--ink); }
 .replay-head { flex-wrap: wrap; row-gap: 6px; }
 .chip-off { opacity: 0.35; }
@@ -246,7 +259,7 @@ body {
 }
 .modal {
   background: var(--surface); border: 1px solid var(--hairline);
-  border-radius: 10px; overflow: hidden;
+  border-radius: 14px; overflow: hidden;
   box-shadow: 0 12px 40px rgba(0, 0, 0, 0.5);
 }
 .video-modal { width: min(860px, 92vw); }
@@ -306,19 +319,19 @@ body {
 .cmd-panel {
   position: absolute; left: 10px; bottom: 10px; z-index: 30;
   width: 300px; background: var(--surface);
-  border: 1px solid var(--hairline); border-radius: 10px;
+  border: 1px solid var(--hairline); border-radius: 14px;
   box-shadow: 0 4px 16px rgba(0, 0, 0, 0.35); font-size: 13px;
 }
 .cmd-head {
   display: flex; align-items: center; gap: 8px;
-  padding: 8px 12px; cursor: grab; user-select: none; touch-action: none;
+  padding: 10px 14px; cursor: grab; user-select: none; touch-action: none;
 }
 .cmd-head .name { font-weight: 700; }
 .cmd-head .meta { font-size: 12px; color: var(--muted); }
 .cmd-head .spacer { flex: 1; }
 .cmd-body {
-  padding: 10px 12px; border-top: 1px solid var(--hairline);
-  display: flex; flex-direction: column; gap: 8px;
+  padding: 12px 14px; border-top: 1px solid var(--hairline);
+  display: flex; flex-direction: column; gap: 10px;
 }
 .cmd-row { display: flex; gap: 6px; align-items: center; flex-wrap: wrap; }
 .cmd-row select {
@@ -394,13 +407,14 @@ body {
   position: absolute; top: 12px; left: 12px; z-index: 20;
   display: flex; overflow: hidden;
   background: var(--surface); border: 1px solid var(--hairline);
-  border-radius: 8px; box-shadow: 0 4px 16px rgba(0, 0, 0, 0.35);
+  border-radius: 10px; box-shadow: 0 4px 16px rgba(0, 0, 0, 0.35);
 }
 .view-toggle button {
   font-size: 12px; padding: 5px 12px; cursor: pointer;
   background: none; border: none; color: var(--ink-2);
 }
-.view-toggle button.on { background: var(--page); color: var(--ink); }
+/* 刻意不用 accent：檢視切換是狀態 chip 不是 CTA（live-restyle-spec §accent） */
+.view-toggle button.on { background: var(--surface-2); color: var(--ink); }
 .video-overlay {
   position: absolute; inset: 0; z-index: 10; background: #000;
   display: flex; align-items: center; justify-content: center;
