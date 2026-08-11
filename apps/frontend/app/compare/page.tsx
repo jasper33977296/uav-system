@@ -71,6 +71,7 @@ function projectChainage(path: ReturnType<typeof buildPath>, lat: number, lon: n
 // dim（design-tokens v1）：同時高亮上限 3 條——本色盤 all-pairs 只驗過前
 // 3 槽，多線交錯超過 3 條就難分。dim 線退 muted 細線墊底、靠線尾標名識別
 interface Series {
+  id: string;                 // React key 用（label 可能撞名，不可當 key）
   label: string; color: string; points: { x: number; y: number }[];
   dim?: boolean;
 }
@@ -122,7 +123,7 @@ function LineChart({ series, xMax, unit, xUnit, xMin = 0 }: {
   const endLabels = series.flatMap((s) => {
       const last = s.points[s.points.length - 1];
       return last
-        ? [{ label: s.label, color: s.dim ? "var(--muted)" : s.color,
+        ? [{ id: s.id, label: s.label, color: s.dim ? "var(--muted)" : s.color,
              x: sx(last.x) + 5, ly: sy(last.y) + 3 }]
         : [];
     }).sort((a, b) => a.ly - b.ly);
@@ -152,13 +153,13 @@ function LineChart({ series, xMax, unit, xUnit, xMin = 0 }: {
           </text>
         ))}
         {[...series].sort((a, b) => Number(!!b.dim) - Number(!!a.dim)).map((s) => (
-          <path key={s.label} d={d(s)} fill="none"
+          <path key={s.id} d={d(s)} fill="none"
             stroke={s.dim ? "var(--muted)" : s.color}
             strokeWidth={s.dim ? 1 : 2} strokeOpacity={s.dim ? 0.6 : 1}
             strokeLinejoin="round" />
         ))}
         {endLabels.map((e) => (
-          <text key={e.label + e.color} x={e.x} y={e.ly}
+          <text key={e.id} x={e.x} y={e.ly}
             className="dlabel" fill={e.color}>{e.label}</text>
         ))}
         {hover !== null && (
@@ -171,7 +172,7 @@ function LineChart({ series, xMax, unit, xUnit, xMin = 0 }: {
           {series.map((s) => {
             const n = near(s, hover);
             return n && n.dx < xSpan * 0.05 && (
-              <div key={s.label}>
+              <div key={s.id}>
                 <span className="dot" style={{ background: s.color }} />
                 {s.label}：{n.p.y.toFixed(1)} {unit}
               </div>
@@ -244,11 +245,25 @@ export default function Compare() {
     setFocus((cur) => cur.includes(sid)
       ? cur.filter((x) => x !== sid)
       : [...cur, sid].slice(-3));           // 滿 3 條丟最舊的
-  const label = (sid: string) => {
-    const s = sessions.find((x) => x.id === sid);
-    return s ? new Date(s.started_at).toLocaleString("zh-TW",
-      { month: "numeric", day: "numeric", hour: "2-digit", minute: "2-digit", hour12: false }) : sid.slice(0, 6);
-  };
+  // 標籤＝起飛時間（到分鐘）。腳本連飛的 session 常落在同一分鐘——撞名的
+  // 才補秒數（全部帶秒是為極少數情況付出常態寬度）。標籤僅供顯示，
+  // React key 一律用 session id：label 撞名曾讓 tooltip 在重複 key 下
+  // 錯誤 reconcile、重複列無限堆疊（2026-08-11 bug）
+  const labelOf = useMemo(() => {
+    const fmt = (iso: string, sec: boolean) => new Date(iso).toLocaleString("zh-TW", {
+      month: "numeric", day: "numeric", hour: "2-digit", minute: "2-digit",
+      ...(sec ? { second: "2-digit" as const } : {}), hour12: false,
+    });
+    const counts = new Map<string, number>();
+    for (const s of sessions) {
+      const k = fmt(s.started_at, false);
+      counts.set(k, (counts.get(k) ?? 0) + 1);
+    }
+    return new Map(sessions.map((s) => [
+      s.id, fmt(s.started_at, (counts.get(fmt(s.started_at, false)) ?? 0) > 1),
+    ]));
+  }, [sessions]);
+  const label = (sid: string) => labelOf.get(sid) ?? sid.slice(0, 6);
   const color = (sid: string) => SERIES[selected.indexOf(sid) % SERIES.length];
 
   // 沿線里程序列（分箱平均）
@@ -266,7 +281,7 @@ export default function Compare() {
       }
       const points = [...bins.entries()].sort((a, b) => a[0] - b[0])
         .map(([x, e]) => ({ x, y: e.sum / e.n }));
-      return { label: label(sid), color: color(sid), points, dim: isDim(sid) };
+      return { id: sid, label: label(sid), color: color(sid), points, dim: isDim(sid) };
     });
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [loaded.length, tracks, metric, path, selected, focus]);
@@ -276,7 +291,7 @@ export default function Compare() {
     const vals = tracks[sid].map((r) => r[metric]).filter((v) => v != null)
       .map(Number).sort((a, b) => a - b);
     const points = vals.map((v, i) => ({ x: v, y: ((i + 1) / vals.length) * 100 }));
-    return { label: label(sid), color: color(sid), points, dim: isDim(sid) };
+    return { id: sid, label: label(sid), color: color(sid), points, dim: isDim(sid) };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }), [loaded.length, tracks, metric, selected, focus]);
   const cdfXs = cdfSeries.flatMap((s) => s.points.map((p) => p.x));
