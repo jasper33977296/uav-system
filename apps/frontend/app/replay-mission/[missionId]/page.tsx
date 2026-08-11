@@ -192,7 +192,8 @@ export default function MissionReplay() {
       map.addSource("proj", { type: "geojson", data: projData(series, hiddenRef.current) });
       map.addLayer({ id: "proj", type: "line", source: "proj",
         layout: { "line-cap": "round", "line-join": "round" },
-        paint: { "line-width": 2, "line-color": ["get", "dcolor"], "line-opacity": 0.7 } });
+        paint: { "line-width": ["interpolate", ["linear"], ["zoom"], 12, 1, 16, 2, 20, 3.5],
+          "line-color": ["get", "dcolor"], "line-opacity": 0.7 } });
       const overlay = new MapboxOverlay({ interleaved: true, layers: [
         routeLayer("ribbons", ribbonTrails(series, hiddenRef.current)),
       ] });

@@ -140,7 +140,9 @@ export default function Replay() {
           .filter((f): f is GeoJSON.Feature => f !== null) } });
       map.addLayer({ id: "track", type: "line", source: "track",
         layout: { "line-cap": "round", "line-join": "round" },
-        paint: { "line-color": "#6b7684", "line-width": 2, "line-opacity": 0.55 } });
+        paint: { "line-color": "#6b7684",
+          "line-width": ["interpolate", ["linear"], ["zoom"], 12, 1, 16, 2, 20, 3.5],
+          "line-opacity": 0.55 } });
 
       // 懸浮航跡：deck.gl PathLayer（route-render-tool-eval，取代 fill-extrusion）
       map.addControl(new MapboxOverlay({ interleaved: true, layers: [

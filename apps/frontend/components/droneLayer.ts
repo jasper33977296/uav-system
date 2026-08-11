@@ -105,7 +105,25 @@ export function createDroneLayer(
         let u = units.get(d.id);
         if (!u) { u = makeUnit(d.color); units.set(d.id, u); }
         const mc = maplibregl.MercatorCoordinate.fromLngLat([d.lon, d.lat], d.alt);
-        const s = mc.meterInMercatorCoordinateUnits() * (d.radiusM ?? 3);
+        let s = mc.meterInMercatorCoordinateUnits() * (d.radiusM ?? 3);
+
+        // 縮放自適應（使用者第四輪）：球心與球面右緣投到 NDC → CSS px，
+        // 投影半徑夾 [7,16]px——近看不佔畫面、遠看不消失；中間隨縮放連續。
+        // 命中半徑用夾後值（pickDrone 與看到的球一致）
+        const c4 = new THREE.Vector4(mc.x, mc.y, mc.z ?? 0, 1).applyMatrix4(proj);
+        let cx = 0, cy = 0, r = 0;
+        const visible = c4.w > 0;
+        if (visible) {
+          cx = (c4.x / c4.w + 1) / 2 * cw;
+          cy = (1 - c4.y / c4.w) / 2 * ch;
+          const e4 = new THREE.Vector4(mc.x + s, mc.y, mc.z ?? 0, 1).applyMatrix4(proj);
+          const ex = (e4.x / e4.w + 1) / 2 * cw;
+          const ey = (1 - e4.y / e4.w) / 2 * ch;
+          const r0 = Math.hypot(ex - cx, ey - cy);
+          r = Math.min(16, Math.max(7, r0));
+          if (r0 > 0.01) s *= r / r0;   // 以夾後螢幕半徑回算世界尺度
+        }
+
         const model = new THREE.Matrix4()
           .makeTranslation(mc.x, mc.y, mc.z ?? 0)
           .scale(new THREE.Vector3(s, -s, s));   // Y 反向：mercator 與 three 的 Y 軸相反
@@ -114,18 +132,8 @@ export function createDroneLayer(
         renderer.render(u.scene, camera);
 
         if (hits) {
-          // 球心與球面右緣投到 NDC → CSS px（applyMatrix4 自帶除 w）
-          const c4 = new THREE.Vector4(mc.x, mc.y, mc.z ?? 0, 1).applyMatrix4(proj);
-          if (c4.w > 0) {
-            const cx = (c4.x / c4.w + 1) / 2 * cw;
-            const cy = (1 - c4.y / c4.w) / 2 * ch;
-            const e4 = new THREE.Vector4(mc.x + s, mc.y, mc.z ?? 0, 1).applyMatrix4(proj);
-            const ex = (e4.x / e4.w + 1) / 2 * cw;
-            const ey = (1 - e4.y / e4.w) / 2 * ch;
-            hits.set(d.id, { x: cx, y: cy, r: Math.max(Math.hypot(ex - cx, ey - cy), 6) });
-          } else {
-            hits.delete(d.id);   // 在相機後方
-          }
+          if (visible) hits.set(d.id, { x: cx, y: cy, r });
+          else hits.delete(d.id);   // 在相機後方
         }
       }
       for (const [k, u] of units) {

@@ -75,7 +75,10 @@ export function pathsLayer(id: string, data: RouteRun[], pickable = false) {
     getColor: (d) => d.color,
     getWidth: (d) => d.width ?? 3,   // 公尺（與原絲帶同寬）
     widthUnits: "meters",
-    widthMinPixels: 2,               // 遠 zoom 仍可見
+    // 縮放自適應（使用者第四輪）：物理錨定＋螢幕像素夾限——中間隨縮放
+    // 連續變化保留距離感，兩端有界（近看不肥帶、遠看不消失）
+    widthMinPixels: 3,
+    widthMaxPixels: 8,
     jointRounded: true,
     capRounded: true,
     // billboard:true（2026-08-11 使用者二輪反饋修正）：false 時寬度只在

@@ -112,7 +112,8 @@ export default function MapView() {
         layout: { "line-cap": "round", "line-join": "round" },
         paint: {
           "line-color": ["get", "dcolor"],
-          "line-width": 2,
+          // 縮放自適應：兩端有界、中間連續（同 pathsLayer 原則）
+          "line-width": ["interpolate", ["linear"], ["zoom"], 12, 1, 16, 2, 20, 3.5],
           "line-opacity": 0.7,
         },
       });
