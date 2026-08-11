@@ -82,6 +82,11 @@ ingest 的 mavsdk 改聽內部埠 14549，回程原路轉回）。tlog 格式
 
 ## 3. 群組任務（群飛同時配置飛行路徑）
 
+> **完整設計定案見 [group-missions-design.md](group-missions-design.md)**
+> （2026-08-11 三方討論＋PM 裁決：地面展開 per-drone 實體任務、mission_groups
+> 資料模型、兩階段狀態機、嚴格 execute gate、check_group、切批 011→013）。
+> 本節為原始草案，細節以該文件為準。
+
 QGC 多機支援弱（能看不能派），這是自製 GCS 超越它的部分；研究價值：
 **N 台同測＝一次飛行取得鏈路品質空間分布**（垂直剖面／平面分割掃描）。
 
