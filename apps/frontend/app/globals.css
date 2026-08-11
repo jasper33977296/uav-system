@@ -276,6 +276,9 @@ a:focus-visible, button:focus-visible, input:focus-visible, select:focus-visible
   grid-column: 2 / 5; position: relative; align-self: center;
   display: flex; flex-direction: column; gap: 2px; padding: 3px 0;
   background: var(--surface-2); border-radius: 3px;
+  /* 門檻刻度標籤（::after top:-11px）畫在軌道上方——自留邊距讓標籤
+     落在振動列自己的盒內，不溢入上一列（驗收 bug：30/60 侵入角速率） */
+  margin-top: 11px;
 }
 .vib-bar { height: 4px; border-radius: 2px; min-width: 2px; }
 .vib-tick {
