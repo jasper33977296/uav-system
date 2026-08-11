@@ -336,6 +336,10 @@ a:focus-visible, button:focus-visible, input:focus-visible, select:focus-visible
   display: flex; align-items: center; gap: 8px;
   padding: 10px 14px; cursor: grab; user-select: none; touch-action: none;
 }
+/* 收合態：高度與隔壁 [▤][地圖|影像] 一致（32px），圓角同 10 */
+.cmd-panel.cmd-closed { border-radius: 10px; }
+.cmd-panel.cmd-closed .cmd-head { padding: 5px 12px; }
+.cmd-panel.cmd-closed .cmd-head .btn-sm { padding: 1px 8px; }
 .cmd-head .name { font-weight: 700; }
 .cmd-head .meta { font-size: 12px; color: var(--muted); }
 .cmd-head .spacer { flex: 1; }

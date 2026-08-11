@@ -51,7 +51,7 @@ export default function CommandPanel() {
   const [result, setResult] = useState<{ ok: boolean; text: string } | null>(null);
   const [confirm, setConfirm] = useState<string | null>(null);
   const confirmTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
-  const [open, setOpen] = useState(true);
+  const [open, setOpen] = useState(false);   // 預設收合（使用者 2026-08-11 指示）
   // toast「點這裡看原因」喚起（ui-spec §2.4）
   const cmdOpenReq = useUavStore((s) => s.cmdOpenReq);
   useEffect(() => { if (cmdOpenReq) setOpen(true); }, [cmdOpenReq]);
@@ -298,7 +298,7 @@ export default function CommandPanel() {
   );
 
   return (
-    <div className="cmd-panel" ref={panelRef}
+    <div className={`cmd-panel ${open ? "" : "cmd-closed"}`} ref={panelRef}
       style={pos ? { position: "fixed", left: pos.x, top: pos.y, zIndex: 60 } : undefined}>
       <div className="cmd-head" title="拖曳移動；點擊收合"
         onPointerDown={dragStart} onPointerMove={dragMove}

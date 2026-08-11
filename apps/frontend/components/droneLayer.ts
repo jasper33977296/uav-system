@@ -107,19 +107,28 @@ export function createDroneLayer(
         const mc = maplibregl.MercatorCoordinate.fromLngLat([d.lon, d.lat], d.alt);
         let s = mc.meterInMercatorCoordinateUnits() * (d.radiusM ?? 3);
 
-        // 縮放自適應（使用者第四輪）：球心與球面右緣投到 NDC → CSS px，
-        // 投影半徑夾 [7,16]px——近看不佔畫面、遠看不消失；中間隨縮放連續。
-        // 命中半徑用夾後值（pickDrone 與看到的球一致）
+        // 縮放自適應（使用者第四輪）：投影半徑夾 [7,16]px——近看不佔畫面、
+        // 遠看不消失；中間隨縮放連續。命中半徑用夾後值（pickDrone 一致）。
+        // 半徑量測用**三軸 Jacobian 的橢圓長軸**（最大奇異值）：沿單一世界軸
+        // 量會隨旋轉/傾斜呼吸（該軸貼近視線時投影縮短→夾限回算跟著放大，
+        // 使用者回報「旋轉時球忽大忽小」的根因），奇異值對任意旋轉不變
         const c4 = new THREE.Vector4(mc.x, mc.y, mc.z ?? 0, 1).applyMatrix4(proj);
         let cx = 0, cy = 0, r = 0;
         const visible = c4.w > 0;
         if (visible) {
           cx = (c4.x / c4.w + 1) / 2 * cw;
           cy = (1 - c4.y / c4.w) / 2 * ch;
-          const e4 = new THREE.Vector4(mc.x + s, mc.y, mc.z ?? 0, 1).applyMatrix4(proj);
-          const ex = (e4.x / e4.w + 1) / 2 * cw;
-          const ey = (1 - e4.y / e4.w) / 2 * ch;
-          const r0 = Math.hypot(ex - cx, ey - cy);
+          const px = (dx: number, dy: number, dz: number): [number, number] => {
+            const v = new THREE.Vector4(mc.x + dx, mc.y + dy, (mc.z ?? 0) + dz, 1)
+              .applyMatrix4(proj);
+            return [(v.x / v.w + 1) / 2 * cw - cx, (1 - v.y / v.w) / 2 * ch - cy];
+          };
+          const cols = [px(s, 0, 0), px(0, s, 0), px(0, 0, s)];
+          const a = cols.reduce((t, c) => t + c[0] * c[0], 0);
+          const c2 = cols.reduce((t, c) => t + c[1] * c[1], 0);
+          const b = cols.reduce((t, c) => t + c[0] * c[1], 0);
+          const r0 = Math.sqrt(
+            (a + c2) / 2 + Math.sqrt(((a - c2) / 2) ** 2 + b * b));
           r = Math.min(16, Math.max(7, r0));
           if (r0 > 0.01) s *= r / r0;   // 以夾後螢幕半徑回算世界尺度
         }
