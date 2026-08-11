@@ -45,6 +45,31 @@ export default function Drones() {
   const [url, setUrl] = useState("");
   const [err, setErr] = useState<string | null>(null);
   const live = useUavStore((s) => s.live);
+  const fleet = useUavStore((s) => s.fleet);
+
+  // 卡片摺疊（compare-drones-restyle §2）：收合＝一機一行的機隊全貌，
+  // 展開＝架次工作區。工作區判準 → per 機 localStorage 記憶；
+  // 單機自動展開（僅在無記憶時——全貌不成問題，多一次點擊是純摩擦）
+  const [open, setOpen] = useState<Record<string, boolean>>({});
+  useEffect(() => {
+    if (!drones.length) return;
+    setOpen((cur) => {
+      const next = { ...cur };
+      for (const d of drones) {
+        if (next[d.id] === undefined) {
+          const saved = localStorage.getItem(`drone-open:${d.id}`);
+          next[d.id] = saved != null ? saved === "1" : drones.length === 1;
+        }
+      }
+      return next;
+    });
+  }, [drones]);
+  const toggleOpen = (id: string) =>
+    setOpen((cur) => {
+      const v = !cur[id];
+      localStorage.setItem(`drone-open:${id}`, v ? "1" : "0");
+      return { ...cur, [id]: v };
+    });
 
   const reload = useCallback(() => {
     fetch(`${API}/api/drones`).then((r) => r.json()).then(setDrones).catch(() => {});
@@ -93,14 +118,15 @@ export default function Drones() {
 
   return (
     <div className="page-pad">
-      <div className="card">
-        <h3>註冊無人機</h3>
-        <p className="hint-line">
+      {/* 註冊＝低頻教學操作 → 收摺疊、不記憶（IA 判準） */}
+      <details className="card">
+        <summary>＋ 註冊無人機</summary>
+        <p className="hint-line" style={{ marginTop: 8 }}>
           機的身分由系統端管理：註冊 → 「設為主機」後，MAVLink（14540）收到的
           遙測就記在這台名下；也可直接對現有的機「改名」。
           多機同時接入待 ingest 多實例化（issues/011）。
         </p>
-        <div className="form-row">
+        <div className="form-row" style={{ marginTop: 8 }}>
           <input
             placeholder="名稱（如 rb5-uav-1）"
             value={name}
@@ -114,28 +140,44 @@ export default function Drones() {
           <button disabled={!name.trim()} onClick={register}>註冊</button>
         </div>
         {err && <div className="form-err">{err}</div>}
-      </div>
+      </details>
 
       {drones.map((d) => {
         const mine = sessions.filter((s) => s.drone_id === d.id);
         const isLive = live?.drone_id === d.id;
         return (
           <div className="card" key={d.id}>
-            <div className="drone-head">
+            {/* 收合＝全貌一行：機名＋徽章＋架次數＋最近時間（點擊展開） */}
+            <div className="drone-head drone-row" onClick={() => toggleOpen(d.id)}>
+              <span className="meta">{open[d.id] ? "▾" : "▸"}</span>
               <span className="name">{d.name}</span>
-              {d.is_primary && <span className="chip">
-                <span className="dot" style={{ background: "#0ca30c" }} />主機</span>}
-              {d.is_simulated && <span className="chip">模擬</span>}
               {apChip(d.autopilot) && <span className="chip">{apChip(d.autopilot)}</span>}
+              {fleet[d.id]?.connected && (
+                <span className="chip">
+                  <span className="dot" style={{ background: "var(--status-ok)" }} />連線
+                </span>
+              )}
+              {d.is_primary && <span className="chip">主機</span>}
+              {d.is_simulated && <span className="chip">模擬</span>}
               {isLive && live?.armed && (
                 <span className="chip">
                   <span className="dot" style={{ background: "#d03b3b" }} />
                   飛行中·記錄中
                 </span>
               )}
+              <span className="spacer" />
               <span className="meta">
-                {d.connection_url ?? ""} · 共 {mine.length} 條航線
+                {mine.length} 架次
+                {mine[0] ? ` · 最近 ${new Date(mine[0].started_at).toLocaleString("zh-TW",
+                  { month: "numeric", day: "numeric", hour: "2-digit", minute: "2-digit",
+                    hour12: false })}` : ""}
               </span>
+            </div>
+
+            {/* 展開＝工作區：操作列＋架次表格（刪除/匯出安全流程照舊） */}
+            {open[d.id] && (<>
+            <div className="drone-actions">
+              <span className="meta">{d.connection_url ?? ""}</span>
               <span className="spacer" />
               <button className="btn-plain btn-sm"
                 onClick={async () => {
@@ -236,6 +278,7 @@ export default function Drones() {
                 ))}
               </tbody>
             </table>
+            </>)}
           </div>
         );
       })}

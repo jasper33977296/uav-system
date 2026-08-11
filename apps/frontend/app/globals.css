@@ -210,6 +210,10 @@ a:focus-visible, button:focus-visible, input:focus-visible, select:focus-visible
 .form-err { margin-top: 8px; font-size: 12px; color: var(--status-danger); }
 .drone-head .spacer { flex: 1; }
 .row-link { cursor: pointer; }
+/* 機隊卡片摺疊：收合＝一機一行全貌，點卡片頭展開架次工作區 */
+.drone-row { cursor: pointer; user-select: none; }
+.drone-actions { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; margin-top: 10px; }
+.drone-actions .spacer { flex: 1; }
 
 /* 回放頁 */
 .replay { height: 100%; display: flex; flex-direction: column; }
@@ -427,7 +431,7 @@ a:focus-visible, button:focus-visible, input:focus-visible, select:focus-visible
 .name-lg { font-weight: 700; font-size: 15px; margin-right: 2px; cursor: help; }
 .sig-detail summary { font-size: 12px; color: var(--muted); cursor: pointer; margin-top: 8px; }
 .sig-detail[open] summary { margin-bottom: 6px; }
-.card h3 .h3-note {
+.card h3 .h3-note, .card h4 .h3-note {
   float: right; font-size: 11px; font-weight: 400; color: var(--muted);
   text-transform: none; letter-spacing: 0;
 }
@@ -494,5 +498,17 @@ a:focus-visible, button:focus-visible, input:focus-visible, select:focus-visible
 .cmp-tip .dot { margin-right: 5px; }
 .cmp-legend { display: flex; flex-wrap: wrap; gap: 14px; margin-top: 6px; font-size: 12px; color: var(--ink-2); }
 .cmp-legend .dot { margin-right: 5px; }
-.cmp-map { width: 100%; height: auto; margin-top: 8px; background: var(--page); border-radius: 8px; }
+/* 比較頁 3D 軌跡疊圖 */
+.cmp3d {
+  position: relative; height: 400px; margin-top: 8px;
+  border-radius: 10px; overflow: hidden; background: var(--page);
+}
+.cmp3d-map { position: absolute; inset: 0; }
+.legend-right { left: auto; right: 12px; bottom: 12px; }
+.legend-row {
+  display: flex; align-items: center; gap: 6px; width: 100%;
+  background: none; border: none; padding: 2px 0; cursor: pointer;
+  font-size: 12px; color: var(--ink-2); line-height: 1.7; text-align: left;
+}
+.legend-row:hover { color: var(--ink); }
 details.card summary { cursor: pointer; font-size: 14px; font-weight: 600; }

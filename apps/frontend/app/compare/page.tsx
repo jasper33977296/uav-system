@@ -9,9 +9,13 @@
  * 圖表遵循 dataviz 規範：序列色盤經 CVD 驗證（深色底全項通過）、
  * 2px 線、單一 Y 軸、遞弱網格、légende＋線尾直接標籤、crosshair tooltip。
  */
+import dynamic from "next/dynamic";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 
 import { API } from "@/lib/signal";
+
+// MapLibre 依賴 window，關閉 SSR（同即時頁 MapView 作法）
+const CompareMap3D = dynamic(() => import("@/components/CompareMap3D"), { ssr: false });
 
 // 已驗證的類別色盤（新暖 surface #262624 重驗全過，見 doc/design-tokens.md
 // 驗證表；實體是「航線」，固定順序指派、不循環。all-pairs 只有前 3 槽通過
@@ -191,7 +195,7 @@ export default function Compare() {
   const [sessions, setSessions] = useState<Sess[]>([]);
   const [selected, setSelected] = useState<string[]>([]);   // 順序即基準順序
   const [tracks, setTracks] = useState<Record<string, LinkRow[]>>({});
-  const [wps, setWps] = useState<{ lat: number; lon: number }[]>([]);
+  const [wps, setWps] = useState<{ lat: number; lon: number; alt?: number }[]>([]);
   const [metric, setMetric] = useState("sinr");
   // 同時高亮上限 3 條（design-tokens v1）：超過的退 muted，點圖例切換
   const [focus, setFocus] = useState<string[]>([]);
@@ -428,10 +432,14 @@ export default function Compare() {
             )}
 
             {loaded.length > 0 && path && (
-              <details className="card">
-                <summary>軌跡疊圖（確認航線位置用）</summary>
-                <MiniMap path={path} loaded={loaded} tracks={tracks} color={color} />
-              </details>
+              <div className="card">
+                <h4>軌跡疊圖（3D）
+                  <span className="h3-note">拖曳旋轉 · 點絲帶看 SINR</span>
+                </h4>
+                <CompareMap3D wps={wps} loaded={loaded} tracks={tracks}
+                  colorOf={color} labelOf={label}
+                  dimIds={loaded.filter(isDim)} />
+              </div>
             )}
           </div>
         </div>
@@ -440,31 +448,3 @@ export default function Compare() {
   );
 }
 
-function MiniMap({ path, loaded, tracks, color }: {
-  path: ReturnType<typeof buildPath>; loaded: string[];
-  tracks: Record<string, LinkRow[]>; color: (sid: string) => string;
-}) {
-  const all = path.pts;
-  const xs = all.map((p) => p.x), ys = all.map((p) => p.y);
-  const x0 = Math.min(...xs) - 20, x1 = Math.max(...xs) + 20;
-  const y0 = Math.min(...ys) - 20, y1 = Math.max(...ys) + 20;
-  const W = 640, H = Math.max(200, (W * (y1 - y0)) / (x1 - x0 || 1));
-  const sx = (x: number) => ((x - x0) / (x1 - x0)) * W;
-  const sy = (y: number) => H - ((y - y0) / (y1 - y0)) * H;
-  const line = (pts: { x: number; y: number }[]) =>
-    pts.map((p, i) => `${i ? "L" : "M"}${sx(p.x).toFixed(1)},${sy(p.y).toFixed(1)}`).join("");
-  return (
-    <svg viewBox={`0 0 ${W} ${H}`} className="cmp-map">
-      <path d={line(path.pts)} fill="none" stroke="#8f8b80" strokeWidth={1.5}
-        strokeDasharray="4 4" opacity={0.6} />
-      {loaded.map((sid) => {
-        const pts = tracks[sid]
-          .filter((r) => r.lat != null && r.lon != null)
-          .filter((_, i) => i % 3 === 0)
-          .map((r) => toXY(r.lat!, r.lon!, path.origin.lat, path.origin.lon));
-        return <path key={sid} d={line(pts)} fill="none"
-          stroke={color(sid)} strokeWidth={2} opacity={0.85} />;
-      })}
-    </svg>
-  );
-}
