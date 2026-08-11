@@ -50,6 +50,31 @@ function parsePlan(text: string): PlanWp[] {
   return out;
 }
 
+/** 路線縮圖（ui-spec §4）：waypoints 俯視折線——縮圖即說明。
+ * 起點綠圓、終點方塊；經度以 cos(lat) 校正避免變形。 */
+function MissionThumb({ wps }: { wps?: { lat: number; lon: number }[] }) {
+  const pts = (wps ?? []).filter((w) => w.lat && w.lon);
+  if (pts.length < 2) return <div className="mthumb" />;
+  const k = Math.cos((pts[0].lat * Math.PI) / 180);
+  const xs = pts.map((p) => p.lon * k), ys = pts.map((p) => p.lat);
+  const x0 = Math.min(...xs), x1 = Math.max(...xs);
+  const y0 = Math.min(...ys), y1 = Math.max(...ys);
+  const span = Math.max(x1 - x0, y1 - y0) || 1e-9;
+  const X = (x: number) => 8 + ((x - x0) / span) * 84 + (84 - ((x1 - x0) / span) * 84) / 2;
+  const Y = (y: number) => 92 - ((y - y0) / span) * 84 - (84 - ((y1 - y0) / span) * 84) / 2;
+  const pl = pts.map((p) => `${X(p.lon * k).toFixed(1)},${Y(p.lat).toFixed(1)}`).join(" ");
+  const first = pts[0], last = pts[pts.length - 1];
+  return (
+    <svg viewBox="0 0 100 100" className="mthumb" aria-hidden>
+      <polyline points={pl} fill="none" stroke="#c2bfb3" strokeWidth="2"
+        strokeLinejoin="round" strokeLinecap="round" />
+      <circle cx={X(first.lon * k)} cy={Y(first.lat)} r="3.2" fill="#0ca30c" />
+      <rect x={X(last.lon * k) - 2.6} y={Y(last.lat) - 2.6} width="5.2" height="5.2"
+        fill="#c2bfb3" />
+    </svg>
+  );
+}
+
 export default function Missions() {
   const router = useRouter();
   const [missions, setMissions] = useState<Mission[]>([]);
@@ -57,7 +82,23 @@ export default function Missions() {
   const [err, setErr] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
   const [openId, setOpenId] = useState<string | null>(null);
+  const [menuId, setMenuId] = useState<string | null>(null);
+  const [deleting, setDeleting] = useState<string | null>(null);
+  const delTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const [thumbs, setThumbs] = useState<Record<string, { lat: number; lon: number }[]>>({});
   const fileRef = useRef<HTMLInputElement>(null);
+
+  // 縮圖資料：每條路線抓一次 waypoints（路線數少，逐條抓可接受）
+  useEffect(() => {
+    for (const m of missions) {
+      if (thumbs[m.id]) continue;
+      fetch(`${API}/api/missions/${m.id}/waypoints`)
+        .then((r) => r.json())
+        .then((d) => setThumbs((t) => ({ ...t, [m.id]: d.waypoints ?? [] })))
+        .catch(() => {});
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [missions]);
 
   const reload = useCallback(() => {
     fetch(`${API}/api/missions`).then((r) => r.json()).then(setMissions).catch(() => {});
@@ -114,87 +155,92 @@ export default function Missions() {
 
   return (
     <div className="page-pad">
-      <div className="card">
-        <h3>路徑管理</h3>
-        <p className="hint-line">
-          路徑來自 QGC：上傳 .plan 檔，或把機上目前的任務讀回儲存。
-          「顯示於即時頁」的那一條會以灰色預計路徑疊在即時監控地圖上。
-        </p>
-        <div className="form-row" style={{ marginTop: 8 }}>
-          <button disabled={busy}
-            onClick={() => call("/api/missions/from-vehicle", { method: "POST" })}>
-            從機上讀回並儲存
-          </button>
-          <button disabled={busy} onClick={() => fileRef.current?.click()}>
-            上傳 .plan 檔
-          </button>
-          <input ref={fileRef} type="file" accept=".plan,application/json" hidden
-            onChange={(e) => { const f = e.target.files?.[0]; if (f) uploadPlan(f); e.target.value = ""; }} />
+      {err && <div className="form-err">{err}</div>}
+      {report && (
+        <div className="plan-report">
+          {report.ok && report.warnings.length === 0 && (
+            <div className="ok">✅ 幾何預檢通過（最遠航點 {report.max_dist_m} m／
+              圍欄 {report.fence_r} m）</div>
+          )}
+          {report.problems.map((p, i) => (
+            <div className="bad" key={`p${i}`}>❌ {p}</div>
+          ))}
+          {report.warnings.map((w, i) => (
+            <div className="warn" key={`w${i}`}>⚠️ {w}</div>
+          ))}
         </div>
-        {err && <div className="form-err">{err}</div>}
-        {report && (
-          <div className="plan-report">
-            {report.ok && report.warnings.length === 0 && (
-              <div className="ok">✅ 幾何預檢通過（最遠航點 {report.max_dist_m} m／
-                圍欄 {report.fence_r} m）</div>
-            )}
-            {report.problems.map((p, i) => (
-              <div className="bad" key={`p${i}`}>❌ {p}</div>
-            ))}
-            {report.warnings.map((w, i) => (
-              <div className="warn" key={`w${i}`}>⚠️ {w}</div>
-            ))}
-            {!report.ok && (
-              <div className="hint-line">已存入任務庫。預檢僅供參考（不擋上傳；
-                GEOFENCE_ENFORCE=true 可恢復擋門）——空中防線是 PX4 的 Geofence</div>
-            )}
-          </div>
-        )}
+      )}
+
+      {/* 縮圖卡格（ui-spec §4）：縮圖即說明；點卡＝顯示於即時頁（再點取消） */}
+      <div className="mission-grid">
+        {missions.map((m) => {
+          const count = sessions.filter((s) => s.mission_id === m.id).length;
+          return (
+            <div key={m.id} className={`mcard ${m.is_active ? "on" : ""}`}
+              title={m.is_active ? "點擊取消顯示於即時頁" : "點擊顯示於即時頁"}
+              onClick={() => !busy && call(
+                `/api/missions/${m.id}/activate?active=${!m.is_active}`,
+                { method: "POST" })}>
+              <MissionThumb wps={thumbs[m.id]} />
+              <div className="mcard-foot">
+                <span className="mcard-name">{m.name}</span>
+                {m.is_active && <span className="chip on-chip">顯示中</span>}
+                <span className="spacer" />
+                <button className="btn-plain btn-sm" title="更多"
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    setMenuId(menuId === m.id ? null : m.id);
+                    setDeleting(null);
+                  }}>⋯</button>
+              </div>
+              {menuId === m.id && (
+                <div className="mcard-menu" onClick={(e) => e.stopPropagation()}>
+                  <button className="btn-plain btn-sm"
+                    onClick={() => { setOpenId(openId === m.id ? null : m.id); setMenuId(null); }}>
+                    航線紀錄（{count}）
+                  </button>
+                  {/* 刪除兩段式：卡上變紅「確定刪除？」（ui-spec §4.3） */}
+                  <button className="btn-danger btn-sm" disabled={busy}
+                    onClick={() => {
+                      if (deleting === m.id) {
+                        setDeleting(null); setMenuId(null);
+                        call(`/api/missions/${m.id}`, { method: "DELETE" });
+                      } else {
+                        setDeleting(m.id);
+                        if (delTimer.current) clearTimeout(delTimer.current);
+                        delTimer.current = setTimeout(() => setDeleting(null), 3500);
+                      }
+                    }}>
+                    {deleting === m.id ? "確定刪除？" : "刪除"}
+                  </button>
+                </div>
+              )}
+            </div>
+          );
+        })}
+        <button className="mcard mcard-add" disabled={busy}
+          onClick={() => fileRef.current?.click()}>
+          <span className="mcard-plus">＋</span>上傳 .plan
+        </button>
+        <input ref={fileRef} type="file" accept=".plan,application/json" hidden
+          onChange={(e) => { const f = e.target.files?.[0]; if (f) uploadPlan(f); e.target.value = ""; }} />
+      </div>
+      {/* 技術操作：從機上讀回（全域動作，不屬於任一卡） */}
+      <div>
+        <button className="btn-plain btn-sm" disabled={busy}
+          onClick={() => call("/api/missions/from-vehicle", { method: "POST" })}>
+          從機上讀回
+        </button>
       </div>
 
-      <div className="card">
-        <table className="table">
-          <thead>
-            <tr>
-              <th>名稱</th><th>來源</th><th className="num">航點數</th>
-              <th>建立時間</th><th>即時頁顯示</th><th></th>
-            </tr>
-          </thead>
-          <tbody>
-            {missions.length === 0 && (
-              <tr><td colSpan={6} className="empty">尚無儲存的路徑</td></tr>
-            )}
-            {missions.map((m) => (
-              <tr key={m.id} className="row-link" title="展開此路徑的航線紀錄"
-                  onClick={() => setOpenId(openId === m.id ? null : m.id)}>
-                <td>
-                  {m.name}
-                  {m.is_active && <span className="chip" style={{ marginLeft: 8 }}>
-                    <span className="dot" style={{ background: "#0ca30c" }} />顯示中</span>}
-                </td>
-                <td>{m.source === "vehicle" ? "機上讀回" : ".plan 檔"}</td>
-                <td className="num">{m.waypoint_count}</td>
-                <td>{new Date(m.created_at).toLocaleString("zh-TW", { hour12: false })}</td>
-                <td>
-                  <button disabled={busy}
-                    onClick={() => call(`/api/missions/${m.id}/activate?active=${!m.is_active}`,
-                                        { method: "POST" })}>
-                    {m.is_active ? "隱藏" : "顯示於即時頁"}
-                  </button>
-                </td>
-                <td onClick={(e) => e.stopPropagation()}>
-                  <button className="btn-danger" disabled={busy}
-                    onClick={() => { if (window.confirm(`刪除路徑「${m.name}」？`))
-                      call(`/api/missions/${m.id}`, { method: "DELETE" }); }}>
-                    刪除
-                  </button>
-                </td>
-              </tr>
-            ))}
-          </tbody>
-        </table>
+      {missions.length === 0 && (
+        <div className="card">
+          <div className="empty">尚無儲存的路線——用「＋」上傳 .plan 檔</div>
+        </div>
+      )}
 
-        {openId && (() => {
+      {openId && <div className="card">
+        {(() => {
           const mine = sessions.filter((s) => s.mission_id === openId);
           const m = missions.find((x) => x.id === openId);
           return (
@@ -240,7 +286,7 @@ export default function Missions() {
             </div>
           );
         })()}
-      </div>
+      </div>}
     </div>
   );
 }

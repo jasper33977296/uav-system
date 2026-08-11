@@ -608,6 +608,38 @@ a:focus-visible, button:focus-visible, input:focus-visible, select:focus-visible
   width: 100%; height: 100%; object-fit: contain;
 }
 
+/* 路徑管理縮圖卡（ui-spec §4）：縮圖即說明 */
+.mission-grid {
+  display: grid; grid-template-columns: repeat(auto-fill, minmax(180px, 1fr));
+  gap: 14px;
+}
+.mcard {
+  position: relative; background: var(--surface);
+  border: 2px solid var(--border); border-radius: 10px; padding: 10px;
+  cursor: pointer; text-align: left;
+}
+.mcard.on { border-color: var(--accent); }
+.mthumb { width: 100%; aspect-ratio: 1 / 1; background: var(--page); border-radius: 8px; display: block; }
+.mcard-foot { display: flex; align-items: center; gap: 6px; margin-top: 8px; min-width: 0; }
+.mcard-name {
+  font-size: 13px; font-weight: 600;
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+.on-chip { color: var(--accent); border-color: var(--accent); flex: none; }
+.mcard-foot .spacer { flex: 1; }
+.mcard-add {
+  display: flex; flex-direction: column; align-items: center; justify-content: center;
+  gap: 6px; border-style: dashed; color: var(--muted); font-size: 14px;
+  background: none; min-height: 200px; cursor: pointer;
+}
+.mcard-plus { font-size: 26px; line-height: 1; }
+.mcard-menu {
+  position: absolute; right: 8px; bottom: 42px; z-index: 5;
+  display: flex; flex-direction: column; gap: 6px; padding: 8px;
+  background: var(--surface); border: 1px solid var(--hairline); border-radius: 8px;
+  box-shadow: 0 4px 16px rgba(0, 0, 0, 0.35);
+}
+
 /* 航線比較頁 */
 .cmp-layout { display: grid; grid-template-columns: 300px 1fr; gap: 12px; margin-top: 12px; align-items: start; }
 .cmp-sessions { max-height: 75vh; overflow-y: auto; }
