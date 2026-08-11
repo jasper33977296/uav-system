@@ -108,7 +108,7 @@ async def _run(sysid: int, action: str, fn, *args, params=None):
         raise HTTPException(409, {
             "msg": f"機端拒絕（{res.get('result')}）",
             "hint": res.get("hint", ""),
-            "px4_notes": res.get("px4_notes", []),
+            "autopilot_notes": res.get("autopilot_notes", []),
         })
     return res
 

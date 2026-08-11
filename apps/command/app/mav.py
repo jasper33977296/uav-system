@@ -228,7 +228,7 @@ class MavRouter(threading.Thread):
 # result code → 操作指引（來自現場工具 start_mission.py 的實戰註解）
 RESULT_HINTS = {
     M.MAV_RESULT_TEMPORARILY_REJECTED: "暫時拒絕——EKF/GPS 暖機中，稍等 30–60 秒再試",
-    M.MAV_RESULT_DENIED: "被拒——看 px4_notes 的具體原因（GPS/校準/RC/任務狀態）",
+    M.MAV_RESULT_DENIED: "被拒——看 autopilot_notes 的具體原因（GPS/校準/RC/任務狀態）",
     M.MAV_RESULT_UNSUPPORTED: "不支援此指令",
     M.MAV_RESULT_FAILED: "執行失敗",
 }
@@ -252,10 +252,10 @@ def job_command(r: MavRouter, sysid: int, command: int, params: list,
                 # 多等 1.5 秒收 PX4 的解釋文字（拒絕原因常在 ACK 之後才廣播）
                 r._wait(sysid, ("_none_",), timeout=1.5)
                 res["hint"] = RESULT_HINTS.get(ack.result, "")
-                res["px4_notes"] = r.texts_since(sysid, t0)
+                res["autopilot_notes"] = r.texts_since(sysid, t0)
             return res
     raise CommandError(f"指令 {command} 無 ACK（重試 {retries} 次）"
-                       f"｜px4_notes={r.texts_since(sysid, t0)}")
+                       f"｜autopilot_notes={r.texts_since(sysid, t0)}")
 
 
 def job_set_mode(r: MavRouter, sysid: int, mode: str) -> dict:
@@ -334,4 +334,4 @@ def job_upload_mission(r: MavRouter, sysid: int, items: list) -> dict:
         s = r._wait(sysid, ("STATUSTEXT",), timeout=0.5)
         if s is not None:
             notes.append(s.text.strip())
-    return {"uploaded": n, "verified": True, "px4_notes": notes}
+    return {"uploaded": n, "verified": True, "autopilot_notes": notes}
