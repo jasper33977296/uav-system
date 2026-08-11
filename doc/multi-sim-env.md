@@ -24,15 +24,27 @@
 - 單實例 entrypoint 用 `HOST_QGC HOST_API` 兩參數＝PX4 送 MAVLink 到 GS:14550(QGC)＋
   GS:14540(API)。**這是現行 command=14550／backend=14540 的由來**。
 
-## 唯一 gap：多實例的 MAVLink 導向 → 我們的單埠 demux
+## MAVLink 埠實況（讀 px4-rc.mavlink 確認）＋合流設計
 
-原生多機各實例走自己的埠（14560+N 等），而本系統要**單埠 demux**：所有機送同一組
-backend(14540)＋command(14550)、逐框架以 sysid 分。→ **mavlink-router 合流**：聽各實例輸出、
-轉發到 14540＋14550，保留 sysid，backend/command 照常 demux（撞號防線＋mode 去抖已在，安全）。
+每 PX4 SITL 實例 `px4_instance`（0-indexed）的 MAVLink 埠（`init.d-posix/px4-rc.mavlink`）：
+- **offboard**：bind `14580+i`、**送到 `14540+i`**（`-o`）。**instance 0 送 14540＝現行
+  backend 收得到 sysid 1 的原因**；instance 1/2 送 14541/14542。
+- **GCS**：bind `18570+i`（`mavlink start -u 18570+i`，等 GCS 連入）。
+- gazebo↔PX4：TCP `4560+i`。
 
-**待 bring-up 驗證的關鍵未知**：各 PX4 SITL 實例實際把 GCS 遙測**送到哪個 UDP 埠**
-（rcS 的 mavlink start 埠隨 instance 位移的確切值）。第一次 bring-up 用 `ss -aunp`/tcpdump
-或讀 instance rootfs 的 out.log 確認，再據此定 mavlink-router endpoint。
+**整合陷阱**：若天真讓 mavlink-router 也送 backend 14540，會與 instance 0 的 offboard(14540)
+**撞號**（sysid 1 兩來源）——正是剛修好的洪水成因。
+
+**乾淨合流設計**（避開所有撞埠、image 保原廠、backend/command 程式不改）：
+- mavlink-router **以 client 連各實例的 GCS 埠 `18570+i`**（i=0/1/2）——拿逐台全遙測，
+  不碰 14540/14550。
+- router 合流轉發到 **backend／command 的專用埠**（例 `udpin` 14545／14555）。
+- **sim-fleet profile 覆寫** backend `MAVLINK_URL=udpin://0.0.0.0:14545`、command
+  `COMMAND_MAVLINK_URL=udpin://0.0.0.0:14555`——只餵 router 合流流，**instance 的
+  offboard 14540+i 不進 backend/command，零撞號**。sysid 1/2/3 天然 demux（防線仍在）。
+- 單台 uav-sitl profile 維持現狀（14540/14550 直連）；兩 profile 互斥、切換即換埠。
+
+（bring-up 仍需實跑確認 GCS 埠連入行為與 router config 語法，但埠對應已由原始碼定死、非猜測。）
 
 ## 建置步驟
 
