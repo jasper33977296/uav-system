@@ -94,10 +94,12 @@ services:
               "--host", "0.0.0.0", "--port", "${COMMAND_PORT:-38001}"]
     volumes:
       - ./apps/command/app:/srv/app
+      - ./missions:/srv/missions:ro   # 航線檔（GET /api/plans、POST /api/start）；唯讀掛載
     environment:
       DATABASE_URL: postgresql://uav:uav@localhost:${DB_PORT:-35432}/uav
       COMMAND_MAVLINK_URL: ${COMMAND_MAVLINK_URL:-udpin://0.0.0.0:14541}
       ENABLE_COMMANDS: ${ENABLE_COMMANDS:-false}
+      MISSIONS_DIR: ${MISSIONS_DIR:-/srv/missions}
       GEOFENCE_ENFORCE: ${GEOFENCE_ENFORCE:-false}
       GEOFENCE_RADIUS_M: ${GEOFENCE_RADIUS_M:-50}
       GEOFENCE_ALT_M: ${GEOFENCE_ALT_M:-15}

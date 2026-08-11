@@ -17,6 +17,9 @@ class Settings(BaseSettings):
     geofence_radius_m: float = 50.0
     geofence_alt_m: float = 15.0
     geofence_margin: float = 0.7
+    # 航線檔目錄（repo 的 missions/ 掛進容器；GET /api/plans 與 POST /api/start
+    # 只認這一層下的 .plan——外部給的檔名是不受信任輸入，見 plans.resolve）
+    missions_dir: str = "/srv/missions"
 
 
 settings = Settings()
