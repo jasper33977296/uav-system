@@ -12,6 +12,7 @@
   POST /api/command/{sysid}/mission/upload   body: {"mission_id": "..."}
 """
 import asyncio
+import contextvars
 import json
 import logging
 import math
@@ -21,6 +22,11 @@ import asyncpg
 from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
+
+# 每請求的 client 來源（X-Client header）——留痕歸因用（issue 013-B：驗收 rig 帶
+# X-Client: acceptance-rig，指令來源一眼可辨、查案不用反推）。contextvar 讓 _audit
+# 不必改每個端點簽名就取得；背景序列（execute 起的 task）沿用觸發請求的 client。
+_client_var: contextvars.ContextVar = contextvars.ContextVar("client", default=None)
 
 from . import group_exec, mav, plan_check
 from .config import settings
@@ -60,9 +66,10 @@ def build_items(wps: list[dict]) -> list[dict]:
 
 async def _audit(sysid: int, action: str, params, result: str, detail: str = ""):
     await pool.execute(
-        "INSERT INTO command_log (sysid, action, params, result, detail) "
-        "VALUES ($1, $2, $3, $4, $5)",
-        sysid, action, json.dumps(params, default=str), result, detail[:500])
+        "INSERT INTO command_log (sysid, action, params, result, detail, client) "
+        "VALUES ($1, $2, $3, $4, $5, $6)",
+        sysid, action, json.dumps(params, default=str), result, detail[:500],
+        _client_var.get())
 
 
 def _require_enabled():
@@ -122,6 +129,8 @@ async def lifespan(app):
         id BIGSERIAL PRIMARY KEY, time TIMESTAMPTZ NOT NULL DEFAULT now(),
         sysid INT, action TEXT NOT NULL, params JSONB,
         result TEXT NOT NULL, detail TEXT)""")
+    # 指令來源歸因（issue 013-B）：X-Client header 落痕，既有表補欄
+    await pool.execute("ALTER TABLE command_log ADD COLUMN IF NOT EXISTS client TEXT")
     # 單埠多機的身分對應欄位（issues/011；backend migrate 也建，這裡防序）
     await pool.execute("ALTER TABLE drones ADD COLUMN IF NOT EXISTS mav_sysid INT")
     await pool.execute("ALTER TABLE drones ADD COLUMN IF NOT EXISTS current_mission_id UUID")
@@ -142,6 +151,13 @@ async def lifespan(app):
 app = FastAPI(title="UAV Command Service", lifespan=lifespan)
 app.add_middleware(CORSMiddleware, allow_origins=["*"],
                    allow_methods=["*"], allow_headers=["*"])
+
+
+@app.middleware("http")
+async def _capture_client(request, call_next):
+    """把 X-Client header 塞進 contextvar，供 _audit 歸因（背景 task 沿用此 context）。"""
+    _client_var.set(request.headers.get("x-client"))
+    return await call_next(request)
 
 
 @app.get("/healthz")
