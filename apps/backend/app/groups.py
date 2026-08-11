@@ -35,6 +35,15 @@ class GroupError(Exception):
     """建群組的可預期錯誤（回 422）。"""
 
 
+async def _lookup_drones(ids: list[str]) -> dict[str, dict]:
+    """drone_id → {name, mav_sysid}。非有效 UUID 或查無 → 不在回傳 map（呼叫端
+    據此回 422）。用 text 比對避開 UUID 轉型例外，容忍前端傳非 UUID 字串。"""
+    rows = await db.pool.fetch(
+        "SELECT id::text AS id, name, mav_sysid FROM drones WHERE id::text = ANY($1)",
+        ids)
+    return {r["id"]: {"name": r["name"], "mav_sysid": r["mav_sysid"]} for r in rows}
+
+
 async def create_group(name: str, mode: str, base_mission_id, drones: list[dict],
                        params: dict | None) -> dict:
     """drones：[{drone_id, layer_index?, mission_id?}]。unified＝從 base 依 layer
@@ -50,6 +59,13 @@ async def create_group(name: str, mode: str, base_mission_id, drones: list[dict]
     used_params = {"vsep_m": vsep, "lsep_m": lsep,
                    "rtl_stagger_m": (params or {}).get("rtl_stagger_m",
                                                        settings.group_rtl_stagger_m)}
+    # 先驗證每台都是真的機（group_assignments.drone_id 無 FK，不擋則會靜默
+    # 插入幽靈指派、GET 才發現 drone_name 為空、UI 台數對不上——issue 013-A
+    # 前端回饋 #3）。不存在的一律回 422 列名，不做部分成功。
+    dmap = await _lookup_drones(ids)
+    missing = [i for i in ids if i not in dmap]
+    if missing:
+        raise GroupError("找不到這些無人機（非有效機號）：" + "、".join(missing))
     assignments, paths = [], []
     async with db.pool.acquire() as con:
         async with con.transaction():
@@ -72,8 +88,11 @@ async def create_group(name: str, mode: str, base_mission_id, drones: list[dict]
                 await con.execute(
                     """INSERT INTO group_assignments (group_id, drone_id, mission_id, layer_index)
                        VALUES ($1, $2, $3, $4)""", gid, d["drone_id"], mid, layer)
+                info = dmap[d["drone_id"]]
                 assignments.append({"drone_id": d["drone_id"], "mission_id": mid,
-                                    "layer_index": layer, "phase": "idle"})
+                                    "layer_index": layer, "phase": "idle",
+                                    "drone_name": info["name"],
+                                    "mav_sysid": info["mav_sysid"]})
                 paths.append({"label": f"L{layer}", "waypoints": wps})
 
     conflict = plan_check.check_group(paths, vsep, lsep)
@@ -93,3 +112,25 @@ async def get_group(gid: str) -> dict | None:
     return {"group_id": str(g["id"]), "name": g["name"], "mode": g["mode"],
             "status": g["status"], "params": g["params"],
             "assignments": [dict(r) for r in rows]}
+
+
+async def delete_group(gid: str) -> str:
+    """刪除群組。只允許 draft（執行中/已飛過的不可刪，保留稽核）。回結果碼：
+    'deleted' / 'not_found' / 'locked'。group_assignments 靠 ON DELETE CASCADE
+    連帶清；materialized 任務（created_by='group-gen'）另清避免任務庫堆草稿。"""
+    g = await db.pool.fetchrow("SELECT status FROM mission_groups WHERE id = $1", gid)
+    if g is None:
+        return "not_found"
+    if g["status"] != "draft":
+        return "locked"
+    async with db.pool.acquire() as con:
+        async with con.transaction():
+            mids = [r["mission_id"] for r in await con.fetch(
+                "SELECT mission_id FROM group_assignments WHERE group_id = $1", gid)]
+            await con.execute("DELETE FROM mission_groups WHERE id = $1", gid)
+            # 只清本群組地面生成的具體任務（separate 用的既有任務不動）
+            if mids:
+                await con.execute(
+                    "DELETE FROM missions WHERE id = ANY($1) AND created_by = 'group-gen'",
+                    mids)
+    return "deleted"

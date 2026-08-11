@@ -180,6 +180,18 @@ async def get_group(group_id: str):
     return grp
 
 
+@router.delete("/groups/{group_id}")
+async def delete_group(group_id: str):
+    """刪 draft 群組（使用者調整成員／參數會重建、draft 會堆積——前端回饋 #2）。
+    只允許 draft：執行中/已飛過的回 409，保留稽核。"""
+    r = await groups.delete_group(group_id)
+    if r == "not_found":
+        raise HTTPException(404, "無此群組")
+    if r == "locked":
+        raise HTTPException(409, "非 draft 群組不可刪除（保留稽核紀錄）")
+    return {"deleted": group_id}
+
+
 @router.get("/sessions")
 async def list_sessions(limit: int = 50, mission_id: str | None = None):
     q = """
