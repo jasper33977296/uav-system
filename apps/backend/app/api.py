@@ -193,8 +193,18 @@ async def delete_group(group_id: str):
 
 
 @router.get("/sessions")
-async def list_sessions(limit: int = 50, mission_id: str | None = None):
-    q = """
+async def list_sessions(limit: int = 50, mission_id: str | None = None,
+                        since: str | None = None):
+    """架次清單。可選 mission_id（綁定任務）＋since（ISO 時間窗，比較頁 v4 用）。"""
+    conds, args = [], []
+    if mission_id:
+        args.append(mission_id)
+        conds.append(f"s.mission_id = ${len(args) + 1}")
+    if since:
+        args.append(since)
+        conds.append(f"s.started_at >= ${len(args) + 1}::text::timestamptz")
+    where = ("WHERE " + " AND ".join(conds)) if conds else ""
+    q = f"""
         SELECT s.*, d.name AS drone_name, m.name AS mission_name
         FROM flight_sessions s
         JOIN drones d ON d.id = s.drone_id
@@ -202,10 +212,7 @@ async def list_sessions(limit: int = 50, mission_id: str | None = None):
         {where}
         ORDER BY s.started_at DESC LIMIT $1
         """
-    if mission_id:
-        rows = await db.pool.fetch(q.format(where="WHERE s.mission_id = $2"), limit, mission_id)
-    else:
-        rows = await db.pool.fetch(q.format(where=""), limit)
+    rows = await db.pool.fetch(q, limit, *args)
     return [dict(r) for r in rows]
 
 
