@@ -17,11 +17,14 @@ import os
 os.environ.setdefault("MAVLINK20", "1")     # 強制 MAVLink 2（MISSION_ITEM_INT 需要）
 
 import concurrent.futures
+import logging
 import queue
 import threading
 import time
 
 from pymavlink import mavutil
+
+log = logging.getLogger("command.mav")
 
 M = mavutil.mavlink
 GCS_SYSID = 254
@@ -85,17 +88,37 @@ class MavRouter(threading.Thread):
 
     # ── 主迴圈（唯一碰 socket 的執行緒）──────────────────────────
     def run(self):
+        """**這個迴圈不准死。**
+
+        它是本服務與飛機之間唯一的收發者：死掉之後 socket 沒人讀（接收佇列
+        塞滿後靜靜丟包）、心跳停發（PX4 依 `COM_DL_LOSS_T` 觸發 failsafe）、
+        所有指令等到逾時為止——而 HTTP 層完全無感，`/healthz` 照回 ok。
+
+        實際踩過（2026-08-11）：5G 瞬斷讓心跳的 sendto() 丟 ENETUNREACH，
+        例外從 _tick() 一路上拋殺死執行緒，服務就此變成殭屍近一小時，操作員
+        只看到 UI 轉圈。網路瞬斷是常態不是異常，這裡一律吞掉並繼續。
+        """
         while True:
-            self._tick()
             try:
-                fn, args, fut = self.jobs.get_nowait()
-            except queue.Empty:
-                self._recv(0.2)
-                continue
-            try:
-                fut.set_result(fn(self, *args))
-            except Exception as e:            # 失敗必須浮上去，不得靜默
-                fut.set_exception(e)
+                self._tick()
+                try:
+                    fn, args, fut = self.jobs.get_nowait()
+                except queue.Empty:
+                    self._recv(0.2)
+                    continue
+                try:
+                    fut.set_result(fn(self, *args))
+                except Exception as e:        # 工作失敗必須浮回呼叫端，不得靜默
+                    fut.set_exception(e)
+            except Exception:
+                # 迴圈本身的例外（socket/解析層）只記錄不中斷；
+                # 隔一拍再試，鏈路回來就自然復原。
+                log.exception("router 迴圈例外，略過這一拍")
+                time.sleep(0.2)
+
+    def alive(self) -> bool:
+        """執行緒還在跑嗎——/healthz 用這個判斷服務是不是殭屍。"""
+        return self.is_alive()
 
     def _tick(self):
         now = time.monotonic()
@@ -106,7 +129,7 @@ class MavRouter(threading.Thread):
                     self._sendto(sysid, lambda m: m.heartbeat_encode(
                         M.MAV_TYPE_GCS, M.MAV_AUTOPILOT_INVALID, 0, 0, 0))
                 except CommandError:
-                    pass
+                    pass                      # 送不出去（見 _sendto，已記錄並退掉路由）
 
     def _recv(self, timeout: float):
         msg = self.conn.recv_match(blocking=True, timeout=timeout)
@@ -145,7 +168,16 @@ class MavRouter(threading.Thread):
             raise CommandError(f"sysid {sysid} 未連線（心跳未見）")
         msg = encode_fn(self.conn.mav)
         buf = msg.pack(self.conn.mav)
-        self.conn.port.sendto(buf, d["addr"])
+        try:
+            self.conn.port.sendto(buf, d["addr"])
+        except OSError as e:
+            # 送不出去（網路不可達／介面掉了）＝指令失敗，不是內部錯誤。
+            # 轉成 CommandError 讓 API 層回 502 與可讀訊息，而不是 500。
+            # 同時退掉這條回程路由：位址已不可達，硬記著只會每秒重踩，
+            # 等對方下一個心跳自然重新學。
+            d.pop("addr", None)
+            log.warning("sysid %s 送出失敗（%s），退掉路由表條目", sysid, e)
+            raise CommandError(f"送往 sysid {sysid} 失敗：{e}（鏈路中斷？）")
         self.conn.mav.seq = (self.conn.mav.seq + 1) % 256
 
     def _wait(self, sysid: int, types: tuple, pred=None, timeout: float = 3.0):
