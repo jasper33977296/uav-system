@@ -29,7 +29,15 @@ export default function CommandPanel() {
   const [confirm, setConfirm] = useState<string | null>(null);
   const confirmTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const [open, setOpen] = useState(true);
-  const [alt, setAlt] = useState(10);
+  const [alt, setAltState] = useState(10);
+  useEffect(() => {
+    const saved = Number(localStorage.getItem("takeoff-alt"));
+    if (saved >= 3 && saved <= 100) setAltState(saved);
+  }, []);
+  const setAlt = (v: number) => {
+    setAltState(v);
+    if (v >= 3 && v <= 100) localStorage.setItem("takeoff-alt", String(v));
+  };
   const live = useUavStore((s) => s.live);
 
   // 可拖曳：抓標題列移動，貼齊邊緣，位置記在 localStorage（重整不跑位）
