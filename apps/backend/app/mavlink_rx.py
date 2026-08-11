@@ -38,6 +38,9 @@ log = logging.getLogger(__name__)
 M = mavutil.mavlink
 GCS_SYSID = 254
 ADDR_WARN_COOLDOWN = 30.0    # 同 sysid 撞號告警去抖（秒）：避免告警風暴
+STX_CHUNK_LEN = 50           # STATUSTEXT text 欄位長度：滿 50＝還有下一段
+STX_STALE_S = 3.0            # 分段末段掉包，殘段逾時丟棄（秒）
+STX_FOLD_S = 15.0            # 同句連續重複在此窗內折疊計數（秒）
 
 # read-only 邊界的實體：能離開這個 socket 的訊息類型只有這三種（任務下載
 # 的查詢對話）。要發任何別的，這行 assert 就是攔你的人。
@@ -284,12 +287,66 @@ class MavlinkRx:
         elif t == "EXTENDED_SYS_STATE":
             st.landed_state = _LANDED.get(msg.landed_state)
         elif t == "STATUSTEXT":
-            sev = _SEVERITY.get(msg.severity)
-            if sev:
-                ev = await db.insert_event(st.drone_id, st.session_id, sev,
-                                           "statustext", {"text": msg.text})
-                ev["drone"] = st.drone_name
-                await manager.broadcast({"type": "event", "event": ev})
+            await self._statustext(ent, st, msg)
+
+    # ── STATUSTEXT → 事件流（issue 014 Phase A）───────────────────────
+    # 自駕儀的 log。三件事：長訊息**分段重組**（MAVLink2 STATUSTEXT 切 50 字
+    # 一段、同 id 遞增 chunk_seq）、**重複折疊**（PX4 會每秒噴同一句 prearm 失敗
+    # ——折成一筆帶 count，不淹沒事件流）、標 source='vehicle'（QGC vehicle-
+    # messages 面板同源，前端分「機上訊息」與「系統事件」）。
+    def _stx_reassemble(self, ent: dict, msg) -> str | None:
+        """回完整整句；分段未收完回 None。末段掉包的殘段逾時丟棄（不吐半句）。"""
+        now = time.monotonic()
+        buf = ent.get("stx_buf")
+        if buf:
+            for k in [k for k, v in buf.items() if now - v["t"] > STX_STALE_S]:
+                del buf[k]
+        cid = getattr(msg, "id", 0) or 0
+        raw = msg.text or ""
+        if cid == 0:                      # 未分段（≤50 字，或舊韌體不切段）
+            return raw
+        seq = getattr(msg, "chunk_seq", 0) or 0
+        buf = ent.setdefault("stx_buf", {})
+        slot = buf.setdefault(cid, {"parts": {}, "t": now})
+        slot["parts"][seq] = raw
+        slot["t"] = now
+        if len(raw) < STX_CHUNK_LEN:      # 末段（pymavlink 去尾 NUL 後 <50）
+            parts = buf.pop(cid)["parts"]
+            return "".join(parts[k] for k in sorted(parts))
+        return None
+
+    async def _statustext(self, ent: dict, st: LiveState, msg) -> None:
+        sev = _SEVERITY.get(msg.severity)
+        if not sev:                       # 7=DEBUG 不入流
+            return
+        text = self._stx_reassemble(ent, msg)
+        if text is None:                  # 還在收分段
+            return
+        text = text.strip()
+        if not text:
+            return
+        now = time.monotonic()
+        last = ent.get("stx_last")
+        if (last and last["text"] == text and last["sev"] == sev
+                and now - last["t"] < STX_FOLD_S):
+            # 折疊：同句連續重複 → count++、就地更新既有那筆、原地重播
+            last["count"] += 1
+            last["t"] = now
+            detail = {"text": text, "count": last["count"]}
+            upd = await db.bump_event(last["id"], detail)
+            if upd is not None:
+                await manager.broadcast({"type": "event", "fold": True, "event": {
+                    "id": last["id"], "time": upd["time"], "severity": sev,
+                    "type": "statustext", "detail": detail, "source": "vehicle",
+                    "drone": st.drone_name}})
+                return
+            # 那筆已被清理輪替掉 → 落到下面新插一筆
+        ev = await db.insert_event(st.drone_id, st.session_id, sev, "statustext",
+                                   {"text": text, "count": 1}, source="vehicle")
+        ev["drone"] = st.drone_name
+        ent["stx_last"] = {"id": ev["id"], "text": text, "sev": sev,
+                           "count": 1, "t": now}
+        await manager.broadcast({"type": "event", "event": ev})
 
     async def _armed_transition(self, st: LiveState, armed: bool):
         """架次邊界。賦值順序沿用原 ingest.py 的紀律（見該處歷史註解）：

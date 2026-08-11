@@ -36,6 +36,11 @@ async def migrate() -> None:
     # issue 020：每機「當前飛的任務」——command 上傳任務時設，create_session
     # 據此綁 session.mission_id（任務↔架次因果鏈，非一次性補丁）
     await pool.execute("ALTER TABLE drones ADD COLUMN IF NOT EXISTS current_mission_id UUID")
+    # issue 014 STATUSTEXT Phase A：事件來源分類。'vehicle'＝自駕儀自己吐的 log
+    # （STATUSTEXT，QGC vehicle-messages 面板同源）；'system'＝backend 推導的
+    # （link_lost/cell_change/session…）。前端據此分「機上訊息」與「系統事件」兩流。
+    await pool.execute(
+        "ALTER TABLE events ADD COLUMN IF NOT EXISTS source TEXT NOT NULL DEFAULT 'system'")
     # issue 013-A：群組任務資料模型（doc/group-missions-design.md）
     await pool.execute("""CREATE TABLE IF NOT EXISTS mission_groups (
         id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
@@ -262,15 +267,28 @@ async def insert_link_sample(drone_id: str, session_id: str | None, m: dict) -> 
 
 
 async def insert_event(drone_id: str, session_id: str | None,
-                       severity: str, type_: str, detail: dict) -> dict:
+                       severity: str, type_: str, detail: dict,
+                       source: str = "system") -> dict:
     row = await pool.fetchrow(
         """
-        INSERT INTO events (drone_id, session_id, severity, type, detail)
-        VALUES ($1, $2, $3, $4, $5) RETURNING id, time
+        INSERT INTO events (drone_id, session_id, severity, type, detail, source)
+        VALUES ($1, $2, $3, $4, $5, $6) RETURNING id, time
         """,
-        drone_id, session_id, severity, type_, json.dumps(detail),
+        drone_id, session_id, severity, type_, json.dumps(detail), source,
     )
     return {"id": row["id"], "time": row["time"].isoformat(),
-            "severity": severity, "type": type_, "detail": detail}
+            "severity": severity, "type": type_, "detail": detail, "source": source}
+
+
+async def bump_event(event_id: int, detail: dict) -> dict | None:
+    """重複事件折疊（issue 014 Phase A）：把既有事件的 detail（含 count）與時間戳
+    就地更新，回更新後的 time。前端據相同 id 原地替換，不新增一列。查無回 None
+    （例：那列已被清理輪替掉，呼叫端退回新插一筆）。"""
+    row = await pool.fetchrow(
+        "UPDATE events SET detail = $2, time = now() WHERE id = $1 RETURNING time",
+        event_id, json.dumps(detail))
+    if row is None:
+        return None
+    return {"id": event_id, "time": row["time"].isoformat(), "detail": detail}
 
 
