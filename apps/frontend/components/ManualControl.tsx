@@ -67,6 +67,11 @@ export default function ManualControl({ sid, lockedReason = null }: {
   const [enabled, setEnabled] = useState(false);
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState<string | null>(null);
+  // deadman 三態視覺（restyle §3，全靠前端本地資訊）：
+  // ok(<0.4s) / warn(0.4–2s 進度環) / lost(≥2s＝後端已接管切 Hold)
+  const [linkState, setLinkState] = useState<"ok" | "warn" | "lost">("ok");
+  const [warnFrac, setWarnFrac] = useState(0);
+  const lastOkRef = useRef(0);
   const joyRef = useRef({ x: 0, y: 0, z: 0, r: 0 });
   const keysRef = useRef(new Set<string>());
   const enabledRef = useRef(false);
@@ -81,6 +86,7 @@ export default function ManualControl({ sid, lockedReason = null }: {
 
   const stop = () => {   // 停止串流 → 後端結束手動並切 Hold
     setEnabled(false);
+    setLinkState("ok");
     keysRef.current.clear();
     joyRef.current = { x: 0, y: 0, z: 0, r: 0 };
     postStop();
@@ -143,10 +149,36 @@ export default function ManualControl({ sid, lockedReason = null }: {
           x: clamp(j.x + kb.x), y: clamp(j.y + kb.y),
           z: clamp(j.z + kb.z), r: clamp(j.r + kb.r),
         }),
-      }).catch(() => { /* 掉包交給後端 deadman */ });
+      }).then((res) => {
+        if (res.ok) lastOkRef.current = performance.now();
+      }).catch(() => { /* 掉包交給後端 deadman；lastOk 不更新讓三態如實反映 */ });
     };
     send();
     const t = setInterval(send, RATE_MS);
+    return () => clearInterval(t);
+  }, [enabled]);
+
+  // deadman 三態計時：以「最後一次成功送達」起算，門檻對齊後端（0.4s/2s）。
+  // ≥2s＝後端已自動 Hold（接管）——停止串流但不打 manual/stop（已接管，
+  // 打了也只是重複切 Hold），顯示橫幅讓操作者知道並可重新啟用
+  useEffect(() => {
+    if (!enabled) return;
+    lastOkRef.current = performance.now();   // 啟用起點
+    setLinkState("ok");
+    const t = setInterval(() => {
+      const gap = (performance.now() - lastOkRef.current) / 1000;
+      if (gap >= 2) {
+        setEnabled(false);
+        keysRef.current.clear();
+        joyRef.current = { x: 0, y: 0, z: 0, r: 0 };
+        setLinkState("lost");
+      } else if (gap >= 0.4) {
+        setWarnFrac(Math.min(1, (gap - 0.4) / 1.6));
+        setLinkState("warn");
+      } else {
+        setLinkState("ok");
+      }
+    }, 150);
     return () => clearInterval(t);
   }, [enabled]);
 
@@ -197,16 +229,44 @@ export default function ManualControl({ sid, lockedReason = null }: {
 
   return (
     <>
+      {linkState === "lost" && !enabled && (
+        <div className="manual-lost">
+          ⚠ deadman 已觸發——輸入中斷逾 2 秒，機體已自動 Hold。
+          <div className="cmd-row">
+            <button className="btn-plain btn-sm"
+              disabled={!sid || busy} onClick={start}>
+              {busy ? "⋯" : "重新啟用手動"}
+            </button>
+            <button className="btn-plain btn-sm"
+              onClick={() => setLinkState("ok")}>關閉</button>
+          </div>
+        </div>
+      )}
       <div className="cmd-row">
         {enabled ? (
           <button className="btn-danger btn-sm" onClick={stop}>停用手動</button>
-        ) : (
+        ) : linkState !== "lost" && (
           <button className="btn-danger btn-sm"
             disabled={!sid || busy || !!lockedReason} onClick={start}>
             {busy ? "⋯" : "啟用手動控制"}
           </button>
         )}
-        {enabled && <span className="manual-live">● 手動控制中 · 10Hz 串流</span>}
+        {enabled && linkState === "ok" && (
+          <span className="manual-live ok">● 手動控制中 · 10Hz 串流</span>
+        )}
+        {enabled && linkState === "warn" && (
+          <span className="manual-live warn">
+            <svg className="dm-ring" viewBox="0 0 14 14" aria-hidden>
+              <circle cx="7" cy="7" r="5.5" fill="none"
+                stroke="var(--hairline)" strokeWidth="2.5" />
+              <circle cx="7" cy="7" r="5.5" fill="none"
+                stroke="var(--status-warn)" strokeWidth="2.5"
+                strokeDasharray={`${((1 - warnFrac) * 34.6).toFixed(1)} 34.6`}
+                transform="rotate(-90 7 7)" />
+            </svg>
+            輸入中斷——即將自動懸停
+          </span>
+        )}
       </div>
       {lockedReason && <p className="hint-line">· 手動：{lockedReason}</p>}
       {enabled ? (

@@ -19,6 +19,7 @@ export interface Telemetry {
   battery_pct: number | null; battery_voltage: number | null;
   gps_fix: number | null; satellites: number | null;
   flight_mode: string | null; armed: boolean;
+  autopilot?: string | null;         // "px4"|"ardupilot"|"unknown"（015 batch2）
   // 飛行就緒（QGC「Ready To Fly」同源訊號）
   ready?: boolean;
   not_ready_reasons?: string[];

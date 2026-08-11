@@ -25,6 +25,7 @@
   --status-ok: #0ca30c;
   --status-ok-bg: rgba(12, 163, 12, 0.08);
   --status-warn: #fab219;
+  --status-warn-bg: rgba(250, 178, 25, 0.1);
   --status-serious: #e05e0e;
   --status-serious-bg: rgba(224, 94, 14, 0.08);
   --status-danger: #e05e5e;
@@ -353,6 +354,8 @@ a:focus-visible, button:focus-visible, input:focus-visible, select:focus-visible
 .cmd-ready { font-size: 12.5px; line-height: 1.6; padding: 6px 8px; border-radius: 6px; }
 .cmd-ready.ok { color: var(--status-ok); background: var(--status-ok-bg); }
 .cmd-ready.warn { color: var(--status-serious); background: var(--status-serious-bg); }
+/* 僅觀察鎖定：warn 黃底（刻意保護非故障，restyle §3）；安全橫幅不摺疊 */
+.cmd-ready.lock { color: var(--status-warn); background: var(--status-warn-bg); }
 
 /* 起飛高度輸入 */
 .cmd-alt { display: flex; align-items: center; gap: 4px; font-size: 12.5px; color: var(--ink-2); }
@@ -400,7 +403,49 @@ a:focus-visible, button:focus-visible, input:focus-visible, select:focus-visible
 }
 .joy .label { font-size: 11px; color: var(--ink-2); }
 .joy .sub { font-size: 10px; color: var(--muted); }
-.manual-live { font-size: 12px; color: var(--status-serious); }
+/* deadman 三態（restyle §3）：ok 綠點／warn 進度環倒數／lost 接管橫幅 */
+.manual-live { font-size: 12px; display: inline-flex; align-items: center; gap: 5px; }
+.manual-live.ok { color: var(--status-ok); }
+.manual-live.warn { color: var(--status-warn); }
+.dm-ring { width: 14px; height: 14px; flex: none; }
+.manual-lost {
+  font-size: 12.5px; line-height: 1.6; padding: 8px 10px; border-radius: 6px;
+  color: var(--status-danger); background: var(--status-danger-bg);
+  display: flex; flex-direction: column; gap: 6px;
+}
+
+/* 主要（非危險）動作按鈕：accent 只進互動 chrome（design-tokens 鐵則） */
+.btn-accent {
+  font-size: 13px; border-radius: 6px; padding: 7px 14px; cursor: pointer;
+  background: var(--accent-bg); color: var(--accent); border: 1px solid transparent;
+}
+.btn-accent:disabled { opacity: 0.4; cursor: not-allowed; }
+
+/* 側欄徽章列與 5G 詳細摺疊（restyle §2） */
+.badges { display: flex; gap: 6px; flex-wrap: wrap; align-items: center; margin-bottom: 10px; }
+.badges.sub { margin-bottom: 0; margin-top: 6px; }
+.name-lg { font-weight: 700; font-size: 15px; margin-right: 2px; cursor: help; }
+.sig-detail summary { font-size: 12px; color: var(--muted); cursor: pointer; margin-top: 8px; }
+.sig-detail[open] summary { margin-bottom: 6px; }
+
+/* sparkline：原始＋平滑並存、hover tooltip */
+.spark-wrap { position: relative; }
+.spark-tip {
+  position: absolute; top: -4px; right: 0; pointer-events: none;
+  font-size: 11px; color: var(--ink-2); background: var(--surface-2);
+  border: 1px solid var(--hairline); border-radius: 6px; padding: 2px 7px;
+  font-variant-numeric: tabular-nums; white-space: nowrap;
+}
+
+/* 事件流：critical 標底、連續同類 ×N */
+.event.ev-crit {
+  background: var(--status-danger-bg); border-radius: 6px;
+  padding: 3px 6px; margin: 0 -6px;
+}
+.ev-n {
+  flex: none; font-size: 11px; color: var(--muted);
+  border: 1px solid var(--hairline); border-radius: 999px; padding: 0 6px;
+}
 
 /* 即時頁檢視切換（地圖 ↔ 即時影像；地圖保持 mounted，影像覆蓋其上） */
 .view-toggle {

@@ -206,9 +206,11 @@ export default function CommandPanel() {
 
   const btn = (action: string, label: string, path: string,
                opts: { confirm?: boolean; danger?: boolean; disabled?: boolean;
-                       body?: Record<string, unknown>; cap?: CapKey } = {}) => (
+                       body?: Record<string, unknown>; cap?: CapKey;
+                       accent?: boolean } = {}) => (
     <button
-      className={opts.danger ? "btn-danger btn-sm" : "btn-plain btn-sm"}
+      className={opts.danger ? "btn-danger btn-sm"
+        : opts.accent ? "btn-accent btn-sm" : "btn-plain btn-sm"}
       disabled={!sid || busy !== null || !!opts.disabled
         || (opts.cap ? capState(opts.cap) !== "ok" : false)}
       onClick={() => exec(action, path, opts.confirm, opts.body)}
@@ -277,7 +279,7 @@ export default function CommandPanel() {
           {/* 僅觀察（未驗證/不支援機型）：指令區整個換成鎖定橫幅——
               警告色而非紅色（是刻意保護，不是故障）；遙測照常 */}
           {observeOnly && (
-            <div className="cmd-ready warn">
+            <div className="cmd-ready lock">
               ⚠ 此機型（{dh?.vehicle_type ?? apLabel ?? "未知"}）
               {allUnsupported
                 ? "不支援現行指令集，指令已鎖定。"
@@ -295,7 +297,7 @@ export default function CommandPanel() {
             </select>
             {btn("上傳", "上傳", "/mission/upload",
                  { disabled: !missionId, body: { mission_id: missionId },
-                   cap: "mission_upload" })}
+                   cap: "mission_upload", accent: true })}
           </div>
           {/* 起飛→任務：實戰教訓——地面直接啟動任務會失敗，須先到高度。
               一鍵序列：解鎖→起飛→等高度到達→切 MISSION */}
