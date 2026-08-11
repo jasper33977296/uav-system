@@ -60,7 +60,10 @@ function Joystick({ label, sub, onMove }: {
   );
 }
 
-export default function ManualControl({ sid }: { sid: string | null }) {
+export default function ManualControl({ sid, lockedReason = null }: {
+  sid: string | null;
+  lockedReason?: string | null;   // 非 null＝能力 gating 鎖定（顯示原因、禁啟用）
+}) {
   const [enabled, setEnabled] = useState(false);
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState<string | null>(null);
@@ -89,6 +92,12 @@ export default function ManualControl({ sid }: { sid: string | null }) {
     sidRef.current = sid;
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [sid]);
+
+  // 能力 gating 中途翻轉（capabilities 更新）：啟用中被鎖就立即停
+  useEffect(() => {
+    if (lockedReason && enabledRef.current) stop();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [lockedReason]);
 
   async function start() {
     if (!sid) return;
@@ -192,12 +201,14 @@ export default function ManualControl({ sid }: { sid: string | null }) {
         {enabled ? (
           <button className="btn-danger btn-sm" onClick={stop}>停用手動</button>
         ) : (
-          <button className="btn-danger btn-sm" disabled={!sid || busy} onClick={start}>
+          <button className="btn-danger btn-sm"
+            disabled={!sid || busy || !!lockedReason} onClick={start}>
             {busy ? "⋯" : "啟用手動控制"}
           </button>
         )}
         {enabled && <span className="manual-live">● POSCTL · 10Hz 串流中</span>}
       </div>
+      {lockedReason && <p className="hint-line">· 手動：{lockedReason}</p>}
       {enabled ? (
         <div className="joy-row">
           <Joystick label="油門｜偏航" sub="W S｜A D"
@@ -205,7 +216,7 @@ export default function ManualControl({ sid }: { sid: string | null }) {
           <Joystick label="俯仰｜橫滾" sub="↑ ↓｜← →"
             onMove={(dx, dy) => { joyRef.current.x = dy; joyRef.current.y = dx; }} />
         </div>
-      ) : (
+      ) : !lockedReason && (
         <p className="hint-line">
           切 POSCTL 以搖桿／鍵盤直接操控；放開回中＝定點懸停。
           失焦或關頁自動懸停並於 2 秒後切 Hold（後端 deadman）。

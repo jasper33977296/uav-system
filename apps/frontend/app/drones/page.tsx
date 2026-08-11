@@ -10,6 +10,14 @@ interface Drone {
   id: string; name: string; is_simulated: boolean; is_primary: boolean;
   connection_url: string | null; status: string | null;
   video_url: string | null;
+  autopilot?: string | null;    // "px4"/"ardupilot"/"unknown"；null＝從未見 MAVLink 心跳
+}
+
+// 機型標示（issue 015 機隊盤點）：欄位缺席＝舊後端，不顯示
+function apChip(ap: string | null | undefined): string | null {
+  if (ap === undefined) return null;
+  if (ap === null) return "未見 MAVLink 心跳";
+  return { px4: "PX4", ardupilot: "ArduPilot" }[ap] ?? "機型未知";
 }
 interface Session {
   id: string; drone_id: string; drone_name: string;
@@ -118,6 +126,7 @@ export default function Drones() {
               {d.is_primary && <span className="chip">
                 <span className="dot" style={{ background: "#0ca30c" }} />主機</span>}
               {d.is_simulated && <span className="chip">模擬</span>}
+              {apChip(d.autopilot) && <span className="chip">{apChip(d.autopilot)}</span>}
               {isLive && live?.armed && (
                 <span className="chip">
                   <span className="dot" style={{ background: "#d03b3b" }} />

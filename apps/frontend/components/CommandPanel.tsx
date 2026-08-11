@@ -13,10 +13,33 @@ import ManualControl from "@/components/ManualControl";
 import { API, COMMAND_API } from "@/lib/signal";
 import { useUavStore } from "@/lib/store";
 
+/** 能力四態（doc/capability-ui-proposal.md，issue 015）：按鈕由每機
+ * capabilities descriptor 驅動，前端不寫死機型行為。
+ * capabilities 是 command 服務端 gating 的同一真相——UI 與實際放行永不背離。 */
+type CapState = "ok" | "unverified" | "unsupported";
+const CAP_KEYS = ["arm", "takeoff", "land", "rtl", "hold",
+  "mission_upload", "mission_start", "mission_fly", "manual"] as const;
+type CapKey = (typeof CAP_KEYS)[number];
+const CAP_LABELS: Record<CapKey, string> = {
+  arm: "解鎖", takeoff: "起飛", land: "降落", rtl: "RTL", hold: "Hold",
+  mission_upload: "上傳", mission_start: "啟動任務", mission_fly: "起飛→任務",
+  manual: "手動",
+};
+const AP_LABELS: Record<string, string> = { px4: "PX4", ardupilot: "ArduPilot" };
+const AP_SHORT: Record<string, string> = { px4: "PX4", ardupilot: "Ardu" };
+
+interface DroneHealth {
+  age_s: number;
+  armed: boolean | null;
+  autopilot?: string;                 // "px4" | "ardupilot" | "unknown"（字串枚舉）
+  vehicle_type?: string;              // 選配（ArduCopter/ArduPlane…）
+  capabilities?: Partial<Record<CapKey, CapState>>;
+  capability_reasons?: Partial<Record<CapKey, string>>;   // 僅非 ok 鍵
+}
 interface Health {
   ok: boolean;
   enabled: boolean;
-  drones: Record<string, { age_s: number; armed: boolean | null }>;
+  drones: Record<string, DroneHealth>;
 }
 interface Mission { id: string; name: string }
 
@@ -116,7 +139,28 @@ export default function CommandPanel() {
 
   const sysids = Object.keys(health.drones);
   const sid = sysid && sysids.includes(sysid) ? sysid : sysids[0] ?? null;
-  const armed = sid ? health.drones[sid].armed : null;
+  const dh = sid ? health.drones[sid] : null;
+  const armed = dh?.armed ?? null;
+
+  // 四態推導：capabilities 缺席＝舊後端 → 退回現行全功能（feature-detect，
+  // 前後端可獨立部署）；不在 healthz.drones 的機（無心跳）面板本來就不出現
+  const caps = dh?.capabilities ?? null;
+  const capState = (k: CapKey): CapState => (caps ? caps[k] ?? "unsupported" : "ok");
+  const capReason = (k: CapKey) =>
+    dh?.capability_reasons?.[k] ??
+    (capState(k) === "unverified" ? "本機型尚未驗證" : "本機型不支援");
+  // 僅觀察＝零 action 可用：整個指令區換成鎖定橫幅（含緊急鈕，PM 定案——
+  // 會誤觸危險模式的 RTL 比沒有 RTL 更危險）
+  const observeOnly = caps !== null && CAP_KEYS.every((k) => capState(k) !== "ok");
+  const allUnsupported = caps !== null && CAP_KEYS.every((k) => capState(k) === "unsupported");
+  const apLabel = dh?.autopilot ? AP_LABELS[dh.autopilot] ?? "未知機型" : null;
+  // 受限態的逐鈕原因行（沿 not_ready_reasons 視覺語言，不用 tooltip）
+  const capHints = (keys: CapKey[]) =>
+    caps && !observeOnly
+      ? keys.filter((k) => capState(k) !== "ok").map((k) => (
+          <div className="hint-line" key={k}>· {CAP_LABELS[k]}：{capReason(k)}</div>
+        ))
+      : null;
 
   async function exec(action: string, path: string, needsConfirm = false,
                       payload?: Record<string, unknown>) {
@@ -162,10 +206,11 @@ export default function CommandPanel() {
 
   const btn = (action: string, label: string, path: string,
                opts: { confirm?: boolean; danger?: boolean; disabled?: boolean;
-                       body?: Record<string, unknown> } = {}) => (
+                       body?: Record<string, unknown>; cap?: CapKey } = {}) => (
     <button
       className={opts.danger ? "btn-danger btn-sm" : "btn-plain btn-sm"}
-      disabled={!sid || busy !== null || opts.disabled}
+      disabled={!sid || busy !== null || !!opts.disabled
+        || (opts.cap ? capState(opts.cap) !== "ok" : false)}
       onClick={() => exec(action, path, opts.confirm, opts.body)}
     >
       {busy === action ? "⋯" : confirm === action ? `確認${label}？` : label}
@@ -181,7 +226,10 @@ export default function CommandPanel() {
         <span className="name">任務控制</span>
         {!health.enabled && <span className="meta">未啟用</span>}
         {health.enabled && sid && (
-          <span className="meta">sysid {sid} · {armed ? "已解鎖" : "待機"}</span>
+          <span className="meta">
+            sysid {sid}{apLabel ? ` · ${apLabel}` : ""} · {armed ? "已解鎖" : "待機"}
+            {observeOnly ? " · 僅觀察" : ""}
+          </span>
         )}
         {health.enabled && !sid && <span className="meta">未看到機</span>}
         <span className="spacer" />
@@ -213,14 +261,32 @@ export default function CommandPanel() {
           ))}
           {sysids.length > 1 && (
             <div className="cmd-row">
-              {sysids.map((s) => (
-                <button key={s}
-                  className={`btn-plain btn-sm chip-btn ${s === sid ? "chip-on" : ""}`}
-                  onClick={() => setSysid(s)}>sysid {s}</button>
-              ))}
+              {sysids.map((s) => {
+                const ap = health.drones[s].autopilot;
+                return (
+                  <button key={s}
+                    className={`btn-plain btn-sm chip-btn ${s === sid ? "chip-on" : ""}`}
+                    onClick={() => setSysid(s)}>
+                    sysid {s}{ap ? ` ·${AP_SHORT[ap] ?? "?"}` : ""}
+                  </button>
+                );
+              })}
             </div>
           )}
 
+          {/* 僅觀察（未驗證/不支援機型）：指令區整個換成鎖定橫幅——
+              警告色而非紅色（是刻意保護，不是故障）；遙測照常 */}
+          {observeOnly && (
+            <div className="cmd-ready warn">
+              ⚠ 此機型（{dh?.vehicle_type ?? apLabel ?? "未知"}）
+              {allUnsupported
+                ? "不支援現行指令集，指令已鎖定。"
+                : "控制尚未驗證，指令已鎖定——現行指令集對本機型可能誤觸危險模式（詳 issues/015）。"}
+              遙測與紀錄不受影響。
+            </div>
+          )}
+
+          {!observeOnly && (<>
           <div className="cmd-sec">任務</div>
           <div className="cmd-row">
             <select value={missionId} onChange={(e) => setMissionId(e.target.value)}>
@@ -228,7 +294,8 @@ export default function CommandPanel() {
               {missions.map((m) => <option key={m.id} value={m.id}>{m.name}</option>)}
             </select>
             {btn("上傳", "上傳", "/mission/upload",
-                 { disabled: !missionId, body: { mission_id: missionId } })}
+                 { disabled: !missionId, body: { mission_id: missionId },
+                   cap: "mission_upload" })}
           </div>
           {/* 起飛→任務：實戰教訓——地面直接啟動任務會失敗，須先到高度。
               一鍵序列：解鎖→起飛→等高度到達→切 MISSION */}
@@ -238,27 +305,32 @@ export default function CommandPanel() {
                 onChange={(e) => setAlt(Number(e.target.value) || 10)} /> m
             </label>
             {btn("起飛→任務", "起飛→任務", "/mission/fly",
-                 { confirm: true,
+                 { confirm: true, cap: "mission_fly",
                    body: { mission_id: missionId || undefined, takeoff_alt: alt } })}
-            {btn("啟動任務", "啟動任務", "/mission/start", { confirm: true })}
+            {btn("啟動任務", "啟動任務", "/mission/start",
+                 { confirm: true, cap: "mission_start" })}
           </div>
+          {capHints(["mission_upload", "mission_fly", "mission_start"])}
 
           <div className="cmd-sec">飛行</div>
           <div className="cmd-row">
             {armed
-              ? btn("上鎖", "上鎖", "/disarm", { confirm: true, danger: true })
-              : btn("解鎖", "解鎖", "/arm", { confirm: true })}
-            {btn("起飛", "起飛", "/takeoff", { confirm: true, body: { alt } })}
+              ? btn("上鎖", "上鎖", "/disarm", { confirm: true, danger: true, cap: "arm" })
+              : btn("解鎖", "解鎖", "/arm", { confirm: true, cap: "arm" })}
+            {btn("起飛", "起飛", "/takeoff", { confirm: true, body: { alt }, cap: "takeoff" })}
           </div>
           <div className="cmd-row cmd-emergency">
-            {btn("RTL", "RTL 返航", "/mode/rtl", { danger: true })}
-            {btn("Hold", "Hold 懸停", "/mode/hold")}
-            {btn("降落", "原地降落", "/mode/land", { confirm: true, danger: true })}
+            {btn("RTL", "RTL 返航", "/mode/rtl", { danger: true, cap: "rtl" })}
+            {btn("Hold", "Hold 懸停", "/mode/hold", { cap: "hold" })}
+            {btn("降落", "原地降落", "/mode/land", { confirm: true, danger: true, cap: "land" })}
           </div>
+          {capHints(["arm", "takeoff", "rtl", "hold", "land"])}
 
           {/* 手動：虛擬搖桿（串流/deadman 邏輯在 ManualControl 內自理） */}
           <div className="cmd-sec">手動</div>
-          <ManualControl sid={sid} />
+          <ManualControl sid={sid}
+            lockedReason={caps && capState("manual") !== "ok" ? capReason("manual") : null} />
+          </>)}
 
           {result && (
             <div className={`cmd-result ${result.ok ? "ok" : "err"}`}>{result.text}</div>
