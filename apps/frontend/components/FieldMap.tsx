@@ -26,7 +26,20 @@ interface SessRow {
   mission_id: string | null; mission_name: string | null;
   drone_id: string; drone_name: string;
   note?: string | null;
+  summary?: { samples_total?: number } | string | null;
 }
+
+// 「有資料的飛行」門檻：環境事件後 30 天窗內 ~90% 是零/微樣本測試殘留，
+// 抓 track 前先以 sessions 既有的 summary.samples_total 過濾（後端
+// min_samples 參數上線後改伺服器端篩，此為同義客端實作）
+const MIN_SAMPLES = 10;
+const LIST_LIMIT = 5000;
+const samplesOf = (s: SessRow): number => {
+  const sm = typeof s.summary === "string"
+    ? (JSON.parse(s.summary) as { samples_total?: number })
+    : s.summary;
+  return sm?.samples_total ?? 0;
+};
 
 const RANGES = [
   { key: 7, label: "7天" },
@@ -51,6 +64,8 @@ export default function FieldMap() {
   const [panelOpen, setPanelOpen] = useState(true);
 
   const [sessions, setSessions] = useState<SessRow[]>([]);
+  // 誠實截斷資訊（no silent caps）：範圍內總數／略過的無樣本數／清單是否截斷
+  const [listInfo, setListInfo] = useState({ total: 0, skipped: 0, truncated: false });
   const [tracks, setTracks] = useState<Record<string, TrackRow[]>>({});
   const tracksRef = useRef(tracks);
   useEffect(() => { tracksRef.current = tracks; }, [tracks]);
@@ -67,9 +82,16 @@ export default function FieldMap() {
     (async () => {
       const since = range
         ? `&since=${new Date(Date.now() - range * 864e5).toISOString()}` : "";
-      const rows: SessRow[] = await fetch(`${API}/api/sessions?limit=500${since}`)
+      const all: SessRow[] = await fetch(`${API}/api/sessions?limit=${LIST_LIMIT}${since}`)
         .then((r) => r.json()).catch(() => []);
       if (stop) return;
+      // 有資料的飛行才進地圖（垃圾架次不花 track 請求）；計數如實揭露
+      const rows = all.filter((s) => samplesOf(s) >= MIN_SAMPLES);
+      setListInfo({
+        total: all.length,
+        skipped: all.length - rows.length,
+        truncated: all.length >= LIST_LIMIT,
+      });
       setSessions(rows);
       setLoadedN(Object.keys(tracksRef.current)
         .filter((id) => rows.some((s) => s.id === id)).length);
@@ -301,6 +323,14 @@ export default function FieldMap() {
                   onChange={(e) => setZonesOn(e.target.checked)} />
                 弱區輪廓
               </label>
+              {/* 誠實截斷（no silent caps）：總量與略過數如實揭露 */}
+              {(listInfo.skipped > 0 || listInfo.truncated) && (
+                <div className="hint-line">
+                  範圍內 {listInfo.total} 筆架次
+                  {listInfo.skipped > 0 && `．已略過 ${listInfo.skipped} 個無樣本測試架次`}
+                  {listInfo.truncated && `．清單達 ${LIST_LIMIT} 筆上限（可能未涵蓋全部）`}
+                </div>
+              )}
             </div>
           )}
         </div>
