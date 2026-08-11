@@ -70,22 +70,22 @@ def _require_enabled():
                                  "——這是刻意的安全 gate，部署時顯式開啟")
 
 
-# MAV_AUTOPILOT_PX4 = 12。模式設定/起飛序列/手動前置模式目前硬編碼 PX4 方言
-# （reference/gap-analysis.md、issue 015）；對 ArduPilot 會誤觸危險模式
-# （RTL→GUIDED、手動啟動→AUTO 跑機上任務）。跨自駕儀支援落地前，這些路徑
-# fail-closed 只放行 PX4——寧可拒絕也不誤飛。arm/disarm 與任務上傳是協定共通層，
-# 不在此限。
-def _require_px4(sysid: int):
-    ap = router.autopilot_of(sysid)
-    if ap is None:
-        raise HTTPException(409, f"sysid {sysid} 尚未收到心跳，無法確認自駕儀型別")
-    if ap != mav.M.MAV_AUTOPILOT_PX4:
+# 能力 gating（issue 015）：capabilities 是伺服器端唯一真相，非 "ok" 的能力
+# 一律拒發——UI 與實際放行永不背離。取代舊 _require_px4 硬碼（ardupilot 現在走
+# unverified＝全鎖，比舊版嚴、符合四態「僅觀察」）。可攜指令在某機型 SITL 驗過
+# 後把該鍵開 "ok"，前後端同時放行。
+def _require_capability(sysid: int, endpoint_key: str):
+    if sysid not in router.drones:
+        raise HTTPException(409, f"sysid {sysid} 未連線（心跳未見）")
+    ap = mav.caps.autopilot_name(router.autopilot_of(sysid))
+    cap_key = mav.caps.ENDPOINT_CAP.get(endpoint_key, endpoint_key)
+    cap, reasons = mav.caps.capabilities_for(ap)
+    state = cap.get(cap_key, "unsupported")
+    if state != "ok":
         raise HTTPException(501, {
-            "msg": "此指令目前僅支援 PX4 自駕儀",
-            "autopilot": int(ap),
-            "hint": "模式/起飛/手動控制硬編碼 PX4 方言，對 ArduPilot 會誤觸危險"
-                    "模式（RTL→GUIDED、手動→AUTO）；跨自駕儀支援見 issue 015，"
-                    "落地前對非 PX4 機拒發這些指令。"})
+            "msg": f"{cap_key} 目前不可用（{state}）",
+            "autopilot": ap, "capability": cap_key, "state": state,
+            "reason": reasons.get(cap_key, "")})
 
 
 async def _run(sysid: int, action: str, fn, *args, params=None):
@@ -144,11 +144,13 @@ async def healthz():
 
 @app.post("/api/command/{sysid}/arm")
 async def arm(sysid: int):
+    _require_enabled(); _require_capability(sysid, "arm")
     return await _run(sysid, "arm", mav.job_command, 400, [1.0])
 
 
 @app.post("/api/command/{sysid}/disarm")
 async def disarm(sysid: int):
+    _require_enabled(); _require_capability(sysid, "disarm")
     return await _run(sysid, "disarm", mav.job_command, 400, [0.0])
 
 
@@ -156,12 +158,13 @@ async def disarm(sysid: int):
 async def set_mode(sysid: int, mode: str):
     if mode not in mav.PX4_MODES:
         raise HTTPException(422, f"mode 須為 {sorted(mav.PX4_MODES)}")
-    _require_enabled(); _require_px4(sysid)
+    _require_enabled(); _require_capability(sysid, f"mode:{mode}")
     return await _run(sysid, f"mode:{mode}", mav.job_set_mode, mode)
 
 
 @app.post("/api/command/{sysid}/mission/start")
 async def mission_start(sysid: int):
+    _require_enabled(); _require_capability(sysid, "mission_start")
     return await _run(sysid, "mission_start", mav.job_command, 300, [0.0])
 
 
@@ -218,7 +221,7 @@ async def manual_start(sysid: int):
 
     順序關鍵（PX4 雞生蛋）：POSCTL 需要「已存在的手動控制串流」才會
     engage——先送中位 MANUAL_CONTROL 建立串流，再切模式。"""
-    _require_px4(sysid)   # POSCTL＋deadman 降級是 PX4 方言（issue 015）
+    _require_capability(sysid, "manual")   # POSCTL＋deadman 降級是 PX4 方言
     router.set_manual(sysid, 0.0, 0.0, 0.0, 0.0)   # 起手中位＝懸停；先開串流
     await asyncio.sleep(0.5)                        # 讓幾筆 MANUAL_CONTROL 先出去
     return await _run(sysid, "manual_start", mav.job_set_mode, "position")
@@ -253,7 +256,7 @@ class UploadIn(BaseModel):
 async def takeoff(sysid: int, body: TakeoffIn):
     """監督式起飛：解鎖＋爬升到指定高度後自動懸停（PX4 自主執行）。
     取代「用 RC 手動飛到高度」的操作——連續操縱仍是 RC 的職權。"""
-    _require_enabled(); _require_px4(sysid)   # NAV_TAKEOFF 序列是 PX4 方言（issue 015）
+    _require_enabled(); _require_capability(sysid, "takeoff")
     return await _do_takeoff(sysid, body.alt)
 
 
@@ -274,7 +277,7 @@ async def mission_fly(sysid: int, body: FlyIn):
     高度沒到就不切任務——序列在任何一步失敗都停在安全狀態
     （PX4 起飛後自動懸停），並回報卡在哪一步。
     """
-    _require_enabled(); _require_px4(sysid)   # 起飛序列＋AUTO.MISSION 是 PX4 方言
+    _require_enabled(); _require_capability(sysid, "mission_fly")
     steps = {}
     if body.mission_id:
         steps["upload"] = await mission_upload(sysid, UploadIn(mission_id=body.mission_id))
@@ -304,7 +307,7 @@ async def mission_fly(sysid: int, body: FlyIn):
 
 @app.post("/api/command/{sysid}/mission/upload")
 async def mission_upload(sysid: int, body: UploadIn):
-    _require_enabled()
+    _require_enabled(); _require_capability(sysid, "mission_upload")
     rows = await pool.fetch(
         "SELECT seq, lat, lon, alt, action, params FROM waypoints "
         "WHERE mission_id = $1 ORDER BY seq", body.mission_id)

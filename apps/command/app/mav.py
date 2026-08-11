@@ -23,8 +23,14 @@ import time
 
 from pymavlink import mavutil
 
+from . import capabilities as caps
+
 M = mavutil.mavlink
 GCS_SYSID = 254
+
+# MAV_TYPE → 粗略載具類別（選配，前端徽章分 ArduCopter/ArduPlane 用）
+_VEHICLE_TYPES = {2: "quadrotor", 13: "hexarotor", 14: "octorotor",
+                  1: "fixed_wing", 10: "ground_rover", 12: "submarine"}
 
 # PX4 custom mode（DO_SET_MODE 的 param2/param3：main_mode/sub_mode）
 PX4_MODES = {
@@ -78,15 +84,21 @@ class MavRouter(threading.Thread):
 
     def snapshot(self) -> dict:
         now = time.monotonic()
-        return {
-            str(sysid): {
+        out = {}
+        for sysid, d in self.drones.items():
+            ap = caps.autopilot_name(d.get("autopilot"))
+            cap, reasons = caps.capabilities_for(ap)
+            out[str(sysid)] = {
                 "age_s": round(now - d.get("seen_mono", now), 1),
                 "armed": d.get("armed"),
                 "custom_mode": d.get("custom_mode"),
-                "autopilot": d.get("autopilot"),   # MAV_AUTOPILOT_*（12=PX4）
+                "autopilot": ap,                       # 字串枚舉 px4/ardupilot/unknown
+                "autopilot_raw": d.get("autopilot"),   # MAV_AUTOPILOT_*，除錯用
+                "vehicle_type": _VEHICLE_TYPES.get(d.get("type")),
+                "capabilities": cap,                   # 伺服器端 gating 唯一真相
+                "capability_reasons": reasons,
             }
-            for sysid, d in self.drones.items()
-        }
+        return out
 
     # ── 主迴圈（唯一碰 socket 的執行緒）──────────────────────────
     def run(self):
@@ -183,8 +195,8 @@ class MavRouter(threading.Thread):
                 if msg.get_type() == "HEARTBEAT" and msg.type != M.MAV_TYPE_GCS:
                     d["armed"] = bool(msg.base_mode & M.MAV_MODE_FLAG_SAFETY_ARMED)
                     d["custom_mode"] = msg.custom_mode
-                    d["autopilot"] = msg.autopilot   # 飛安：模式指令是 PX4 方言
-                                                     # （issue 015／reference/gap-analysis.md）
+                    d["autopilot"] = msg.autopilot   # 飛安：模式指令方言分家
+                    d["type"] = msg.type             # （issue 015／gap-analysis.md）
                 elif msg.get_type() == "STATUSTEXT":
                     # PX4 的解釋（"Arming denied: ..."）——被拒時要能拿出來給人看。
                     # 實戰教訓：沒有這段文字，操作員只看到 result code 乾瞪眼
