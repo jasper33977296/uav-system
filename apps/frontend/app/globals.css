@@ -165,7 +165,9 @@ a:focus-visible, button:focus-visible, input:focus-visible, select:focus-visible
 
 .spark { display: block; margin: 6px 0 10px; width: 100%; height: 40px; }
 
-.card-grow { flex: 1; display: flex; flex-direction: column; min-height: 0; }
+/* 有空間時長滿剩餘（常駐展開）；空間不足時保底 240px 不被壓扁——
+   抽屜（.panel overflow-y）此時自然出捲軸（IMU/機上資料卡進駐後實際發生） */
+.card-grow { flex: 1 0 auto; display: flex; flex-direction: column; min-height: 240px; }
 .card-grow .events { flex: 1; max-height: none; }
 .events { display: flex; flex-direction: column; gap: 6px; max-height: 220px; overflow-y: auto; }
 .event { display: flex; gap: 8px; font-size: 12px; align-items: baseline; min-width: 0; }
