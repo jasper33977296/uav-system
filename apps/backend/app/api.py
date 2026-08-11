@@ -209,6 +209,22 @@ async def list_sessions(limit: int = 50, mission_id: str | None = None):
     return [dict(r) for r in rows]
 
 
+class SessionPatch(BaseModel):
+    note: str | None = None            # 自訂備註（實驗條件標註）；空字串/None＝清除
+
+
+@router.patch("/sessions/{session_id}")
+async def patch_session(session_id: str, body: SessionPatch):
+    """更新架次自訂備註（使用者標實驗條件，如「開干擾器那趟」）。"""
+    note = (body.note or "").strip() or None
+    row = await db.pool.fetchrow(
+        "UPDATE flight_sessions SET note = $2 WHERE id = $1 RETURNING id::text, note",
+        session_id, note)
+    if row is None:
+        raise HTTPException(404, "無此架次")
+    return {"id": row["id"], "note": row["note"]}
+
+
 @router.get("/sessions/{session_id}/track")
 async def session_track(session_id: str):
     """回放用：一條航線的軌跡 + 鏈路時序 + 關聯任務（供疊預計路徑）。"""

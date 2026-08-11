@@ -1,16 +1,22 @@
 # Data Schema 設計
 
-完整 DDL 見 `db/init/01_schema.sql`（TimescaleDB image 啟動時自動執行）。
+基準 DDL 見 `db/init/01_schema.sql`（只在**全新 volume** 執行）；之後的增量
+變更在 `apps/backend/app/db.py` 的 `migrate()`（冪等，backend 啟動時跑）——
+**看現行 schema 以兩者相加為準**。command 服務另建 `command_log`（防序也補
+drones 欄位）。
 
 ## 設計思路
 
-資料分四類：**靜態註冊、架次、時序量測、事件**。
+資料分五類：**靜態註冊、架次、時序量測、事件、群組/指令留痕**。
 
 ```
 drones ──┬── flight_sessions ──┬── telemetry     (hypertable, 1Hz)
-         │                     ├── link_metrics  (hypertable, 1Hz) ← 研究核心
-         │                     └── events
-         └── missions ── waypoints
+         │        │            ├── link_metrics  (hypertable, 1Hz) ← 研究核心
+         │        │            └── events (source: system/vehicle)
+         │        └── group_id ─┐
+         └── missions ── waypoints │
+mission_groups ── group_assignments ┘   (013 群組任務)
+command_log                             (command 服務指令留痕)
 ```
 
 （模擬場景表 `cells`／`interference_zones` 已於 2026-08-10 拆除，場景改為
@@ -40,10 +46,19 @@ MAVSDK telemetry API 一對一對映：`position()` → lat/lon/alt、`battery()
 armed→disarmed 自動切分。`summary JSONB` 在架次結束時計算：
 max_alt、avg/min SINR、avg RTT、干擾區內取樣數／總取樣數。
 「比較干擾區內外的鏈路品質」這類分析可以直接從 summary 起手。
+後補欄位：
+- `note TEXT`（比較頁 v3）：架次自訂備註，使用者標實驗條件（如「開干擾器那趟」）；
+  `PATCH /api/sessions/{id}` 設定（空字串／null＝清除），`GET /api/sessions` 帶回。
 
 ### `drones`
 
-`is_simulated` 與 `connection_url` 讓模擬機和真機走同一套程式路徑，只差設定。
+`is_simulated` 與 `connection_url` 讓模擬機和真機走同一套程式路徑，只差設定
+（單埠多機後 `connection_url` 語意作廢，見 issues/011）。後補欄位：
+- `mav_sysid`（011）：MAVLink sysid ↔ 資料列身分對應，單埠多機 demux 的核心；
+  自動註冊時寫入。
+- `current_mission_id`（020）：command 上傳任務成功時設＝「這台現在要飛的
+  任務」，create_session 據此綁架次（任務↔架次因果鏈）。
+- `video_url`：即時影像串流位址（無則 UI 不顯示影像入口）。
 
 ### ~~`cells` / `interference_zones`~~（已拆除，2026-08-10）
 
@@ -54,7 +69,28 @@ max_alt、avg/min SINR、avg RTT、干擾區內取樣數／總取樣數。
 ### `events`
 
 `link_degraded` / `link_lost` / `link_recovered` / `mode_change` /
-`low_battery`…，帶 `severity` 與 `acked_at`（操作員確認）。
+`low_battery` / `sysid_addr_change`…，帶 `severity` 與 `acked_at`（操作員確認）。
+
+`source` 欄（014 Phase A）分兩流：`system`＝backend 推導的事件（預設，
+舊資料已回填）；`vehicle`＝自駕儀自己吐的 log（STATUSTEXT，QGC
+vehicle-messages 同源；分段重組成整句、15s 窗重複折疊帶 count 於
+`detail`）。PX4 1.14 實測多走 Events 協定（EVENT 410）而非 STATUSTEXT，
+解碼見 issue 014 Phase A.2。
+
+### `mission_groups` / `group_assignments`（013 群組任務）
+
+`mission_groups`：一次編隊任務（`mode`＝unified/separate、`base_mission_id`
+＝unified 的展開來源、`params` 存 vsep 等、`status` 生命週期見
+doc/group-missions-design.md §7.1）。`group_assignments`：每台一列——
+`mission_id` 指向**地面展開後的具體 materialized 任務**（不是共用
+base）、`layer_index` 高度分層、`phase`/`error`/`updated_at` 為 013-B
+執行期即時態。`flight_sessions.group_id` 讓群組↔架次可追。
+
+### `command_log`（command 服務）
+
+指令留痕：`sysid`/`action`/`params`/`result`/`detail`，每筆指令（含被拒與
+逾時）都入庫——020 的孤兒架次回填就是靠它。MCP 落地時將加主體欄
+（操作員 vs agent 身分，issue 019）。
 
 ## 取樣頻率策略
 
@@ -88,11 +124,13 @@ max_alt、avg/min SINR、avg RTT、干擾區內取樣數／總取樣數。
 完整 JSON → 確認後「移除」從 DB 刪除。匯出格式含 session/telemetry/
 link_metrics/events 四段，可離線分析或之後寫匯入工具還原。
 
-## 航線 ↔ 任務（2026-08-04 新增）
+## 航線 ↔ 任務（2026-08-04 新增；2026-08-11 issue 020 改版）
 
-`flight_sessions.mission_id`：開航線（armed）時自動關聯任務庫**當下的
-啟用路徑**（`missions.is_active`）——語意是「操作員宣告要飛的那條」。
-回放頁據此疊出當時的預計路徑做預計 vs 實際比對。手飛／未宣告為 NULL。
+`flight_sessions.mission_id` 綁定序（020 定案）：**明示指定 >
+`drones.current_mission_id`（command 上傳時設，「操作員宣告要飛這條」的
+意圖點）> `missions.is_active` 後備**。回放頁據此疊出預計路徑做預計 vs
+實際比對；手飛／未宣告為 NULL。舊孤兒架次的回填見
+`scripts/backfill-session-mission.sql`（事實源＝command_log，冪等）。
 
 用詞約定：UI 稱一次飛行紀錄為「**航線**」（資料表名維持 flight_sessions，
 程式識別字不動，只有使用者可見文字用航線）。

@@ -63,6 +63,8 @@ async def migrate() -> None:
     await pool.execute("ALTER TABLE group_assignments ADD COLUMN IF NOT EXISTS error JSONB")
     await pool.execute(
         "ALTER TABLE group_assignments ADD COLUMN IF NOT EXISTS updated_at TIMESTAMPTZ")
+    # 架次自訂備註（使用者要標實驗條件，如「開干擾器那趟」）：短文字，PATCH 可改
+    await pool.execute("ALTER TABLE flight_sessions ADD COLUMN IF NOT EXISTS note TEXT")
 
 
 async def drone_for_sysid(sysid: int) -> tuple[str, str]:
