@@ -82,10 +82,13 @@ export default function FieldMap() {
     (async () => {
       const since = range
         ? `&since=${new Date(Date.now() - range * 864e5).toISOString()}` : "";
-      const all: SessRow[] = await fetch(`${API}/api/sessions?limit=${LIST_LIMIT}${since}`)
+      // 伺服器端 min_samples 篩選（backend 578294d）：無樣本測試殘留
+      // 不進傳輸（4790→95）。客端過濾保留作退場保護——舊後端忽略此參數
+      // 時會回全量，過濾後行為與換源前相同（skipped 行此時才會出現）。
+      const all: SessRow[] = await fetch(
+        `${API}/api/sessions?limit=${LIST_LIMIT}&min_samples=${MIN_SAMPLES}${since}`)
         .then((r) => r.json()).catch(() => []);
       if (stop) return;
-      // 有資料的飛行才進地圖（垃圾架次不花 track 請求）；計數如實揭露
       const rows = all.filter((s) => samplesOf(s) >= MIN_SAMPLES);
       setListInfo({
         total: all.length,
@@ -286,7 +289,9 @@ export default function FieldMap() {
         <div className="cmd-panel field-panel">
           <div className="cmd-head" onClick={() => setPanelOpen((o) => !o)}>
             <span className="name">場域訊號</span>
-            <span className="meta">{visLoaded.length} 趟</span>
+            <span className="meta"
+              title={`樣本數 ≥${MIN_SAMPLES} 的架次（門檻與後端 min_samples 對齊）`}>
+              {visLoaded.length} 趟</span>
             {loading && <span className="meta">載入 {loadedN}/{sessions.length}…</span>}
             <span className="spacer" />
             <span className="meta">{panelOpen ? "▾" : "▸"}</span>
