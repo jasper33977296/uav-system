@@ -3,9 +3,7 @@ import { useEffect, useRef, useState } from "react";
 
 import { EventsCard } from "@/components/SimpleHud";
 import { classifySinr } from "@/lib/signal";
-import { useUavStore } from "@/lib/store";
-
-const AP_LABELS: Record<string, string> = { px4: "PX4", ardupilot: "ArduPilot" };
+import { type ImuData, type Telemetry, useUavStore } from "@/lib/store";
 
 function Metric({ label, value, unit }: { label: string; value: string; unit?: string }) {
   return (
@@ -69,6 +67,148 @@ function Sparkline({ data }: { data: number[] }) {
 const fmt = (v: number | null | undefined, digits = 1) =>
   v == null ? "—" : v.toFixed(digits);
 
+// ── IMU 卡（ui-spec §2.6，使用者核准 2026-08-11）────────────────────
+// 三軸一律純數字（等寬對齊、x/y/z 弱字欄標一次、單位弱字）；唯一圖形＝
+// 振動量條（PX4 權威門檻 30/60 才有有意義的刻度）。缺欄整列不畫、不佔位。
+
+const DEG = 180 / Math.PI;
+const has = (...v: (number | null | undefined)[]) => v.some((x) => x != null);
+
+/** 三軸列：共用 .imu-row 網格欄位，跨列數字對齊 */
+function Axis3({ label, v, unit, digits = 2, scale = 1 }: {
+  label: string; v: (number | null | undefined)[];
+  unit: string; digits?: number; scale?: number;
+}) {
+  if (!has(...v)) return null;
+  return (
+    <div className="imu-row">
+      <span className="imu-lab">{label}</span>
+      {v.map((x, i) => (
+        <span className="imu-num" key={i}>
+          {x == null ? "" : (x * scale).toFixed(digits)}
+        </span>
+      ))}
+      <span className="imu-unit">{unit}</span>
+    </div>
+  );
+}
+
+/** 振動量條：0–90 橫軌、門檻刻度 30/60、x/y/z 三細條疊放、超標染色。
+ * clipping 三軸計數列於條下。 */
+function VibBar({ imu }: { imu: ImuData }) {
+  const axes: [string, number | null | undefined][] = [
+    ["x", imu.vibration_x], ["y", imu.vibration_y], ["z", imu.vibration_z]];
+  if (!has(...axes.map(([, v]) => v))) return null;
+  const FULL = 90;   // 滿刻度＝danger 門檻的 1.5 倍（門檻本身才是語意錨點）
+  const color = (v: number) =>
+    v >= 60 ? "var(--status-danger)" : v >= 30 ? "var(--status-warn)"
+      : "var(--status-ok)";
+  const worst = Math.max(...axes.map(([, v]) => v ?? 0));
+  const clip = [imu.clipping_0, imu.clipping_1, imu.clipping_2];
+  return (
+    <>
+      <div className="imu-row imu-vib">
+        <span className="imu-lab">振動</span>
+        <div className="vib-track">
+          {axes.map(([ax, v]) => v != null && (
+            <div className="vib-bar" key={ax} title={`${ax} ${v.toFixed(1)}`}
+              style={{ width: `${Math.min(100, (v / FULL) * 100)}%`,
+                       background: color(v) }} />
+          ))}
+          <span className="vib-tick" style={{ left: `${(30 / FULL) * 100}%` }}
+            data-v="30" />
+          <span className="vib-tick" style={{ left: `${(60 / FULL) * 100}%` }}
+            data-v="60" />
+        </div>
+        <span className="imu-num" style={{ color: color(worst) }}>
+          {worst.toFixed(1)}
+        </span>
+      </div>
+      {has(...clip) && (
+        <div className="imu-row">
+          <span className="imu-lab" />
+          <span className="imu-sub">
+            clipping {clip.map((c) => c ?? 0).join(" / ")}
+          </span>
+        </div>
+      )}
+    </>
+  );
+}
+
+function ImuCard({ live }: { live: Telemetry | null }) {
+  const imu = live?.imu ?? ({} as ImuData);
+  // 航向本就是 yaw——併入姿態列（§2.6 安置 3）；360°＝0° 正規化照舊
+  const yaw = live?.heading == null ? null : Math.round(live.heading) % 360;
+  const showAxisHead =
+    has(imu.xacc, imu.yacc, imu.zacc, imu.xgyro, imu.ygyro, imu.zgyro,
+        imu.xmag, imu.ymag, imu.zmag);
+  return (
+    <div className="card">
+      <h3>IMU</h3>
+      <div className="imu-grid">
+        {has(live?.roll, live?.pitch, yaw) && (
+          <div className="imu-row imu-att">
+            <span className="imu-lab">姿態</span>
+            <span className="imu-sub">
+              Roll <b>{fmt(live?.roll)}°</b>　Pitch <b>{fmt(live?.pitch)}°</b>
+              　Yaw <b>{yaw ?? "—"}°</b><span className="imu-unit">（航向）</span>
+            </span>
+          </div>
+        )}
+        <Axis3 label="角速率" unit="°/s" digits={1} scale={DEG}
+          v={[imu.rollspeed, imu.pitchspeed, imu.yawspeed]} />
+        {showAxisHead && (
+          <div className="imu-row imu-axhead">
+            <span className="imu-lab" />
+            <span className="imu-num">x</span>
+            <span className="imu-num">y</span>
+            <span className="imu-num">z</span>
+            <span className="imu-unit" />
+          </div>
+        )}
+        <Axis3 label="加速度" unit="m/s²" v={[imu.xacc, imu.yacc, imu.zacc]} />
+        <Axis3 label="陀螺" unit="rad/s" digits={3}
+          v={[imu.xgyro, imu.ygyro, imu.zgyro]} />
+        <Axis3 label="磁力" unit="µT" digits={1} v={[imu.xmag, imu.ymag, imu.zmag]} />
+        {imu.temperature != null && (
+          <div className="imu-row">
+            <span className="imu-lab">溫度</span>
+            <span className="imu-sub"><b>{imu.temperature.toFixed(1)}</b>
+              <span className="imu-unit"> °C</span></span>
+          </div>
+        )}
+        <VibBar imu={imu} />
+        {imu.abs_pressure != null && (
+          <div className="imu-row">
+            <span className="imu-lab">氣壓</span>
+            <span className="imu-sub"><b>{imu.abs_pressure.toFixed(1)}</b>
+              <span className="imu-unit"> hPa</span>
+              {imu.pressure_alt != null &&
+                <span className="imu-unit">（氣壓高度 {imu.pressure_alt.toFixed(0)} m）</span>}
+            </span>
+          </div>
+        )}
+        {/* 導航估計：EKF 融合值，括注來源語意、不冒充原始感測（§2.6 安置）。
+            相對高度住 HUD（唯一的家）；海拔 alt_msl 原本無家，入此。 */}
+        {has(live?.vertical_speed, live?.alt_msl) && (
+          <div className="imu-row">
+            <span className="imu-lab">導航估計</span>
+            <span className="imu-sub">
+              {live?.vertical_speed != null &&
+                <>垂直速度 <b>{fmt(live.vertical_speed)}</b>
+                  <span className="imu-unit"> m/s</span>　</>}
+              {live?.alt_msl != null &&
+                <>海拔 <b>{fmt(live.alt_msl)}</b>
+                  <span className="imu-unit"> m</span></>}
+            </span>
+          </div>
+        )}
+      </div>
+    </div>
+  );
+}
+
 export default function SidePanel() {
   const { live, primaryId, selectedId, sinrHistories } = useUavStore();
   const link = live?.link;
@@ -83,10 +223,6 @@ export default function SidePanel() {
     setSigOpen(o);
     localStorage.setItem("sig-detail-open", o ? "1" : "0");
   };
-
-  const gpsTxt = live?.gps_fix == null ? "—"
-    : live.gps_fix >= 3 ? `3D·${live.satellites ?? "—"}`
-    : live.gps_fix === 2 ? `2D·${live.satellites ?? "—"}` : "無定位";
 
   // 單一住所（simple-first 第五輪）：高度/速度/電量/訊號格住 HUD、事件住
   // 底部單行、機隊選擇住左上色點——本抽屜只留「訊號品質」與「專業數值」，
@@ -136,33 +272,11 @@ export default function SidePanel() {
         {/* 圖例回歸地圖左下常駐（ui-spec §2 使用者定案）——不在卡內 */}
       </div>
 
-      {/* 專業數值：GPS／姿態／模式（HUD 沒有的才在這裡） */}
-      <div className="card">
-        <h3>專業數值</h3>
-        <div className="badges">
-          {live?.autopilot && (
-            <span className="chip">{AP_LABELS[live.autopilot] ?? live.autopilot}</span>
-          )}
-          <span className="chip">
-            <span className="dot" style={{
-              background: live?.ready ? "var(--status-ok)" : "var(--status-serious)" }} />
-            {live?.ready ? "就緒" : "未就緒"}
-          </span>
-          {live?.flight_mode && <span className="chip">{live.flight_mode}</span>}
-        </div>
-        <div className="metrics">
-          <Metric label="GPS" value={gpsTxt} />
-          {/* 360°＝0°：四捨五入後也可能碰到 360（359.6°），一律正規化 */}
-          <Metric label="航向"
-            value={live?.heading == null ? "—" : (Math.round(live.heading) % 360).toString()}
-            unit="°" />
-          <Metric label="垂直速度" value={fmt(live?.vertical_speed)} unit="m/s" />
-          <Metric label="橫滾 Roll" value={fmt(live?.roll)} unit="°" />
-          <Metric label="俯仰 Pitch" value={fmt(live?.pitch)} unit="°" />
-        </div>
-      </div>
+      {/* IMU 卡（§2.6，原專業數值卡改造）：就緒/模式/GPS 與面板狀態列重複
+          已刪；機型 chip 移任務控制面板對象行；航向併入 Yaw */}
+      <ImuCard live={live} />
 
-      {/* 事件卡（使用者二次修訂）：住抽屜、專業數值卡下方 */}
+      {/* 事件卡（使用者二次修訂）：住抽屜、IMU 卡下方 */}
       <EventsCard />
     </aside>
   );

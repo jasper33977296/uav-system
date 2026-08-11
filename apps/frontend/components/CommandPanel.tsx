@@ -674,6 +674,8 @@ export default function CommandPanel() {
             <span className="st-target">
               {live?.drone_name ?? "—"}{sid ? `（sysid ${sid}）` : ""}
             </span>
+            {/* 機型 chip（§2.6 安置：身分歸身分——自抽屜專業數值卡移入） */}
+            {apLabel && <span className="chip">{apLabel}</span>}
             <span className={live?.ready ? "st-ok" : "st-warn"}>
               {live ? (live.ready ? "● 就緒" : "● 未就緒") : "● 無遙測"}
             </span>

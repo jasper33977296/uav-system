@@ -8,6 +8,22 @@ export interface LinkMetrics {
   in_interference_zone: boolean; source: string;
 }
 
+/** IMU 卡資料（ui-spec §2.6）。後端契約落地前的暫定形：欄位名沿 MAVLink
+ * 原訊息（ATTITUDE 角速率／HIGHRES_IMU／VIBRATION），全部可缺（feature-
+ * detect：缺項回 null、缺欄整列不畫）。單位假設＝MAVLink 原生（角速率
+ * rad/s、加速度 m/s²、磁力 gauss→後端應轉 µT）——契約到齊時對齊此註解。 */
+export interface ImuData {
+  rollspeed?: number | null; pitchspeed?: number | null; yawspeed?: number | null;
+  xacc?: number | null; yacc?: number | null; zacc?: number | null;
+  xgyro?: number | null; ygyro?: number | null; zgyro?: number | null;
+  xmag?: number | null; ymag?: number | null; zmag?: number | null;
+  temperature?: number | null;
+  abs_pressure?: number | null;   // hPa
+  pressure_alt?: number | null;   // m（氣壓高度）
+  vibration_x?: number | null; vibration_y?: number | null; vibration_z?: number | null;
+  clipping_0?: number | null; clipping_1?: number | null; clipping_2?: number | null;
+}
+
 export interface Telemetry {
   drone_id: string; drone_name?: string | null;
   primary?: boolean;                 // MAVLink 主機的廣播帶此旗標
@@ -31,6 +47,7 @@ export interface Telemetry {
   prearm_ok?: boolean | null;
   ekf_ok?: boolean | null;
   sensors_unhealthy?: string[];
+  imu?: ImuData | null;              // IMU 卡（§2.6）；WS telemetry 整包透傳
   link: Partial<LinkMetrics>;
 }
 
