@@ -385,12 +385,20 @@ a:focus-visible, button:focus-visible, input:focus-visible, select:focus-visible
 }
 .fleet-dots button.on { border-color: var(--ink); }
 
-/* 右上叢集：[▤][地圖|影像]，任務控制面板（初始右上）在其右側 */
-.hud-top-right {
-  position: absolute; top: 12px; right: 324px; z-index: 20;
-  display: flex; gap: 8px; align-items: stretch;
+/* 右上三件套單一 flex 容器（批 2a blocker 修正）：[▤][地圖|影像][任務控制]
+   右對齊，面板寬度變化時左鄰自然讓位 */
+.top-stack {
+  position: absolute; top: 12px; right: 12px; z-index: 30;
+  display: flex; gap: 8px; align-items: flex-start;
 }
-.hud-top-right .view-toggle { position: static; box-shadow: none; }
+.top-stack .view-toggle { position: static; box-shadow: none; flex: none; }
+.drawer-btn {
+  width: 36px; height: 32px; font-size: 15px; cursor: pointer; flex: none;
+  background: var(--surface); color: var(--ink-2);
+  border: 1px solid var(--hairline); border-radius: 10px;
+  box-shadow: 0 4px 16px rgba(0, 0, 0, 0.35);
+}
+.drawer-btn.on { background: var(--surface-2); color: var(--ink); }
 .hud-top-right button {
   width: 36px; height: 32px; font-size: 15px; cursor: pointer;
   background: var(--surface); color: var(--ink-2);
@@ -496,7 +504,8 @@ a:focus-visible, button:focus-visible, input:focus-visible, select:focus-visible
 /* 擺位（ui-spec §2）：左下＝圖例＋HUD；比例尺/attribution 右下（事件列上方）；
    任務控制面板初始右上（可拖曳、位置記憶） */
 .map-wrap .maplibregl-ctrl-bottom-right { bottom: 34px; }
-.cmd-panel { left: auto; right: 12px; top: 12px; bottom: auto; }
+/* 面板平時住 top-stack flex 流（position:relative）；拖走後 inline fixed */
+.cmd-panel { position: relative; left: auto; right: auto; top: auto; bottom: auto; flex: none; }
 
 /* 游標經緯度（issue 017 P1）：與比例尺同區、等寬數字；無內容時隱藏 */
 .coord-read {

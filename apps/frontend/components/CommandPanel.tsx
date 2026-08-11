@@ -74,7 +74,9 @@ export default function CommandPanel() {
   const dragRef = useRef<{ dx: number; dy: number; moved: boolean } | null>(null);
   useEffect(() => {
     try {
-      const saved = localStorage.getItem("cmd-panel-pos");
+      // pos2：座標系從 map-wrap 相對改視口 fixed（批 2a blocker），換 key
+      // 讓舊值自然失效
+      const saved = localStorage.getItem("cmd-panel-pos2");
       if (saved) setPos(JSON.parse(saved));
     } catch { /* 壞值就用預設位置 */ }
   }, []);
@@ -91,18 +93,18 @@ export default function CommandPanel() {
     const d = dragRef.current;
     const el = panelRef.current;
     if (!d || !el) return;
-    const parent = el.offsetParent as HTMLElement | null;
-    if (!parent) return;
-    const pr = parent.getBoundingClientRect();
+    // 視口座標（拖走後 position:fixed）：面板平時住 top-stack flex 流，
+    // 不能再以 offsetParent 定位（批 2a blocker 修正配套）
+    const vw = window.innerWidth, vh = window.innerHeight;
     const w = el.offsetWidth, h = el.offsetHeight;
-    let x = e.clientX - pr.left - d.dx;
-    let y = e.clientY - pr.top - d.dy;
-    x = Math.max(8, Math.min(x, pr.width - w - 8));
-    y = Math.max(8, Math.min(y, pr.height - h - 8));
+    let x = e.clientX - d.dx;
+    let y = e.clientY - d.dy;
+    x = Math.max(8, Math.min(x, vw - w - 8));
+    y = Math.max(56, Math.min(y, vh - h - 8));        // 上界避開導覽列
     if (x < 28) x = 8;                                // 貼齊邊緣
-    if (pr.width - (x + w) < 28) x = pr.width - w - 8;
-    if (y < 28) y = 8;
-    if (pr.height - (y + h) < 28) y = pr.height - h - 8;
+    if (vw - (x + w) < 28) x = vw - w - 8;
+    if (y < 84) y = 56;
+    if (vh - (y + h) < 28) y = vh - h - 8;
     d.moved = d.moved || Math.abs(x - (posRef.current?.x ?? -1)) > 4
       || Math.abs(y - (posRef.current?.y ?? -1)) > 4;
     setPos({ x, y });
@@ -113,7 +115,7 @@ export default function CommandPanel() {
     if (!d) return;
     if (!d.moved) setOpen((o) => !o);                 // 沒拖動＝點擊：收合/展開
     else if (posRef.current) {
-      localStorage.setItem("cmd-panel-pos", JSON.stringify(posRef.current));
+      localStorage.setItem("cmd-panel-pos2", JSON.stringify(posRef.current));
     }
   }
 
@@ -227,7 +229,7 @@ export default function CommandPanel() {
 
   return (
     <div className="cmd-panel" ref={panelRef}
-      style={pos ? { left: pos.x, top: pos.y, bottom: "auto" } : undefined}>
+      style={pos ? { position: "fixed", left: pos.x, top: pos.y, zIndex: 60 } : undefined}>
       <div className="cmd-head" title="拖曳移動；點擊收合"
         onPointerDown={dragStart} onPointerMove={dragMove}
         onPointerUp={dragEnd} onPointerCancel={dragEnd}>

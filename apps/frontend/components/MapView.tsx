@@ -279,9 +279,11 @@ export default function MapView() {
           ))}
         </div>
       )}
-      {/* 右上叢集（ui-spec §2）：[▤ 抽屜] [地圖|影像]，任務控制面板在其右 */}
-      <div className="hud-top-right">
-        <button className={panelOpen ? "on" : ""} title="詳細數值面板"
+      {/* 右上三件套＝單一 flex 容器右對齊（批 2a 驗收 blocker 修正：
+          固定偏移會撞面板寬度，flex 讓面板收合/展開時左鄰自然讓位）。
+          面板被拖走（fixed 定位）後，其餘兩件自動靠右補位 */}
+      <div className="top-stack">
+        <button className={`drawer-btn ${panelOpen ? "on" : ""}`} title="詳細數值面板"
           onClick={() => useUavStore.getState().setPanelOpen(!panelOpen)}>▤</button>
         <div className="view-toggle">
           <button className={view === "map" ? "on" : ""}
@@ -289,6 +291,7 @@ export default function MapView() {
           <button className={view === "video" ? "on" : ""}
             onClick={() => setView("video")}>影像</button>
         </div>
+        <CommandPanel />
       </div>
 
       {/* 軌跡顏色圖例：回歸左下常駐（ui-spec §2 使用者定案），HUD 上方 */}
@@ -342,9 +345,8 @@ export default function MapView() {
         </div>
       )}
 
-      {/* simple-first HUD（數值列＋toast＋事件單行）；任務控制面板恆顯自收合 */}
+      {/* simple-first HUD（數值列＋toast＋事件單行）；任務控制面板在 top-stack */}
       <SimpleHud />
-      <CommandPanel />
 
       {videoDrone && (
         <VideoModal

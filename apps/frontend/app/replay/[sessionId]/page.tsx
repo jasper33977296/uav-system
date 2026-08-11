@@ -6,6 +6,7 @@ import { useParams, useRouter } from "next/navigation";
 import { useEffect, useMemo, useRef, useState } from "react";
 
 import { createDroneLayer } from "@/components/droneLayer";
+import { SignalBars } from "@/components/SimpleHud";
 import { routeLayer } from "@/lib/deckRoute";
 import { CANVAS, groundGrid, pathArrows, ribbon, trailLineString } from "@/lib/geo";
 import { API, classifySinr } from "@/lib/signal";
@@ -192,18 +193,48 @@ export default function Replay() {
     mapRef.current?.triggerRepaint();
   }, [idx, rows]);
 
+  // 播放（ui-spec §5）：1Hz 樣本 → 每 1000/speed ms 前進一格；到底自停
+  const [playing, setPlaying] = useState(false);
+  const [speed, setSpeed] = useState(1);
+  const [speedMenu, setSpeedMenu] = useState(false);
+  useEffect(() => {
+    if (!playing || rows.length < 2) return;
+    const t = setInterval(() => {
+      setIdx((i) => {
+        if (i >= rows.length - 1) { setPlaying(false); return i; }
+        return i + 1;
+      });
+    }, 1000 / speed);
+    return () => clearInterval(t);
+  }, [playing, speed, rows.length]);
+  // 空白鍵播放/暫停（表單元素聚焦時不攔）
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      const t = e.target as HTMLElement | null;
+      if (e.key !== " " || t?.closest("button, input, select, textarea")) return;
+      e.preventDefault();
+      setPlaying((p) => !p);
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, []);
+  // 圖表抽屜（研究工作區 → 展開記憶）
+  const [drawerOpen, setDrawerOpen] = useState(false);
+  useEffect(() => { setDrawerOpen(localStorage.getItem("replay-drawer-open") === "1"); }, []);
+
   const cur = rows[idx];
-  const curCls = cur?.sinr != null ? classifySinr(cur.sinr) : null;
 
   return (
     <div className="replay">
+      {/* 極簡 header（ui-spec §5）：返回＋日期＋任務名，無樣本數 */}
       <div className="replay-head">
-        <button className="btn-plain" onClick={() => router.push("/drones")}>← 無人機</button>
+        <button className="btn-plain btn-sm" title="返回"
+          onClick={() => router.push("/drones")}>←</button>
         <span className="meta">
-          航線回放 · {rows.length} 筆樣本
-          {meta?.mission_name && ` · 任務：${meta.mission_name}`}
-          {rows.length > 0 &&
-            ` · ${new Date(rows[0].time).toLocaleString("zh-TW", { hour12: false })}`}
+          {rows.length > 0 && new Date(rows[0].time).toLocaleString("zh-TW",
+            { month: "numeric", day: "numeric", hour: "2-digit", minute: "2-digit",
+              hour12: false })}
+          {meta?.mission_name && ` · ${meta.mission_name}`}
         </span>
       </div>
 
@@ -213,20 +244,46 @@ export default function Replay() {
 
       {rows.length > 1 && (
         <div className="timeline">
-          <Chart rows={rows} field="sinr" height={110} yLabel="SINR (dB)"
-                 thresholds={[5, -2]} events={events} t0={t0} t1={t1} idx={idx} />
-          <Chart rows={rows} field="rtt_ms" height={70} yLabel="RTT (ms)"
-                 t0={t0} t1={t1} idx={idx} />
+          {/* 播放＋時間軸＋游標處 ▲高度/訊號格；速度收 ⋯（§7 預設） */}
           <div className="scrub-row">
+            <button className="btn-plain btn-sm" title="播放/暫停（空白鍵）"
+              onClick={() => setPlaying((p) => !p)}>{playing ? "⏸" : "▶"}</button>
             <input type="range" min={0} max={rows.length - 1} value={idx}
-                   onChange={(e) => setIdx(Number(e.target.value))} />
+                   onChange={(e) => { setIdx(Number(e.target.value)); setPlaying(false); }} />
             <span className="scrub-read">
               {cur && new Date(cur.time).toLocaleTimeString("zh-TW", { hour12: false })}
-              　SINR {fmt(cur?.sinr)} dB
-              {curCls && <span className="dot" style={{ background: curCls.color, marginLeft: 4 }} />}
-              　RTT {fmt(cur?.rtt_ms, 0)} ms　高度 {fmt(cur?.alt_rel, 0)} m
+              　▲{fmt(cur?.alt_rel, 0)}m
+              <SignalBars sinr={cur?.sinr} />
+            </span>
+            <span style={{ position: "relative" }}>
+              <button className="btn-plain btn-sm" title="播放速度"
+                onClick={() => setSpeedMenu(!speedMenu)}>{speed > 1 ? `${speed}×` : "⋯"}</button>
+              {speedMenu && (
+                <div className="mcard-menu" style={{ bottom: 34, right: 0 }}>
+                  {[1, 4, 8].map((s) => (
+                    <button key={s} className="btn-plain btn-sm"
+                      onClick={() => { setSpeed(s); setSpeedMenu(false); }}>
+                      {s}×{speed === s ? " ✓" : ""}
+                    </button>
+                  ))}
+                </div>
+              )}
             </span>
           </div>
+
+          {/* 圖表＝研究工作區 → 上滑抽屜（展開記憶，ui-spec §5） */}
+          <details className="replay-drawer" open={drawerOpen}
+            onToggle={(e) => {
+              const o = e.currentTarget.open;
+              setDrawerOpen(o);
+              localStorage.setItem("replay-drawer-open", o ? "1" : "0");
+            }}>
+            <summary>〓 圖表</summary>
+            <Chart rows={rows} field="sinr" height={110} yLabel="SINR (dB)"
+                   thresholds={[5, -2]} events={events} t0={t0} t1={t1} idx={idx} />
+            <Chart rows={rows} field="rtt_ms" height={70} yLabel="RTT (ms)"
+                   t0={t0} t1={t1} idx={idx} />
+          </details>
         </div>
       )}
     </div>
