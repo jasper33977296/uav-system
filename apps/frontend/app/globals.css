@@ -336,3 +336,26 @@ body {
   width: 52px; background: var(--page); color: var(--ink);
   border: 1px solid var(--hairline); border-radius: 6px; padding: 3px 6px;
 }
+
+/* 航線比較頁 */
+.cmp-layout { display: grid; grid-template-columns: 300px 1fr; gap: 12px; margin-top: 12px; align-items: start; }
+.cmp-sessions { max-height: 75vh; overflow-y: auto; }
+.cmp-sess { display: flex; align-items: center; gap: 8px; padding: 5px 2px; font-size: 13px; cursor: pointer; }
+.cmp-sess .meta { margin-left: auto; font-size: 12px; color: var(--muted); }
+.cmp-main { display: flex; flex-direction: column; gap: 12px; min-width: 0; }
+.cmp-chartwrap { position: relative; margin-top: 8px; }
+.cmp-chart { width: 100%; height: auto; display: block; }
+.cmp-chart .grid { stroke: var(--hairline); stroke-width: 1; }
+.cmp-chart .tick { fill: var(--muted); font-size: 10px; }
+.cmp-chart .dlabel { font-size: 10px; }
+.cmp-chart .xhair { stroke: var(--ink-2); stroke-width: 1; stroke-dasharray: 3 3; }
+.cmp-tip {
+  position: absolute; top: 8px; right: 8px; pointer-events: none;
+  background: var(--page); border: 1px solid var(--hairline); border-radius: 8px;
+  padding: 6px 10px; font-size: 12px; line-height: 1.7;
+}
+.cmp-tip .dot { margin-right: 5px; }
+.cmp-legend { display: flex; flex-wrap: wrap; gap: 14px; margin-top: 6px; font-size: 12px; color: var(--ink-2); }
+.cmp-legend .dot { margin-right: 5px; }
+.cmp-map { width: 100%; height: auto; margin-top: 8px; background: var(--page); border-radius: 8px; }
+details.card summary { cursor: pointer; font-size: 14px; font-weight: 600; }
