@@ -28,6 +28,19 @@ const CAP_LABELS: Record<CapKey, string> = {
 };
 const AP_LABELS: Record<string, string> = { px4: "PX4", ardupilot: "ArduPilot" };
 
+// 013-B 狀態對照（group-missions-design §7.1 → 畫面人話，照枚舉不猜字串）
+const GROUP_STATUS: Record<string, string> = {
+  executing: "編隊起飛中…", flying: "✓ 編隊飛行中", gate_rejected: "起飛前檢查未過",
+  aborting: "撤銷中…", aborted: "已全撤", partial: "部分完成",
+  pending_approval: "等待現場確認", draft: "草稿", completed: "已完成",
+};
+const PHASE_TXT: Record<string, string> = {
+  idle: "待命", uploading: "上傳路徑中…", uploaded: "路徑已上傳",
+  arming: "解鎖中…", armed: "已解鎖", starting: "啟動中…", flying: "✓ 飛行中",
+  landed: "已降落", upload_failed: "✗ 路徑上傳失敗", prearm_failed: "✗ 起飛檢查未過",
+  rejected: "✗ 機端拒絕", rtl: "返航中",
+};
+
 interface DroneHealth {
   age_s: number;
   armed: boolean | null;
@@ -90,6 +103,84 @@ export default function CommandPanel() {
     discardDraft();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [cfgKey]);
+
+  // ── 013-B 執行段（ca6d658 契約）────────────────────────────
+  interface RunAssign {
+    drone_id: string; phase: string; layer_index: number;
+    drone_name?: string;
+    error?: { msg?: string; hint?: string; autopilot_notes?: string[] } | null;
+  }
+  const [groupRun, setGroupRun] = useState<{
+    id: string; status: string; assignments: RunAssign[] } | null>(null);
+  const [gateRejects, setGateRejects] = useState<
+    { drone_name?: string; reason?: string; hint?: string }[] | null>(null);
+  const [execConfirm, setExecConfirm] = useState(false);
+  const execTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const [abortBusy, setAbortBusy] = useState(false);
+
+  async function executeGroup() {
+    if (!draftGroup) return;
+    // 兩段式（群組級一顆鈕）：變紅「確定起飛？」3.5s
+    if (!execConfirm) {
+      setExecConfirm(true);
+      if (execTimer.current) clearTimeout(execTimer.current);
+      execTimer.current = setTimeout(() => setExecConfirm(false), 3500);
+      return;
+    }
+    setExecConfirm(false);
+    setGroupBusy(true);
+    setGateRejects(null);
+    setResult(null);
+    try {
+      const res = await fetch(
+        `${COMMAND_API}/api/command/group/${draftGroup.id}/execute`, { method: "POST" });
+      const body = await res.json().catch(() => ({}));
+      if (res.status === 202) {
+        // 序列已交伺服器（斷線不影響；中止只能按 abort）——進入進度視圖
+        setGroupRun({
+          id: draftGroup.id, status: "executing",
+          assignments: draftGroup.assignments.map((a) => ({ ...a, phase: "idle" })),
+        });
+      } else if (res.status === 409) {
+        // gate 擋＝序列未啟動：逐台原因原文列出，留在設定畫面
+        setGateRejects(
+          (body.detail?.members ?? []).filter((m: { ok: boolean }) => !m.ok));
+        setResult({ ok: false, text: body.detail?.msg ?? "起飛前檢查未過" });
+      } else {
+        setResult({ ok: false, text: `執行失敗（HTTP ${res.status}）` });
+      }
+    } catch (e) {
+      setResult({ ok: false, text: `連線失敗：${e}` });
+    }
+    setGroupBusy(false);
+  }
+
+  // 進度輪詢：1s 打 backend GET /api/groups/{id}（後端定案不用 WS）
+  const runId = groupRun?.id ?? null;
+  useEffect(() => {
+    if (!runId) return;
+    const t = setInterval(async () => {
+      try {
+        const r = await fetch(`${API}/api/groups/${runId}`);
+        if (!r.ok) return;
+        const g = await r.json();
+        setGroupRun((cur) => cur && cur.id === runId
+          ? { id: cur.id, status: g.status, assignments: g.assignments ?? cur.assignments }
+          : cur);
+      } catch { /* 掉一拍下秒再試 */ }
+    }, 1000);
+    return () => clearInterval(t);
+  }, [runId]);
+
+  async function abortGroup() {
+    if (!groupRun) return;
+    setAbortBusy(true);   // 緊急單擊、冪等（依 phase 伺服器自選 disarm/RTL）
+    try {
+      await fetch(`${COMMAND_API}/api/command/group/${groupRun.id}/abort`,
+        { method: "POST" });
+    } catch { /* 冪等，再按即可 */ }
+    setAbortBusy(false);
+  }
 
   // 013-B 前半：建群組＋預檢（POST /api/groups，backend 50c3c1a 契約）
   async function createGroup() {
@@ -366,19 +457,71 @@ export default function CommandPanel() {
               if (t.ready === false) out.push(`${name}：未就緒`);
               return out;
             });
+            // ── 進度視圖（執行中接管面板；過程唯一互動＝中止） ──
+            if (groupRun) {
+              const running = ["executing", "flying", "aborting", "pending_approval"]
+                .includes(groupRun.status);
+              return (<>
+                <div className="cmd-status">
+                  <span className="st-target">
+                    {GROUP_STATUS[groupRun.status] ?? groupRun.status}
+                  </span>
+                  <span className="spacer" />
+                  {running ? (
+                    <button className="btn-danger btn-sm" disabled={abortBusy}
+                      onClick={abortGroup}>{abortBusy ? "⋯" : "中止"}</button>
+                  ) : (
+                    <button className="btn-plain btn-sm"
+                      onClick={() => setGroupRun(null)}>返回設定</button>
+                  )}
+                </div>
+                {groupRun.assignments.map((a) => (
+                  <div className="run-row" key={a.drone_id}>
+                    <span className="dot" style={{ background: colorFor(a.drone_id) }} />
+                    <span>{a.drone_name ?? a.drone_id.slice(0, 6)}</span>
+                    <span className="spacer" />
+                    <span className={a.phase.includes("failed") || a.phase === "rejected"
+                      ? "run-err" : "run-ok"}>
+                      {PHASE_TXT[a.phase] ?? a.phase}
+                    </span>
+                  </div>
+                ))}
+                {/* 失敗必須看得見：結構化原因原文逐台列出 */}
+                {groupRun.assignments.filter((a) => a.error?.msg).map((a) => (
+                  <div className="cmd-result err" key={`e${a.drone_id}`}>
+                    {a.drone_name ?? a.drone_id.slice(0, 6)}：{a.error!.msg}
+                    {a.error!.hint ? `——${a.error!.hint}` : ""}
+                    {a.error!.autopilot_notes?.length
+                      ? `｜自駕儀：${a.error!.autopilot_notes.join("；")}` : ""}
+                  </div>
+                ))}
+              </>);
+            }
             return (<>
               <div className="cmd-status">
                 <span className="st-target">編隊 · {targetIds.length} 台</span>
                 <span className="spacer" />
-                {/* A 段：群組指令服務（013-B）上線前如實停用，不假裝可飛 */}
-                <button className="btn-accent btn-sm" disabled
-                  title="群組指令服務上線後啟用（013-B）">↑ 全部起飛</button>
+                {/* 兩段式（群組級一顆鈕）：變紅「確定起飛？」；未預檢先 disabled */}
+                <button
+                  className={execConfirm ? "btn-danger btn-sm" : "btn-accent btn-sm"}
+                  disabled={!draftGroup || groupBusy}
+                  title={!draftGroup ? "先建立群組＋預檢" : undefined}
+                  onClick={executeGroup}>
+                  {groupBusy ? "⋯" : execConfirm ? "確定起飛？" : "↑ 全部起飛"}
+                </button>
                 <button className="btn-plain btn-sm" title="退出編隊模式"
                   onClick={() => {
                     discardDraft();
                     useUavStore.getState().setFormation(false);
                   }}>✕</button>
               </div>
+              {/* gate 擋（409＝序列未啟動）：逐台原因原文 */}
+              {gateRejects?.map((m, i) => (
+                <div className="cmd-ready warn" key={i}>
+                  ✗ {m.drone_name ?? "?"}：{m.reason ?? ""}
+                  {m.hint ? `——${m.hint}` : ""}
+                </div>
+              ))}
               {/* 成員列：◎焦點（點地圖球切）、◉目標集（點這裡 toggle）；
                   無指令通道機不可勾（物理上發不了指令），其餘可勾＋狀態環預警 */}
               <div className="cmd-row">

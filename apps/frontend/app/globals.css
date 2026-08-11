@@ -413,6 +413,14 @@ a:focus-visible, button:focus-visible, input:focus-visible, select:focus-visible
   background: none; border: none; color: var(--ink-2);
 }
 .seg button.on { background: var(--surface-2); color: var(--ink); }
+/* 013-B 進度清單：逐台一行（機色點＋名＋phase 人話；異常紅字） */
+.run-row {
+  display: flex; align-items: center; gap: 8px;
+  font-size: 12.5px; color: var(--ink-2); line-height: 1.9;
+}
+.run-row .spacer { flex: 1; }
+.run-ok { font-variant-numeric: tabular-nums; }
+.run-err { color: var(--status-danger); font-weight: 600; }
 
 /* 右上三件套單一 flex 容器（批 2a blocker 修正）：[▤][地圖|影像][任務控制]
    右對齊，面板寬度變化時左鄰自然讓位 */
