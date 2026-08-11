@@ -63,25 +63,46 @@ export function Battery({ pct, plain = false }: {
 }
 
 /** 事件卡（使用者三次修訂 2026-08-11）：住 ▤ 抽屜最下、**常駐展開**——
- * 無收合切換，flex-grow 填滿抽屜剩餘空間，列表內部捲動。 */
+ * 無收合切換，flex-grow 填滿抽屜剩餘空間，列表內部捲動。
+ * STATUSTEXT 定案：單一事件流不分面板，卡頭 [全部｜機上訊息｜系統]
+ * 篩選（不記憶）；×N 折疊徽章列尾膠囊、fold 原地更新時閃現一次。 */
 export function EventsCard() {
   const events = useUavStore((s) => s.events);
+  const [src, setSrc] = useState<"all" | "vehicle" | "system">("all");
+  const shown = events.filter((e) =>
+    src === "all" || (src === "vehicle" ? e.source === "vehicle" : e.source !== "vehicle"));
   const evTime = (t: string) =>
     new Date(t).toLocaleTimeString("zh-TW", { hour12: false });
   return (
     <div className="card card-grow">
-      <h3>事件</h3>
+      <h3>事件
+        <span className="ev-filter">
+          {([["all", "全部"], ["vehicle", "機上訊息"], ["system", "系統"]] as const)
+            .map(([k, label]) => (
+              <button key={k} className={src === k ? "on" : ""}
+                onClick={() => setSrc(k)}>{label}</button>
+            ))}
+        </span>
+      </h3>
       <div className="events">
-        {events.length === 0 && <div className="empty">尚無事件</div>}
-        {events.map((e) => (
-          <div className={`event ${e.severity === "critical" ? "ev-crit" : ""}`} key={e.id}>
-            <span className="dot" style={{
-              background: e.severity === "critical" ? "#a01818"
-                : e.severity === "warning" ? "#fab219" : "#8f8b80" }} />
-            <time>{evTime(e.time)}</time>
-            <span className="detail">{evText(e)}</span>
-          </div>
-        ))}
+        {shown.length === 0 && <div className="empty">尚無事件</div>}
+        {shown.map((e) => {
+          const count = e.type === "statustext" && typeof e.detail.count === "number"
+            ? e.detail.count : 0;
+          return (
+            <div className={`event ${e.severity === "critical" ? "ev-crit" : ""}`} key={e.id}>
+              <span className="dot" style={{
+                background: e.severity === "critical" ? "#a01818"
+                  : e.severity === "warning" ? "#fab219" : "#8f8b80" }} />
+              <time>{evTime(e.time)}</time>
+              <span className="detail">{evText(e)}</span>
+              {/* key 帶 count：fold 遞增即重掛徽章 → CSS 動畫閃現一次 */}
+              {count > 1 && (
+                <span className="ev-count" key={`${e.id}:${count}`}>×{count}</span>
+              )}
+            </div>
+          );
+        })}
       </div>
     </div>
   );

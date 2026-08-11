@@ -8,9 +8,9 @@ export function evText(e: Pick<UavEvent, "type" | "detail">): string {
   const sinr = typeof d.sinr === "number" ? `SINR ${d.sinr.toFixed(1)} dB` : "";
   switch (e.type) {
     // 機上訊息（STATUSTEXT）：原文不翻譯（event-stream-design 定案）；
-    // 同句重複的折疊計數由後端維護（count），這裡只如實標 ×N
+    // ×N 折疊計數由事件卡的列尾徽章呈現，不進文字
     case "statustext":
-      return `${d.text ?? ""}${typeof d.count === "number" && d.count > 1 ? `　×${d.count}` : ""}`;
+      return `${d.text ?? ""}`;
     case "link_degraded": return `訊號劣化 · ${sinr}`;
     case "link_lost":     return `訊號瀕斷 · ${sinr}`;
     case "link_recovered":return `訊號恢復 · ${sinr}`;

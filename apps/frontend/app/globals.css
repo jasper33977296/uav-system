@@ -513,7 +513,27 @@ a:focus-visible, button:focus-visible, input:focus-visible, select:focus-visible
 }
 
 /* 事件卡（三次修訂）：常駐展開、card-grow 填滿抽屜剩餘空間、列表內捲——
-   直接沿用既有 .card-grow/.events 機制，無專屬樣式 */
+   直接沿用既有 .card-grow/.events 機制 */
+/* STATUSTEXT：來源篩選 chips（不記憶）＋ ×N 折疊徽章（fold 更新閃現） */
+.ev-filter {
+  float: right; display: inline-flex; gap: 4px;
+  text-transform: none; letter-spacing: 0;
+}
+.ev-filter button {
+  font-size: 11px; font-weight: 400; padding: 1px 8px; cursor: pointer;
+  border: 1px solid var(--hairline); border-radius: 999px;
+  background: none; color: var(--muted);
+}
+.ev-filter button.on { background: var(--surface-2); color: var(--ink); }
+.ev-count {
+  flex: none; font-size: 11px; color: var(--muted);
+  background: var(--surface-2); border-radius: 999px; padding: 0 6px;
+  animation: ev-flash 0.2s ease-out;
+}
+@keyframes ev-flash {
+  0% { background: rgba(240, 238, 230, 0.35); }
+  100% { background: var(--surface-2); }
+}
 /* 擺位：左下＝圖例＋HUD；比例尺/attribution 右下；面板/事件卡右上 */
 /* 面板平時住 top-stack flex 流（position:relative）；拖走後 inline fixed */
 .cmd-panel { position: relative; left: auto; right: auto; top: auto; bottom: auto; flex: none; }
