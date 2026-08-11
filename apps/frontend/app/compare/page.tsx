@@ -206,6 +206,9 @@ export default function Compare() {
   const [metric, setMetric] = useState("sinr");
   // 同時高亮上限 3 條（design-tokens v1）：超過的退 muted，點圖例切換
   const [focus, setFocus] = useState<string[]>([]);
+  // CDF 對新手最難讀：排最後＋預設收合（展開記憶——研究工作區判準）
+  const [cdfOpen, setCdfOpen] = useState(false);
+  useEffect(() => { setCdfOpen(localStorage.getItem("cmp-cdf-open") === "1"); }, []);
 
   useEffect(() => {
     fetch(`${API}/api/missions`).then((r) => r.json())
@@ -352,11 +355,16 @@ export default function Compare() {
   return (
     <div className="page-pad">
       <div className="card">
-        <h3>航線比較——同一任務的訊號前後比較</h3>
-        <p className="hint-line">
-          對齊軸＝沿計畫路徑的里程（樣本投影到 plan 折線，比「同一地點不同時間」的訊號）。
-          第一條勾選＝基準。最多 {MAX_SEL} 條。
-        </p>
+        <h3>航線比較</h3>
+        {/* 解釋文收 ⓘ（simple-first 文案清剪）：預設零解說 */}
+        <details className="hint-fold">
+          <summary>ⓘ 這頁怎麼比</summary>
+          <p className="hint-line">
+            同一任務的多次飛行，沿計畫路徑逐地點對齊（樣本投影到路線上，
+            比「同一地點、不同時間」的訊號）。第一條勾選＝比較基準，
+            最多 {MAX_SEL} 條。
+          </p>
+        </details>
         <div className="cmd-row" style={{ marginTop: 8 }}>
           <select value={missionId} onChange={(e) => setMissionId(e.target.value)}>
             <option value="">選擇任務⋯</option>
@@ -372,8 +380,9 @@ export default function Compare() {
         <div className="cmp-layout">
           <div className="card cmp-sessions">
             <h4>航線（{sessions.length}）</h4>
+            {/* 基準＝底色標示（不用文字 chip）；沒有的資訊不畫「—」 */}
             {sessions.map((s) => (
-              <label className="cmp-sess" key={s.id}>
+              <label className={`cmp-sess ${selected[0] === s.id ? "base" : ""}`} key={s.id}>
                 <input type="checkbox" checked={selected.includes(s.id)}
                   disabled={!selected.includes(s.id) && selected.length >= MAX_SEL}
                   onChange={() => toggle(s.id)} />
@@ -382,8 +391,9 @@ export default function Compare() {
                   border: selected.includes(s.id) ? "none" : "1px solid var(--hairline)",
                 }} />
                 <span>{label(s.id)}</span>
-                <span className="meta">{s.summary?.samples_total ?? "—"} 筆</span>
-                {selected[0] === s.id && <span className="chip">基準</span>}
+                {s.summary?.samples_total != null && (
+                  <span className="meta">{s.summary.samples_total} 筆</span>
+                )}
               </label>
             ))}
             {sessions.length === 0 && <div className="empty">此任務尚無航線</div>}
@@ -395,9 +405,7 @@ export default function Compare() {
             )}
             {loaded.length > 0 && path && (
               <div className="card">
-                <h4>路徑訊號圖（{mUnit.label}）
-                  <span className="h3-note">x 軸＝沿計畫路徑里程</span>
-                </h4>
+                <h4>{mUnit.key === "sinr" ? "訊號" : mUnit.label} vs 飛行距離</h4>
                 <LineChart series={chainSeries} xMax={path.total}
                   unit={mUnit.unit} xUnit="m" />
                 {legend}
@@ -406,7 +414,7 @@ export default function Compare() {
 
             {loaded.length > 0 && (
               <div className="card">
-                <h4>Δ 摘要（vs 基準）</h4>
+                <h4>與第一趟相比</h4>
                 <table className="table">
                   <thead><tr>
                     <th>航線</th><th className="num">平均 SINR</th>
@@ -431,24 +439,29 @@ export default function Compare() {
               </div>
             )}
 
-            {loaded.length > 0 && (
-              <div className="card">
-                <h4>{mUnit.label} 分布（CDF）</h4>
-                <LineChart series={cdfSeries} xMin={cdfXMin} xMax={cdfXMax}
-                  unit="%" xUnit={mUnit.unit} />
-                {legend}
-              </div>
-            )}
-
             {loaded.length > 0 && path && (
               <div className="card">
                 <h4>軌跡疊圖（3D）
-                  <span className="h3-note">拖曳旋轉 · 點絲帶看 SINR</span>
+                  <span className="h3-note">拖曳旋轉 · 點絲帶看訊號</span>
                 </h4>
                 <CompareMap3D wps={wps} loaded={loaded} tracks={tracks}
                   colorOf={color} labelOf={label}
                   dimIds={loaded.filter(isDim)} />
               </div>
+            )}
+
+            {loaded.length > 0 && (
+              <details className="card" open={cdfOpen}
+                onToggle={(e) => {
+                  const o = e.currentTarget.open;
+                  setCdfOpen(o);
+                  localStorage.setItem("cmp-cdf-open", o ? "1" : "0");
+                }}>
+                <summary>{mUnit.label} 分布（CDF）</summary>
+                <LineChart series={cdfSeries} xMin={cdfXMin} xMax={cdfXMax}
+                  unit="%" xUnit={mUnit.unit} />
+                {legend}
+              </details>
             )}
           </div>
         </div>

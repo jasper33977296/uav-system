@@ -3,6 +3,7 @@ import { useRouter } from "next/navigation";
 import { useCallback, useEffect, useState } from "react";
 
 import ConfirmModal from "@/components/ConfirmModal";
+import { Battery, SignalBars } from "@/components/SimpleHud";
 import { API } from "@/lib/signal";
 import { useUavStore } from "@/lib/store";
 
@@ -147,37 +148,42 @@ export default function Drones() {
         const isLive = live?.drone_id === d.id;
         return (
           <div className="card" key={d.id}>
-            {/* 收合＝全貌一行：機名＋徽章＋架次數＋最近時間（點擊展開） */}
+            {/* 一行全貌（simple-first）：色點(亮=連線/灰=離線)＋名＋訊號格＋
+                電池＋N 次。離線機沒有的資訊不畫、不放「—」；徽章全收展開 */}
             <div className="drone-head drone-row" onClick={() => toggleOpen(d.id)}>
-              <span className="meta">{open[d.id] ? "▾" : "▸"}</span>
+              <span className="dot drone-dot" style={{
+                background: fleet[d.id]?.connected ? "var(--status-ok)" : "var(--hairline)",
+              }} />
               <span className="name">{d.name}</span>
-              {apChip(d.autopilot) && <span className="chip">{apChip(d.autopilot)}</span>}
               {fleet[d.id]?.connected && (
-                <span className="chip">
-                  <span className="dot" style={{ background: "var(--status-ok)" }} />連線
-                </span>
+                <SignalBars sinr={fleet[d.id]?.link?.sinr} />
               )}
-              {d.is_primary && <span className="chip">主機</span>}
-              {d.is_simulated && <span className="chip">模擬</span>}
+              {fleet[d.id]?.connected && (
+                <Battery pct={fleet[d.id]?.battery_pct} plain />
+              )}
               {isLive && live?.armed && (
                 <span className="chip">
-                  <span className="dot" style={{ background: "#d03b3b" }} />
-                  飛行中·記錄中
+                  <span className="dot" style={{ background: "#d03b3b" }} />飛行中
                 </span>
               )}
               <span className="spacer" />
+              <span className="meta">{mine.length} 次</span>
+              <span className="meta">{open[d.id] ? "▾" : "▸"}</span>
+            </div>
+
+            {/* 展開＝工作區：徽章＋最近時間＋操作列＋架次表格
+                （刪除/匯出安全流程照舊） */}
+            {open[d.id] && (<>
+            <div className="drone-actions">
+              {apChip(d.autopilot) && <span className="chip">{apChip(d.autopilot)}</span>}
+              {d.is_primary && <span className="chip">主機</span>}
+              {d.is_simulated && <span className="chip">模擬</span>}
               <span className="meta">
-                {mine.length} 架次
+                {d.connection_url ?? ""}
                 {mine[0] ? ` · 最近 ${new Date(mine[0].started_at).toLocaleString("zh-TW",
                   { month: "numeric", day: "numeric", hour: "2-digit", minute: "2-digit",
                     hour12: false })}` : ""}
               </span>
-            </div>
-
-            {/* 展開＝工作區：操作列＋架次表格（刪除/匯出安全流程照舊） */}
-            {open[d.id] && (<>
-            <div className="drone-actions">
-              <span className="meta">{d.connection_url ?? ""}</span>
               <span className="spacer" />
               <button className="btn-plain btn-sm"
                 onClick={async () => {

@@ -15,32 +15,39 @@ import { useUavStore } from "@/lib/store";
 
 const BAR_LEVEL: Record<string, number> = { good: 4, warning: 3, serious: 2, critical: 1 };
 
-function SignalBars({ sinr, lost, onOpen }: {
-  sinr: number | null | undefined; lost: boolean; onOpen: () => void;
+/** 訊號格（icon spec：格數＝分級、失聯＝0 格＋斜線，形狀先於顏色）。
+ * 有 onOpen＝HUD 可點開詳細；無＝純顯示（機隊頁一行式共用）。 */
+export function SignalBars({ sinr, lost = false, onOpen }: {
+  sinr: number | null | undefined; lost?: boolean; onOpen?: () => void;
 }) {
   const cls = !lost && sinr != null ? classifySinr(sinr) : null;
   const level = cls ? BAR_LEVEL[cls.key] ?? 0 : 0;
-  return (
-    <button className="hud-item hud-tap" title="訊號（點開詳細）" onClick={onOpen}>
-      <span className="sig-bars" aria-label={lost ? "失聯" : "訊號強度"}>
-        {[1, 2, 3, 4].map((i) => (
-          <span key={i} className="sig-bar" style={{
-            height: 3 + i * 3,
-            background: i <= level ? cls?.color ?? "var(--muted)" : "var(--hairline)",
-          }} />
-        ))}
-        {/* 失聯＝0 格＋斜線：形狀先於顏色（icon spec） */}
-        {lost && <span className="sig-slash" />}
-      </span>
-    </button>
+  const bars = (
+    <span className="sig-bars" aria-label={lost ? "失聯" : "訊號強度"}>
+      {[1, 2, 3, 4].map((i) => (
+        <span key={i} className="sig-bar" style={{
+          height: 3 + i * 3,
+          background: i <= level ? cls?.color ?? "var(--muted)" : "var(--hairline)",
+        }} />
+      ))}
+      {lost && <span className="sig-slash" />}
+    </span>
   );
+  return onOpen ? (
+    <button className="hud-item hud-tap" title="訊號（點開詳細）" onClick={onOpen}>
+      {bars}
+    </button>
+  ) : bars;
 }
 
-function Battery({ pct }: { pct: number | null | undefined }) {
-  if (pct == null) return null;   // 沒有就不畫，不放「—」
+/** 電池圖形（填充＝存量、<20% 轉紅）；無資料不畫、不放「—」。 */
+export function Battery({ pct, plain = false }: {
+  pct: number | null | undefined; plain?: boolean;
+}) {
+  if (pct == null) return null;
   const p = Math.max(0, Math.min(100, pct));
-  return (
-    <span className="hud-item" title="電量">
+  const body = (
+    <>
       <span className="batt">
         <span className="batt-fill" style={{
           width: `${p}%`,
@@ -48,8 +55,11 @@ function Battery({ pct }: { pct: number | null | undefined }) {
         }} />
       </span>
       <span className="hud-num">{Math.round(p)}%</span>
-    </span>
+    </>
   );
+  return plain
+    ? <span className="batt-plain" title="電量">{body}</span>
+    : <span className="hud-item" title="電量">{body}</span>;
 }
 
 interface Health {
@@ -174,7 +184,7 @@ export default function SimpleHud({ onExpand }: { onExpand: () => void }) {
     : err ? { t: err, sev: "err" as const }
     : now - takeoffDeniedAt < 10000
       ? { t: "現在還不能起飛——點這裡看原因", sev: "warn" as const, onClick: onExpand }
-    : ageStale ? { t: "無人機資料延遲——顯示的可能不是最新位置", sev: "warn" as const }
+    : ageStale ? { t: "資料延遲——畫面可能不是最新", sev: "warn" as const }
     : gpsBad && now - epRef.current.gps < 10000
       ? { t: "衛星訊號變弱——位置可能不準", sev: "warn" as const }
     : clsKey === "serious" && now - epRef.current.degraded < 10000

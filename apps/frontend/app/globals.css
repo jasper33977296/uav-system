@@ -212,6 +212,8 @@ a:focus-visible, button:focus-visible, input:focus-visible, select:focus-visible
 .row-link { cursor: pointer; }
 /* 機隊卡片摺疊：收合＝一機一行全貌，點卡片頭展開架次工作區 */
 .drone-row { cursor: pointer; user-select: none; }
+.drone-dot { width: 10px; height: 10px; }
+.batt-plain { display: inline-flex; align-items: center; gap: 5px; font-size: 12px; color: var(--ink-2); }
 .drone-actions { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; margin-top: 10px; }
 .drone-actions .spacer { flex: 1; }
 
@@ -599,7 +601,9 @@ a:focus-visible, button:focus-visible, input:focus-visible, select:focus-visible
 /* 航線比較頁 */
 .cmp-layout { display: grid; grid-template-columns: 300px 1fr; gap: 12px; margin-top: 12px; align-items: start; }
 .cmp-sessions { max-height: 75vh; overflow-y: auto; }
-.cmp-sess { display: flex; align-items: center; gap: 8px; padding: 5px 2px; font-size: 13px; cursor: pointer; }
+.cmp-sess { display: flex; align-items: center; gap: 8px; padding: 5px 6px; font-size: 13px; cursor: pointer; border-radius: 6px; }
+/* 基準＝底色標示（不用文字 chip） */
+.cmp-sess.base { background: var(--surface-2); }
 .cmp-sess .meta { margin-left: auto; font-size: 12px; color: var(--muted); }
 .cmp-main { display: flex; flex-direction: column; gap: 12px; min-width: 0; }
 .cmp-chartwrap { position: relative; margin-top: 8px; }
