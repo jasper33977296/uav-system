@@ -35,16 +35,44 @@
 **整合陷阱**：若天真讓 mavlink-router 也送 backend 14540，會與 instance 0 的 offboard(14540)
 **撞號**（sysid 1 兩來源）——正是剛修好的洪水成因。
 
-**乾淨合流設計**（避開所有撞埠、image 保原廠、backend/command 程式不改）：
-- mavlink-router **以 client 連各實例的 GCS 埠 `18570+i`**（i=0/1/2）——拿逐台全遙測，
-  不碰 14540/14550。
-- router 合流轉發到 **backend／command 的專用埠**（例 `udpin` 14545／14555）。
-- **sim-fleet profile 覆寫** backend `MAVLINK_URL=udpin://0.0.0.0:14545`、command
-  `COMMAND_MAVLINK_URL=udpin://0.0.0.0:14555`——只餵 router 合流流，**instance 的
-  offboard 14540+i 不進 backend/command，零撞號**。sysid 1/2/3 天然 demux（防線仍在）。
-- 單台 uav-sitl profile 維持現狀（14540/14550 直連）；兩 profile 互斥、切換即換埠。
+## Bring-up 實測（2026-08-11）＋ pivot（PM 核可 A）
 
-（bring-up 仍需實跑確認 GCS 埠連入行為與 router config 語法，但埠對應已由原始碼定死、非猜測。）
+**第一次 bring-up 推翻原「connect-model」設計假設**——實測事實（rollback 前確認）：
+1. **PX4 GCS mavlink 不回連線者**：原設計是「router 以 client 連 18570+i、實例回傳遙測」。
+   實測 PX4 **不**把遙測回送給連線來源埠，而是**送到固定 remote（廣播式 14550）**——
+   command(14550) 就是這樣直接收到 3 台（單埠 demux、正是我們的模型），我方 connect
+   到 18570 收不到任何遙測。→ connect-model 行不通。
+2. **mavlink-router 不可得**：不在 px4 image、`ghcr.io/mavlink-router/...` pull denied、
+   image 內無 binary。
+3. **backend(14540) 收不到艦隊**：實例 GCS 只送 14550、offboard 送 14541/42/43，**無一到
+   14540**＝研究資料錄不到（核心承諾未達）——必須解。
+4. **sysid off-by-one**：`sitl_multiple_run.sh` 的 `spawn_model` 用 `$((n+1))`→`px4 -i 1/2/3`
+   →`MAV_SYS_ID=instance+1`＝**2/3/4**。要 1/2/3 得改跑法用 `-i 0/1/2`（自寫 launch 迴圈或
+   patch 該行）。
+
+**Pivot（PM 核可 A，2026-08-11）**：改用 image 自帶的官方鉤子 **edit_rcS**（單台 entrypoint
+本來就在用，不算破「不動 init」精神；mavlink-router 不可得＋PX4 只送固定 remote 是實測，
+設計照現實改）。方案：
+- **edit_rcS／px4 param 重導每實例 GCS remote → 我方 fanout 埠（14545）**（取代廣播 14550）。
+- **fanout（`sim-fleet/mav_fanout.py`，改成 listen-model）**：聽 14545 收 3 台遙測 →
+  複製轉發到 backend＋command，回程指令按 sysid 路由回各實例的 18570+i 監聽埠。
+- **backend 腿＝forward-only（零回送）**：讀寫分離架構在模擬環境也保持（PM 要求 (1)）——
+  fanout 只把遙測**單向**餵 backend，backend 不透過 fanout 送任何東西（backend 的
+  SEND_WHITELIST 任務查詢在多機模擬先不經 fanout；command 腿才雙向）。
+- **sysid＝`-i 0/1/2`→1/2/3**（PM 要求 (2)）：sim-uav-1 身分連續；2/3 對應既有 uav-s2/s3
+  資料列（本就標 simulated，可接受，名稱語意之後再理）。
+- backend/command 埠：sim-fleet profile 覆寫 backend `MAVLINK_URL`、command
+  `COMMAND_MAVLINK_URL` 指向 fanout 出口（或 fanout 直送 14540/14550，視 forward-only
+  接法定；下段 bring-up 敲定）。
+
+> `mav_fanout.py` 目前是 connect-model 初稿，**下段需改成 listen-model＋backend forward-only**。
+
+## 收尾紀律（本 session）
+
+第一次 bring-up **已 rollback 回單台 uav-sitl（已知良好）**——不留「backend 收不到遙測」的
+WIP（今日教訓：WIP 殘留＝別人的靈異事件）。pivot 方向與實測已入本文件，下個 focused 段
+按 A 執行：edit_rcS 重導 → fanout listen-model（backend forward-only）→ sysid 1/2/3 →
+逐台 link_sim → 資源實測 → 013-B skew/RTL。
 
 ## 建置步驟
 
