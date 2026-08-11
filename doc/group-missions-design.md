@@ -112,13 +112,40 @@ IDLE
 - `GET /api/groups/{id}` — 群組狀態（assignments、逐台 capability、預檢、執行中即時態）。
 
 指令層（command :38001，有 router＋gating）：
-- `POST /api/command/group/{id}/execute` — 兩階段提交（§3）。伺服器端嚴格 gate→
-  逐台 upload(回讀)→全 arm→廣播 start。回逐台逐步結果；任一階段失敗回狀態機終態。
-- `POST /api/command/group/{id}/rtl` — 群組緊急 RTL-all。
+- `POST /api/command/group/{id}/execute` — 兩階段提交（§3）。**非同步啟動**：
+  嚴格 gate 通過後**立即回 202**＋群組 handle，背景 task 跑序列（逐台 upload
+  回讀→全 arm→廣播 start），過程逐步寫入群組即時態。gate 失敗則同步回 409＋
+  逐台原因（未啟動序列）。
+- `POST /api/command/group/{id}/abort` — **操作員主動撤銷**（緊急全撤鈕）。
+  冪等、單擊、依當前 phase 自動選動作：UPLOADING→停序列；ARMING/已 arm 未 start
+  →全 disarm；FLYING→RTL-all。與 §3「伺服器偵測失敗自動全撤」是兩條路徑
+  （自動 vs 操作員主動），終態一致。
+- `POST /api/command/group/{id}/rtl` — 群組 RTL-all（空中緊急）。冪等。
+
+**執行語意（013 定案，明寫）**：
+- **排程原子性全在伺服器端**。execute 非同步啟動後**前端斷線/關頁不影響**——
+  不會因 HTTP 斷掉卡半途留半 arm 機隊；序列由伺服器跑到終態或自動全撤（§3），
+  中止只能透過 abort 端點，不是斷 HTTP。
+- **進度**：不需 WS——`GET /api/groups/{id}` 即時態逐步推進，前端 **1s 輪詢**
+  看逐台 phase 即可。
+- **逐台錯誤形狀**：execute 逐步結果與 GET 即時態的 per-member 錯誤，沿用既有
+  結構化 `{msg, hint, autopilot_notes}`（同單機拒絕），UI 原文顯示、不猜。
 
 > 這組即 019 MCP `submit_mission(N 台)` 的地基：execute 是多機版 submit_mission，
-> 實機時進 pending_approval→操作員確認才飛，SITL 直飛（019 定案）。前端四端點
-> 提案與此對齊；差異回前端收斂。
+> 實機時進 `pending_approval`→操作員前端確認才飛，SITL 直飛（019 定案）。
+> §7 契約已與前端四端點提案收斂（2026-08-11）。
+
+### 7.1 狀態枚舉（前端照此畫狀態視圖，不猜字串）
+
+**群組 `group.status`**：`draft`（建好未執行）→ `pending_approval`（實機待審批）→
+`executing`（序列進行中）→ `flying`（全機起飛）→ `completed`（全落地上鎖）；
+終態/中止：`gate_rejected`（嚴格 gate 擋）、`aborting`→`aborted`、
+`partial`（空中單機 RTL、其他續飛）。
+
+**每台 `assignment.phase`**：`idle`→`uploading`→`uploaded`→`arming`→`armed`→
+`starting`→`flying`→`landed`；異常：`upload_failed`、`prearm_failed`、
+`rejected`（capability 非 ok）、`rtl`（該台返航中）。每個異常態帶
+`error?: {msg, hint, autopilot_notes}`。
 
 ## 8. 模式入口（PM 裁決：漸進顯示）
 
