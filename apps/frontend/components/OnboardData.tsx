@@ -82,7 +82,14 @@ function InspectorSheet({ droneId, onClose }: { droneId: string; onClose: () => 
                     {fields.map(([k, v]) => (
                       <div className="evm-kv-row" key={k}>
                         <span className="evm-k">{k}</span>
-                        <span className="evm-v">{fmtVal(v)}</span>
+                        <span className="evm-v">
+                          {fmtVal(v)}
+                          {/* bitmask 提示：附 hex（raw 值仍在前，不取代） */}
+                          {m.displays?.[k] === "bitmask" && typeof v === "number"
+                            && ` (0x${v.toString(16)})`}
+                          {m.units?.[k] &&
+                            <span className="imu-unit"> {m.units[k]}</span>}
+                        </span>
                       </div>
                     ))}
                   </div>

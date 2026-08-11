@@ -60,6 +60,10 @@ export interface RegistryMsg {
   hz: number;
   age_s: number;
   fields?: Record<string, unknown> | null;
+  // 線上單位（pymavlink fieldunits_by_name＝MAVLink XML 同源）：raw wire
+  // 單位配 raw 值——degE7/mV/cdegC 等縮放單位原樣直出，兩邊都誠實不換算
+  units?: Record<string, string> | null;
+  displays?: Record<string, string> | null;   // 顯示提示（如 'bitmask'）
 }
 export interface SensorHealth { name: string; ok: boolean }
 export interface DroneRegistry { sensors: SensorHealth[]; messages: RegistryMsg[] }
