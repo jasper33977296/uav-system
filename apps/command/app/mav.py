@@ -270,10 +270,31 @@ def job_command(r: MavRouter, sysid: int, command: int, params: list,
                        f"｜autopilot_notes={r.texts_since(sysid, t0)}")
 
 
-def job_set_mode(r: MavRouter, sysid: int, mode: str) -> dict:
+def job_set_mode(r: MavRouter, sysid: int, mode: str,
+                 retries: int = 3, verify_timeout: float = 3.0) -> dict:
+    """切模式 → ACK → **驗證真的切了**（HEARTBEAT.custom_mode 轉到目標）。
+
+    關鍵（實測，2026-08-11）：PX4 對 DO_SET_MODE 常回 ACCEPTED，但 commander
+    可能沒真的轉（前置條件、暫態）。只看 ACK 會**誤報成功**——操作員按了
+    「原地降落」看到 OK，機卻沒切、繼續原本動作（若在爬升就像「降落讓它飛高」）。
+    故 ACCEPTED 後還要看 HEARTBEAT 確認轉到目標模式，沒轉就重試、再不行明示失敗。
+    """
     main, sub = PX4_MODES[mode]
-    return job_command(r, sysid, M.MAV_CMD_DO_SET_MODE,
-                       [M.MAV_MODE_FLAG_CUSTOM_MODE_ENABLED, main, sub])
+    for attempt in range(1, retries + 1):
+        res = job_command(r, sysid, M.MAV_CMD_DO_SET_MODE,
+                          [M.MAV_MODE_FLAG_CUSTOM_MODE_ENABLED, main, sub])
+        if not res.get("accepted"):
+            return res            # 明確被拒（帶原因）——不是「沒生效」，直接回
+        deadline = time.monotonic() + verify_timeout
+        while time.monotonic() < deadline:
+            r._wait(sysid, ("HEARTBEAT",), timeout=1.2)
+            cm = (r.drones.get(sysid) or {}).get("custom_mode")
+            if cm is not None and ((cm >> 16) & 0xFF, (cm >> 24) & 0xFF) == (main, sub):
+                return {**res, "mode_engaged": True, "attempts_mode": attempt}
+    raise CommandError(
+        f"模式 {mode} 已被接受但未生效——DO_SET_MODE 回 ACCEPTED，但機端 "
+        f"{verify_timeout:.0f}s 內未切到目標模式（PX4 commander 未執行轉換，"
+        f"檢查前置條件/狀態）｜autopilot_notes={r.texts_since(sysid, time.monotonic() - 5)}")
 
 
 def job_upload_mission(r: MavRouter, sysid: int, items: list) -> dict:
