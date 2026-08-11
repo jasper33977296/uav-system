@@ -53,6 +53,9 @@ interface UavStore {
   // simple-first：專業數值面板是抽屜（預設關、點訊號格/▤ 開）
   panelOpen: boolean;
   setPanelOpen: (v: boolean) => void;
+  // deadman 已觸發（ManualControl 判定、HUD 異常句顯示）：danger 常駐至解除
+  deadman: boolean;
+  setDeadman: (v: boolean) => void;
   setLive: (t: Telemetry) => void;
   select: (id: string) => void;
   setWsConnected: (v: boolean) => void;
@@ -71,6 +74,8 @@ export const useUavStore = create<UavStore>((set) => ({
   sinrHistories: {},
   panelOpen: false,
   setPanelOpen: (v) => set({ panelOpen: v }),
+  deadman: false,
+  setDeadman: (v) => set({ deadman: v }),
   setLive: (t) =>
     set((s) => {
       const id = t.drone_id ?? "unknown";

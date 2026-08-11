@@ -14,6 +14,7 @@
 import { useEffect, useRef, useState } from "react";
 
 import { COMMAND_API } from "@/lib/signal";
+import { useUavStore } from "@/lib/store";
 
 const RATE_MS = 100;  // ≥10Hz（後端 deadman 0.4s）
 const KB_GAIN = 0.5;  // 鍵盤按住的軸偏移：滿舵太猛，半舵夠用且可與搖桿疊加
@@ -122,6 +123,7 @@ export default function ManualControl({ sid, lockedReason = null }: {
           : `啟用失敗（HTTP ${res.status}）`);
       } else {
         setEnabled(true);
+        useUavStore.getState().setDeadman(false);   // 重新接手＝解除
       }
     } catch (e) {
       setErr(`連線失敗：${e}`);
@@ -172,6 +174,7 @@ export default function ManualControl({ sid, lockedReason = null }: {
         keysRef.current.clear();
         joyRef.current = { x: 0, y: 0, z: 0, r: 0 };
         setLinkState("lost");
+        useUavStore.getState().setDeadman(true);   // HUD 異常句（常駐至解除）
       } else if (gap >= 0.4) {
         setWarnFrac(Math.min(1, (gap - 0.4) / 1.6));
         setLinkState("warn");
@@ -238,7 +241,10 @@ export default function ManualControl({ sid, lockedReason = null }: {
               {busy ? "⋯" : "重新啟用手動"}
             </button>
             <button className="btn-plain btn-sm"
-              onClick={() => setLinkState("ok")}>關閉</button>
+              onClick={() => {
+                setLinkState("ok");
+                useUavStore.getState().setDeadman(false);
+              }}>關閉</button>
           </div>
         </div>
       )}

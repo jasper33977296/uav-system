@@ -15,12 +15,14 @@ const ic = (paths: React.ReactNode) => (
 const TABS = [
   { href: "/", label: "即時監控",
     icon: ic(<><circle cx="12" cy="12" r="3.2" /><path d="M12 2.5v4M12 17.5v4M2.5 12h4M17.5 12h4" /></>) },
+  // 機隊＝四旋翼頂視 silhouette（icon spec：小旋翼＋機身＋斜臂，避免 ⌘ 感）
   { href: "/drones", label: "無人機",
-    icon: ic(<><circle cx="7" cy="7" r="3" /><circle cx="17" cy="7" r="3" /><circle cx="7" cy="17" r="3" /><circle cx="17" cy="17" r="3" /><path d="M9.2 9.2l5.6 5.6M14.8 9.2l-5.6 5.6" /></>) },
+    icon: ic(<><circle cx="5.5" cy="5.5" r="2.4" /><circle cx="18.5" cy="5.5" r="2.4" /><circle cx="5.5" cy="18.5" r="2.4" /><circle cx="18.5" cy="18.5" r="2.4" /><path d="M7.5 7.5l2.6 2.6M16.5 7.5l-2.6 2.6M7.5 16.5l2.6-2.6M16.5 16.5l-2.6-2.6" /><rect x="10" y="10" width="4" height="4" rx="1.4" /></>) },
   { href: "/missions", label: "路徑管理",
     icon: ic(<><path d="M4 19c6 0 2-10 8-10 5 0 3 7 8 5" /><circle cx="4" cy="19" r="1.8" fill="currentColor" /><circle cx="20" cy="14" r="1.8" fill="currentColor" /></>) },
+  // 比較＝雙折線疊影（icon spec：長條圖意象偏「統計」，換折線）
   { href: "/compare", label: "比較",
-    icon: ic(<><path d="M5 20V10M12 20V4M19 20v-7" /></>) },
+    icon: ic(<><path d="M3 16l5-6 4 3 6-8" /><path d="M3 20l5-4 4 2 6-6" opacity="0.5" /></>) },
 ];
 
 /** 頂欄＋內容區。WebSocket 掛在這一層，切換頁面不斷線、狀態 chips 全站可見。 */

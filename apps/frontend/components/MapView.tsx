@@ -73,7 +73,9 @@ export default function MapView() {
           { id: "canvas", type: "background", paint: { "background-color": CANVAS } },
         ],
       },
+      attributionControl: false,   // 右下讓給主按鈕（驗收修正 2）——移左下
     });
+    map.addControl(new maplibregl.AttributionControl({ compact: true }), "bottom-left");
     map.addControl(new maplibregl.ScaleControl({ maxWidth: 120, unit: "metric" }), "bottom-right");
     mapRef.current = map;
 

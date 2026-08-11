@@ -15,18 +15,22 @@ import { useUavStore } from "@/lib/store";
 
 const BAR_LEVEL: Record<string, number> = { good: 4, warning: 3, serious: 2, critical: 1 };
 
-function SignalBars({ sinr, onOpen }: { sinr: number | null | undefined; onOpen: () => void }) {
-  const cls = sinr != null ? classifySinr(sinr) : null;
+function SignalBars({ sinr, lost, onOpen }: {
+  sinr: number | null | undefined; lost: boolean; onOpen: () => void;
+}) {
+  const cls = !lost && sinr != null ? classifySinr(sinr) : null;
   const level = cls ? BAR_LEVEL[cls.key] ?? 0 : 0;
   return (
     <button className="hud-item hud-tap" title="訊號（點開詳細）" onClick={onOpen}>
-      <span className="sig-bars" aria-label="訊號強度">
+      <span className="sig-bars" aria-label={lost ? "失聯" : "訊號強度"}>
         {[1, 2, 3, 4].map((i) => (
           <span key={i} className="sig-bar" style={{
             height: 3 + i * 3,
             background: i <= level ? cls?.color ?? "var(--muted)" : "var(--hairline)",
           }} />
         ))}
+        {/* 失聯＝0 格＋斜線：形狀先於顏色（icon spec） */}
+        {lost && <span className="sig-slash" />}
       </span>
     </button>
   );
@@ -63,11 +67,13 @@ export default function SimpleHud({ onExpand }: { onExpand: () => void }) {
   const events = useUavStore((s) => s.events);
   const setPanelOpen = useUavStore((s) => s.setPanelOpen);
 
+  const deadman = useUavStore((s) => s.deadman);
   const [health, setHealth] = useState<Health | null>(null);
   const [confirming, setConfirming] = useState(false);
   const confirmTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState<string | null>(null);
+  const [takeoffDeniedAt, setTakeoffDeniedAt] = useState(0);
   const [logOpen, setLogOpen] = useState(false);
 
   useEffect(() => {
@@ -87,11 +93,12 @@ export default function SimpleHud({ onExpand }: { onExpand: () => void }) {
   const caps = sid ? health!.drones[sid].capabilities : undefined;
   const capOk = (k: string) => !caps || caps[k] === "ok";   // 缺席＝舊後端全功能
 
-  // 情境主按鈕：地面＝起飛（兩段式：變色＋「確定？」）；空中＝返航（單擊）
+  // 情境主按鈕：地面＝起飛（兩段式：變色＋「確定？」）；
+  // 空中＝返航（單擊、danger 紅——緊急動作不吃 accent，與展開面板 RTL 同語意）
   const inAir = live?.landed_state === "in_air" || (live?.alt_rel ?? 0) > 2;
   const action = inAir
-    ? { label: "返航", path: "/mode/rtl", confirm: false, cap: "rtl" }
-    : { label: "起飛", path: "/takeoff", confirm: true, cap: "takeoff" };
+    ? { label: "⌂ 返航", path: "/mode/rtl", confirm: false, cap: "rtl", danger: true }
+    : { label: "↑ 起飛", path: "/takeoff", confirm: true, cap: "takeoff", danger: false };
 
   async function fire() {
     if (!sid) return;
@@ -112,11 +119,16 @@ export default function SimpleHud({ onExpand }: { onExpand: () => void }) {
         body: action.path === "/takeoff" ? JSON.stringify({ alt }) : undefined,
       });
       if (!res.ok) {
-        const d = ((await res.json().catch(() => ({}))) as { detail?: unknown }).detail;
-        const s = d as { msg?: string; hint?: string } | undefined;
-        setErr(typeof d === "string" ? d
-          : s?.msg ? `${s.msg}${s.hint ? `——${s.hint}` : ""}`
-          : `失敗（HTTP ${res.status}）`);
+        if (action.path === "/takeoff") {
+          // 起飛被拒＝人話句（點擊展開完整面板看 not_ready_reasons 與原因原文）
+          setTakeoffDeniedAt(Date.now());
+        } else {
+          const d = ((await res.json().catch(() => ({}))) as { detail?: unknown }).detail;
+          const s = d as { msg?: string; hint?: string } | undefined;
+          setErr(typeof d === "string" ? d
+            : s?.msg ? `${s.msg}${s.hint ? `——${s.hint}` : ""}`
+            : `失敗（HTTP ${res.status}）`);
+        }
       }
     } catch (e) { setErr(`連線失敗：${e}`); }
     setBusy(false);
@@ -125,12 +137,47 @@ export default function SimpleHud({ onExpand }: { onExpand: () => void }) {
 
     () => { if (confirmTimer.current) clearTimeout(confirmTimer.current); }, []);
 
-  // 異常浮出句：只在異常時出現，說「發生了什麼＋機器在做什麼」，零術語
+  // 異常浮出句（設計定稿句式表）：同時多事只顯最嚴重一則；danger 常駐至
+  // 解除、warn 10s、ok 3s；句中零術語。warn/ok 的「一段時間後自動消失」
+  // 靠 episode 起點時間戳實現（遙測 5Hz 重渲染自然帶動過期）
   const cls = live?.link?.sinr != null ? classifySinr(live.link.sinr) : null;
-  const anomaly = !wsConnected ? "與地面站失去連線——畫面資料已停止更新"
-    : live && !live.connected ? "無人機失聯——收不到機上資料"
-    : cls?.key === "critical" ? "訊號快斷了"
-    : cls?.key === "serious" ? "訊號變差了"
+  const clsKey = cls?.key ?? null;
+  const prevClsRef = useRef<string | null>(null);
+  const epRef = useRef({ degraded: 0, recovered: 0, gps: 0 });
+  useEffect(() => {
+    const prev = prevClsRef.current;
+    if (clsKey === "serious" && prev !== "serious" && prev !== "critical") {
+      epRef.current.degraded = Date.now();
+    }
+    if ((clsKey === "good" || clsKey === "warning")
+        && (prev === "serious" || prev === "critical")) {
+      epRef.current.recovered = Date.now();
+    }
+    prevClsRef.current = clsKey;
+  }, [clsKey]);
+  const droneLost = !!live && !live.connected;
+  const gpsBad = !!live && live.connected && live.gps_fix != null && live.gps_fix < 3;
+  useEffect(() => { if (gpsBad) epRef.current.gps = Date.now(); }, [gpsBad]);
+  // failsafe：最近 30s 內的 critical failsafe 事件（自動處置進行中）
+  const fsEvent = events.find((e) => e.severity === "critical" && /failsafe/i.test(e.type));
+  const fsActive = !!fsEvent && Date.now() - new Date(fsEvent.time).getTime() < 30000;
+
+  const now = Date.now();
+  const notice =
+    !wsConnected ? { t: "與系統失去連線——畫面可能不是最新", sev: "err" as const }
+    : droneLost ? { t: "無人機失聯——顯示的是最後已知位置", sev: "err" as const }
+    : deadman ? { t: "操控中斷——無人機已自動懸停", sev: "err" as const }
+    : fsActive ? { t: "無人機進入緊急狀態——正在自動處置", sev: "err" as const }
+    : clsKey === "critical" ? { t: "訊號快斷了", sev: "err" as const }
+    : err ? { t: err, sev: "err" as const }
+    : now - takeoffDeniedAt < 10000
+      ? { t: "現在還不能起飛——點這裡看原因", sev: "warn" as const, onClick: onExpand }
+    : gpsBad && now - epRef.current.gps < 10000
+      ? { t: "衛星訊號變弱——位置可能不準", sev: "warn" as const }
+    : clsKey === "serious" && now - epRef.current.degraded < 10000
+      ? { t: "訊號變差了", sev: "warn" as const }
+    : now - epRef.current.recovered < 3000
+      ? { t: "訊號恢復了", sev: "ok" as const }
     : null;
 
   const latest = events[0];
@@ -139,8 +186,11 @@ export default function SimpleHud({ onExpand }: { onExpand: () => void }) {
 
   return (
     <>
-      {(anomaly || err) && (
-        <div className={`hud-toast ${err ? "err" : ""}`}>⚠ {err ?? anomaly}</div>
+      {notice && (
+        <div className={`hud-toast ${notice.sev} ${notice.onClick ? "hud-tap" : ""}`}
+          onClick={notice.onClick}>
+          {notice.sev === "ok" ? "✓" : "⚠"} {notice.t}
+        </div>
       )}
 
       <div className="hud-bottom">
@@ -150,13 +200,14 @@ export default function SimpleHud({ onExpand }: { onExpand: () => void }) {
         {live?.ground_speed != null && (
           <span className="hud-item" title="速度">→<span className="hud-num">{live.ground_speed.toFixed(1)}</span></span>
         )}
-        <SignalBars sinr={live?.link?.sinr} onOpen={() => setPanelOpen(true)} />
+        <SignalBars sinr={live?.link?.sinr} lost={!wsConnected || droneLost}
+          onOpen={() => setPanelOpen(true)} />
         <Battery pct={live?.battery_pct} />
         <span className="hud-spacer" />
         {sid && (
           <span className="hud-main">
             <button
-              className={`hud-cta ${confirming ? "confirming" : ""}`}
+              className={`hud-cta ${action.danger ? "danger" : ""} ${confirming ? "confirming" : ""}`}
               disabled={busy || !capOk(action.cap)}
               title={!capOk(action.cap) ? "此機型尚不支援" : undefined}
               onClick={fire}>

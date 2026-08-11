@@ -437,8 +437,25 @@ a:focus-visible, button:focus-visible, input:focus-visible, select:focus-visible
   position: absolute; left: 50%; transform: translateX(-50%); bottom: 112px;
   z-index: 25; font-size: 14px; padding: 8px 16px; border-radius: 10px;
   background: var(--status-warn-bg); color: var(--status-warn); white-space: nowrap;
+  border: none;
 }
 .hud-toast.err { background: var(--status-danger-bg); color: var(--status-danger); }
+.hud-toast.ok { background: var(--status-ok-bg); color: var(--status-ok); }
+.hud-toast.hud-tap { cursor: pointer; }
+
+/* 失聯訊號格：0 格＋斜線（形狀先於顏色） */
+.sig-bars { position: relative; }
+.sig-slash {
+  position: absolute; left: -2px; right: -2px; top: 50%; height: 2px;
+  background: var(--status-danger); transform: rotate(-40deg); border-radius: 1px;
+}
+
+/* 返航＝緊急動作：danger 紅（accent 鐵則），與展開面板 RTL 同語意 */
+.hud-cta.danger {
+  background: var(--status-danger-bg); color: var(--status-danger);
+  border-color: var(--status-danger-border);
+}
+.map-wrap .maplibregl-ctrl-bottom-left { bottom: 34px; }
 
 .hud-events {
   position: absolute; left: 0; right: 0; bottom: 0; z-index: 26;
