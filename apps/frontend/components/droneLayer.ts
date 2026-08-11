@@ -107,11 +107,12 @@ export function createDroneLayer(
         const mc = maplibregl.MercatorCoordinate.fromLngLat([d.lon, d.lat], d.alt);
         let s = mc.meterInMercatorCoordinateUnits() * (d.radiusM ?? 3);
 
-        // 縮放自適應（使用者第四輪）：投影半徑夾 [7,16]px——近看不佔畫面、
-        // 遠看不消失；中間隨縮放連續。命中半徑用夾後值（pickDrone 一致）。
-        // 半徑量測用**三軸 Jacobian 的橢圓長軸**（最大奇異值）：沿單一世界軸
-        // 量會隨旋轉/傾斜呼吸（該軸貼近視線時投影縮短→夾限回算跟著放大，
-        // 使用者回報「旋轉時球忽大忽小」的根因），奇異值對任意旋轉不變
+        // 縮放自適應（使用者第四輪＋第六輪定案）：**螢幕半徑只由 zoom 決定**
+        // ——同縮放比例下旋轉/傾角/球在畫面何處都不改變大小。第一版夾限沿
+        // 單軸量測會隨旋轉呼吸；第二版奇異值修了量測，但透視下球偏離旋轉
+        // 中心時深度仍隨旋轉變、未夾限區間尺寸照樣變（使用者二次回報）。
+        // 目標半徑改由 zoom 的地面 m/px 推得（旋轉不變），Jacobian 奇異值
+        // 只用來把目標半徑準確換算回世界尺度
         const c4 = new THREE.Vector4(mc.x, mc.y, mc.z ?? 0, 1).applyMatrix4(proj);
         let cx = 0, cy = 0, r = 0;
         const visible = c4.w > 0;
@@ -129,8 +130,12 @@ export function createDroneLayer(
           const b = cols.reduce((t, c) => t + c[0] * c[1], 0);
           const r0 = Math.sqrt(
             (a + c2) / 2 + Math.sqrt(((a - c2) / 2) ** 2 + b * b));
-          r = Math.min(16, Math.max(7, r0));
-          if (r0 > 0.01) s *= r / r0;   // 以夾後螢幕半徑回算世界尺度
+          // 目標半徑＝zoom 的地面 m/px（512-tile 尺度）換算實體半徑後夾限：
+          // 只含 zoom 與緯度，旋轉/傾角/深度皆不影響
+          const mppZoom = (78271.517 * Math.cos((d.lat * Math.PI) / 180))
+            / Math.pow(2, map.getZoom());
+          r = Math.min(16, Math.max(7, (d.radiusM ?? 3) / mppZoom));
+          if (r0 > 0.01) s *= r / r0;   // 以目標螢幕半徑回算世界尺度
         }
 
         const model = new THREE.Matrix4()

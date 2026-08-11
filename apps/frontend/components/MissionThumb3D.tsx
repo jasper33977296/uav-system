@@ -10,8 +10,6 @@ import { useId, useRef, useState } from "react";
 
 export interface ThumbWp { lat: number; lon: number; alt?: number | null }
 
-const PITCH = (55 * Math.PI) / 180;
-const COS_P = Math.cos(PITCH), SIN_P = Math.sin(PITCH);
 const GRID_M = 50;
 
 export default function MissionThumb3D({ wps, className = "", onTap }: {
@@ -23,7 +21,9 @@ export default function MissionThumb3D({ wps, className = "", onTap }: {
 }) {
   const clipId = useId();
   const [bearing, setBearing] = useState(-30);
-  const dragRef = useRef<{ x: number; y: number; b: number } | null>(null);
+  // 垂直拖曳＝俯仰（15–85°，使用者：要能壓低視角看高低差）；水平＝bearing 無限制
+  const [pitch, setPitch] = useState(55);
+  const dragRef = useRef<{ x: number; y: number; b: number; p: number } | null>(null);
   const movedRef = useRef(false);
   const suppressClickRef = useRef(false);
 
@@ -40,10 +40,13 @@ export default function MissionThumb3D({ wps, className = "", onTap }: {
   }));
   const maxR = Math.max(...xyz.map((p) => Math.hypot(p.x, p.y)), 1);
   const zMax = Math.max(...xyz.map((p) => p.z), 0);
-  // 恆 fit＝旋轉不變：以水平最大半徑（旋轉掃出的圓）＋高度餘裕算比例
+  const P = (pitch * Math.PI) / 180;
+  const COS_P = Math.cos(P), SIN_P = Math.sin(P);
+  // 恆 fit＝旋轉不變：以水平最大半徑（旋轉掃出的圓）＋最壞高度餘裕
+  // （sin 上限取 1，pitch 調整時比例不跳）算比例
   const scale = Math.min(
     (50 - 10) / maxR,
-    (50 - 10) / (maxR * COS_P + zMax * SIN_P),
+    (50 - 10) / (maxR + zMax),
   );
 
   const B = (bearing * Math.PI) / 180;
@@ -77,16 +80,19 @@ export default function MissionThumb3D({ wps, className = "", onTap }: {
       style={{ touchAction: "pan-y" }}
       onPointerDown={(e) => {
         movedRef.current = false;
-        dragRef.current = { x: e.clientX, y: e.clientY, b: bearing };
+        dragRef.current = { x: e.clientX, y: e.clientY, b: bearing, p: pitch };
         (e.currentTarget as Element).setPointerCapture(e.pointerId);
       }}
       onPointerMove={(e) => {
         const dr = dragRef.current;
         if (!dr) return;
         const dx = e.clientX - dr.x;
+        const dy = e.clientY - dr.y;
         // 位移門檻 5px（雙軸）：小抖動視為 click 放行（驗收修正）
-        if (Math.hypot(dx, e.clientY - dr.y) > 5) movedRef.current = true;
+        if (Math.hypot(dx, dy) > 5) movedRef.current = true;
         setBearing(dr.b + dx * 0.8);
+        // 往下拖＝壓低視角（更側視，高低差最清楚）、往上拖＝趨近俯視
+        setPitch(Math.max(15, Math.min(85, dr.p + dy * 0.5)));
       }}
       onPointerUp={() => {
         const wasDrag = dragRef.current != null;
