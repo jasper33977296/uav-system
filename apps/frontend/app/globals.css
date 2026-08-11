@@ -13,6 +13,17 @@
   --hairline: #2c2c2a;
   --border: rgba(255, 255, 255, 0.1);
   --series-1: #3987e5;
+  /* 狀態語意色（全站 restyle 前置：規則不再硬編色值，換膚只改這裡）。
+     值＝原硬編值，兩主題共用；資料序列/分級色仍在 TS（CVD 驗證附理由），
+     design tokens 到位時一起換並重驗 */
+  --status-ok: #0ca30c;
+  --status-ok-bg: rgba(12, 163, 12, 0.08);
+  --status-warn: #fab219;
+  --status-serious: #e05e0e;
+  --status-serious-bg: rgba(224, 94, 14, 0.08);
+  --status-danger: #e05e5e;
+  --status-danger-border: rgba(208, 59, 59, 0.4);
+  --status-danger-bg: rgba(208, 59, 59, 0.12);
 }
 :root[data-theme="light"] {
   color-scheme: light;
@@ -180,9 +191,9 @@ body {
   background: var(--surface); color: var(--ink); border: 1px solid var(--hairline);
 }
 .form-row button:disabled, .btn-danger:disabled { opacity: 0.4; cursor: not-allowed; }
-.btn-danger { color: #e05e5e; border-color: rgba(208, 59, 59, 0.4); padding: 4px 12px; }
-.btn-danger:hover:not(:disabled) { background: rgba(208, 59, 59, 0.12); }
-.form-err { margin-top: 8px; font-size: 12px; color: #e05e5e; }
+.btn-danger { color: var(--status-danger); border-color: var(--status-danger-border); padding: 4px 12px; }
+.btn-danger:hover:not(:disabled) { background: var(--status-danger-bg); }
+.form-err { margin-top: 8px; font-size: 12px; color: var(--status-danger); }
 .drone-head .spacer { flex: 1; }
 .row-link { cursor: pointer; }
 
@@ -316,19 +327,19 @@ body {
 }
 .cmd-emergency { padding-top: 6px; border-top: 1px dashed var(--hairline); }
 .cmd-result { font-size: 12px; line-height: 1.5; word-break: break-all; }
-.cmd-result.ok { color: #0ca30c; }
-.cmd-result.err { color: #e05e0e; }
+.cmd-result.ok { color: var(--status-ok); }
+.cmd-result.err { color: var(--status-serious); }
 
 /* .plan 匯入的幾何預檢報告 */
 .plan-report { margin-top: 8px; font-size: 12.5px; line-height: 1.7; }
-.plan-report .ok { color: #0ca30c; }
-.plan-report .bad { color: #e05e0e; }
-.plan-report .warn { color: #fab219; }
+.plan-report .ok { color: var(--status-ok); }
+.plan-report .bad { color: var(--status-serious); }
+.plan-report .warn { color: var(--status-warn); }
 
 /* 飛行就緒橫幅（QGC Ready To Fly 同源） */
 .cmd-ready { font-size: 12.5px; line-height: 1.6; padding: 6px 8px; border-radius: 6px; }
-.cmd-ready.ok { color: #0ca30c; background: rgba(12, 163, 12, 0.08); }
-.cmd-ready.warn { color: #e05e0e; background: rgba(224, 94, 14, 0.08); }
+.cmd-ready.ok { color: var(--status-ok); background: var(--status-ok-bg); }
+.cmd-ready.warn { color: var(--status-serious); background: var(--status-serious-bg); }
 
 /* 起飛高度輸入 */
 .cmd-alt { display: flex; align-items: center; gap: 4px; font-size: 12.5px; color: var(--ink-2); }
@@ -357,8 +368,8 @@ body {
   display: flex; gap: 10px; flex-wrap: wrap; align-items: baseline;
   font-size: 12.5px; color: var(--ink-2); font-variant-numeric: tabular-nums;
 }
-.cmd-status .st-ok { color: #0ca30c; font-weight: 600; }
-.cmd-status .st-warn { color: #e05e0e; font-weight: 600; }
+.cmd-status .st-ok { color: var(--status-ok); font-weight: 600; }
+.cmd-status .st-warn { color: var(--status-serious); font-weight: 600; }
 
 /* 虛擬搖桿（手動控制） */
 .joy-row { display: flex; gap: 12px; justify-content: space-around; padding: 4px 0; }
@@ -376,7 +387,7 @@ body {
 }
 .joy .label { font-size: 11px; color: var(--ink-2); }
 .joy .sub { font-size: 10px; color: var(--muted); }
-.manual-live { font-size: 12px; color: #e05e0e; }
+.manual-live { font-size: 12px; color: var(--status-serious); }
 
 /* 即時頁檢視切換（地圖 ↔ 即時影像；地圖保持 mounted，影像覆蓋其上） */
 .view-toggle {
