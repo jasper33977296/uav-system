@@ -38,6 +38,7 @@ export interface UavEvent {
   id: number; time: string; severity: "info" | "warning" | "critical";
   type: string; detail: Record<string, unknown>;
   drone?: string | null;   // 多機時標示來源機
+  source?: "vehicle" | "system" | null;   // vehicle＝自駕儀 STATUSTEXT；system＝backend 推導
 }
 
 export interface TrailPoint { lat: number; lon: number; sinr: number | null; alt: number | null }
@@ -91,7 +92,7 @@ interface UavStore {
   setLive: (t: Telemetry) => void;
   select: (id: string) => void;
   setWsConnected: (v: boolean) => void;
-  pushEvent: (e: UavEvent) => void;
+  pushEvent: (e: UavEvent, fold?: boolean) => void;
   seedEvents: (es: UavEvent[]) => void;
 }
 
@@ -152,7 +153,20 @@ export const useUavStore = create<UavStore>((set) => ({
   select: (id) =>
     set((s) => ({ selectedId: id, live: s.fleet[id] ?? s.live })),
   setWsConnected: (v) => set({ wsConnected: v }),
-  pushEvent: (e) => set((s) => ({ events: [e, ...s.events].slice(0, 100) })),
+  // fold＝同句 STATUSTEXT 重複：就地替換同 id 那筆（count/時間更新、位置不動）；
+  // 本地找不到（開頁晚於首播）就當新事件 append
+  pushEvent: (e, fold = false) =>
+    set((s) => {
+      if (fold) {
+        const i = s.events.findIndex((x) => x.id === e.id);
+        if (i >= 0) {
+          const events = [...s.events];
+          events[i] = e;
+          return { events };
+        }
+      }
+      return { events: [e, ...s.events].slice(0, 100) };
+    }),
   // 開頁補歷史用：只在 WS 事件先到時去重（以 id 為準），不覆蓋已收到的
   seedEvents: (es) =>
     set((s) => {

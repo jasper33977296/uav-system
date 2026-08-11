@@ -36,7 +36,8 @@ export function useTelemetry() {
       ws.onmessage = (e) => {
         const msg = JSON.parse(e.data);
         if (msg.type === "telemetry") setLive(msg);
-        else if (msg.type === "event") pushEvent(msg.event);
+        // fold:true＝同句 STATUSTEXT 重複的就地更新（不新增列，7127218 契約）
+        else if (msg.type === "event") pushEvent(msg.event, msg.fold === true);
       };
       ws.onclose = () => {
         setWsConnected(false);
