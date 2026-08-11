@@ -84,6 +84,10 @@ interface UavStore {
   setFormationCfg: (p: Partial<UavStore["formationCfg"]>) => void;
   // 013-B 前半：draft 群組（POST /api/groups 的回應）——預覽自此改讀
   // 後端 materialized assignments（單一真相），設定變更即失效待重建
+  // 013-B 執行中的群組 id：進度視圖以此為準（存 store——元件重掛/state
+  // 丟失時輪詢自癒，不依賴一次性 setState）
+  runGroupId: string | null;
+  setRunGroupId: (id: string | null) => void;
   draftGroup: {
     id: string; name: string; mode: string;
     conflictOk: boolean;
@@ -130,6 +134,8 @@ export const useUavStore = create<UavStore>((set) => ({
     })),
   formationCfg: { mode: "unified", base: "", spacing: 5, assign: {} },
   setFormationCfg: (p) => set((s) => ({ formationCfg: { ...s.formationCfg, ...p } })),
+  runGroupId: null,
+  setRunGroupId: (id) => set({ runGroupId: id }),
   draftGroup: null,
   setDraftGroup: (g) => set({ draftGroup: g }),
   setLive: (t) =>

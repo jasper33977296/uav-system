@@ -122,11 +122,13 @@ export default function CommandPanel() {
     if (!draftGroup) return;
     // 兩段式（群組級一顆鈕）：變紅「確定起飛？」3.5s
     if (!execConfirm) {
+      console.debug("[013b] confirm armed");   // rig 取證：兩段式第一擊
       setExecConfirm(true);
       if (execTimer.current) clearTimeout(execTimer.current);
       execTimer.current = setTimeout(() => setExecConfirm(false), 3500);
       return;
     }
+    console.debug("[013b] confirm fired");     // rig 取證：第二擊送出
     setExecConfirm(false);
     setGroupBusy(true);
     setGateRejects(null);
@@ -135,8 +137,11 @@ export default function CommandPanel() {
       const res = await fetch(
         `${COMMAND_API}/api/command/group/${draftGroup.id}/execute`, { method: "POST" });
       const body = await res.json().catch(() => ({}));
+      console.debug("[013b] execute resp", res.status, draftGroup.id);   // rig 取證
       if (res.status === 202) {
-        // 序列已交伺服器（斷線不影響；中止只能按 abort）——進入進度視圖
+        // 序列已交伺服器（斷線不影響；中止只能按 abort）——進度視圖以
+        // store 的 runGroupId 為準（重掛自癒），本地只是資料快取
+        useUavStore.getState().setRunGroupId(draftGroup.id);
         setGroupRun({
           id: draftGroup.id, status: "executing",
           assignments: draftGroup.assignments.map((a) => ({ ...a, phase: "idle" })),
@@ -155,22 +160,25 @@ export default function CommandPanel() {
     setGroupBusy(false);
   }
 
-  // 進度輪詢：1s 打 backend GET /api/groups/{id}（後端定案不用 WS）
-  const runId = groupRun?.id ?? null;
+  // 進度輪詢：1s 打 backend GET /api/groups/{id}（後端定案不用 WS）。
+  // 以 store 的 runGroupId 驅動：即使本地快取遺失（重掛/重整）也會
+  // 從輪詢重建視圖資料
+  const runGroupId = useUavStore((s) => s.runGroupId);
   useEffect(() => {
-    if (!runId) return;
+    if (!runGroupId) { setGroupRun(null); return; }
     const t = setInterval(async () => {
       try {
-        const r = await fetch(`${API}/api/groups/${runId}`);
+        const r = await fetch(`${API}/api/groups/${runGroupId}`);
         if (!r.ok) return;
         const g = await r.json();
-        setGroupRun((cur) => cur && cur.id === runId
-          ? { id: cur.id, status: g.status, assignments: g.assignments ?? cur.assignments }
-          : cur);
+        setGroupRun({
+          id: runGroupId, status: g.status,
+          assignments: g.assignments ?? [],
+        });
       } catch { /* 掉一拍下秒再試 */ }
     }, 1000);
     return () => clearInterval(t);
-  }, [runId]);
+  }, [runGroupId]);
 
   async function abortGroup() {
     if (!groupRun) return;
@@ -457,14 +465,16 @@ export default function CommandPanel() {
               if (t.ready === false) out.push(`${name}：未就緒`);
               return out;
             });
-            // ── 進度視圖（執行中接管面板；過程唯一互動＝中止） ──
-            if (groupRun) {
+            // ── 進度視圖（執行中接管面板；過程唯一互動＝中止）──
+            // 條件用 store 的 runGroupId：一次性 setState 遺失也不會漏切視圖
+            if (runGroupId) {
+              const status = groupRun?.status ?? "executing";
               const running = ["executing", "flying", "aborting", "pending_approval"]
-                .includes(groupRun.status);
+                .includes(status);
               return (<>
                 <div className="cmd-status">
                   <span className="st-target">
-                    {GROUP_STATUS[groupRun.status] ?? groupRun.status}
+                    {GROUP_STATUS[status] ?? status}
                   </span>
                   <span className="spacer" />
                   {running ? (
@@ -472,10 +482,14 @@ export default function CommandPanel() {
                       onClick={abortGroup}>{abortBusy ? "⋯" : "中止"}</button>
                   ) : (
                     <button className="btn-plain btn-sm"
-                      onClick={() => setGroupRun(null)}>返回設定</button>
+                      onClick={() => {
+                        useUavStore.getState().setRunGroupId(null);
+                        setGroupRun(null);
+                      }}>返回設定</button>
                   )}
                 </div>
-                {groupRun.assignments.map((a) => (
+                {!groupRun && <div className="hint-line">狀態載入中…</div>}
+                {(groupRun?.assignments ?? []).map((a) => (
                   <div className="run-row" key={a.drone_id}>
                     <span className="dot" style={{ background: colorFor(a.drone_id) }} />
                     <span>{a.drone_name ?? a.drone_id.slice(0, 6)}</span>
@@ -487,7 +501,7 @@ export default function CommandPanel() {
                   </div>
                 ))}
                 {/* 失敗必須看得見：結構化原因原文逐台列出 */}
-                {groupRun.assignments.filter((a) => a.error?.msg).map((a) => (
+                {(groupRun?.assignments ?? []).filter((a) => a.error?.msg).map((a) => (
                   <div className="cmd-result err" key={`e${a.drone_id}`}>
                     {a.drone_name ?? a.drone_id.slice(0, 6)}：{a.error!.msg}
                     {a.error!.hint ? `——${a.error!.hint}` : ""}
