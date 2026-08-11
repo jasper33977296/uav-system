@@ -9,6 +9,7 @@
  */
 import { useEffect, useRef, useState } from "react";
 
+import EventModal from "@/components/EventModal";
 import { evText } from "@/lib/evtext";
 import { classifySinr } from "@/lib/signal";
 import { useUavStore } from "@/lib/store";
@@ -69,6 +70,10 @@ export function Battery({ pct, plain = false }: {
 export function EventsCard() {
   const events = useUavStore((s) => s.events);
   const [src, setSrc] = useState<"all" | "vehicle" | "system">("all");
+  // 事件詳情 modal（§2.7）：單一 modal、新點替換；存 id 不存物件——
+  // fold 就地更新時 modal 跟著長 ×N
+  const [openEvId, setOpenEvId] = useState<number | null>(null);
+  const openEv = events.find((e) => e.id === openEvId);
   const shown = events.filter((e) =>
     src === "all" || (src === "vehicle" ? e.source === "vehicle" : e.source !== "vehicle"));
   const evTime = (t: string) =>
@@ -90,7 +95,9 @@ export function EventsCard() {
           const count = (e.type === "statustext" || e.type === "vehicle_event")
             && typeof e.detail.count === "number" ? e.detail.count : 0;
           return (
-            <div className={`event ${e.severity === "critical" ? "ev-crit" : ""}`} key={e.id}>
+            <div className={`event ev-tap ${e.severity === "critical" ? "ev-crit" : ""}`}
+              key={e.id} title="點擊看詳情"
+              onClick={() => setOpenEvId(e.id)}>
               <span className="dot" style={{
                 background: e.severity === "critical" ? "#a01818"
                   : e.severity === "warning" ? "#fab219" : "#8f8b80" }} />
@@ -104,6 +111,14 @@ export function EventsCard() {
           );
         })}
       </div>
+      {openEv && (
+        <EventModal onClose={() => setOpenEvId(null)}
+          ev={{ ...openEv,
+            // REST 補歷史的事件只有 drone_id——查 fleet 補機名
+            drone: openEv.drone ?? (openEv.drone_id
+              ? useUavStore.getState().fleet[openEv.drone_id]?.drone_name : null)
+              ?? null }} />
+      )}
     </div>
   );
 }

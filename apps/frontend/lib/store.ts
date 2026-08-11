@@ -54,8 +54,10 @@ export interface Telemetry {
 export interface UavEvent {
   id: number; time: string; severity: "info" | "warning" | "critical";
   type: string; detail: Record<string, unknown>;
-  drone?: string | null;   // 多機時標示來源機
+  drone?: string | null;   // 多機時標示來源機（WS 路徑帶名）
+  drone_id?: string | null; // REST 補歷史路徑帶 id 不帶名——顯示時查 fleet
   source?: "vehicle" | "system" | null;   // vehicle＝自駕儀 STATUSTEXT；system＝backend 推導
+  timeFirst?: string;      // 折疊事件首次時間（客端保留；modal ×N 時間範圍用）
 }
 
 export interface TrailPoint { lat: number; lon: number; sinr: number | null; alt: number | null }
@@ -195,7 +197,8 @@ export const useUavStore = create<UavStore>((set) => ({
         const i = s.events.findIndex((x) => x.id === e.id);
         if (i >= 0) {
           const events = [...s.events];
-          events[i] = e;
+          // 折疊就地更新會覆蓋 time——首次時間客端保留（§2.7 ×N 範圍）
+          events[i] = { ...e, timeFirst: events[i].timeFirst ?? events[i].time };
           return { events };
         }
       }

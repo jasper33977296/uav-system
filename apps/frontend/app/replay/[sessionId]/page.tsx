@@ -6,8 +6,10 @@ import { useParams, useRouter } from "next/navigation";
 import { useEffect, useMemo, useRef, useState } from "react";
 
 import { createDroneLayer } from "@/components/droneLayer";
+import EventModal from "@/components/EventModal";
 import { SignalBars } from "@/components/SimpleHud";
 import { routeLayer } from "@/lib/deckRoute";
+import { evText } from "@/lib/evtext";
 import { CANVAS, groundGrid, pathArrows, ribbon, trailLineString } from "@/lib/geo";
 import { API, classifySinr } from "@/lib/signal";
 
@@ -15,7 +17,11 @@ interface LinkRow {
   time: string; lat: number | null; lon: number | null; alt_rel: number | null;
   sinr: number | null; rtt_ms: number | null;
 }
-interface Ev { id: number; time: string; severity: string; type: string }
+interface Ev {
+  id: number; time: string; severity: string; type: string;
+  detail: Record<string, unknown>;
+  source?: string | null;
+}
 
 const fmt = (v: number | null | undefined, d = 1) => (v == null ? "—" : v.toFixed(d));
 
@@ -23,11 +29,12 @@ const fmt = (v: number | null | undefined, d = 1) => (v == null ? "—" : v.toFi
 const W = 1000;
 
 function Chart({
-  rows, field, height, yLabel, thresholds, events, t0, t1, idx, onSeek,
+  rows, field, height, yLabel, thresholds, events, t0, t1, idx, onSeek, onEvent,
 }: {
   rows: LinkRow[]; field: "sinr" | "rtt_ms"; height: number; yLabel: string;
   thresholds?: number[]; events?: Ev[]; t0: number; t1: number; idx: number;
   onSeek?: (idx: number) => void;
+  onEvent?: (e: Ev) => void;
 }) {
   const vals = rows.map((r) => r[field]).filter((v): v is number => v != null);
   if (!vals.length) return null;
@@ -75,8 +82,13 @@ function Chart({
             key={e.id}
             points={`${x(new Date(e.time).getTime()) - 5},2 ${x(new Date(e.time).getTime()) + 5},2 ${x(new Date(e.time).getTime())},11`}
             fill={e.severity === "critical" ? "#a01818" : e.severity === "warning" ? "#fab219" : "#8f8b80"}
+            style={onEvent ? { cursor: "pointer" } : undefined}
+            // 點三角＝跳到事件時刻（pointerdown 冒泡到 svg 的 seek）＋開詳情
+            // modal（§2.7：modal 接手細節職責；title 保留 hover 摘要）
+            onClick={() => onEvent?.(e)}
           >
-            <title>{e.type}</title>
+            <title>{evText({ type: e.type, detail: e.detail,
+              severity: e.severity as "info" | "warning" | "critical" })}</title>
           </polygon>
         ))}
         <line x1={cx} x2={cx} y1={0} y2={height} stroke="var(--ink)" strokeWidth="1"
@@ -90,9 +102,11 @@ export default function Replay() {
   const { sessionId } = useParams<{ sessionId: string }>();
   const router = useRouter();
   const [rows, setRows] = useState<LinkRow[]>([]);
-  const [meta, setMeta] = useState<{ mission_id: string | null; mission_name: string | null } | null>(null);
+  const [meta, setMeta] = useState<{ mission_id: string | null;
+    mission_name: string | null; drone_name?: string | null } | null>(null);
   const [plan, setPlan] = useState<{ lat: number; lon: number; alt: number | null }[]>([]);
   const [events, setEvents] = useState<Ev[]>([]);
+  const [openEv, setOpenEv] = useState<Ev | null>(null);   // 事件詳情 modal（§2.7）
   const [idx, setIdx] = useState(0);
   const mapRef = useRef<maplibregl.Map | null>(null);
   const containerRef = useRef<HTMLDivElement>(null);
@@ -115,7 +129,13 @@ export default function Replay() {
       })
       .catch(() => {});
     fetch(`${API}/api/events?session_id=${sessionId}`)
-      .then((r) => r.json()).then(setEvents).catch(() => {});
+      .then((r) => r.json())
+      // REST 的 detail 是 JSONB 字串——解析成物件（modal 細節層要用）
+      .then((rows) => setEvents(rows.map((e: any) => ({
+        ...e,
+        detail: typeof e.detail === "string" ? JSON.parse(e.detail) : e.detail ?? {},
+      }))))
+      .catch(() => {});
   }, [sessionId]);
 
   const [t0, t1] = useMemo(() => {
@@ -298,12 +318,17 @@ export default function Replay() {
             <summary>〓 圖表</summary>
             <Chart rows={rows} field="sinr" height={110} yLabel="SINR (dB)"
                    thresholds={[5, -2]} events={events} t0={t0} t1={t1} idx={idx}
-                   onSeek={(i) => { setIdx(i); setPlaying(false); }} />
+                   onSeek={(i) => { setIdx(i); setPlaying(false); }}
+                   onEvent={setOpenEv} />
             <Chart rows={rows} field="rtt_ms" height={70} yLabel="RTT (ms)"
                    t0={t0} t1={t1} idx={idx}
                    onSeek={(i) => { setIdx(i); setPlaying(false); }} />
           </details>
         </div>
+      )}
+      {openEv && (
+        <EventModal ev={{ ...openEv, drone: meta?.drone_name ?? null }}
+          onClose={() => setOpenEv(null)} />
       )}
     </div>
   );
