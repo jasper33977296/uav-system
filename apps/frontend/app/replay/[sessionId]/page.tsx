@@ -23,10 +23,11 @@ const fmt = (v: number | null | undefined, d = 1) => (v == null ? "—" : v.toFi
 const W = 1000;
 
 function Chart({
-  rows, field, height, yLabel, thresholds, events, t0, t1, idx,
+  rows, field, height, yLabel, thresholds, events, t0, t1, idx, onSeek,
 }: {
   rows: LinkRow[]; field: "sinr" | "rtt_ms"; height: number; yLabel: string;
   thresholds?: number[]; events?: Ev[]; t0: number; t1: number; idx: number;
+  onSeek?: (idx: number) => void;
 }) {
   const vals = rows.map((r) => r[field]).filter((v): v is number => v != null);
   if (!vals.length) return null;
@@ -42,10 +43,26 @@ function Chart({
     .join(" ");
   const cx = rows[idx] ? x(new Date(rows[idx].time).getTime()) : 0;
 
+  // 點圖表跳時刻（ui-spec §5.3）：點擊位置 → 時間 → 最近樣本；
+  // 事件三角同一路徑（三角座標＝事件時刻，點它即跳到事件）
+  const seek = (e: React.PointerEvent<SVGSVGElement>) => {
+    if (!onSeek || !rows.length) return;
+    const r = e.currentTarget.getBoundingClientRect();
+    const t = t0 + ((e.clientX - r.left) / r.width) * (t1 - t0);
+    let best = 0, bd = Infinity;
+    rows.forEach((row, i) => {
+      const d = Math.abs(new Date(row.time).getTime() - t);
+      if (d < bd) { bd = d; best = i; }
+    });
+    onSeek(best);
+  };
+
   return (
     <div className="chart">
       <span className="chart-label">{yLabel}</span>
-      <svg viewBox={`0 0 ${W} ${height}`} preserveAspectRatio="none">
+      <svg viewBox={`0 0 ${W} ${height}`} preserveAspectRatio="none"
+           onPointerDown={seek}
+           style={onSeek ? { cursor: "crosshair" } : undefined}>
         {(thresholds ?? []).map((th) => (
           <line key={th} x1={0} x2={W} y1={y(th)} y2={y(th)}
                 stroke="var(--muted)" strokeWidth="1" strokeDasharray="4 4"
@@ -280,9 +297,11 @@ export default function Replay() {
             }}>
             <summary>〓 圖表</summary>
             <Chart rows={rows} field="sinr" height={110} yLabel="SINR (dB)"
-                   thresholds={[5, -2]} events={events} t0={t0} t1={t1} idx={idx} />
+                   thresholds={[5, -2]} events={events} t0={t0} t1={t1} idx={idx}
+                   onSeek={(i) => { setIdx(i); setPlaying(false); }} />
             <Chart rows={rows} field="rtt_ms" height={70} yLabel="RTT (ms)"
-                   t0={t0} t1={t1} idx={idx} />
+                   t0={t0} t1={t1} idx={idx}
+                   onSeek={(i) => { setIdx(i); setPlaying(false); }} />
           </details>
         </div>
       )}

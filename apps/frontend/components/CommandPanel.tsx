@@ -370,7 +370,7 @@ export default function CommandPanel() {
                 <div className="hint-line" key={i}>· {h}</div>
               ))}
               <div className="cmd-sec">手動</div>
-              <p className="hint-line">編隊模式中停用——手動控制限單機。</p>
+              <p className="hint-line">編隊模式中停用</p>
             </>);
           })()}
 
