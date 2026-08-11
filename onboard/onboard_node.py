@@ -30,7 +30,13 @@ serial 用 termios 直開 tty；MAVLink 只聽三種訊息且只收不發，內�
   BUFFER_PATH  持久緩衝，預設 /var/lib/uav-link/buffer.sqlite3
   PX4_URL      機上 PX4 MAVLink，預設 udpin:0.0.0.0:14540（udpin:// 寫法也接受）
   PING_HOST    RTT 目標，預設取 GROUND_API 的主機
-  DRONE_ID     選填；不填則地面站記在「主機」名下（單機部署的正確預設）
+  MAV_SYSID    這台的 MAVLink sysid（多機部署建議用這個）——啟動時向地面站
+               查 GET /api/drones 比對解出 drone_id。**雞生蛋**：drone_id 是
+               地面站的 UUID，要等該機首次 MAVLink 連上被自動註冊才存在，
+               機上無從預先知道；sysid 則是機上本來就設好的（見 rb5-setup）
+  DRONE_ID     直接給地面站的 drone_id UUID（相容路徑；知道 UUID 時可用）
+               兩者皆不填＝單機部署，地面站記在「主機」名下；**多機必須設
+               其一**，否則三台的即時訊號會全被記到主機身上（靜默混料）
 
 模式：--probe 上機首驗（印 modem 原始回應）；--selftest 解析器測試（免硬體）
 """
@@ -76,11 +82,17 @@ SAMPLE_HZ = float(os.environ.get("SAMPLE_HZ", "1.0"))
 BUFFER_PATH = os.environ.get("BUFFER_PATH", "/var/lib/uav-link/buffer.sqlite3")
 PX4_URL = os.environ.get("PX4_URL", "udpin:0.0.0.0:14540")
 DRONE_ID = os.environ.get("DRONE_ID") or None
+_MAV_SYSID_RAW = (os.environ.get("MAV_SYSID") or "").strip()
+try:                                              # 空＝未設；非數字＝設錯（run() 會擋）
+    MAV_SYSID = int(_MAV_SYSID_RAW or 0) or None
+except ValueError:
+    MAV_SYSID = None
 PING_HOST = os.environ.get("PING_HOST") or (
     GROUND_API.split("//")[-1].split(":")[0] if GROUND_API else "")
 
 BUFFER_KEEP_SENT_DAYS = 7      # 已送達樣本保留天數（地面站重建資料庫時可救援）
-PING_LOSS_WINDOW = 20          # 丟包率統計視窗（最近 N 次 ping）
+PING_LOSS_WINDOW = 20          # 丟包率統計視窗（最近 N 次 ping，jitter 同窗）
+IDENTITY_RETRY_S = 30          # drone_id 解析重試間隔（該機連上地面站前解不到）
 
 
 # ── AT 回應解析 ──────────────────────────────────────────────
@@ -285,10 +297,24 @@ class PingState(object):
     def __init__(self):
         self.rtt_ms = None
         self.loss_pct = 0.0
+        self.jitter_ms = None
+
+
+def jitter_ms(rtts):
+    """連續 RTT 的平均變動量（mean |Δ|，RFC 3550 的簡化版）。
+
+    不另外發探測：直接用既有 ping 序列算，成本為零而 schema 早有 jitter_ms 欄。
+    少於兩筆無從談變動 → None（誠實留空，不填 0 假裝很穩）。"""
+    vals = [r for r in rtts if r is not None]
+    if len(vals) < 2:
+        return None
+    diffs = [abs(vals[i] - vals[i - 1]) for i in range(1, len(vals))]
+    return round(sum(diffs) / len(diffs), 1)
 
 
 def ping_thread(state, host):
     results = []
+    rtts = []
     while True:
         t0 = time.monotonic()
         try:
@@ -303,6 +329,10 @@ def ping_thread(state, host):
         results.append(rtt is not None)
         del results[:-PING_LOSS_WINDOW]
         state.loss_pct = round(100.0 * (1 - float(sum(results)) / len(results)), 1)
+        if rtt is not None:            # 只把成功的 RTT 納入變動量（逾時不是「變慢」）
+            rtts.append(rtt)
+            del rtts[:-PING_LOSS_WINDOW]
+        state.jitter_ms = jitter_ms(rtts)
         time.sleep(max(0.0, 1.0 - (time.monotonic() - t0)))
 
 
@@ -359,29 +389,100 @@ def post_json(url, payload, timeout=3.0):
         r.close()
 
 
+def get_json(url, timeout=3.0):
+    r = urllib.request.urlopen(url, timeout=timeout)
+    try:
+        return json.loads(r.read().decode())
+    finally:
+        r.close()
+
+
+def match_sysid(drones, sysid):
+    """GET /api/drones 的回應 → 該 sysid 對應的 drone_id（找不到回 None）。
+    sysid 為 None 時一律不匹配——否則會誤中「還沒綁 sysid」（mav_sysid=null）的列。"""
+    if sysid is None:
+        return None
+    for d in drones or []:
+        if d.get("mav_sysid") == sysid and d.get("id"):
+            return str(d["id"])
+    return None
+
+
+class Identity(object):
+    """這台機在地面站的身分（drone_id）。
+
+    兩條路徑：DRONE_ID 直接給 UUID（相容）；MAV_SYSID=N 則向地面站查
+    GET /api/drones 比對 mav_sysid 解出 UUID——**雞生蛋**的解法：UUID 要等
+    該機首次 MAVLink 連上被自動註冊才存在，機上無從預先寫進 .env。
+
+    `blocked`＝「該解但還沒解出」：此時**兩條通道都不送**。不帶 drone_id 送出
+    會讓地面站 fallback 記到「主機」名下（api.py：`fleet.get(drone_id) if
+    drone_id else live`）——多機時三台的即時訊號全蓋到主機身上、靜默混料。
+    寧可讓緩衝堆著（本來就是為斷線設計的）等解出後補傳，也不要送錯身分的資料。
+    兩者皆不設＝單機部署，blocked=False、不帶 drone_id（維持舊行為）。
+    """
+
+    def __init__(self, drone_id=None, sysid=None):
+        self.drone_id = drone_id
+        self.sysid = sysid
+        self.blocked = bool(sysid) and not drone_id
+
+
+def identity_thread(ident):
+    """背景解析 sysid → drone_id，解到為止（解不到就吵，不靜默降級）。"""
+    n = 0
+    while ident.drone_id is None:
+        try:
+            did = match_sysid(get_json(GROUND_API + "/api/drones"), ident.sysid)
+            if did:
+                ident.drone_id = did
+                ident.blocked = False
+                print("[identity] sysid {} → drone_id {}（樣本開始送出）".format(
+                    ident.sysid, did), flush=True)
+                return
+            if n % 10 == 0:        # 每 10 輪印一次，別洗版
+                print("[identity] 地面站還沒有 mav_sysid={} 的機——該機首次 MAVLink "
+                      "連上地面站才會自動註冊。樣本先進緩衝不送出（避免記到主機"
+                      "名下），{}s 後重試".format(ident.sysid, IDENTITY_RETRY_S), flush=True)
+        except Exception as e:
+            if n % 10 == 0:
+                print("[identity] 查地面站失敗（{}: {}），{}s 後重試".format(
+                    type(e).__name__, e, IDENTITY_RETRY_S), flush=True)
+        n += 1
+        time.sleep(IDENTITY_RETRY_S)
+
+
 class Latest(object):
     """main → sender 的最新樣本交接（即時通道用）。GIL 下單一參照賦值安全。"""
     sample = None
 
 
-def sender_thread(latest):
+def sender_thread(latest, ident):
     """送出執行緒：網路逾時只拖慢送出，永不拖慢取樣。"""
     buf = Buffer(BUFFER_PATH)                  # 自己的 sqlite 連線
     n = 0
     while True:
         t0 = time.monotonic()
+        if ident.blocked:      # 身分未解出：兩條通道都先不送（見 Identity）
+            time.sleep(1.0)
+            continue
+        did = ident.drone_id
         s = latest.sample
         if s is not None:
             try:                               # 即時通道：失敗放棄
-                post_json(GROUND_API + "/api/link-metrics/live", s, timeout=1.5)
+                # **身分要跟著即時通道走**：不帶 drone_id 的話地面站會 fallback
+                # 到主機，多機時三台的即時訊號全蓋到主機身上（而記錄通道帶了
+                # drone_id 入庫是對的）＝畫面與資料不一致。
+                post_json(GROUND_API + "/api/link-metrics/live",
+                          dict(s, drone_id=did) if did else s, timeout=1.5)
             except Exception:
                 pass
         pending = buf.unsent()
         if pending:
             try:                               # 記錄通道：補傳到成功
                 body = {"samples": pending}
-                if DRONE_ID:
-                    body["drone_id"] = DRONE_ID
+                if did:
+                    body["drone_id"] = did
                 res = post_json(GROUND_API + "/api/link-metrics/batch", body)
                 buf.mark_sent(res["accepted_seq"])
             except urllib.error.HTTPError as e:
@@ -407,7 +508,12 @@ def sender_thread(latest):
 # ── 主迴圈：讀 modem ＋ 組樣本 ＋ 落盤（穩定節奏）─────────────
 def run():
     if not GROUND_API:
-        sys.exit("GROUND_API 未設定（如 http://192.168.55.10:38000）")
+        sys.exit("GROUND_API 未設定（如 http://10.141.2.32:38000）")
+    if _MAV_SYSID_RAW and MAV_SYSID is None:
+        # 設了卻讀不出數字＝設定打錯。不能默默當「沒設」跑下去——那會讓這台的
+        # 樣本記到地面站主機名下（靜默混料），錯得無聲無息。寧可立刻停、講清楚。
+        sys.exit("MAV_SYSID={!r} 不是有效的 sysid（要正整數，如 MAV_SYSID=2）".format(
+            _MAV_SYSID_RAW))
     modem = Modem(AT_PORT, AT_BAUD)
     print("[modem] {}@{} 開啟；ATI → {!r}".format(
         AT_PORT, AT_BAUD, modem.cmd("ATI", 0.3).strip()[:60]), flush=True)
@@ -417,7 +523,18 @@ def run():
     px4 = Px4State()
     ping = PingState()
     latest = Latest()
-    threads = [(px4_thread, (px4,)), (sender_thread, (latest,))]
+    ident = Identity(DRONE_ID, MAV_SYSID)
+    if ident.drone_id:
+        print("[identity] drone_id {}（直接指定）".format(ident.drone_id), flush=True)
+    elif ident.sysid:
+        print("[identity] 以 MAV_SYSID={} 向地面站解析 drone_id…".format(ident.sysid),
+              flush=True)
+    else:
+        print("[identity] 未設 MAV_SYSID／DRONE_ID：樣本記在地面站「主機」名下"
+              "（單機部署的預設；多機部署請設 MAV_SYSID）", flush=True)
+    threads = [(px4_thread, (px4,)), (sender_thread, (latest, ident))]
+    if ident.blocked:
+        threads.append((identity_thread, (ident,)))
     if PING_HOST:
         threads.append((ping_thread, (ping, PING_HOST)))
     for fn, args in threads:
@@ -433,6 +550,7 @@ def run():
             "time": px4.now_iso(),
             "lat": px4.lat, "lon": px4.lon, "alt_rel": px4.alt_rel,
             "rtt_ms": ping.rtt_ms, "packet_loss_pct": ping.loss_pct,
+            "jitter_ms": ping.jitter_ms,
         })
         latest.sample = buf.append(sample)     # 先落盤，再供 sender 取用
         time.sleep(max(0.0, 1.0 / SAMPLE_HZ - (time.monotonic() - t0)))
@@ -486,6 +604,26 @@ def selftest():
     assert st2.gps_offset is None      # GPS_RAW_INT 的開機時間必須被拒收
     bad = bytearray(frame(33, gpi)); bad[12] ^= 0xFF
     assert mav_frames(bytes(bad)) == []            # CRC 錯的框架不得採用
+
+    # 身分解析（多機）：GET /api/drones 回應 → drone_id
+    drones = [{"id": "aaa", "name": "uav-1", "mav_sysid": 1},
+              {"id": "bbb", "name": "uav-2", "mav_sysid": 2},
+              {"id": "ccc", "name": "no-sysid", "mav_sysid": None}]
+    assert match_sysid(drones, 2) == "bbb", match_sysid(drones, 2)
+    assert match_sysid(drones, 9) is None          # 該機還沒連上＝解不到，不亂猜
+    assert match_sysid([], 1) is None and match_sysid(None, 1) is None
+    # blocked 語意：設了 sysid 但還沒解出＝不送（避免記到主機名下）
+    assert Identity(None, 2).blocked is True
+    assert Identity("uuid-x", 2).blocked is False  # 直接給 UUID＝不必解
+    assert Identity(None, None).blocked is False   # 單機部署＝維持舊行為
+    # 即時通道必須帶 drone_id（本次修的真 bug：不帶會被地面站記到主機名下）
+    live_payload = dict({"sinr": 13.0}, drone_id="bbb")
+    assert live_payload["drone_id"] == "bbb" and live_payload["sinr"] == 13.0
+
+    # jitter：連續 RTT 的平均變動量，不足兩筆回 None（不填 0 假裝很穩）
+    assert jitter_ms([10.0, 12.0, 11.0]) == 1.5    # |2| + |1| = 3 / 2
+    assert jitter_ms([20.0]) is None and jitter_ms([]) is None
+    assert jitter_ms([None, 10.0, 14.0]) == 4.0    # None（逾時）不計入
     print("selftest OK")
 
 

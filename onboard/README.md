@@ -83,7 +83,32 @@ sudo systemctl restart uav-link-node  # 改 .env 後重啟生效
 | `BUFFER_PATH` | `/var/lib/uav-link/buffer.sqlite3` | 持久緩衝，放斷電保留的分割區 |
 | `PX4_URL` | `udpin://0.0.0.0:14540` | 機上 PX4 MAVLink |
 | `PING_HOST` | 取自 GROUND_API | RTT 目標 |
-| `DRONE_ID` | （不填）| 不填＝記在地面站的「主機」名下（單機正確預設）|
+| `MAV_SYSID` | （不填）| **多機部署用這個**：這台的 MAVLink sysid，啟動時向地面站解出 `drone_id`（見下節）|
+| `DRONE_ID` | （不填）| 直接給地面站的 drone_id UUID（相容路徑）|
+
+單機部署兩者皆可不填（記在地面站「主機」名下）；**多機部署必填其一**——
+不填的話每台送回的即時訊號都會被記到主機身上（靜默混料）。
+
+### 多機：身分怎麼來（`MAV_SYSID`）
+
+`drone_id` 是地面站的 UUID，**要等該機首次 MAVLink 連上地面站被自動註冊
+才存在**——機上無從預先寫進 `.env`（雞生蛋）。所以多機部署設的是機上本來
+就有的 `MAV_SYSID`（見 `rb5-setup/`，逐台唯一），節點啟動時向地面站查
+`GET /api/drones` 比對 `mav_sysid` 解出 `drone_id`：
+
+```
+MAV_SYSID=2         # 這台的 sysid；解出的 drone_id 會印在日誌
+```
+
+解不到時（該機還沒連上地面站、或地面站不可達）**兩條通道都先不送**、
+樣本留在緩衝，每 30 秒重試並印原因——寧可堆著等身分正確再補傳，也不要
+送出沒有身分的樣本被記到主機名下。解出後緩衝自動補傳，不會掉資料。
+
+| 欄位 | 來源 | 備註 |
+|---|---|---|
+| `rtt_ms` / `packet_loss_pct` | ping 地面站 | 最近 20 次為統計視窗 |
+| `jitter_ms` | 同一組 ping 序列算 mean \|Δ\| | 不另發探測；不足兩筆留空 |
+| `throughput_up/down_kbps` | **保留欄位、不填** | 主動測速會佔用被測鏈路本身，反而污染量測 |
 
 ## 常見拒絕原因
 
