@@ -77,9 +77,37 @@ def _mode_name(custom_mode: int, autopilot_raw=None) -> str:
     return _PX4_MAIN.get(main, f"MODE_{main}")
 
 
-# MAV_SEVERITY(0-7) → 事件層級；7=DEBUG 不入流
+# MAV_SEVERITY(0-7) → 事件層級；7=DEBUG 不入流。EVENT 的外層 log level 也用
+# 同一枚舉，另有 8=Protocol（框架內部、非給人看）落在表外 → 自然丟棄。
 _SEVERITY = {0: "critical", 1: "critical", 2: "critical", 3: "critical",
              4: "warning", 5: "info", 6: "info"}
+
+
+def _decode_event(msgbuf) -> dict | None:
+    """手工解 MAVLink EVENT（msg 410）裸 frame（issue 014 Phase A.2）。
+
+    PX4 1.14 的 vehicle 通知（Armed/Takeoff…）走 Events 協定、**不走
+    STATUSTEXT**（實測：整天 tlog STATUSTEXT=0、EVENT=65）。當前 pymavlink
+    方言未定義 410（顯示 UNKNOWN_410、payload 解不出），故從 frame bytes 手解。
+    人話文字要逐韌體 event metadata 才翻得出（QGC 那套）——本階段先給
+    severity＋event id＋args，文字翻譯排後續（metadata 落地時同一列自動升級）。
+
+    EVENT 欄位線序（MAVLink2 依型別大小排序）：id(u32) event_time_boot_ms(u32)
+    sequence(u16) destination_component(u8) destination_system(u8)
+    log_levels(u8) arguments(u8[40])＝共 53 bytes；MAVLink2 尾零截斷，補回。
+    """
+    mb = bytes(msgbuf)
+    if len(mb) < 13 or mb[0] != 0xFD:        # 只認 MAVLink2 frame
+        return None
+    plen = mb[1]
+    payload = mb[10:10 + plen]
+    payload = payload + b"\x00" * (53 - len(payload))
+    ev_id = int.from_bytes(payload[0:4], "little")
+    seq = int.from_bytes(payload[8:10], "little")
+    log_levels = payload[12]
+    args = payload[13:53].rstrip(b"\x00")
+    return {"event_id": ev_id, "seq": seq,
+            "severity_ext": log_levels & 0x0F, "args_hex": args.hex()}
 
 # 飛行就緒訊號（QGC「Ready To Fly」同源；docs.px4.io pre_flight_checks）
 _MAV_STATE = {0: "UNINIT", 1: "BOOT", 2: "CALIBRATING", 3: "STANDBY",
@@ -288,6 +316,8 @@ class MavlinkRx:
             st.landed_state = _LANDED.get(msg.landed_state)
         elif t == "STATUSTEXT":
             await self._statustext(ent, st, msg)
+        elif t == "UNKNOWN_410":         # MAVLink EVENT（PX4 vehicle 通知，Phase A.2）
+            await self._vehicle_event(ent, st, msg)
 
     # ── STATUSTEXT → 事件流（issue 014 Phase A）───────────────────────
     # 自駕儀的 log。三件事：長訊息**分段重組**（MAVLink2 STATUSTEXT 切 50 字
@@ -346,6 +376,42 @@ class MavlinkRx:
         ev["drone"] = st.drone_name
         ent["stx_last"] = {"id": ev["id"], "text": text, "sev": sev,
                            "count": 1, "t": now}
+        await manager.broadcast({"type": "event", "event": ev})
+
+    async def _vehicle_event(self, ent: dict, st: LiveState, msg) -> None:
+        """MAVLink EVENT（410）→ 事件流（issue 014 Phase A.2）。折疊同 STATUSTEXT：
+        同 event_id 連續重複折成一筆帶 count。type='vehicle_event'、source='vehicle'；
+        detail 帶 event_id＋args（前端顯示「機上事件 #id（severity）」骨架，metadata
+        文字落地時同列升級全文）。"""
+        try:
+            d = _decode_event(msg.get_msgbuf())
+        except Exception:
+            log.exception("EVENT 解碼失敗")
+            return
+        if not d:
+            return
+        sev = _SEVERITY.get(d["severity_ext"])   # 7=debug／8=protocol 等 → 不入流
+        if not sev:
+            return
+        now = time.monotonic()
+        eid = d["event_id"]
+        last = ent.get("evt_last")
+        if last and last["event_id"] == eid and now - last["t"] < STX_FOLD_S:
+            last["count"] += 1
+            last["t"] = now
+            detail = {"event_id": eid, "args": d["args_hex"], "count": last["count"]}
+            upd = await db.bump_event(last["id"], detail)
+            if upd is not None:
+                await manager.broadcast({"type": "event", "fold": True, "event": {
+                    "id": last["id"], "time": upd["time"], "severity": sev,
+                    "type": "vehicle_event", "detail": detail, "source": "vehicle",
+                    "drone": st.drone_name}})
+                return
+        ev = await db.insert_event(st.drone_id, st.session_id, sev, "vehicle_event",
+                                   {"event_id": eid, "args": d["args_hex"], "count": 1},
+                                   source="vehicle")
+        ev["drone"] = st.drone_name
+        ent["evt_last"] = {"id": ev["id"], "event_id": eid, "count": 1, "t": now}
         await manager.broadcast({"type": "event", "event": ev})
 
     async def _armed_transition(self, st: LiveState, armed: bool):
