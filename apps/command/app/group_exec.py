@@ -191,26 +191,48 @@ class GroupExecutor:
                     await self._set_phase(gid, m["drone_id"], "prearm_failed", self._err(e))
                     return await self._fail_group(gid, members, "解鎖失敗")
 
-            # Phase 3：START（逐台 takeoff 到分層高度 → AUTO.MISSION）
+            # Phase 3：START —— **同時起飛**（全體 takeoff → 等全體到高度 → 全體 MISSION）。
+            # 逐台序列會讓後面的等前面爬完、起飛 skew 大；拆三步讓 N 台幾乎同時離地。
+            # 「等到達目標高度才切 MISSION」是單機 mission_fly 的教訓（地面直接切 MISSION 會
+            # 失敗）；per-sysid 高度由 command router 從 GLOBAL_POSITION_INT 存（不靠 backend）。
             partial = False
-            for m in members:
+            airborne = []
+            for m in members:               # 3a. 全體 takeoff（連發、不等爬升）
                 if abort.is_set():
                     return
                 await self._set_phase(gid, m["drone_id"], "starting")
+                m["_alt_target"] = _BASE_TAKEOFF_ALT + m["layer_index"] * vsep
+                amsl = ((ground_amsl + m["_alt_target"]) if ground_amsl is not None
+                        else m["_alt_target"])   # NAV_TAKEOFF param7=AMSL、經緯/偏航 NaN=原地
                 try:
-                    alt_rel = _BASE_TAKEOFF_ALT + m["layer_index"] * vsep
-                    amsl = (ground_amsl + alt_rel) if ground_amsl is not None else alt_rel
-                    # NAV_TAKEOFF：param7=AMSL、經緯/偏航 NaN=原地。[收尾] 真機逐台
-                    # 地面海拔＋等到達高度 gating（單機 mission_fly 的教訓），需 per-sysid alt。
                     await self._submit_audited(
-                        m["mav_sysid"], f"takeoff:{alt_rel:.0f}m", mav.job_command, 22,
-                        [0.0, 0.0, 0.0, float("nan"), float("nan"), float("nan"), amsl])
+                        m["mav_sysid"], f"takeoff:{m['_alt_target']:.0f}m",
+                        mav.job_command, 22, [0.0, 0.0, 0.0, float("nan"),
+                                              float("nan"), float("nan"), amsl])
+                    airborne.append(m)
+                except Exception as e:
+                    await self._member_rtl(gid, m, self._err(e))
+                    partial = True
+            for m in airborne:              # 3b. 等各自到目標高度 80%（per-sysid alt gating）
+                if abort.is_set():
+                    return
+                if await self._wait_alt(m["mav_sysid"], m["_alt_target"] * 0.8):
+                    m["_alt_ok"] = True
+                else:
+                    alt = (self.router.drones.get(m["mav_sysid"]) or {}).get("alt_rel")
+                    await self._member_rtl(gid, m, {
+                        "msg": f"起飛後未達目標高度（目前 {alt} m / 目標 {m['_alt_target']:.0f} m）",
+                        "hint": "機停在懸停、未進任務——檢查後可重試或 RTL"})
+                    partial = True
+            for m in airborne:              # 3c. 到高度者切 MISSION（已在空中，PX4 跳過任務內 takeoff）
+                if abort.is_set() or not m.get("_alt_ok"):
+                    continue
+                try:
                     await self._submit_audited(m["mav_sysid"], "mode:mission",
                                                mav.job_set_mode, "mission")
                     await self._set_phase(gid, m["drone_id"], "flying")
                 except Exception as e:
-                    # 空中單機失敗：該台 RTL、其他續飛 → group partial（§3）
-                    await self._member_rtl(gid, m, self._err(e))
+                    await self._member_rtl(gid, m, self._err(e))   # 空中單機失敗→RTL、其他續（§3）
                     partial = True
 
             await self._set_status(gid, "partial" if partial else "flying")
@@ -219,6 +241,19 @@ class GroupExecutor:
             await self._set_status(gid, "aborted")
         finally:
             self.runs.pop(gid, None)
+
+    async def _wait_alt(self, sysid: int, target: float, timeout: float = 60.0) -> bool:
+        """等該 sysid 相對高度達 target（m）才回 True；逾時 False。per-sysid alt 由
+        command router 從 GLOBAL_POSITION_INT 存（mav._recv）。[收尾] 真機 timeout
+        與 80% 門檻依實測調。"""
+        loop = asyncio.get_running_loop()
+        deadline = loop.time() + timeout
+        while loop.time() < deadline:
+            await asyncio.sleep(0.5)
+            alt = (self.router.drones.get(sysid) or {}).get("alt_rel")
+            if alt is not None and alt >= target:
+                return True
+        return False
 
     async def _ground_amsl(self):
         """地面海拔近似。[收尾] 骨架用主機 /api/live 當代理，真機需 per-sysid alt。"""

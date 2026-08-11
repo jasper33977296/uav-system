@@ -197,6 +197,10 @@ class MavRouter(threading.Thread):
                     d["custom_mode"] = msg.custom_mode
                     d["autopilot"] = msg.autopilot   # 飛安：模式指令方言分家
                     d["type"] = msg.type             # （issue 015／gap-analysis.md）
+                elif msg.get_type() == "GLOBAL_POSITION_INT":
+                    # per-sysid 相對高度——群組執行器「等到達高度才切 MISSION」的
+                    # 依據（issue 013-B；單機 mission_fly 教訓的多機版，不靠 backend）
+                    d["alt_rel"] = msg.relative_alt / 1000.0
                 elif msg.get_type() == "STATUSTEXT":
                     # PX4 的解釋（"Arming denied: ..."）——被拒時要能拿出來給人看。
                     # 實戰教訓：沒有這段文字，操作員只看到 result code 乾瞪眼
@@ -253,13 +257,15 @@ def job_command(r: MavRouter, sysid: int, command: int, params: list,
     p = (list(params) + [0.0] * 7)[:7]
     t0 = time.monotonic()
     for attempt in range(1, retries + 1):
+        t_send = time.monotonic()      # ACK 往返時序（issue 013-B 時序驗收 item 1）
         r._sendto(sysid, lambda m: m.command_long_encode(sysid, 1, command, 0, *p))
         ack = r._wait(sysid, ("COMMAND_ACK",),
                       lambda msg: msg.command == command, ack_timeout)
         if ack is not None:
             accepted = ack.result == M.MAV_RESULT_ACCEPTED
             res = {"result": M.enums["MAV_RESULT"][ack.result].name,
-                   "accepted": accepted, "attempts": attempt}
+                   "accepted": accepted, "attempts": attempt,
+                   "ack_ms": round((time.monotonic() - t_send) * 1000, 1)}
             if not accepted:
                 # 多等 1.5 秒收 PX4 的解釋文字（拒絕原因常在 ACK 之後才廣播）
                 r._wait(sysid, ("_none_",), timeout=1.5)

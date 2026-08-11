@@ -21,8 +21,11 @@ GID = sys.argv[1]
 class StubRouter:
     def __init__(self, sysids):
         # sysid → 新鮮的 px4 機（autopilot=12 → 能力全 ok）
+        # alt_rel 給高值 → START 的 per-sysid alt gating（_wait_alt）即刻通過
+        # （stub 不模擬爬升；真爬升在假機 live 測）
         self.drones = {s: {"addr": ("127.0.0.1", 1000 + s),
-                           "seen_mono": time.monotonic(), "autopilot": 12}
+                           "seen_mono": time.monotonic(), "autopilot": 12,
+                           "alt_rel": 100.0}
                        for s in sysids}
         self.calls = []
         self.fail = {}          # (sysid, fn_name) → Exception
