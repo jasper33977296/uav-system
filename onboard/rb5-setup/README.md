@@ -1,9 +1,9 @@
-# RB5 機上 MAVLink 設定（m0052 代）— **fallback 路徑**
+# RB5 機上 MAVLink 設定（m0052 代）— 機端前提設定
 
-> ⚠️ **這是 fallback，不是主路線**（2026-08-11 使用者拍板：RB5 規格死、難改
-> config）。主路線改為**地面站接 14550 relay/demux**（見
-> `issues/016-rb5-platform-connectivity.md` 定案節）。本目錄保留為「機端可改
-> config 時」的替代做法——以 2026-08-10 已實測可控的那台 RB5 為 known-good。
+> 這是**主路線的前提設定**（2026-08-11 使用者澄清：機端本來就開兩 port
+> 分流資料/控制，三實例設定即現況）。新機/其他 RB5 單元接入時用本目錄的
+> 範本＋腳本套用同樣設定，避免每台手改。以 2026-08-10 已實測可控的那台
+> RB5 為 known-good。定案見 `issues/016-rb5-platform-connectivity.md`。
 
 把 RB5（ModalAI m0052／Qualcomm Flight RB5，跑 PX4）的 MAVLink 對外通道，
 從**出廠的廣播 :14550**改成**主動 unicast 打地面站的 14540／14541**——這是
