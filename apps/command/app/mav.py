@@ -77,6 +77,7 @@ class MavRouter(threading.Thread):
         # 手動控制（虛擬搖桿）：sysid → {sp, ts, active}。安全鏈見 _tick_manual。
         self.manual: dict[int, dict] = {}
         self._manual_tx = 0.0
+        self._send_warn_t = 0.0             # sendto 失敗告警節流（見 _sendto）
 
     # ── API 層入口（任意執行緒呼叫；在 executor 裡跑，不阻塞事件迴圈）──
     def submit(self, fn, *args, timeout: float = 30.0):
@@ -234,7 +235,27 @@ class MavRouter(threading.Thread):
             raise CommandError(f"sysid {sysid} 未連線（心跳未見）")
         msg = encode_fn(self.conn.mav)
         buf = msg.pack(self.conn.mav)
-        self.conn.port.sendto(buf, d["addr"])
+        try:
+            self.conn.port.sendto(buf, d["addr"])
+        except OSError as e:
+            # 網路瞬斷（5G 常態）時 sendto() 丟的是**裸 OSError**（ENETUNREACH／
+            # EHOSTUNREACH…），不是 CommandError——呼叫端 _tick／_tick_manual 的
+            # `except CommandError` 因此接不住，例外會逃到 run() 的 catch-all：
+            # 執行緒雖然活著（那層 guard 是 2026-08-11 殭屍事故的修法），但
+            # (1) 外層用 log.exception 印完整 traceback，手動控制 20Hz 時＝每秒
+            #     數十筆 traceback 洪水，淹掉其他診斷；
+            # (2) 例外從 _tick_manual 的逐機迴圈中逃出，該輪剩下的機沒送到搖桿
+            #     封包、_recv 也被跳過。
+            # 包成 CommandError 讓既有的逐機 except 真的接得住＝安靜略過該機、
+            # 該輪其他機照送。對 job_* 路徑則是更準的分類（502「指令失敗＋原因」
+            # 而非 500「內部錯誤」）。
+            now = time.monotonic()
+            if now - self._send_warn_t >= 5.0:   # 節流：洪水無助診斷，5s 一筆就夠
+                self._send_warn_t = now
+                log.warning("送給 sysid %s 失敗：%s（網路瞬斷？5s 內同類不重複印）",
+                            sysid, e)
+            raise CommandError(
+                "送給 sysid {} 失敗（{}: {}）".format(sysid, type(e).__name__, e))
         self.conn.mav.seq = (self.conn.mav.seq + 1) % 256
 
     def _wait(self, sysid: int, types: tuple, pred=None, timeout: float = 3.0):
