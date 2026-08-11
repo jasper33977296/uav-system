@@ -37,23 +37,35 @@ export default function CompareMap3D({
   const fittedRef = useRef(false);
   const pendingBoundsRef = useRef<maplibregl.LngLatBounds | null>(null);
 
-  // 初始取景（2026-08-11 三因修正）：
-  // 1) 時機——dev 下 CSS 注入晚於 map load，rAF 賭一幀仍會用 0 高視窗算
-  //    zoom（過縮 8×）；改 ResizeObserver 等容器首次非零尺寸才 fit
-  // 2) pitch——maplibre fitBounds 不把 pitch 算進視野，傾斜下內容被推向
-  //    地平線（貼頂緣裁半）；先平視 fit、再 setPitch（中心不動）
-  // 3) 離群點——長航次的 GPS 漂移會撐大 bounds（見 tryFit 呼叫端的分位數裁切）
+  // 初始取景。歷經三修仍過縮後棄用 fitBounds（node 端重現證明 bounds 資料
+  // 正確、是 fitBounds 呼叫算出的 zoom 不對）——改確定性取景：自己從 bounds
+  // 公尺跨度算 zoom、jumpTo 置中（即時頁同款路徑，已證實可靠）。
+  // 時機仍靠 ResizeObserver 等容器首次非零尺寸（dev 下 CSS 注入晚於 load）；
+  // 離群點由呼叫端以 P1–P99 分位裁掉
   const tryFit = () => {
     const map = mapRef.current;
     const el = containerRef.current;
     const b = pendingBoundsRef.current;
     if (!map || !el || !b || fittedRef.current) return;
-    if (el.clientHeight < 50) return;   // CSS 尚未套用，等下一次 resize 通知
+    const W = el.clientWidth, H = el.clientHeight;
+    if (H < 50) return;   // CSS 尚未套用，等下一次 resize 通知
     fittedRef.current = true;
     map.resize();
-    map.setPitch(0);
-    map.fitBounds(b, { padding: 48, duration: 0 });
-    map.setPitch(55);
+    const c = b.getCenter();
+    const cosLat = Math.cos((c.lat * Math.PI) / 180);
+    const spanM = {
+      x: (b.getEast() - b.getWest()) * 111320 * cosLat,
+      y: (b.getNorth() - b.getSouth()) * 110574,
+    };
+    // 每像素公尺數取兩軸較大者（含 48px 邊距），zoom 反推自 512-tile 尺度
+    const mpp = Math.max(spanM.x / (W - 96), spanM.y / (H - 96), 0.05);
+    const zoom = Math.min(Math.log2((78271.517 * cosLat) / mpp), 19);
+    // 給驗收 rig 抓數值用（headless 量測取證，issue 由來見 git log）
+    console.debug("[cmp3d] fit", {
+      w: b.getWest(), s: b.getSouth(), e: b.getEast(), n: b.getNorth(),
+      spanM, viewport: { W, H }, zoom,
+    });
+    map.jumpTo({ center: c, zoom, pitch: 55 });
   };
   useEffect(() => {
     const el = containerRef.current;

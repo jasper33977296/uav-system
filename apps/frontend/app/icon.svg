@@ -1,0 +1,12 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 32 32">
+  <!-- 四旋翼簡形：暖底＋ink 旋翼＋accent 機心（tokens 同源色） -->
+  <rect width="32" height="32" rx="7" fill="#1b1a17"/>
+  <g stroke="#c2bfb3" stroke-width="2" fill="none">
+    <circle cx="9" cy="9" r="4"/>
+    <circle cx="23" cy="9" r="4"/>
+    <circle cx="9" cy="23" r="4"/>
+    <circle cx="23" cy="23" r="4"/>
+    <path d="M12 12 L20 20 M20 12 L12 20"/>
+  </g>
+  <circle cx="16" cy="16" r="3.2" fill="#d97757"/>
+</svg>
