@@ -38,6 +38,18 @@ export function sinrRuns(pts: TrailPoint[]): RouteRun[] {
       : classifySinr(p.sinr);
     const pos: [number, number, number] = [p.lon, p.lat, p.alt ?? 0];
     if (curKey === cls.key) {
+      // run 內抽稀 xy 近重合點（<0.5m 水平位移只留高度變化端點）：
+      // 垂直爬升段的 GPS 抖動點串會讓段方向變成雜訊（顆粒感來源之一）
+      const prev = curPath[curPath.length - 1];
+      if (prev) {
+        const k = 111320 * Math.cos((p.lat * Math.PI) / 180);
+        const horiz = Math.hypot((pos[0] - prev[0]) * k, (pos[1] - prev[1]) * 110574);
+        if (horiz < 0.5 && curPath.length >= 2) {
+          const prev2 = curPath[curPath.length - 2];
+          const horiz2 = Math.hypot((prev[0] - prev2[0]) * k, (prev[1] - prev2[1]) * 110574);
+          if (horiz2 < 0.5) { curPath[curPath.length - 1] = pos; continue; }
+        }
+      }
       curPath.push(pos);
       continue;
     }
@@ -62,6 +74,10 @@ export function routeLayer(id: string, trails: Record<string, TrailPoint[]>) {
     widthMinPixels: 2,       // 遠 zoom 仍可見
     jointRounded: true,
     capRounded: true,
-    billboard: false,        // 平面帶固定在世界座標，不面向相機
+    // billboard:true（2026-08-11 使用者二輪反饋修正）：false 時寬度只在
+    // 水平面展開，爬升/下降段的段方向由趨近零的水平位移決定＝GPS 抖動
+    // 雜訊，帶面亂跳＝垂直段顆粒。面向相機後垂直段方向在 3D 中良定義，
+    // 俯視/傾斜觀感不變
+    billboard: true,
   });
 }

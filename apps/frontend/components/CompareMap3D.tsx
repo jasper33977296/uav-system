@@ -66,6 +66,9 @@ export default function CompareMap3D({
       spanM, viewport: { W, H }, zoom,
     });
     map.jumpTo({ center: c, zoom, pitch: 55 });
+    // 取證：jumpTo 是否真的生效（v4 後仍見 zoom≈12——若 applied=計算值而
+    // moveend 又見別的 zoom，就是有後發呼叫在蓋）
+    console.debug("[cmp3d] applied", { zoom: map.getZoom(), center: map.getCenter() });
   };
   useEffect(() => {
     const el = containerRef.current;
@@ -149,6 +152,10 @@ export default function CompareMap3D({
       map.on("mousemove", (e) => {
         const hit = map.queryRenderedFeatures(e.point, { layers: ["runs"] })[0];
         map.getCanvas().style.cursor = hit ? "pointer" : "";
+      });
+      // 取證：所有相機移動都記錄——zoom≈12 的覆蓋源會在這裡現形
+      map.on("moveend", () => {
+        console.debug("[cmp3d] moveend", { zoom: map.getZoom(), pitch: map.getPitch() });
       });
       setReady(true);
     });
