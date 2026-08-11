@@ -147,13 +147,12 @@ export default function Missions() {
         </div>
       )}
 
-      {/* 縮圖卡格（ui-spec §4）：縮圖即說明；點卡＝顯示於即時頁（再點取消） */}
+      {/* 縮圖卡格（§4 v3）：點卡＝展開使用紀錄；「顯示於即時頁」改由
+          任務開始自動 activate，手動切換降級收 ⋯ */}
       <div className="mission-grid">
         {missions.map((m) => {
           const count = sessions.filter((s) => s.mission_id === m.id).length;
           return (
-            {/* v3：點卡＝展開使用紀錄（顯示於即時頁改由任務開始自動；
-                手動切換降級收 ⋯） */}
             <div key={m.id} className={`mcard ${m.is_active ? "on" : ""}`}
               title="點擊展開使用紀錄"
               onClick={() => setOpenId(openId === m.id ? null : m.id)}>
