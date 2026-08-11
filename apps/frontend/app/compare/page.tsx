@@ -230,19 +230,24 @@ export default function Compare() {
       { behavior: "smooth", inline: "nearest", block: "nearest" });
   }, [missionId]);
 
-  // 任務下拉附架次數（ui-spec §6：020 重複名修好前靠架次數自明）——
-  // sessions 只有 mission_name，以名字聚合（重複名會共用計數，020 後改 id）
+  // 每卡架次數按 mission_id 計（誠實原則：標示必須與點開行為一致——
+  // 曾用 mission_name 聚合，重複同名任務全掛同一數字、多數點開是空的）
   const [missionCounts, setMissionCounts] = useState<Record<string, number>>({});
   useEffect(() => {
     fetch(`${API}/api/missions`).then((r) => r.json())
       .then((ms: Mission[]) => setMissions(ms)).catch(() => {});
     fetch(`${API}/api/sessions?limit=500`).then((r) => r.json())
-      .then((rows: { mission_name: string | null }[]) => {
+      .then((rows: { mission_id: string | null }[]) => {
         const c: Record<string, number> = {};
-        for (const r of rows) if (r.mission_name) c[r.mission_name] = (c[r.mission_name] ?? 0) + 1;
+        for (const r of rows) if (r.mission_id) c[r.mission_id] = (c[r.mission_id] ?? 0) + 1;
         setMissionCounts(c);
       }).catch(() => {});
   }, []);
+  // 有架次的排前（找得到可比任務）、0 架次淡化殿後
+  const orderedMissions = useMemo(() =>
+    [...missions].sort((a, b) =>
+      (missionCounts[b.id] ?? 0) - (missionCounts[a.id] ?? 0)),
+    [missions, missionCounts]);
 
   useEffect(() => {
     if (!missionId) { setSessions([]); setSelected([]); return; }
@@ -386,21 +391,25 @@ export default function Compare() {
       {/* v2：任務選擇＝3D 縮圖橫捲列（拖縮圖旋轉、點卡選任務）＋列尾下拉輔助。
           ⓘ 整移除維持（§6 定案：比較頁不放解釋入口） */}
       <div className="mstrip">
-        {missions.map((m) => (
-          <button key={m.id} ref={m.id === missionId ? selCardRef : undefined}
-            className={`mstrip-card ${m.id === missionId ? "on" : ""}`}
-            onClick={() => setMissionId(m.id)}>
-            <MissionThumb3D wps={thumbs[m.id]} />
-            <span className="mstrip-name">{m.name}</span>
-            <span className="meta">{missionCounts[m.name] ?? 0} 架次</span>
-          </button>
-        ))}
+        {orderedMissions.map((m) => {
+          const n = missionCounts[m.id] ?? 0;
+          return (
+            <button key={m.id} ref={m.id === missionId ? selCardRef : undefined}
+              className={`mstrip-card ${m.id === missionId ? "on" : ""}`
+                + ` ${n === 0 ? "dim" : ""}`}
+              onClick={() => setMissionId(m.id)}>
+              <MissionThumb3D wps={thumbs[m.id]} />
+              <span className="mstrip-name">{m.name}</span>
+              <span className="meta">{n} 架次</span>
+            </button>
+          );
+        })}
         <select className="mstrip-tail" value={missionId}
           onChange={(e) => setMissionId(e.target.value)}>
           <option value="">選擇任務⋯</option>
-          {missions.map((m) => (
+          {orderedMissions.map((m) => (
             <option key={m.id} value={m.id}>
-              {m.name}（{missionCounts[m.name] ?? 0} 架次）
+              {m.name}（{missionCounts[m.id] ?? 0} 架次）
             </option>
           ))}
         </select>

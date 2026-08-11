@@ -729,6 +729,7 @@ a:focus-visible, button:focus-visible, input:focus-visible, select:focus-visible
   border-radius: 10px; padding: 8px; cursor: pointer; text-align: left;
 }
 .mstrip-card.on { border-color: var(--accent); }
+.mstrip-card.dim { opacity: 0.45; }   /* 0 架次：淡化殿後（誠實計數配套） */
 .mstrip-name {
   font-size: 12px; font-weight: 600; color: var(--ink);
   overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
