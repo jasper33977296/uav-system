@@ -20,6 +20,8 @@ class Settings(BaseSettings):
     geofence_radius_m: float = 50.0
     geofence_alt_m: float = 15.0
     geofence_margin: float = 0.7
+    # 外部觸發（POST /api/start / GET /api/plans）：repo 的 missions/ 掛進容器唯讀
+    missions_dir: str = "/srv/missions"
 
 
 settings = Settings()

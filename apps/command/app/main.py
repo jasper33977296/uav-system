@@ -17,6 +17,7 @@ import json
 import logging
 import math
 import urllib.request
+import uuid
 
 import asyncpg
 from fastapi import FastAPI, HTTPException
@@ -28,7 +29,7 @@ from pydantic import BaseModel
 # 不必改每個端點簽名就取得；背景序列（execute 起的 task）沿用觸發請求的 client。
 _client_var: contextvars.ContextVar = contextvars.ContextVar("client", default=None)
 
-from . import group_exec, mav, plan_check
+from . import group_exec, mav, plan_check, plans
 from .config import settings
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(name)s %(message)s")
@@ -403,3 +404,191 @@ async def group_rtl(group_id: str):
     if r.get("error") == "not_found":
         raise HTTPException(404, "無此群組")
     return r
+
+
+# ── 外部觸發 API（feat/command-external-trigger 併入）──────────────────
+# 讓外部系統只打 command 服務就能「取航線→預檢→一鍵起飛」，不用自己講 MAVLink。
+# 設計原則保留：POST /api/start 的介面不變，但**內部委派現版 mission/fly**（上傳回讀→
+# arm→起飛→到高度才切 AUTO.MISSION），取代舊分支「地面直接 MISSION_START」（真機會
+# 失敗、後來 main 的教訓）——對外一模一樣、行為升級成真機驗過可飛，且純加法不動現有端點。
+FIDELITY_KEYS = ("command", "frame", "p1", "p2", "p3", "p4")
+STALE_S = 5.0                # 心跳超過此秒數視為斷線，不對它下指令
+
+
+def _unpack(rows: list) -> list[dict]:
+    """DB waypoint 列 → wps（保真欄位從 params JSONB 攤平到頂層，供預檢/顯示）。"""
+    wps = []
+    for r in rows:
+        w = dict(r)
+        p = w.get("params")
+        p = json.loads(p) if isinstance(p, str) else (p or {})
+        w |= {k: p.get(k) for k in FIDELITY_KEYS}
+        wps.append(w)
+    return wps
+
+
+async def _resolve_mission(ref: str) -> dict:
+    """任務 id 或名稱 → {id, name, waypoints}。同名多筆取最新建立的那筆。"""
+    try:
+        uuid.UUID(ref)
+        is_id = True
+    except ValueError:
+        is_id = False
+    if is_id:
+        row = await pool.fetchrow("SELECT id, name FROM missions WHERE id = $1", ref)
+        same = 1
+    else:
+        rows = await pool.fetch(
+            "SELECT id, name FROM missions WHERE name = $1 ORDER BY created_at DESC", ref)
+        row, same = (rows[0] if rows else None), len(rows)
+    if row is None:
+        raise HTTPException(404, f"任務庫找不到「{ref}」")
+    wp_rows = await pool.fetch(
+        "SELECT seq, lat, lon, alt, action, params FROM waypoints "
+        "WHERE mission_id = $1 ORDER BY seq", row["id"])
+    if not wp_rows:
+        raise HTTPException(404, f"任務「{row['name']}」沒有航點")
+    return {"id": str(row["id"]), "name": row["name"], "same_name_count": same,
+            "waypoints": _unpack(wp_rows)}
+
+
+def _check(wps: list[dict]) -> dict:
+    return plan_check.check_waypoints(
+        wps, settings.geofence_radius_m, settings.geofence_alt_m, settings.geofence_margin)
+
+
+def _resolve_sysid(sysid: int | None) -> int:
+    """指定就用指定的；沒指定且只有一台在線就用那台。多台不猜（猜錯＝錯的機起飛）。"""
+    seen = router.snapshot()
+    fresh = sorted(int(k) for k, v in seen.items() if v["age_s"] <= STALE_S)
+    if sysid is not None:
+        d = seen.get(str(sysid))
+        if d is None or d["age_s"] > STALE_S:
+            raise HTTPException(409, f"sysid {sysid} 未連線／心跳逾時"
+                                     f"｜目前在線：{fresh or '無'}")
+        return sysid
+    if not fresh:
+        raise HTTPException(503, "沒有任何機在線（查 :38001/healthz）")
+    if len(fresh) > 1:
+        raise HTTPException(409, f"連線中有多台 {fresh}，請在 payload 指定 sysid")
+    return fresh[0]
+
+
+def _same_waypoints(old: list, wps: list[dict]) -> bool:
+    if len(old) != len(wps):
+        return False
+    for o, w in zip(old, wps):
+        p = o["params"]
+        p = json.loads(p) if isinstance(p, str) else (p or {})
+        if (p.get("command") != w.get("command")
+                or abs((o["lat"] or 0.0) - (w["lat"] or 0.0)) > 1e-7
+                or abs((o["lon"] or 0.0) - (w["lon"] or 0.0)) > 1e-7
+                or abs((o["alt"] or 0.0) - (w["alt"] or 0.0)) > 0.1):
+            return False
+    return True
+
+
+async def _store_plan(name: str, wps: list[dict]) -> str:
+    """.plan 航線入庫回 mission_id；內容相同就重用（外部反覆觸發不洗版任務庫）。"""
+    rows = await pool.fetch(
+        "SELECT id FROM missions WHERE name = $1 AND created_by = 'plan-file' "
+        "ORDER BY created_at DESC LIMIT 10", name)
+    for r in rows:
+        old = await pool.fetch(
+            "SELECT lat, lon, alt, params FROM waypoints WHERE mission_id = $1 ORDER BY seq",
+            r["id"])
+        if _same_waypoints(old, wps):
+            return str(r["id"])
+    async with pool.acquire() as con:
+        async with con.transaction():
+            row = await con.fetchrow(
+                "INSERT INTO missions (name, created_by) VALUES ($1, 'plan-file') RETURNING id",
+                name)
+            await con.executemany(
+                "INSERT INTO waypoints (mission_id, seq, lat, lon, alt, action, params) "
+                "VALUES ($1, $2, $3, $4, $5, $6, $7)",
+                [(row["id"], w["seq"], w["lat"], w["lon"], w.get("alt"),
+                  w.get("action", "waypoint"),
+                  json.dumps({k: w[k] for k in FIDELITY_KEYS if w.get(k) is not None})
+                  if w.get("command") is not None else None)
+                 for w in wps])
+    return str(row["id"])
+
+
+@app.get("/api/missions")
+async def ext_list_missions():
+    """外部：任務庫總表（唯讀、不吃 ENABLE_COMMANDS）。name/id 都可餵給 /api/start。"""
+    rows = await pool.fetch("""
+        SELECT m.id::text AS id, m.name, m.created_by AS source, m.created_at,
+               m.is_active, count(w.seq) AS waypoint_count,
+               count(*) FILTER (WHERE w.lat <> 0 OR w.lon <> 0) AS nav_count
+        FROM missions m LEFT JOIN waypoints w ON w.mission_id = m.id
+        GROUP BY m.id ORDER BY m.created_at DESC""")
+    return {"source": "db", "missions": [dict(r) for r in rows]}
+
+
+@app.get("/api/missions/{ref}")
+async def ext_get_mission(ref: str):
+    """外部：單一航線內容（保真航點）＋幾何預檢。ref＝id 或名稱。"""
+    m = await _resolve_mission(ref)
+    return {**m, "waypoint_count": len(m["waypoints"]), "check": _check(m["waypoints"])}
+
+
+@app.get("/api/plans")
+async def ext_list_plans():
+    """外部：missions/ 目錄的 .plan 檔一覽（含解析失敗的，帶 error）。"""
+    return {"source": "file", "dir": settings.missions_dir,
+            "plans": plans.scan(settings.missions_dir)}
+
+
+@app.get("/api/plans/{name}")
+async def ext_get_plan(name: str, raw: bool = False):
+    """外部：單一 .plan——預設回解析航點＋預檢；raw=true 回 QGC 原始 JSON。"""
+    try:
+        path = plans.resolve(settings.missions_dir, name)
+        if raw:
+            return plans.raw(path)
+        d = plans.detail(path)
+    except plans.PlanError as e:
+        raise HTTPException(404, str(e))
+    return {**d, "check": _check(d["waypoints"])}
+
+
+class StartIn(BaseModel):
+    mission: str | None = None       # 任務庫 id 或名稱（主要來源）
+    plan: str | None = None          # 次要：missions/ 下的 .plan 檔名
+    sysid: int | None = None         # 省略＝唯一在線的那台；多台必填
+    store: bool = True               # 保留相容；plan 路徑一律入庫（現版經 mission_fly 需 DB mission，去重不洗版）
+    takeoff_alt: float = 10.0        # 起飛相對高度（現版先起飛才切任務）
+
+
+@app.post("/api/start")
+async def start(body: StartIn):
+    """**一鍵起飛**：取航線（任務庫 id/名稱 或 .plan 檔）→ 幾何預檢 → 委派 mission/fly
+    （上傳回讀→arm→起飛→到高度→AUTO.MISSION）。航線來源二選一：
+      {"mission": "<id 或名稱>"}   任務庫（主要）
+      {"plan": "xxx.plan"}         missions/ 目錄（會先入庫再飛）
+    失敗帶 mission/fly 的 step 與 PX4 原因。成功回 {source, mission_id, name, sysid, ok, steps}。"""
+    _require_enabled()
+    if bool(body.mission) == bool(body.plan):
+        raise HTTPException(422, "mission 與 plan 二選一（mission＝任務庫，plan＝.plan 檔）")
+    if body.mission:
+        m = await _resolve_mission(body.mission)
+        mission_id, name, src, skipped = m["id"], m["name"], "db", []
+        if m["same_name_count"] > 1:
+            log.warning("任務名稱「%s」有 %d 筆同名，取最新的 %s",
+                        name, m["same_name_count"], mission_id)
+    else:
+        try:
+            path = plans.resolve(settings.missions_dir, body.plan)
+            parsed = plans.parse(path)
+        except plans.PlanError as e:
+            await _audit(None, "start", {"plan": body.plan}, "failed", str(e))
+            raise HTTPException(404, {"step": "plan", "msg": str(e)})
+        mission_id = await _store_plan(path.stem, parsed["waypoints"])
+        name, src, skipped = path.name, "file", parsed["skipped"]
+    sysid = _resolve_sysid(body.sysid)
+    # 委派現版正確流程（capability gate＋到高度 gating＋逐台 audit＋X-Client 都自動繼承）
+    result = await mission_fly(sysid, FlyIn(mission_id=mission_id, takeoff_alt=body.takeoff_alt))
+    return {"source": src, "mission_id": mission_id, "name": name, "sysid": sysid,
+            "skipped": skipped, **result}

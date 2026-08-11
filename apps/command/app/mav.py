@@ -17,6 +17,7 @@ import os
 os.environ.setdefault("MAVLINK20", "1")     # 強制 MAVLink 2（MISSION_ITEM_INT 需要）
 
 import concurrent.futures
+import logging
 import queue
 import threading
 import time
@@ -25,6 +26,7 @@ from pymavlink import mavutil
 
 from . import capabilities as caps
 
+log = logging.getLogger("command.mav")
 M = mavutil.mavlink
 GCS_SYSID = 254
 
@@ -102,19 +104,27 @@ class MavRouter(threading.Thread):
 
     # ── 主迴圈（唯一碰 socket 的執行緒）──────────────────────────
     def run(self):
+        # **這個迴圈不准死。** 它是本服務與飛機唯一的收發者：死掉後 socket 沒人讀、
+        # 心跳停發（PX4 依 COM_DL_LOSS_T 觸發 failsafe）、指令全逾時——而 HTTP 層無感、
+        # /healthz 照回 ok（殭屍）。實戰踩過（2026-08-11）：5G 瞬斷讓心跳 sendto() 丟
+        # ENETUNREACH，例外從 _tick() 上拋殺死執行緒，服務殭屍近一小時。網路瞬斷是常態，
+        # 整個迴圈體包一層吞掉續跑（feat/command-external-trigger 併入）。
         while True:
-            self._tick()
             try:
-                fn, args, fut = self.jobs.get_nowait()
-            except queue.Empty:
-                # 手動控制中 → 20Hz 收發（搖桿要順）；否則 5Hz 省事
-                active = any(m.get("active") for m in self.manual.values())
-                self._recv(0.05 if active else 0.2)
-                continue
-            try:
-                fut.set_result(fn(self, *args))
-            except Exception as e:            # 失敗必須浮上去，不得靜默
-                fut.set_exception(e)
+                self._tick()
+                try:
+                    fn, args, fut = self.jobs.get_nowait()
+                except queue.Empty:
+                    # 手動控制中 → 20Hz 收發（搖桿要順）；否則 5Hz 省事
+                    active = any(m.get("active") for m in self.manual.values())
+                    self._recv(0.05 if active else 0.2)
+                    continue
+                try:
+                    fut.set_result(fn(self, *args))
+                except Exception as e:        # 工作失敗浮回呼叫端；不殺迴圈
+                    fut.set_exception(e)
+            except Exception:                 # _tick/_recv 的網路例外等——吞掉續跑
+                log.exception("router 迴圈例外（網路瞬斷等），吞掉續跑")
 
     def set_manual(self, sysid: int, x: float, y: float, z: float, r: float):
         """更新手動設定點（-1..1；z: 0=定高、+上−下）。API 執行緒高頻呼叫。"""
