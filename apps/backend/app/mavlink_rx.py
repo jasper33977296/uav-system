@@ -203,6 +203,13 @@ class MavlinkRx:
     async def _handle(self, msg, addr):
         sysid = msg.get_srcSystem()
         t = msg.get_type()
+        if not sysid and t.startswith("UNKNOWN_"):
+            # pymavlink 對未知 msgid 不填 header→get_srcSystem()=0，會被下方
+            # 「if not sysid: return」丟掉（EVENT 410 全被吞的元凶）。從裸 frame
+            # 補回真正 srcSystem（MAVLink2 在 byte 5），才找得到該機 ent。
+            mb = msg.get_msgbuf()
+            if mb is not None and len(mb) > 5 and mb[0] == 0xFD:
+                sysid = bytes(mb)[5]
         if (self._collector and sysid == self._collector[0]
                 and t in self._collector[1]):
             self._collector[2].put_nowait(msg)
