@@ -137,9 +137,12 @@ export default function CommandPanel() {
       });
       const body = await res.json().catch(() => ({}));
       if (!res.ok) {
-        // detail 可能是字串或結構化報告（預檢 problems／機端拒絕＋PX4 原因文字）
+        // detail 可能是字串或結構化報告（預檢 problems／機端拒絕＋自駕儀原因
+        // 文字／非 PX4 機的 501 飛安 guard {msg, autopilot, hint}）。
+        // autopilot_notes 為新名、px4_notes 為舊名：雙讀一版，後端改名後移除舊讀
         const d = body.detail;
-        const notes = d?.px4_notes?.length ? `｜PX4：${d.px4_notes.join("；")}` : "";
+        const noteList = d?.autopilot_notes ?? d?.px4_notes;
+        const notes = noteList?.length ? `｜自駕儀：${noteList.join("；")}` : "";
         const text = typeof d === "string" ? d
           : d?.problems?.length ? `${d.msg ?? "被拒"}：${d.problems.join("；")}`
           : d?.msg ? `${d.msg}${d.hint ? `——${d.hint}` : ""}${notes}`

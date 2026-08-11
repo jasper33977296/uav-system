@@ -99,9 +99,12 @@ export default function ManualControl({ sid }: { sid: string | null }) {
       const res = await fetch(`${COMMAND_API}/api/command/${sid}/manual/start`,
         { method: "POST" });
       if (!res.ok) {
+        // detail 可能是字串或結構化 {msg, hint}（含非 PX4 機的 501 飛安 guard）
         const d = ((await res.json().catch(() => ({}))) as { detail?: unknown }).detail;
-        const msg = (d as { msg?: string } | undefined)?.msg;
-        setErr(typeof d === "string" ? d : msg ?? `啟用失敗（HTTP ${res.status}）`);
+        const s = d as { msg?: string; hint?: string } | undefined;
+        setErr(typeof d === "string" ? d
+          : s?.msg ? `${s.msg}${s.hint ? `——${s.hint}` : ""}`
+          : `啟用失敗（HTTP ${res.status}）`);
       } else {
         setEnabled(true);
       }
