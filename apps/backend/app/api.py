@@ -382,10 +382,13 @@ async def _store_mission(name: str, source: str, wps: list[dict]) -> str:
 
 @router.get("/missions")
 async def list_missions():
+    # 排除群組任務地面生成的具體任務（created_by='group-gen'）——那是編隊每台的
+    # materialized 任務、不是任務庫草稿，會污染一般任務清單 UI（issue 013-B 前端回報）。
     rows = await db.pool.fetch("""
         SELECT m.id, m.name, m.created_by AS source, m.created_at, m.is_active,
                count(w.seq) AS waypoint_count
         FROM missions m LEFT JOIN waypoints w ON w.mission_id = m.id
+        WHERE m.created_by IS DISTINCT FROM 'group-gen'
         GROUP BY m.id ORDER BY m.created_at DESC""")
     return [dict(r) for r in rows]
 
