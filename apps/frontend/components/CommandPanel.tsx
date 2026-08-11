@@ -90,8 +90,11 @@ export default function CommandPanel() {
   const [groupBusy, setGroupBusy] = useState(false);
   // draft 失效＝連伺服器端一起清（07260a6 的 DELETE，限 draft；409 不理）——
   // 使用者反覆調整不在 DB 堆孤兒群組
-  const discardDraft = () => {
+  const discardDraft = (reason = "?") => {
     const st = useUavStore.getState();
+    if (st.execArmedUntil || st.draftGroup) {
+      console.debug("[013b] window/draft cleared", reason);   // rig 取證：清窗來源
+    }
     st.setExecArmedUntil(0);   // 舊確認窗不得延用到新 draft（安全邊角）
     if (!st.draftGroup) return;
     fetch(`${API}/api/groups/${st.draftGroup.id}`, { method: "DELETE" }).catch(() => {});
@@ -101,7 +104,7 @@ export default function CommandPanel() {
   const cfgKey = `${cfg.mode}|${cfg.base}|${cfg.spacing}|`
     + `${targetIds.join(",")}|${targetIds.map((id) => cfg.assign[id] ?? "").join(",")}`;
   useEffect(() => {
-    discardDraft();
+    discardDraft(`cfgKey=${cfgKey.slice(0, 40)}`);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [cfgKey]);
 
@@ -123,15 +126,24 @@ export default function CommandPanel() {
     if (!draftGroup) return;
     // 兩段式（群組級一顆鈕）：armed-until 存 store、**呼叫當下讀取**——
     // 不經 closure/本地 state，任何 re-render 或重掛都清不掉確認窗
-    // （live 驗收真兇：confirm 態活不過兩擊之間的重置）
     const st = useUavStore.getState();
     const now = Date.now();
+    // rig 取證：進場快照——until=0 表示窗被清或 setter 沒寫進（store 分裂）
+    console.debug("[013b] exec entry", {
+      until: st.execArmedUntil, dt: st.execArmedUntil - now, draft: draftGroup.id });
     if (now > st.execArmedUntil) {
-      console.debug("[013b] confirm armed");   // rig 取證：兩段式第一擊
-      st.setExecArmedUntil(now + 3500);
-      setExecConfirm(true);                    // 純視覺（變紅）
-      if (execTimer.current) clearTimeout(execTimer.current);
-      execTimer.current = setTimeout(() => setExecConfirm(false), 3500);
+      try {
+        console.debug("[013b] confirm armed");
+        st.setExecArmedUntil(now + 3500);
+        // rig 取證：寫後回讀——寫不進＝store 分裂；拋錯＝EXC 行現形
+        console.debug("[013b] armed verify",
+          useUavStore.getState().execArmedUntil - now);
+        setExecConfirm(true);                  // 純視覺（變紅）
+        if (execTimer.current) clearTimeout(execTimer.current);
+        execTimer.current = setTimeout(() => setExecConfirm(false), 3500);
+      } catch (err) {
+        console.debug("[013b] EXC in arm", err);
+      }
       return;
     }
     console.debug("[013b] confirm fired");     // rig 取證：第二擊送出
