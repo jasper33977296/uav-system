@@ -42,18 +42,33 @@ GCS_SYSID = 254
 # 的查詢對話）。要發任何別的，這行 assert 就是攔你的人。
 SEND_WHITELIST = {"MISSION_REQUEST_LIST", "MISSION_REQUEST_INT", "MISSION_ACK"}
 
-# PX4 custom mode → 人話（名稱對齊 mavsdk 的 FlightMode，前端顯示不變）
-_MAIN_MODES = {1: "MANUAL", 2: "ALTCTL", 3: "POSCTL", 5: "ACRO",
-               6: "OFFBOARD", 7: "STABILIZED", 8: "RATTITUDE"}
-_AUTO_MODES = {1: "READY", 2: "TAKEOFF", 3: "HOLD", 4: "MISSION",
-               5: "RETURN_TO_LAUNCH", 6: "LAND", 8: "FOLLOW_ME", 9: "PRECLAND"}
+# custom_mode → 人話。**方言分表**（issue 015／gap-analysis §2）：PX4 是
+# main<<16|sub<<24 的 union；ArduPilot 是整數模式號（隨載具型別而異，此處
+# Copter；Plane/Rover 另表，待驗）。名稱對齊前端顯示，前端純顯示不動。
+_AUTOPILOT_NAMES = {12: "px4", 3: "ardupilot"}   # MAV_AUTOPILOT_PX4 / _ARDUPILOTMEGA
+_PX4_MAIN = {1: "MANUAL", 2: "ALTCTL", 3: "POSCTL", 5: "ACRO",
+             6: "OFFBOARD", 7: "STABILIZED", 8: "RATTITUDE"}
+_PX4_AUTO = {1: "READY", 2: "TAKEOFF", 3: "HOLD", 4: "MISSION",
+             5: "RETURN_TO_LAUNCH", 6: "LAND", 8: "FOLLOW_ME", 9: "PRECLAND"}
+# ArduPilot Copter 模式號（ardupilot/copter-mode.h）
+_ARDU_COPTER = {0: "STABILIZE", 1: "ACRO", 2: "ALT_HOLD", 3: "AUTO", 4: "GUIDED",
+                5: "LOITER", 6: "RTL", 7: "CIRCLE", 9: "LAND", 11: "DRIFT",
+                13: "SPORT", 16: "POSHOLD", 17: "BRAKE", 18: "THROW",
+                20: "GUIDED_NOGPS", 21: "SMART_RTL", 27: "AUTO_RTL"}
 
 
-def _mode_name(custom_mode: int) -> str:
+def autopilot_name(raw) -> str:
+    return _AUTOPILOT_NAMES.get(raw, "unknown")
+
+
+def _mode_name(custom_mode: int, autopilot_raw=None) -> str:
+    if autopilot_name(autopilot_raw) == "ardupilot":
+        return _ARDU_COPTER.get(custom_mode, f"MODE_{custom_mode}")
+    # 預設 PX4（含 unknown 暫按 PX4 解，維持既有行為）
     main, sub = (custom_mode >> 16) & 0xFF, (custom_mode >> 24) & 0xFF
     if main == 4:
-        return _AUTO_MODES.get(sub, f"AUTO_{sub}")
-    return _MAIN_MODES.get(main, f"MODE_{main}")
+        return _PX4_AUTO.get(sub, f"AUTO_{sub}")
+    return _PX4_MAIN.get(main, f"MODE_{main}")
 
 
 # MAV_SEVERITY(0-7) → 事件層級；7=DEBUG 不入流
@@ -204,7 +219,9 @@ class MavlinkRx:
                 ev["drone"] = st.drone_name
                 await manager.broadcast({"type": "event", "event": ev})
             st.mav_state = state_name
-            mode = _mode_name(msg.custom_mode)
+            st.autopilot_raw = msg.autopilot        # 方言分表解碼與 UI 徽章用
+            st.vehicle_type_raw = msg.type
+            mode = _mode_name(msg.custom_mode, msg.autopilot)
             if st.flight_mode is not None and mode != st.flight_mode:
                 ev = await db.insert_event(st.drone_id, st.session_id, "info",
                                            "mode_change",

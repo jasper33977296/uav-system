@@ -15,7 +15,18 @@ router = APIRouter(prefix="/api")
 
 @router.get("/drones")
 async def list_drones():
-    return [dict(r) for r in await db.pool.fetch("SELECT * FROM drones ORDER BY created_at")]
+    from .state import fleet
+    from .mavlink_rx import autopilot_name
+    rows = await db.pool.fetch("SELECT * FROM drones ORDER BY created_at")
+    out = []
+    for r in rows:
+        d = dict(r)
+        # autopilot：從即時 fleet 帶（runtime，非 DB 欄位）；沒連過 MAVLink＝null
+        st = fleet.get(str(d["id"]))
+        d["autopilot"] = (autopilot_name(st.autopilot_raw)
+                          if st and st.autopilot_raw is not None else None)
+        out.append(d)
+    return out
 
 
 class DroneIn(BaseModel):

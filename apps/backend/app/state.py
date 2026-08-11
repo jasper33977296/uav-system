@@ -41,6 +41,8 @@ class LiveState:
     sensors_unhealthy: list = field(default_factory=list)
     ekf_ok: bool | None = None
     landed_state: str | None = None       # on_ground / in_air / takeoff / landing
+    autopilot_raw: int | None = None      # MAV_AUTOPILOT_*（方言分表；issue 015）
+    vehicle_type_raw: int | None = None   # MAV_TYPE_*
 
     # 5G 鏈路品質（模擬階段由 _link_and_db_loop 更新，真機由機上 node POST 進來）
     link: dict = field(default_factory=dict)
@@ -81,9 +83,11 @@ class LiveState:
 
     def telemetry_dict(self) -> dict:
         ready, reasons = self.readiness()
+        from .mavlink_rx import autopilot_name   # 就地 import 避免載入序循環
         return {
             "ready": ready,
             "not_ready_reasons": reasons,
+            "autopilot": autopilot_name(self.autopilot_raw),  # px4/ardupilot/unknown
             "mav_state": self.mav_state,
             "landed_state": self.landed_state,
             "prearm_ok": self.prearm_ok,
