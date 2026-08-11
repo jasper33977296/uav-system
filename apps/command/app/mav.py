@@ -141,9 +141,17 @@ class MavRouter(threading.Thread):
             age = now - m.get("ts", 0)
             if age > 2.0:
                 m["active"] = False
+                # 失聯 → 自主懸停。fire-and-forget（不等 ACK）：等 ACK 會阻塞
+                # router 執行緒數秒，害其他機的心跳斷掉觸發它們的 datalink
+                # failsafe。就算此指令偶爾漏掉也安全——中位搖桿的 POSCTL 本來
+                # 就在原地懸停，且停送 MANUAL_CONTROL 時 PX4 自身的
+                # manual-control-loss failsafe 也會接管。
+                main, sub = PX4_MODES["hold"]
                 try:
-                    job_set_mode(self, sysid, "hold")   # 失聯 → 自主懸停
-                except Exception:
+                    self._sendto(sysid, lambda mm: mm.command_long_encode(
+                        sysid, 1, M.MAV_CMD_DO_SET_MODE, 0,
+                        M.MAV_MODE_FLAG_CUSTOM_MODE_ENABLED, main, sub, 0, 0, 0, 0))
+                except CommandError:
                     pass
                 continue
             x, y, z, r = m["sp"] if age < 0.4 else (0.0, 0.0, 0.0, 0.0)
