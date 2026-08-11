@@ -42,6 +42,7 @@
 | [017](017-live-3d-visual-quality.md) | 即時頁 3D 呈現粗糙：絲帶段間無 join＋平塗；「真 3D 地圖」需求 | medium | open | `apps/frontend/lib/geo.ts` |
 | [018](018-event-detail-plain-language.md) | 事件 detail 人話化＋新增 serving cell 變更事件 | low | open | 前端事件流＋backend 事件結構 |
 | [019](019-agent-mcp-interface.md) | MCP agent 介面：任務層工具＋因果鏈紀錄＋分析 API（終局目標定案）| medium | open | `doc/agent-mcp-goals.md` |
+| [020](020-session-mission-association-broken.md) | 架次未綁任務：新飛資料比較頁「同任務前後比較」用不了 | high | open | `db.py:create_session` |
 
 「✔實測確認」= 2026-08-03 首次實飛（SITL 起飛 → 進干擾區 → RTL）取得的實際資料佐證，
 不只是讀碼推論。詳見 [progress/log/2026-08-03.md](../progress/log/2026-08-03.md)。
