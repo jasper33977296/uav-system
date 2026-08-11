@@ -280,7 +280,7 @@ export default function CommandPanel() {
             </span>
             <span>{live?.flight_mode ?? "—"}</span>
             <span>GPS {live?.gps_fix ?? "—"} · {live?.satellites ?? "—"}顆</span>
-            <span>電量 {live?.battery_pct ?? "—"}%</span>
+            <span>電量 {live?.battery_pct != null ? Math.round(live.battery_pct) : "—"}%</span>
           </div>
           {live && !live.ready && (live.not_ready_reasons ?? []).map((r, i) => (
             <div className="hint-line" key={i}>· {r}</div>

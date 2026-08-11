@@ -6,7 +6,7 @@ import { useEffect, useRef, useState } from "react";
 
 import CommandPanel from "@/components/CommandPanel";
 import { colorFor, createDroneLayer, pickDrone, type ScreenHit } from "@/components/droneLayer";
-import SimpleHud from "@/components/SimpleHud";
+import SimpleHud, { EventsCard } from "@/components/SimpleHud";
 import VideoModal from "@/components/VideoModal";
 import VideoPlayer from "@/components/VideoPlayer";
 import { routeLayer } from "@/lib/deckRoute";
@@ -291,7 +291,12 @@ export default function MapView() {
           <button className={view === "video" ? "on" : ""}
             onClick={() => setView("video")}>影像</button>
         </div>
-        <CommandPanel />
+        {/* 右欄：任務控制＋正下方同寬事件卡（使用者修訂——事件列從底部
+            改到這裡；面板收合/拖走時事件卡留在右上錨位） */}
+        <div className="right-col">
+          <CommandPanel />
+          <EventsCard />
+        </div>
       </div>
 
       {/* 軌跡顏色圖例：回歸左下常駐（ui-spec §2 使用者定案），HUD 上方 */}

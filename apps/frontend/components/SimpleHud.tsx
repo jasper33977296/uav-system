@@ -62,6 +62,39 @@ export function Battery({ pct, plain = false }: {
     : <span className="hud-item" title="電量">{body}</span>;
 }
 
+/** 事件卡（使用者修訂 2026-08-11）：住任務控制面板正下方、同寬——
+ * 單行最新事件＋點擊展開 log；面板收合/拖走時跟隨右上錨位。 */
+export function EventsCard() {
+  const events = useUavStore((s) => s.events);
+  const [logOpen, setLogOpen] = useState(false);
+  const latest = events[0];
+  const evTime = (t: string) =>
+    new Date(t).toLocaleTimeString("zh-TW", { hour12: false });
+  return (
+    <div className="ev-card">
+      <button className="hud-ticker" onClick={() => setLogOpen(!logOpen)}>
+        {latest
+          ? <><span className="hud-ev-time">{evTime(latest.time)}</span> {evText(latest)}</>
+          : "尚無事件"}
+        <span className="hud-spacer" />{logOpen ? "▾" : "▴"}
+      </button>
+      {logOpen && (
+        <div className="hud-log">
+          {events.map((e) => (
+            <div className={`event ${e.severity === "critical" ? "ev-crit" : ""}`} key={e.id}>
+              <span className="dot" style={{
+                background: e.severity === "critical" ? "#a01818"
+                  : e.severity === "warning" ? "#fab219" : "#8f8b80" }} />
+              <time>{evTime(e.time)}</time>
+              <span className="detail">{evText(e)}</span>
+            </div>
+          ))}
+        </div>
+      )}
+    </div>
+  );
+}
+
 export default function SimpleHud() {
   const live = useUavStore((s) => s.live);
   const wsConnected = useUavStore((s) => s.wsConnected);
@@ -70,7 +103,6 @@ export default function SimpleHud() {
   const deadman = useUavStore((s) => s.deadman);
   // 起飛被拒通知來自任務控制面板（主按鈕已併回面板首行，ui-spec §2）
   const takeoffDeniedAt = useUavStore((s) => s.takeoffDeniedAt);
-  const [logOpen, setLogOpen] = useState(false);
 
   // 異常 toast（ui-spec §0.2/§0.3）：同時多事只顯最嚴重一則；
   // 一律 10s 或點擊即消（✕）——toast 是通知不是狀態的家，持續性危險由
@@ -147,10 +179,6 @@ export default function SimpleHud() {
   }, []);
   const dismiss = () => setToast(null);
 
-  const latest = events[0];
-  const evTime = (t: string) =>
-    new Date(t).toLocaleTimeString("zh-TW", { hour12: false });
-
   return (
     <>
       {toast && (
@@ -176,28 +204,7 @@ export default function SimpleHud() {
           onOpen={() => setPanelOpen(true)} />
         <Battery pct={live?.battery_pct} />
       </div>
-
-      <div className={`hud-events ${logOpen ? "open" : ""}`}>
-        <button className="hud-ticker" onClick={() => setLogOpen(!logOpen)}>
-          {latest
-            ? <><span className="hud-ev-time">{evTime(latest.time)}</span> {evText(latest)}</>
-            : "尚無事件"}
-          <span className="hud-spacer" />{logOpen ? "▾" : "▴"}
-        </button>
-        {logOpen && (
-          <div className="hud-log">
-            {events.map((e) => (
-              <div className={`event ${e.severity === "critical" ? "ev-crit" : ""}`} key={e.id}>
-                <span className="dot" style={{
-                  background: e.severity === "critical" ? "#a01818"
-                    : e.severity === "warning" ? "#fab219" : "#8f8b80" }} />
-                <time>{evTime(e.time)}</time>
-                <span className="detail">{evText(e)}</span>
-              </div>
-            ))}
-          </div>
-        )}
-      </div>
+      {/* 事件列已移右側 EventsCard（使用者修訂）——底部全寬列移除 */}
     </>
   );
 }
