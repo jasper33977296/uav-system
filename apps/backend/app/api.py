@@ -1,11 +1,12 @@
 import asyncio
 import json
 from datetime import datetime
+from uuid import UUID
 
 from fastapi import APIRouter, HTTPException, Response
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_validator
 
-from . import db, groups, mavlink_rx, plan_check, swarm_sim
+from . import db, groups, mavlink_rx, plan_check
 from .config import settings
 from .link_events import transition as link_transition
 from .state import live
@@ -141,10 +142,28 @@ async def live_snapshot():
     return live.telemetry_dict()
 
 
+def _require_uuid(v: str | None) -> str | None:
+    """群組任務的 mission/drone id 必須是合法 UUID。擋掉截斷／亂填字串，否則會一路
+    帶到建群 DDL 的 ::uuid cast 才炸 asyncpg DataError → 500（該回 422 才對）。
+    保留 str 型別（回傳原值），下游程式不受影響。"""
+    if v is None:
+        return v
+    try:
+        UUID(v)
+    except (ValueError, AttributeError, TypeError):
+        raise ValueError(f"不是合法的 UUID：{v!r}")
+    return v
+
+
 class GroupDroneIn(BaseModel):
     drone_id: str
     layer_index: int | None = None
     mission_id: str | None = None     # separate 模式各自任務
+
+    @field_validator("drone_id", "mission_id")
+    @classmethod
+    def _v_uuid(cls, v):
+        return _require_uuid(v)
 
 
 class GroupIn(BaseModel):
@@ -153,6 +172,11 @@ class GroupIn(BaseModel):
     base_mission_id: str | None = None
     drones: list[GroupDroneIn] = Field(min_length=1, max_length=8)
     params: dict | None = None
+
+    @field_validator("base_mission_id")
+    @classmethod
+    def _v_uuid(cls, v):
+        return _require_uuid(v)
 
 
 @router.post("/groups")
@@ -501,32 +525,6 @@ async def delete_mission(mission_id: str):
     if r.split()[-1] == "0":
         raise HTTPException(404, "無此路徑")
     return {"ok": True}  # waypoints 由 FK CASCADE 一併刪除
-
-
-# ── 群飛模擬（開發鷹架，僅 simulated 模式）─────────────────────────────────
-
-@router.post("/swarm/start")
-async def swarm_start(count: int = 3, mission_id: str | None = None):
-    """啟動 N 台運動學僚機。mission_id 指定時多機飛同一條路徑（梯次起飛，
-    航線關聯該任務——真實情境的多機同任務）；否則各飛自己的幾何。"""
-    if settings.link_source == "modem":
-        raise HTTPException(409, "群飛模擬僅在 simulated 模式可用")
-    try:
-        names = await swarm_sim.start(max(1, min(count, 3)), mission_id)
-    except RuntimeError as e:
-        raise HTTPException(409, str(e))
-    return {"drones": names, "mission_id": mission_id}
-
-
-@router.post("/swarm/stop")
-async def swarm_stop():
-    await swarm_sim.stop()
-    return {"ok": True}
-
-
-@router.get("/swarm/status")
-async def swarm_status():
-    return swarm_sim.status()
 
 
 # ── 機上 5G 量測回傳（真機階段）────────────────────────────────────────────
