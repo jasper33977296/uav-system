@@ -84,12 +84,14 @@ async def drone_for_sysid(sysid: int) -> tuple[str, str]:
                            row["id"], sysid)
         return row["id"], row["name"]
     name = f"uav-s{sysid}"
+    # is_simulated 由 config 決定（SITL/dev 全 true、生產 false）——見 config 註解，
+    # 避免假機混進真機清單（issue 013-B）
     row = await pool.fetchrow(
         """INSERT INTO drones (name, serial_no, is_simulated, status, mav_sysid)
-           VALUES ($1, $1, false, 'idle', $2)
+           VALUES ($1, $1, $3, 'idle', $2)
            ON CONFLICT (serial_no) DO UPDATE SET mav_sysid = EXCLUDED.mav_sysid
            RETURNING id::text AS id, name""",
-        name, sysid)
+        name, sysid, settings.autoregister_simulated)
     return row["id"], row["name"]
 
 

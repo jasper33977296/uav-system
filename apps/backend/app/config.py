@@ -7,6 +7,10 @@ class Settings(BaseSettings):
     # 註：本系統管理哪台無人機（名稱/主機指定）由系統端管理（drones 表 +
     # 無人機頁），不走環境變數——見 issues/011。
     link_source: str = "simulated"   # simulated / modem（真機階段實作 modem 讀取）
+    # 自動註冊的機標不標 is_simulated（issue 013-B）：SITL/開發環境所有自動註冊
+    # 的都是假機，設 true 讓它們入庫即標 simulated、不混真機清單；生產預設 false
+    # （自動註冊的是真機）。dev .env 設 AUTOREGISTER_SIMULATED=true。
+    autoregister_simulated: bool = False
     # 原始層錄製（兩層收集，見 doc/gcs-replacement.md）：MAVLink 每框架
     # 無損落盤（tlog）後才轉發給 ingest；~61 MB/hr，依天數滾動清理
     # 任務幾何預檢的圍欄基準（與機上 QGC Geofence 設定保持一致；
