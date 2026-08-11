@@ -11,7 +11,7 @@ import { useEffect, useRef, useState } from "react";
 
 import { colorFor } from "@/components/droneLayer";
 import ManualControl from "@/components/ManualControl";
-import { API, COMMAND_API } from "@/lib/signal";
+import { API, CLIENT_HEADERS, COMMAND_API } from "@/lib/signal";
 import { useUavStore } from "@/lib/store";
 
 /** 能力四態（doc/capability-ui-proposal.md，issue 015）：按鈕由每機
@@ -97,7 +97,8 @@ export default function CommandPanel() {
     }
     st.setExecArmedUntil(0);   // 舊確認窗不得延用到新 draft（安全邊角）
     if (!st.draftGroup) return;
-    fetch(`${API}/api/groups/${st.draftGroup.id}`, { method: "DELETE" }).catch(() => {});
+    fetch(`${API}/api/groups/${st.draftGroup.id}`,
+      { method: "DELETE", headers: CLIENT_HEADERS }).catch(() => {});
     st.setDraftGroup(null);
   };
   // 設定/成員變更 → draft 失效（預覽退回前端試算，需重新預檢）
@@ -154,7 +155,8 @@ export default function CommandPanel() {
     setResult(null);
     try {
       const res = await fetch(
-        `${COMMAND_API}/api/command/group/${draftGroup.id}/execute`, { method: "POST" });
+        `${COMMAND_API}/api/command/group/${draftGroup.id}/execute`,
+        { method: "POST", headers: CLIENT_HEADERS });
       const body = await res.json().catch(() => ({}));
       console.debug("[013b] execute resp", res.status, draftGroup.id);   // rig 取證
       if (res.status === 202) {
@@ -204,7 +206,7 @@ export default function CommandPanel() {
     setAbortBusy(true);   // 緊急單擊、冪等（依 phase 伺服器自選 disarm/RTL）
     try {
       await fetch(`${COMMAND_API}/api/command/group/${groupRun.id}/abort`,
-        { method: "POST" });
+        { method: "POST", headers: CLIENT_HEADERS });
     } catch { /* 冪等，再按即可 */ }
     setAbortBusy(false);
   }
@@ -217,7 +219,7 @@ export default function CommandPanel() {
     try {
       const res = await fetch(`${API}/api/groups`, {
         method: "POST",
-        headers: { "Content-Type": "application/json" },
+        headers: { "Content-Type": "application/json", ...CLIENT_HEADERS },
         body: JSON.stringify({
           name: `編隊 ${new Date().toLocaleTimeString("zh-TW",
             { hour: "2-digit", minute: "2-digit", hour12: false })}`,
@@ -369,7 +371,7 @@ export default function CommandPanel() {
     try {
       const res = await fetch(`${COMMAND_API}/api/command/${sid}${path}`, {
         method: "POST",
-        headers: { "Content-Type": "application/json" },
+        headers: { "Content-Type": "application/json", ...CLIENT_HEADERS },
         body: payload ? JSON.stringify(payload) : undefined,
       });
       const body = await res.json().catch(() => ({}));
@@ -398,7 +400,8 @@ export default function CommandPanel() {
         if (path === "/mission/fly" || path === "/mission/start") {
           const mid = (payload?.mission_id as string | undefined) ?? (missionId || undefined);
           if (mid) {
-            fetch(`${API}/api/missions/${mid}/activate?active=true`, { method: "POST" })
+            fetch(`${API}/api/missions/${mid}/activate?active=true`,
+              { method: "POST", headers: CLIENT_HEADERS })
               .then(() => useUavStore.getState().requestPlanRefresh())
               .catch(() => {});
           }

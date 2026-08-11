@@ -33,3 +33,6 @@ export const API = process.env.NEXT_PUBLIC_API_URL ?? `http://${host}:38000`;
 export const WS_URL = process.env.NEXT_PUBLIC_WS_URL ?? `ws://${host}:38000/ws/telemetry`;
 // command 服務（GCS 取代階段 2/3）：與 backend 分離的獨立服務，同主機不同 port
 export const COMMAND_API = process.env.NEXT_PUBLIC_COMMAND_API ?? `http://${host}:38001`;
+// command_log 歸因（環境事件修法 d）：指令類請求一律帶 client 身分，
+// 事後可分「誰發的」——rig 用 acceptance-rig、前端 UI 用 frontend
+export const CLIENT_HEADERS = { "X-Client": "frontend" } as const;

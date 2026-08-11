@@ -13,7 +13,7 @@
  */
 import { useEffect, useRef, useState } from "react";
 
-import { COMMAND_API } from "@/lib/signal";
+import { CLIENT_HEADERS, COMMAND_API } from "@/lib/signal";
 import { useUavStore } from "@/lib/store";
 
 const RATE_MS = 100;  // ≥10Hz（後端 deadman 0.4s）
@@ -82,7 +82,7 @@ export default function ManualControl({ sid, lockedReason = null }: {
   const postStop = (keepalive = false) => {
     if (!sidRef.current) return;
     fetch(`${COMMAND_API}/api/command/${sidRef.current}/manual/stop`,
-      { method: "POST", keepalive }).catch(() => {});
+      { method: "POST", keepalive, headers: CLIENT_HEADERS }).catch(() => {});
   };
 
   const stop = () => {   // 停止串流 → 後端結束手動並切 Hold
@@ -113,7 +113,7 @@ export default function ManualControl({ sid, lockedReason = null }: {
     try {
       // 約 0.5s 才回：後端先送中位 MANUAL_CONTROL 再切 POSCTL
       const res = await fetch(`${COMMAND_API}/api/command/${sid}/manual/start`,
-        { method: "POST" });
+        { method: "POST", headers: CLIENT_HEADERS });
       if (!res.ok) {
         // detail 可能是字串或結構化 {msg, hint}（含非 PX4 機的 501 飛安 guard）
         const d = ((await res.json().catch(() => ({}))) as { detail?: unknown }).detail;
@@ -146,7 +146,7 @@ export default function ManualControl({ sid, lockedReason = null }: {
       };
       fetch(`${COMMAND_API}/api/command/${sidRef.current}/manual`, {
         method: "POST",
-        headers: { "Content-Type": "application/json" },
+        headers: { "Content-Type": "application/json", ...CLIENT_HEADERS },
         body: JSON.stringify({
           x: clamp(j.x + kb.x), y: clamp(j.y + kb.y),
           z: clamp(j.z + kb.z), r: clamp(j.r + kb.r),
