@@ -34,6 +34,7 @@ export default function MapView() {
   const hitsRef = useRef<Map<string, ScreenHit>>(new Map());
   const [videoDrone, setVideoDrone] = useState<string | null>(null);
   const coordRef = useRef<HTMLDivElement>(null);
+  const ribbonGateRef = useRef({ t: 0, n: -1 });   // 絲帶重建節流（閃爍 hotfix）
 
   // 檢視切換：地圖 ↔ 當前選擇機（側欄選的，未選＝主機）的即時影像
   const [view, setView] = useState<"map" | "video">("map");
@@ -237,6 +238,16 @@ export default function MapView() {
         }
 
         // 球體層自己每幀從 store 讀位置（triggerRepaint 驅動），不需在此餵資料
+
+        // 絲帶/投影重建節流 1Hz 且僅樣本增加時執行：fill-extrusion 的
+        // setData 是整源替換（無增量更新），5Hz 全量 rebuild 是路線閃爍的
+        // 直接來源（route-render-tool-eval 的 hotfix；根治等渲染選型定案）。
+        // 機體 marker 與置中不節流——位置要跟得上 5Hz
+        const total = Object.values(s.trails).reduce((a, tr) => a + tr.length, 0);
+        const now = performance.now();
+        const gate = ribbonGateRef.current;
+        if (total === gate.n || now - gate.t < 1000) return;
+        ribbonGateRef.current = { t: now, n: total };
 
         // 地面投影＝機別色（誰飛的）；空中絲帶＝SINR 分級（訊號如何）
         const trailEntries = Object.entries(s.trails);

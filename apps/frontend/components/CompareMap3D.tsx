@@ -145,7 +145,13 @@ export default function CompareMap3D({
       ?.setData({ type: "FeatureCollection", features: feats });
     if (!fittedRef.current && !bounds.isEmpty()) {
       fittedRef.current = true;
-      map.fitBounds(bounds, { padding: 48, pitch: 55, duration: 0 });
+      // 初始 fit 曾以未定尺寸的視窗計算（dev 下 CSS 注入晚於 load，
+      // 視窗偏小 → zoom 算過低、絲帶縮成一撮）：推遲一幀等佈局定案，
+      // 先 resize 再 fit
+      requestAnimationFrame(() => {
+        map.resize();
+        map.fitBounds(bounds, { padding: 48, pitch: 55, duration: 0 });
+      });
     }
   }, [ready, loaded, tracks, dimIds, sel, wps, colorOf]);
 
