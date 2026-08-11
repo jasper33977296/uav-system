@@ -37,6 +37,11 @@
 | [012](012-command-service.md) | command 服務：自製 GCS 指令能力（取代 QGC 作業流程）| medium | open | `doc/gcs-replacement.md` §1 |
 | [013](013-group-missions.md) | 群組任務：群飛 group 概念同時配置路徑 | medium | open | `doc/gcs-replacement.md` §3 |
 | [014](014-two-tier-collection.md) | 兩層收集：機上傳出資訊全數收集（原始層已實作）| medium | in-progress | `apps/backend/app/capture.py` |
+| [015](015-multi-autopilot-support.md) | 跨自駕儀支援：硬編碼 PX4 方言，非 PX4 機不可控（部分指令有飛安風險）| high | open | `reference/gap-analysis.md` |
+| [016](016-rb5-platform-connectivity.md) | RB5 平台連線層：廣播 :14550／埠寫死／sysid bug，兩通道設計不會自動成立 | high | open | `reference/gap-analysis.md` §0 |
+| [017](017-live-3d-visual-quality.md) | 即時頁 3D 呈現粗糙：絲帶段間無 join＋平塗；「真 3D 地圖」需求 | medium | open | `apps/frontend/lib/geo.ts` |
+| [018](018-event-detail-plain-language.md) | 事件 detail 人話化＋新增 serving cell 變更事件 | low | open | 前端事件流＋backend 事件結構 |
+| [019](019-agent-mcp-interface.md) | MCP agent 介面：任務層工具＋因果鏈紀錄＋分析 API（終局目標定案）| medium | open | `doc/agent-mcp-goals.md` |
 
 「✔實測確認」= 2026-08-03 首次實飛（SITL 起飛 → 進干擾區 → RTL）取得的實際資料佐證，
 不只是讀碼推論。詳見 [progress/log/2026-08-03.md](../progress/log/2026-08-03.md)。
