@@ -231,11 +231,15 @@ function HeatMap({ cells, plan, grid, sel, onSel }: {
   const ys = [...cells.map((c) => c.y), ...plan.map((p) => p.y)];
   const x0 = Math.min(...xs) - grid, x1 = Math.max(...xs) + grid;
   const y0 = Math.min(...ys) - grid, y1 = Math.max(...ys) + grid;
-  const W = 640;
-  const scale = (W - 20) / (x1 - x0 || 1);
-  const H = Math.max(180, (y1 - y0) * scale + 20);
-  const X = (x: number) => 10 + (x - x0) * scale;
-  const Y = (y: number) => H - 10 - (y - y0) * scale;
+  // 縮放取雙軸 min（驗收 blocker 修正：只算 x 軸時，南北向航線的東西跨
+  // 極小 → scale 爆大 → 10m 格畫成巨格）；高度上限 460、內容水平置中
+  const W = 640, HMAX = 460, PAD = 12;
+  const spanX = x1 - x0 || 1, spanY = y1 - y0 || 1;
+  const scale = Math.min((W - 2 * PAD) / spanX, (HMAX - 2 * PAD) / spanY);
+  const H = Math.max(160, spanY * scale + 2 * PAD);
+  const cx0 = ((W - 2 * PAD) - spanX * scale) / 2;   // 水平置中偏移
+  const X = (x: number) => PAD + cx0 + (x - x0) * scale;
+  const Y = (y: number) => H - PAD - (y - y0) * scale;
   const s = grid * scale;
   return (
     <svg viewBox={`0 0 ${W} ${H.toFixed(0)}`} className="heatmap"
