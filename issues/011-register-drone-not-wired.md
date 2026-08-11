@@ -1,8 +1,9 @@
 # 011 · 「註冊無人機」表單未接線：建立資料列但系統不會連線
 
-- 狀態：in-progress（核心已落地 2026-08-10：路線 B 單迴圈多機 RX、
-  sysid 自動註冊、逐台架次、live 通道 drone_id——SITL 驗收通過；
-  剩多機實測與 swarm_sim 退役）
+- 狀態：**closed（2026-08-12）**——核心 2026-08-10 落地（路線 B 單迴圈多機 RX、
+  sysid 自動註冊、逐台架次、live 通道 drone_id）；多機實測於 3×PX4 SITL 環境通過
+  （3 台可見可控、單機隔離、逐台 link_sim、編隊 skew／RTL 驗收）；swarm_sim 運動學
+  僚機鷹架退役（多機 SITL 環境交付＝退役條件達成）
 - 嚴重度：low
 - 位置：`apps/frontend/app/drones/page.tsx`（表單）、`apps/backend/app/api.py`（POST /drones）
 - 建立：2026-08-05

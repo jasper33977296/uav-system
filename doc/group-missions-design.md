@@ -49,8 +49,14 @@ link_metrics/events 完整可追，且與 019 MCP 的 submit_mission(N 台) 同�
 
 `mode='unified'`：從 `base_mission_id` 生成 N 條具體任務，每台：
 - **高度分層**：每個航點高度 += `layer_index × GROUP_VSEP_M`（避免同線同高相撞）。
-- **RTL 高度錯開**：各台 RTL 返航高度按 `layer_index × GROUP_RTL_STAGGER_M` 錯開
-  （同高返航會在 home 上空匯合）。
+  這也順帶提供**返航分離**：unified 各台在不同高度層飛行，RTL 時 PX4 於高於
+  `RTL_RETURN_ALT` 時維持當前高度返航，故各台以 vsep 的間隔錯開返航（2026-08-12
+  三機實飛驗證：29.9／34.9／39.9m，差 5m）。
+- **RTL 高度錯開（`GROUP_RTL_STAGGER_M`）——設計項，現況未實作**：原設計要各台 RTL
+  返航高度按 `layer_index × GROUP_RTL_STAGGER_M` 顯式錯開。實作現況是 `group_exec.rtl()`
+  純 RTL-all（無 per-drone 返航高度、mav 層無 param-set）。unified 情境有上面的 vsep
+  返航分離、rtl_stagger 冗餘；但 **separate 模式各機任務同高度時無此保護**——見 §10.2
+  已知限制與操作規避。（使用者 2026-08-12 裁決：現階段不補實作、文件化限制。）
 - 生成時即跑 `check_group`（§4）驗分離足夠。
 
 `mode='separate'`：逐台指派既有任務（各自 mission_id），不展開；仍跑 check_group
@@ -177,11 +183,17 @@ UI 維持現狀（單機指令面板），不增認知負擔。
   MISSION）、arm-ACK 細粒度（真 PX4 arm 16ms／takeoff 8ms／mode 12–16ms 單次 ACK）、
   真機 prearm 失敗路徑（TEMPORARILY_REJECTED→prearm_failed→自動全撤）、RTL 落地。
 
-**剩兩項時序驗收在多機模擬環境做**（起飛 skew 實測、群組 RTL 高度錯開）：需 ≥2 台真
-PX4。**使用者 2026-08-11 裁決：多機模擬環境升為正式需求**（見下），非僅演練門——這兩項
-併入該環境交付時一起收（alt-gating 的同時起飛重構已入庫 commit 233d10e，屆時直接驗真雙機
-時序）。skew 已有 011 的 +25ms/台序列特徵、RTL 錯開是 materialized 任務內容可逐條檢查，
-故不擋 013-B 功能面收官。
+**兩項時序驗收於多機模擬環境完成（2026-08-12，3 台真 PX4 SITL）**：
+- **起飛 skew — PASS**：建群→執行端到端跑通，takeoff 指令 skew 實測 0／+12／+27ms
+  （~13ms/台、總 27ms），優於 011 的 +25ms/台預期、落在「數十 ms、量測用途可接受」內；
+  arm skew 同量級（0／15／41ms）。同時起飛三步式（全體 takeoff→全體到高度→全體 MISSION）
+  真機行為正確。
+- **群組 RTL 分離 — 以 vsep 驗證通過、rtl_stagger 列已知限制（§10.2）**：三機 RTL-all
+  實飛返航高度 29.9／34.9／39.9m（差 5m，安全不匯合），分離來自 vsep 分層＋PX4 高於
+  return alt 維持高度。顯式 `GROUP_RTL_STAGGER_M` 未實作。
+
+**013 全案收官（2026-08-12）**。多機模擬環境已交付（3×PX4 SITL＋單埠 demux＋逐台
+link_sim），swarm_sim 開發鷹架退役（011 close）。
 
 ### 10.1 多機模擬環境（方向，scope 討論中）
 
@@ -189,7 +201,20 @@ PX4。**使用者 2026-08-11 裁決：多機模擬環境升為正式需求**（�
 **規模/保真度/路徑（N 台上限、bridge net＋埠重映 vs PX4 原生 multi-vehicle、逐台鏈路資料
 生成）由 PM 與使用者討論定案後正式派工**——此處僅記方向，未定稿。已知要點：各實例唯一
 MAV_SYS_ID、單埠 demux 接現有 backend/command；link_sim 需擴成逐台生成（否則僚機無研究
-資料）；起停腳本化；013-B 剩兩項時序（skew、RTL 錯開）併此環境收。
+資料）；起停腳本化。**此環境已於 2026-08-12 交付**（3×PX4 SITL＋單埠 demux＋逐台
+link_sim＋起停腳本 `sim-fleet/fleet.sh`），013-B 剩兩項時序（skew、RTL 分離）已在其上收（見上）。
 
-> **011 收尾（swarm_sim 運動學僚機退役）**：使用者已裁決要做，但與多機模擬環境一併**暫緩、
-> 待 PM 與使用者定案**（退役順序：先斷前端群飛模擬 UI 入口、再拆 swarm_sim.py＋端點，avoid 500）。
+> **011 收尾（swarm_sim 運動學僚機退役）——2026-08-12 執行**：多機 SITL 環境交付＝退役
+> 條件達成。前端無 /swarm 入口（僅 backend 端點），故直接拆 `swarm_sim.py`＋`/api/swarm/*` 端點。
+
+## 10.2 已知限制：separate 模式緊急 RTL-all 返航高度分離
+
+`GROUP_RTL_STAGGER_M`（顯式逐台錯開 RTL 返航高度）**未實作**（`group_exec.rtl()` 純
+RTL-all、mav 層無 param-set job）。影響僅限 **separate 模式且各機任務規劃為相同高度**：
+緊急 RTL-all 時各機以相同高度往同一 home 匯合，返航高度分離無保證——PX4「高於 return alt
+維持高度」是特性非保證，且低於 return alt 即失效。**unified 模式不受影響**（vsep 分層已
+提供返航分離，實飛驗證 29.9／34.9／39.9m）。
+
+- **操作規避（已入部署檢查清單）**：separate 編隊任務請規劃**不同飛行高度**。
+- **未來項**：RTL 前逐台 param-set `RTL_RETURN_ALT`＝base＋layer×`GROUP_RTL_STAGGER_M`
+  （需 mav 層加 param-set job；使用者 2026-08-12 裁決現階段不補、文件化限制）。
