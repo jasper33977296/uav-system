@@ -54,6 +54,8 @@ class Recorder:
         day = datetime.fromtimestamp(now, tz=timezone.utc).strftime("%Y%m%d")
         if day != self.day:
             self._rotate(day)
+        if self.f is None:          # 已 close（關機瞬間仍有封包進來）——靜默略過，不噴 traceback
+            return
         ts = struct.pack(">Q", int(now * 1e6))
         for fr in split_frames(data):
             self.f.write(ts + fr)

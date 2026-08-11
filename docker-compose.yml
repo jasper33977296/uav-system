@@ -52,6 +52,10 @@ services:
     build: ./apps/backend
     network_mode: host          # 直接收 SITL 的 UDP；API 服務於 :${BACKEND_PORT:-38000}
     command: ["uvicorn", "app.main:app", "--reload",
+              # --reload 的 graceful shutdown 會等連線關閉，前端 /ws/telemetry 常駐
+              # WS 不會自己關 → reload 無限卡 down（見 doc/deployment.md 開發注意）。
+              # 上限 3s，reload 自救、不再卡死。
+              "--timeout-graceful-shutdown", "3",
               "--host", "0.0.0.0", "--port", "${BACKEND_PORT:-38000}"]
     volumes:
       - ./apps/backend/app:/srv/app  # 原始碼掛進去，改檔案 reload 立即生效
