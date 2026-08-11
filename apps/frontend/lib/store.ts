@@ -78,6 +78,16 @@ interface UavStore {
     assign: Record<string, string>;    // separate：drone_id → mission_id
   };
   setFormationCfg: (p: Partial<UavStore["formationCfg"]>) => void;
+  // 013-B 前半：draft 群組（POST /api/groups 的回應）——預覽自此改讀
+  // 後端 materialized assignments（單一真相），設定變更即失效待重建
+  draftGroup: {
+    id: string; name: string; mode: string;
+    conflictOk: boolean;
+    conflicts: { a: string; b: string; why: string }[];
+    assignments: { drone_id: string; mission_id: string; layer_index: number;
+      phase: string; drone_name?: string; mav_sysid?: number | null }[];
+  } | null;
+  setDraftGroup: (g: UavStore["draftGroup"]) => void;
   setLive: (t: Telemetry) => void;
   select: (id: string) => void;
   setWsConnected: (v: boolean) => void;
@@ -114,6 +124,8 @@ export const useUavStore = create<UavStore>((set) => ({
     })),
   formationCfg: { mode: "unified", base: "", spacing: 5, assign: {} },
   setFormationCfg: (p) => set((s) => ({ formationCfg: { ...s.formationCfg, ...p } })),
+  draftGroup: null,
+  setDraftGroup: (g) => set({ draftGroup: g }),
   setLive: (t) =>
     set((s) => {
       const id = t.drone_id ?? "unknown";

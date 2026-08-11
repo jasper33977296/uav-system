@@ -73,6 +73,54 @@ export default function CommandPanel() {
   const selectedId = useUavStore((s) => s.selectedId);
   const primaryId = useUavStore((s) => s.primaryId);
   const focusId = selectedId ?? primaryId;
+  const draftGroup = useUavStore((s) => s.draftGroup);
+  const [groupBusy, setGroupBusy] = useState(false);
+  // 設定/成員變更 → draft 失效（預覽退回前端試算，需重新預檢）
+  const cfgKey = `${cfg.mode}|${cfg.base}|${cfg.spacing}|`
+    + `${targetIds.join(",")}|${targetIds.map((id) => cfg.assign[id] ?? "").join(",")}`;
+  useEffect(() => {
+    useUavStore.getState().setDraftGroup(null);
+  }, [cfgKey]);
+
+  // 013-B 前半：建群組＋預檢（POST /api/groups，backend 50c3c1a 契約）
+  async function createGroup() {
+    setGroupBusy(true);
+    setResult(null);
+    try {
+      const res = await fetch(`${API}/api/groups`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          name: `編隊 ${new Date().toLocaleTimeString("zh-TW",
+            { hour: "2-digit", minute: "2-digit", hour12: false })}`,
+          mode: cfg.mode,
+          base_mission_id: cfg.mode === "unified" ? cfg.base : undefined,
+          drones: targetIds.map((id, i) => ({
+            drone_id: id,
+            layer_index: i,
+            mission_id: cfg.mode === "separate" ? cfg.assign[id] : undefined,
+          })),
+          params: { vsep_m: cfg.spacing },
+        }),
+      });
+      const body = await res.json().catch(() => ({}));
+      if (!res.ok) {
+        const d = body.detail;
+        setResult({ ok: false, text: typeof d === "string" ? d : `建立失敗（${res.status}）` });
+      } else {
+        useUavStore.getState().setDraftGroup({
+          id: body.group_id, name: body.name, mode: body.mode,
+          conflictOk: body.conflict?.ok ?? true,
+          conflicts: body.conflict?.conflicts ?? [],
+          assignments: body.assignments ?? [],
+        });
+        setResult({ ok: true, text: `群組已建立（${body.name}）✓ 預檢如下` });
+      }
+    } catch (e) {
+      setResult({ ok: false, text: `連線失敗：${e}` });
+    }
+    setGroupBusy(false);
+  }
 
   // 可拖曳：抓標題列移動，貼齊邊緣，位置記在 localStorage（重整不跑位）
   const panelRef = useRef<HTMLDivElement>(null);
@@ -369,6 +417,33 @@ export default function CommandPanel() {
               {riskHints.map((h, i) => (
                 <div className="hint-line" key={i}>· {h}</div>
               ))}
+              {/* 先看再執行：建群組→後端展開＋conflict 預檢（013-B 前半） */}
+              <div className="cmd-row">
+                <button className="btn-plain btn-sm"
+                  disabled={groupBusy || targetIds.length < 2
+                    || (cfg.mode === "unified" ? !cfg.base
+                        : targetIds.some((id) => !cfg.assign[id]))}
+                  onClick={createGroup}>
+                  {groupBusy ? "⋯" : draftGroup ? "重新預檢" : "建立群組＋預檢"}
+                </button>
+                {draftGroup && <span className="hint-line">{draftGroup.name} · draft</span>}
+              </div>
+              {draftGroup && (<>
+                {draftGroup.conflictOk ? (
+                  <div className="cmd-ready ok">✅ 路徑分離足夠，無衝突</div>
+                ) : (
+                  draftGroup.conflicts.map((c, i) => (
+                    <div className="cmd-ready warn" key={i}>⚠ {c.a} × {c.b}：{c.why}</div>
+                  ))
+                )}
+                {draftGroup.assignments.map((a) => (
+                  <div className="hint-line" key={a.drone_id}>
+                    · {a.drone_name ?? a.drone_id.slice(0, 6)}
+                    　layer {a.layer_index}
+                    {a.mav_sysid != null ? `　sysid ${a.mav_sysid}` : ""}
+                  </div>
+                ))}
+              </>)}
               <div className="cmd-sec">手動</div>
               <p className="hint-line">編隊模式中停用</p>
             </>);

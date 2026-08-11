@@ -45,6 +45,7 @@ export default function MapView() {
   const formationOn = useUavStore((s) => s.formation);
   const targetKey = useUavStore((s) => s.targetIds.join(","));
   const fCfg = useUavStore((s) => s.formationCfg);
+  const draftGroup = useUavStore((s) => s.draftGroup);
   const previewRef = useRef<RouteRun[]>([]);
   const wpCacheRef = useRef(new Map<string, Wp[]>());
   useEffect(() => {
@@ -62,7 +63,19 @@ export default function MapView() {
         return wpCacheRef.current.get(mid)!;
       };
       let runs: RouteRun[] = [];
-      if (fCfg.mode === "unified" && fCfg.base) {
+      if (draftGroup) {
+        // draft 已建：讀後端 materialized assignments（單一真相——實際會
+        // 上傳到機的那 N 條，含分層高度），前端試算退場
+        const per = [];
+        for (const a of draftGroup.assignments) {
+          per.push({ id: a.drone_id, color: colorFor(a.drone_id),
+                     wps: await getWps(a.mission_id) });
+        }
+        runs = separatePreview(per);
+        if (draftGroup.mode === "unified" && fCfg.base) {
+          runs = [...basePreview(await getWps(fCfg.base)), ...runs];
+        }
+      } else if (fCfg.mode === "unified" && fCfg.base) {
         const wps = await getWps(fCfg.base);
         runs = [
           ...basePreview(wps),
@@ -80,7 +93,7 @@ export default function MapView() {
       if (!stop) previewRef.current = runs;
     })();
     return () => { stop = true; };
-  }, [formationOn, fCfg, targetKey]);
+  }, [formationOn, fCfg, targetKey, draftGroup]);
 
   // 檢視切換：地圖 ↔ 當前選擇機（側欄選的，未選＝主機）的即時影像
   const [view, setView] = useState<"map" | "video">("map");
