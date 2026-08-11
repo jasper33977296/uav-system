@@ -19,6 +19,7 @@ progress/   開發進度現況 + 逐次開發紀錄 log/
 | 文件 | 內容 |
 |---|---|
 | [doc/architecture.md](doc/architecture.md) | 系統架構、關鍵決策（單機→多機、模擬→真機的擴充路徑）|
+| [doc/api.md](doc/api.md) | **API 文件**：backend／command 全端點，依起飛程序排列（前置檢查→上傳→起飛→監看→歸檔）|
 | [doc/data-schema.md](doc/data-schema.md) | 資料表設計與理由、取樣頻率策略 |
 | [doc/frontend.md](doc/frontend.md) | 前端版面、軌跡上色規則、即時資料流 |
 | [doc/qgc-integration.md](doc/qgc-integration.md) | QGroundControl 分工、連線拓撲、完整作業流程 |
