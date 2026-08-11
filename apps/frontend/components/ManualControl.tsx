@@ -277,11 +277,15 @@ export default function ManualControl({ sid, lockedReason = null }: {
             onMove={(dx, dy) => { joyRef.current.x = dy; joyRef.current.y = dx; }} />
         </div>
       ) : !lockedReason && (
+        // 漸進揭露：解說收摺疊（安全「橫幅」才不摺；此段是教學非警示）。
         // 動作語彙（語彙分層）：模式名（POSCTL 等）只在狀態列按機型解碼顯示
-        <p className="hint-line">
-          切入手動位置模式，以搖桿／鍵盤直接操控；放開回中＝定點懸停。
-          失焦或關頁自動懸停並於 2 秒後自動切 Hold（後端 deadman）。
-        </p>
+        <details className="hint-fold">
+          <summary>操作說明</summary>
+          <p className="hint-line">
+            切入手動位置模式，以搖桿／鍵盤直接操控；放開回中＝定點懸停。
+            失焦或關頁自動懸停並於 2 秒後自動切 Hold（後端 deadman）。
+          </p>
+        </details>
       )}
       {err && <div className="cmd-result err">{err}</div>}
     </>

@@ -78,6 +78,11 @@ function evText(e: { type: string; detail: Record<string, unknown> }): string {
     case "link_lost":     return `訊號瀕斷 · ${sinr}`;
     case "link_recovered":return `訊號恢復 · ${sinr}`;
     case "mode_change":   return `模式 ${d.from ?? "?"} → ${d.to ?? "?"}`;
+    // 5G 細節收摺疊後，cell 變化靠事件流呈現（issue 018 簡單案例先行）
+    case "cell_change":
+      return `serving cell 換手：PCI ${d.from_pci ?? "?"}`
+        + `${d.from_band ? `（${d.from_band}）` : ""} → PCI ${d.to_pci ?? "?"}`
+        + `${d.to_band ? `（${d.to_band}）` : ""}`;
     default:              return `${e.type} ${JSON.stringify(d)}`;
   }
 }
@@ -160,7 +165,7 @@ export default function SidePanel() {
       </div>
 
       <div className="card">
-        <h3>無人機訊號品質</h3>
+        <h3>無人機訊號品質<span className="h3-note">平滑 2s 窗</span></h3>
         <div className="hero">
           <span className="num">{fmt(link?.sinr)}</span>
           <span className="unit">dB SINR</span>
