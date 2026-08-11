@@ -3,10 +3,19 @@
  * SidePanel 與簡約 HUD 的事件列共用。 */
 import type { UavEvent } from "@/lib/store";
 
-export function evText(e: Pick<UavEvent, "type" | "detail">): string {
+export function evText(
+  e: Pick<UavEvent, "type" | "detail"> & { severity?: UavEvent["severity"] },
+): string {
   const d = e.detail as Record<string, number | string | boolean | undefined>;
   const sinr = typeof d.sinr === "number" ? `SINR ${d.sinr.toFixed(1)} dB` : "";
   switch (e.type) {
+    // PX4 Events 協定（Phase A.2 0296db5）：metadata 文字解析落地前顯示
+    // 人話骨架；args hex 不裸出（那是翻譯原料）。解析落地後同列自動帶全文
+    case "vehicle_event": {
+      const sev = e.severity === "critical" ? "危急"
+        : e.severity === "warning" ? "警告" : "資訊";
+      return `機上事件 #${d.event_id ?? "?"}（${sev}）`;
+    }
     // 機上訊息（STATUSTEXT）：原文不翻譯（event-stream-design 定案）；
     // ×N 折疊計數由事件卡的列尾徽章呈現，不進文字
     case "statustext":

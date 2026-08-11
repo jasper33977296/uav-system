@@ -87,8 +87,8 @@ export function EventsCard() {
       <div className="events">
         {shown.length === 0 && <div className="empty">尚無事件</div>}
         {shown.map((e) => {
-          const count = e.type === "statustext" && typeof e.detail.count === "number"
-            ? e.detail.count : 0;
+          const count = (e.type === "statustext" || e.type === "vehicle_event")
+            && typeof e.detail.count === "number" ? e.detail.count : 0;
           return (
             <div className={`event ${e.severity === "critical" ? "ev-crit" : ""}`} key={e.id}>
               <span className="dot" style={{
