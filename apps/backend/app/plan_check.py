@@ -89,3 +89,32 @@ def check_waypoints(wps: list[dict], fence_r: float, fence_alt: float,
 
     return {"ok": not problems, "problems": problems, "warnings": warnings,
             "max_dist_m": round(max_d, 1), "fence_r": fence_r, "fence_alt": fence_alt}
+
+
+def check_group(paths: list[dict], vsep_m: float, lsep_m: float) -> dict:
+    """群組跨路徑互檢（issue 013-A）：N 條同時飛的路徑要分離足夠。
+    paths：[{label, waypoints:[{lat,lon,alt}]}]。兩條路徑若在某處**橫向 < lsep
+    且垂直 < vsep**＝衝突（都靠太近才危險，分層或分離任一夠即安全）。
+    unified 高度分層下垂直本就 ≥ vsep，天然通過；separate 才真的互檢。"""
+    conflicts = []
+    for i in range(len(paths)):
+        for j in range(i + 1, len(paths)):
+            a, b = paths[i], paths[j]
+            wa = [w for w in a.get("waypoints", []) if w.get("lat") and w.get("lon")]
+            wb = [w for w in b.get("waypoints", []) if w.get("lat") and w.get("lon")]
+            hit = None
+            for pa in wa:
+                for pb in wb:
+                    dh = _dist_m(pa["lat"], pa["lon"], pb["lat"], pb["lon"])
+                    dv = abs((pa.get("alt") or 0) - (pb.get("alt") or 0))
+                    if dh < lsep_m and dv < vsep_m:
+                        hit = (round(dh), round(dv))
+                        break
+                if hit:
+                    break
+            if hit:
+                conflicts.append({
+                    "a": a.get("label"), "b": b.get("label"),
+                    "why": f"最近處 橫向 {hit[0]}m／垂直 {hit[1]}m"
+                           f"（門檻 橫向 {lsep_m:.0f}m 或 垂直 {vsep_m:.0f}m）"})
+    return {"ok": not conflicts, "conflicts": conflicts}

@@ -14,6 +14,10 @@ class Settings(BaseSettings):
     geofence_radius_m: float = 50.0
     geofence_alt_m: float = 15.0
     geofence_margin: float = 0.7     # 超過半徑此比例即警告（Home=擺放位置的餘裕）
+    # 群組任務（issue 013；doc/group-missions-design.md）——ops/使用者定終值
+    group_vsep_m: float = 5.0        # 相鄰分層垂直間隔
+    group_rtl_stagger_m: float = 4.0 # 各台 RTL 返航高度錯開量（013-B 執行期用）
+    group_lsep_m: float = 10.0       # 橫向分離門檻（check_group）
     capture_enabled: bool = True
     capture_dir: str = "/data/mavcap"
     capture_keep_days: int = 30

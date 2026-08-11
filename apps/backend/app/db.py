@@ -36,6 +36,23 @@ async def migrate() -> None:
     # issue 020：每機「當前飛的任務」——command 上傳任務時設，create_session
     # 據此綁 session.mission_id（任務↔架次因果鏈，非一次性補丁）
     await pool.execute("ALTER TABLE drones ADD COLUMN IF NOT EXISTS current_mission_id UUID")
+    # issue 013-A：群組任務資料模型（doc/group-missions-design.md）
+    await pool.execute("""CREATE TABLE IF NOT EXISTS mission_groups (
+        id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+        name TEXT NOT NULL,
+        base_mission_id UUID REFERENCES missions(id),   -- unified 展開來源
+        mode TEXT NOT NULL DEFAULT 'unified',            -- unified / separate
+        params JSONB,                                    -- vsep_m/rtl_stagger_m 等
+        status TEXT NOT NULL DEFAULT 'draft',            -- 見 §7.1 group.status
+        created_at TIMESTAMPTZ NOT NULL DEFAULT now())""")
+    await pool.execute("""CREATE TABLE IF NOT EXISTS group_assignments (
+        group_id UUID REFERENCES mission_groups(id) ON DELETE CASCADE,
+        drone_id UUID NOT NULL,
+        mission_id UUID REFERENCES missions(id),         -- materialized 具體任務
+        layer_index INT NOT NULL DEFAULT 0,
+        phase TEXT NOT NULL DEFAULT 'idle',              -- 見 §7.1 assignment.phase
+        PRIMARY KEY (group_id, drone_id))""")
+    await pool.execute("ALTER TABLE flight_sessions ADD COLUMN IF NOT EXISTS group_id UUID")
 
 
 async def drone_for_sysid(sysid: int) -> tuple[str, str]:

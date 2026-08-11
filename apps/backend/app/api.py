@@ -5,7 +5,7 @@ from datetime import datetime
 from fastapi import APIRouter, HTTPException, Response
 from pydantic import BaseModel, Field
 
-from . import db, mavlink_rx, plan_check, swarm_sim
+from . import db, groups, mavlink_rx, plan_check, swarm_sim
 from .config import settings
 from .link_events import transition as link_transition
 from .state import live
@@ -139,6 +139,45 @@ async def live_snapshot():
     curl 排查。輪詢頻率不宜超過 broadcast_hz，即時顯示請走 WS。
     """
     return live.telemetry_dict()
+
+
+class GroupDroneIn(BaseModel):
+    drone_id: str
+    layer_index: int | None = None
+    mission_id: str | None = None     # separate 模式各自任務
+
+
+class GroupIn(BaseModel):
+    name: str
+    mode: str = "unified"             # unified / separate
+    base_mission_id: str | None = None
+    drones: list[GroupDroneIn] = Field(min_length=1, max_length=8)
+    params: dict | None = None
+
+
+@router.post("/groups")
+async def create_group(g: GroupIn):
+    """建群組任務（issue 013-A）：unified 從 base 展開 per-drone 具體任務、
+    separate 用各自任務。回 assignments＋跨路徑衝突預檢（capability 嚴格
+    gate 在 execute／command 服務，此處只做幾何互檢＋materialize）。"""
+    if g.mode == "unified" and not g.base_mission_id:
+        raise HTTPException(422, "unified 模式需要 base_mission_id")
+    if g.mode == "separate" and any(d.mission_id is None for d in g.drones):
+        raise HTTPException(422, "separate 模式每台需要 mission_id")
+    try:
+        return await groups.create_group(
+            g.name, g.mode, g.base_mission_id,
+            [d.model_dump() for d in g.drones], g.params)
+    except groups.GroupError as e:
+        raise HTTPException(422, str(e))
+
+
+@router.get("/groups/{group_id}")
+async def get_group(group_id: str):
+    grp = await groups.get_group(group_id)
+    if grp is None:
+        raise HTTPException(404, "無此群組")
+    return grp
 
 
 @router.get("/sessions")
