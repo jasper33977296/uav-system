@@ -3,6 +3,7 @@ import { useRouter } from "next/navigation";
 import { useCallback, useEffect, useRef, useState } from "react";
 
 import { colorFor } from "@/components/droneLayer";
+import MissionThumb3D from "@/components/MissionThumb3D";
 import { API } from "@/lib/signal";
 
 interface Mission {
@@ -48,31 +49,6 @@ function parsePlan(text: string): PlanWp[] {
     });
   }
   return out;
-}
-
-/** 路線縮圖（ui-spec §4）：waypoints 俯視折線——縮圖即說明。
- * 起點綠圓、終點方塊；經度以 cos(lat) 校正避免變形。 */
-function MissionThumb({ wps }: { wps?: { lat: number; lon: number }[] }) {
-  const pts = (wps ?? []).filter((w) => w.lat && w.lon);
-  if (pts.length < 2) return <div className="mthumb" />;
-  const k = Math.cos((pts[0].lat * Math.PI) / 180);
-  const xs = pts.map((p) => p.lon * k), ys = pts.map((p) => p.lat);
-  const x0 = Math.min(...xs), x1 = Math.max(...xs);
-  const y0 = Math.min(...ys), y1 = Math.max(...ys);
-  const span = Math.max(x1 - x0, y1 - y0) || 1e-9;
-  const X = (x: number) => 8 + ((x - x0) / span) * 84 + (84 - ((x1 - x0) / span) * 84) / 2;
-  const Y = (y: number) => 92 - ((y - y0) / span) * 84 - (84 - ((y1 - y0) / span) * 84) / 2;
-  const pl = pts.map((p) => `${X(p.lon * k).toFixed(1)},${Y(p.lat).toFixed(1)}`).join(" ");
-  const first = pts[0], last = pts[pts.length - 1];
-  return (
-    <svg viewBox="0 0 100 100" className="mthumb" aria-hidden>
-      <polyline points={pl} fill="none" stroke="#c2bfb3" strokeWidth="2"
-        strokeLinejoin="round" strokeLinecap="round" />
-      <circle cx={X(first.lon * k)} cy={Y(first.lat)} r="3.2" fill="#0ca30c" />
-      <rect x={X(last.lon * k) - 2.6} y={Y(last.lat) - 2.6} width="5.2" height="5.2"
-        fill="#c2bfb3" />
-    </svg>
-  );
 }
 
 export default function Missions() {
@@ -181,7 +157,7 @@ export default function Missions() {
               onClick={() => !busy && call(
                 `/api/missions/${m.id}/activate?active=${!m.is_active}`,
                 { method: "POST" })}>
-              <MissionThumb wps={thumbs[m.id]} />
+              <MissionThumb3D wps={thumbs[m.id]} />
               <div className="mcard-foot">
                 <span className="mcard-name">{m.name}</span>
                 {m.is_active && <span className="chip on-chip">顯示中</span>}

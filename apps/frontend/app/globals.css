@@ -710,12 +710,48 @@ a:focus-visible, button:focus-visible, input:focus-visible, select:focus-visible
 .cmp-tip .dot { margin-right: 5px; }
 .cmp-legend { display: flex; flex-wrap: wrap; gap: 14px; margin-top: 6px; font-size: 12px; color: var(--ink-2); }
 .cmp-legend .dot { margin-right: 5px; }
-/* 比較頁 3D 軌跡疊圖。容器定位必須用兩層選擇器：maplibre-gl.css 對
-   .maplibregl-map 設 position:relative，單層 class 會被 cascade 順序蓋掉
-   （容器高度歸 0 黑屏，2026-08-11 驗收 bug）——同 .map-wrap 的既有解法 */
+/* 比較頁 3D 軌跡疊圖（v2 升主視覺置頂最大幅）。容器定位必須用兩層選擇器：
+   maplibre-gl.css 對 .maplibregl-map 設 position:relative，單層 class 會被
+   cascade 順序蓋掉（高度歸 0 黑屏，2026-08-11 驗收 bug）——同 .map-wrap 解法 */
 .cmp3d {
-  position: relative; height: 480px; margin-top: 8px;
+  position: relative; height: clamp(360px, 52vh, 620px); margin-top: 8px;
   border-radius: 10px; overflow: hidden; background: var(--page);
+}
+
+/* v2：任務 3D 縮圖橫捲列（共用 MissionThumb3D）＋列尾下拉輔助 */
+.mstrip {
+  display: flex; gap: 10px; overflow-x: auto; align-items: stretch;
+  padding: 2px;
+}
+.mstrip-card {
+  flex: none; width: 132px; display: flex; flex-direction: column; gap: 4px;
+  background: var(--surface); border: 2px solid var(--border);
+  border-radius: 10px; padding: 8px; cursor: pointer; text-align: left;
+}
+.mstrip-card.on { border-color: var(--accent); }
+.mstrip-name {
+  font-size: 12px; font-weight: 600; color: var(--ink);
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+.mstrip-tail {
+  flex: none; align-self: center; font-size: 12px;
+  background: var(--page); color: var(--ink-2);
+  border: 1px solid var(--hairline); border-radius: 6px; padding: 4px 6px;
+}
+
+/* v2：架次膠囊列（基準底色） */
+.sess-pills { display: flex; flex-wrap: wrap; gap: 6px; align-items: center; }
+.pill {
+  display: inline-flex; align-items: center; gap: 6px;
+  font-size: 12.5px; padding: 4px 11px; border-radius: 999px; cursor: pointer;
+  border: 1px solid var(--hairline); background: none; color: var(--ink-2);
+}
+.pill.on { color: var(--ink); border-color: var(--ink-2); }
+.pill.base { background: var(--surface-2); }
+.pill:disabled { opacity: 0.4; cursor: not-allowed; }
+.metric-mini {
+  font-size: 12px; background: var(--page); color: var(--ink-2);
+  border: 1px solid var(--hairline); border-radius: 6px; padding: 2px 4px;
 }
 .cmp3d .maplibregl-map { position: absolute; inset: 0; }
 .legend-right { left: auto; right: 12px; bottom: 12px; }

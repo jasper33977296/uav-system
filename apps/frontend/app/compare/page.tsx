@@ -12,6 +12,7 @@
 import dynamic from "next/dynamic";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 
+import MissionThumb3D from "@/components/MissionThumb3D";
 import { API } from "@/lib/signal";
 
 // MapLibre 依賴 window，關閉 SSR（同即時頁 MapView 作法）
@@ -210,6 +211,25 @@ export default function Compare() {
   const [cdfOpen, setCdfOpen] = useState(false);
   useEffect(() => { setCdfOpen(localStorage.getItem("cmp-cdf-open") === "1"); }, []);
 
+  // v2：任務選擇＝3D 縮圖橫捲列（共用 §4 元件）——逐任務抓 waypoints、
+  // 選中卡自動捲入
+  const [thumbs, setThumbs] = useState<Record<string, { lat: number; lon: number; alt?: number }[]>>({});
+  const selCardRef = useRef<HTMLButtonElement>(null);
+  useEffect(() => {
+    for (const m of missions) {
+      if (thumbs[m.id]) continue;
+      fetch(`${API}/api/missions/${m.id}/waypoints`)
+        .then((r) => r.json())
+        .then((d) => setThumbs((t) => ({ ...t, [m.id]: d.waypoints ?? [] })))
+        .catch(() => {});
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [missions]);
+  useEffect(() => {
+    selCardRef.current?.scrollIntoView(
+      { behavior: "smooth", inline: "nearest", block: "nearest" });
+  }, [missionId]);
+
   // 任務下拉附架次數（ui-spec §6：020 重複名修好前靠架次數自明）——
   // sessions 只有 mission_name，以名字聚合（重複名會共用計數，020 後改 id）
   const [missionCounts, setMissionCounts] = useState<Record<string, number>>({});
@@ -363,45 +383,48 @@ export default function Compare() {
 
   return (
     <div className="page-pad">
-      <div className="card">
-        {/* ⓘ 整移除（ui-spec §6 使用者定案）：比較頁不放任何解釋入口，
-            里程對齊原理留在 doc/ 不進 UI */}
-        <h3>航線比較</h3>
-        <div className="cmd-row" style={{ marginTop: 8 }}>
-          <select value={missionId} onChange={(e) => setMissionId(e.target.value)}>
-            <option value="">選擇任務⋯</option>
-            {missions.map((m) => (
-              <option key={m.id} value={m.id}>
-                {m.name}（{missionCounts[m.name] ?? 0} 架次）
-              </option>
-            ))}
-          </select>
-          <select value={metric} onChange={(e) => setMetric(e.target.value)}>
-            {METRICS.map((m) => <option key={m.key} value={m.key}>{m.label}</option>)}
-          </select>
-        </div>
+      {/* v2：任務選擇＝3D 縮圖橫捲列（拖縮圖旋轉、點卡選任務）＋列尾下拉輔助。
+          ⓘ 整移除維持（§6 定案：比較頁不放解釋入口） */}
+      <div className="mstrip">
+        {missions.map((m) => (
+          <button key={m.id} ref={m.id === missionId ? selCardRef : undefined}
+            className={`mstrip-card ${m.id === missionId ? "on" : ""}`}
+            onClick={() => setMissionId(m.id)}>
+            <MissionThumb3D wps={thumbs[m.id]} />
+            <span className="mstrip-name">{m.name}</span>
+            <span className="meta">{missionCounts[m.name] ?? 0} 架次</span>
+          </button>
+        ))}
+        <select className="mstrip-tail" value={missionId}
+          onChange={(e) => setMissionId(e.target.value)}>
+          <option value="">選擇任務⋯</option>
+          {missions.map((m) => (
+            <option key={m.id} value={m.id}>
+              {m.name}（{missionCounts[m.name] ?? 0} 架次）
+            </option>
+          ))}
+        </select>
       </div>
 
       {missionId && (
-        <div className="cmp-layout">
-          <div className="card cmp-sessions">
-            <h4>航線（{sessions.length}）</h4>
-            {/* 基準＝底色標示（不用文字 chip）；沒有的資訊不畫「—」 */}
-            {sessions.map((s) => (
-              <label className={`cmp-sess ${selected[0] === s.id ? "base" : ""}`} key={s.id}>
-                <input type="checkbox" checked={selected.includes(s.id)}
-                  disabled={!selected.includes(s.id) && selected.length >= MAX_SEL}
-                  onChange={() => toggle(s.id)} />
-                <span className="dot" style={{
-                  background: selected.includes(s.id) ? color(s.id) : "transparent",
-                  border: selected.includes(s.id) ? "none" : "1px solid var(--hairline)",
-                }} />
-                <span>{label(s.id)}</span>
-                {s.summary?.samples_total != null && (
-                  <span className="meta">{s.summary.samples_total} 筆</span>
-                )}
-              </label>
-            ))}
+        <>
+          {/* v2：架次膠囊列——識別色點＋時間，基準底色（無文字 chip） */}
+          <div className="sess-pills">
+            {sessions.map((s) => {
+              const on = selected.includes(s.id);
+              return (
+                <button key={s.id}
+                  className={`pill ${on ? "on" : ""} ${selected[0] === s.id ? "base" : ""}`}
+                  disabled={!on && selected.length >= MAX_SEL}
+                  onClick={() => toggle(s.id)}>
+                  <span className="dot" style={{
+                    background: on ? color(s.id) : "transparent",
+                    border: on ? "none" : "1px solid var(--hairline)",
+                  }} />
+                  {label(s.id)}
+                </button>
+              );
+            })}
             {sessions.length === 0 && <div className="empty">此任務尚無航線</div>}
           </div>
 
@@ -409,9 +432,30 @@ export default function Compare() {
             {loaded.length === 0 && (
               <div className="card"><div className="empty">勾選 2 條以上航線開始比較</div></div>
             )}
+            {/* v2：3D 疊圖升主視覺——置頂最大幅（3D 為榮） */}
             {loaded.length > 0 && path && (
               <div className="card">
-                <h4>{mUnit.key === "sinr" ? "訊號" : mUnit.label} vs 飛行距離</h4>
+                <h4>軌跡疊圖（3D）
+                  <span className="h3-note">拖曳旋轉 · 點絲帶看訊號</span>
+                </h4>
+                <CompareMap3D wps={wps} loaded={loaded} tracks={tracks}
+                  colorOf={color} labelOf={label}
+                  dimIds={loaded.filter(isDim)} />
+              </div>
+            )}
+            {loaded.length > 0 && path && (
+              <div className="card">
+                <h4>{mUnit.key === "sinr" ? "訊號" : mUnit.label} vs 飛行距離
+                  {/* v2：指標切換收線圖卡右上 */}
+                  <span className="h3-note">
+                    <select className="metric-mini" value={metric}
+                      onChange={(e) => setMetric(e.target.value)}>
+                      {METRICS.map((m) => (
+                        <option key={m.key} value={m.key}>{m.label}</option>
+                      ))}
+                    </select>
+                  </span>
+                </h4>
                 <LineChart series={chainSeries} xMax={path.total}
                   unit={mUnit.unit} xUnit="m" />
                 {legend}
@@ -445,17 +489,6 @@ export default function Compare() {
               </div>
             )}
 
-            {loaded.length > 0 && path && (
-              <div className="card">
-                <h4>軌跡疊圖（3D）
-                  <span className="h3-note">拖曳旋轉 · 點絲帶看訊號</span>
-                </h4>
-                <CompareMap3D wps={wps} loaded={loaded} tracks={tracks}
-                  colorOf={color} labelOf={label}
-                  dimIds={loaded.filter(isDim)} />
-              </div>
-            )}
-
             {loaded.length > 0 && (
               <details className="card" open={cdfOpen}
                 onToggle={(e) => {
@@ -470,7 +503,7 @@ export default function Compare() {
               </details>
             )}
           </div>
-        </div>
+        </>
       )}
     </div>
   );
