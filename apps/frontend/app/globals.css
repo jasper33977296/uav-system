@@ -675,6 +675,8 @@ a:focus-visible, button:focus-visible, input:focus-visible, select:focus-visible
   cursor: pointer; text-align: left;
 }
 .mcard.on { border-color: var(--accent); }
+/* 展開中＝暖白外框（§4.3：珊瑚=顯示中狀態、暖白=目前展開，兩者可並存） */
+.mcard.expanded { outline: 1.5px solid var(--ink); outline-offset: 2px; }
 .mthumb { width: 100%; aspect-ratio: 1 / 1; background: var(--page); border-radius: 8px; display: block; }
 .mcard-foot { display: flex; align-items: center; gap: 6px; margin-top: 8px; min-width: 0; }
 .mcard-name {

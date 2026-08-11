@@ -153,7 +153,9 @@ export default function Missions() {
         {missions.map((m) => {
           const count = sessions.filter((s) => s.mission_id === m.id).length;
           return (
-            <div key={m.id} className={`mcard ${m.is_active ? "on" : ""}`}
+            <div key={m.id}
+              className={`mcard ${m.is_active ? "on" : ""}`
+                + ` ${openId === m.id ? "expanded" : ""}`}
               title="點擊展開使用紀錄"
               onClick={() => setOpenId(openId === m.id ? null : m.id)}>
               <MissionThumb3D wps={thumbs[m.id]}
