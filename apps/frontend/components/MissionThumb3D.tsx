@@ -14,13 +14,18 @@ const PITCH = (55 * Math.PI) / 180;
 const COS_P = Math.cos(PITCH), SIN_P = Math.sin(PITCH);
 const GRID_M = 50;
 
-export default function MissionThumb3D({ wps, className = "" }: {
+export default function MissionThumb3D({ wps, className = "", onTap }: {
   wps?: ThumbWp[]; className?: string;
+  /** 純點擊（無拖曳）回呼：走 pointerup（capture 目標必達），不賭 click
+   * 冒泡——pointer capture 下 click 重定向在非 button 父層曾吞掉點擊
+   * （/missions div 卡點縮圖無反應、/compare button 卡卻正常的差異來源） */
+  onTap?: () => void;
 }) {
   const clipId = useId();
   const [bearing, setBearing] = useState(-30);
   const dragRef = useRef<{ x: number; y: number; b: number } | null>(null);
   const movedRef = useRef(false);
+  const suppressClickRef = useRef(false);
 
   const pts = (wps ?? []).filter((w) => w.lat && w.lon);
   if (pts.length < 2) return <div className={`mthumb ${className}`} />;
@@ -83,14 +88,25 @@ export default function MissionThumb3D({ wps, className = "" }: {
         if (Math.hypot(dx, e.clientY - dr.y) > 5) movedRef.current = true;
         setBearing(dr.b + dx * 0.8);
       }}
-      onPointerUp={() => { dragRef.current = null; }}
+      onPointerUp={() => {
+        const wasDrag = dragRef.current != null;
+        dragRef.current = null;
+        if (wasDrag && !movedRef.current && onTap) {
+          onTap();
+          suppressClickRef.current = true;   // 已處理，後續 click 不再冒泡防雙觸發
+        }
+      }}
       onPointerCancel={() => { dragRef.current = null; }}
       onClickCapture={(e) => {
         // 拖曳結束的 click 不往上冒（父卡的選取/啟用不誤觸）。
         // 旗標**用過即清**：合成 click（無 pointerdown 前導）不會被
-        // 上一次拖曳的殘留旗標永久吞掉——「點縮圖選不了」的真兇
-        if (movedRef.current) { e.preventDefault(); e.stopPropagation(); }
+        // 上一次拖曳的殘留旗標永久吞掉
+        if (movedRef.current || suppressClickRef.current) {
+          e.preventDefault();
+          e.stopPropagation();
+        }
         movedRef.current = false;
+        suppressClickRef.current = false;
       }}>
       <defs>
         <clipPath id={clipId}><rect width="100" height="100" rx="6" /></clipPath>

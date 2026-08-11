@@ -156,7 +156,8 @@ export default function Missions() {
             <div key={m.id} className={`mcard ${m.is_active ? "on" : ""}`}
               title="點擊展開使用紀錄"
               onClick={() => setOpenId(openId === m.id ? null : m.id)}>
-              <MissionThumb3D wps={thumbs[m.id]} />
+              <MissionThumb3D wps={thumbs[m.id]}
+                onTap={() => setOpenId(openId === m.id ? null : m.id)} />
               <div className="mcard-foot">
                 <span className="mcard-name">{m.name}</span>
                 {m.is_active && <span className="chip on-chip">顯示中</span>}

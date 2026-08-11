@@ -398,7 +398,8 @@ export default function Compare() {
               className={`mstrip-card ${m.id === missionId ? "on" : ""}`
                 + ` ${n === 0 ? "dim" : ""}`}
               onClick={() => setMissionId(m.id)}>
-              <MissionThumb3D wps={thumbs[m.id]} />
+              <MissionThumb3D wps={thumbs[m.id]}
+                onTap={() => setMissionId(m.id)} />
               <span className="mstrip-name">{m.name}</span>
               <span className="meta">{n} 架次</span>
             </button>
