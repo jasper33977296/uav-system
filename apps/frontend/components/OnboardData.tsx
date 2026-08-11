@@ -20,7 +20,9 @@ const SENSOR_LABELS: Record<string, string> = {
 };
 
 const fmtVal = (v: unknown): string =>
-  typeof v === "number" && !Number.isInteger(v) ? v.toFixed(3) : String(v);
+  typeof v === "number" && !Number.isInteger(v) ? v.toFixed(3)
+    : Array.isArray(v) ? JSON.stringify(v)   // 陣列欄（四元數/多芯電壓）帶括號
+    : String(v);
 
 function InspectorSheet({ droneId, onClose }: { droneId: string; onClose: () => void }) {
   const reg = useUavStore((s) => s.registry[droneId]);
@@ -34,7 +36,8 @@ function InspectorSheet({ droneId, onClose }: { droneId: string; onClose: () => 
   }, [onClose]);
 
   const rows = useMemo(() => {
-    const list = [...(reg?.messages ?? [])].sort((a, b) => b.hz - a.hz);
+    // hz=null（一次性訊息無率）沉底：排序鍵取 -1
+    const list = [...(reg?.messages ?? [])].sort((a, b) => (b.hz ?? -1) - (a.hz ?? -1));
     if (!q.trim()) return list;
     const needle = q.trim().toLowerCase();
     // 搜尋＝型別名/編號子字串（§2.8 規則 3）
@@ -60,7 +63,7 @@ function InspectorSheet({ droneId, onClose }: { droneId: string; onClose: () => 
             <span className="num">齡</span><span />
           </div>
           {rows.map((m) => {
-            const stale = m.age_s > 5;
+            const stale = (m.age_s ?? 0) > 5;
             const opened = open.has(m.id);
             const fields = Object.entries(m.fields ?? {});
             return (
@@ -73,8 +76,11 @@ function InspectorSheet({ droneId, onClose }: { droneId: string; onClose: () => 
                   })}>
                   {/* 未知型別顯示 id 不隱藏（§2.8 文字圖）——收到什麼列什麼 */}
                   <span className="insp-name">{m.name ?? `#${m.id}`}</span>
-                  <span className="num">{m.hz.toFixed(1)}</span>
-                  <span className="num">{m.age_s.toFixed(1)}s</span>
+                  {/* hz=null＝一次性/首見訊息還沒有率（實測 MISSION_ACK 炸過
+                      toFixed 整頁白屏）。設計師裁定：null 欄留空——「還不知道」
+                      不是 0.0 也不是 —；型別名照列（收到什麼列什麼） */}
+                  <span className="num">{typeof m.hz === "number" ? m.hz.toFixed(1) : ""}</span>
+                  <span className="num">{typeof m.age_s === "number" ? `${m.age_s.toFixed(1)}s` : ""}</span>
                   <span className="insp-arrow">{opened ? "▾" : "▸"}</span>
                 </button>
                 {opened && fields.length > 0 && (
@@ -117,7 +123,7 @@ export default function OnboardDataCard() {
   // 登錄表沒資料＝整卡不畫（feature-detect；後端 014 Phase B 上線前的空態）
   if (!effective || !reg || (!reg.messages.length && !reg.sensors.length)) return null;
 
-  const totalHz = reg.messages.reduce((t, m) => t + m.hz, 0);
+  const totalHz = reg.messages.reduce((t, m) => t + (m.hz ?? 0), 0);
   return (
     <div className="card">
       <h3>機上資料</h3>

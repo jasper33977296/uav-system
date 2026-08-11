@@ -57,8 +57,8 @@ export interface Telemetry {
 export interface RegistryMsg {
   id: number;                  // MAVLink msgid
   name?: string | null;        // 已知型別名；null＝未知 → UI 顯 #id
-  hz: number;
-  age_s: number;
+  hz: number | null;           // 一次性訊息（MISSION_ACK 等）無率——null 誠實
+  age_s: number | null;
   fields?: Record<string, unknown> | null;
   // 線上單位（pymavlink fieldunits_by_name＝MAVLink XML 同源）：raw wire
   // 單位配 raw 值——degE7/mV/cdegC 等縮放單位原樣直出，兩邊都誠實不換算
