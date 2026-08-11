@@ -37,6 +37,7 @@ from .ws import manager
 log = logging.getLogger(__name__)
 M = mavutil.mavlink
 GCS_SYSID = 254
+ADDR_WARN_COOLDOWN = 30.0    # 同 sysid 撞號告警去抖（秒）：避免告警風暴
 
 # read-only 邊界的實體：能離開這個 socket 的訊息類型只有這三種（任務下載
 # 的查詢對話）。要發任何別的，這行 assert 就是攔你的人。
@@ -62,6 +63,8 @@ def autopilot_name(raw) -> str:
 
 
 def _mode_name(custom_mode: int, autopilot_raw=None) -> str:
+    if not custom_mode:              # 0＝尚未設定模式（開機瞬間），不顯 MODE_0
+        return "—"
     if autopilot_name(autopilot_raw) == "ardupilot":
         return _ARDU_COPTER.get(custom_mode, f"MODE_{custom_mode}")
     # 預設 PX4（含 unknown 暫按 PX4 解，維持既有行為）
@@ -195,16 +198,23 @@ class MavlinkRx:
             log.info("sysid %d → %s（%s）", sysid, name,
                      "既有主機" if st is live else "自動註冊")
         elif ent["addr"] != addr:
-            # 撞號（兩台同 sysid）或換網路——必須看得見，混料比斷線嚴重
+            # 撞號（兩台同 sysid）或換網路——必須看得見，混料比斷線嚴重。
+            # 去抖（issue 016 RB5 sysid=1 bug 場景）：兩源撞號會每次心跳交替、
+            # 每次都改 addr——不去抖會告警風暴淹掉事件流。同 sysid 每
+            # ADDR_WARN_COOLDOWN 秒最多發一次。
             st = ent["state"]
-            ev = await db.insert_event(st.drone_id, st.session_id, "warning",
-                                       "sysid_addr_change",
-                                       {"sysid": sysid, "from": str(ent["addr"]),
-                                        "to": str(addr)})
-            ev["drone"] = st.drone_name
-            await manager.broadcast({"type": "event", "event": ev})
-            log.warning("sysid %d 來源位址改變 %s → %s（撞號？換網路？）",
-                        sysid, ent["addr"], addr)
+            now = time.monotonic()
+            if now - ent.get("addr_warn_t", 0) >= ADDR_WARN_COOLDOWN:
+                ent["addr_warn_t"] = now
+                ev = await db.insert_event(
+                    st.drone_id, st.session_id, "warning", "sysid_addr_change",
+                    {"sysid": sysid,
+                     "note": "同 sysid 從多個來源收到——撞號或換網路，資料可能混料",
+                     "from_addr": "%s:%d" % ent["addr"], "to_addr": "%s:%d" % addr})
+                ev["drone"] = st.drone_name
+                await manager.broadcast({"type": "event", "event": ev})
+                log.warning("sysid %d 來源位址改變 %s → %s（撞號？換網路？）",
+                            sysid, ent["addr"], addr)
             ent["addr"] = addr
 
         ent["seen"] = time.monotonic()
