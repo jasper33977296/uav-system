@@ -11,6 +11,10 @@ export function evText(e: Pick<UavEvent, "type" | "detail">): string {
     case "link_lost":     return `訊號瀕斷 · ${sinr}`;
     case "link_recovered":return `訊號恢復 · ${sinr}`;
     case "mode_change":   return `模式 ${d.from ?? "?"} → ${d.to ?? "?"}`;
+    // sysid 位址變更（47a384d 後 note 已是完整中文句，補來源位址即可）
+    case "sysid_addr_change":
+      return `${d.note ?? "sysid 來源位址變更"}`
+        + `${d.from_addr && d.to_addr ? `（來源 ${d.from_addr} → ${d.to_addr}）` : ""}`;
     // 5G 細節收摺疊後，cell 變化靠事件流呈現（issue 018 簡單案例先行）
     case "cell_change":
       return `serving cell 換手：PCI ${d.from_pci ?? "?"}`
