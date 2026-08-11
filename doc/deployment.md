@@ -15,6 +15,10 @@
 
 三條流全部由**機上主動外連**——SSH 只在安裝日用一次，運行期間零人為連線。
 
+> 🚀 **到現場照著打勾的精簡版**見 [`deploy-checklist.md`](deploy-checklist.md)——env／埠、
+> 服務起法、每台 RB5 機上設定驗證、5G 可達性、首飛驗收順序（單機先→編隊後）、安全注意
+> 事項。本文是完整手冊與背景；清單是現場操作面。
+
 ---
 
 ## 0. 前提清單
@@ -344,3 +348,21 @@ docker compose up -d        # 含 sitl（由 sim profile 帶起）
 build；開發加 `docker-compose.dev.yml` 覆寫＝bind mount + 熱重載。
 前端程式碼變更後，部署環境要 `docker compose up -d --build` 重建映像
 （build 產物在映像內）；開發環境改檔即生效。
+
+### 開發注意事項：backend `--reload` 會被常駐 WebSocket 卡死
+
+開發環境 backend 掛 bind mount + `uvicorn --reload`，改 `apps/backend/app/`
+下任何 `.py` 即熱重載。**坑（2026-08-12 實測）**：uvicorn 的 graceful
+shutdown 會等所有連線關閉才重啟，而前端 `/ws/telemetry` 是**常駐 WS、不會
+自己關** → reload 無限卡在 `Waiting for connections to close`，backend 直接
+down（不是幾秒 blip，是無限期，直到手動介入）。「沒人在飛」擋不住這個——
+WS 與 arming 無關、前端一開著就一直連著。
+
+- **緩解**：`docker-compose.yml` backend 的 uvicorn command 加
+  `--timeout-graceful-shutdown 3`，reload 最多卡 3s 自救。
+- **沒加之前**：backend 改完寧可 `docker restart uav-backend`（可預期 ~8s、
+  乾淨載新碼、SITL 機隊自動重連），不要賭 `--reload` 不卡。
+- **多檔一次改**：先 `python3 -m py_compile <檔...>` 確認全部能編譯，再一次
+  改完、一次 restart，避免中途 reload 載到半套。
+- 使用者/機隊實測進行中時，backend 改動挑安靜窗口（`GET :38001/healthz`
+  三台持續 disarmed）＋部署前複驗，並知會協作者會有一次短重啟。
