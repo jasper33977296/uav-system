@@ -30,6 +30,7 @@ class LiveState:
     gps_fix: int | None = None
     satellites: int | None = None
     flight_mode: str | None = None
+    mode_pending: str | None = None    # mode_change 防抖候選（連續 2 次才算，見 mavlink_rx）
     armed: bool = False
 
     # 飛行就緒（QGC「Ready To Fly」的同源訊號，2026-08-11）：

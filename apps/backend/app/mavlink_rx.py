@@ -271,13 +271,24 @@ class MavlinkRx:
             st.autopilot_raw = msg.autopilot        # 方言分表解碼與 UI 徽章用
             st.vehicle_type_raw = msg.type
             mode = _mode_name(msg.custom_mode, msg.autopilot)
-            if st.flight_mode is not None and mode != st.flight_mode:
-                ev = await db.insert_event(st.drone_id, st.session_id, "info",
-                                           "mode_change",
-                                           {"from": st.flight_mode, "to": mode})
-                ev["drone"] = st.drone_name
-                await manager.broadcast({"type": "event", "event": ev})
-            st.flight_mode = mode
+            # 防抖（同 cell_change 的 2-連續紀律）：撞號多來源會讓同 sysid 的模式
+            # 每顆心跳在多值間翻打，噴 15/秒 mode_change 灌爆事件流（2026-08-11 事故）。
+            # 新模式**連續 2 次**才提交＋發事件——翻打源每次都不同、永遠湊不齊 2 次→不噴；
+            # 真的換模式是穩定的、下一顆心跳即確認（~0.5s 延遲，事件日誌可接受）。
+            if mode == st.flight_mode:
+                st.mode_pending = None
+            elif mode == st.mode_pending:              # 第 2 次見到同一新模式 → 確認
+                if st.flight_mode is not None:
+                    ev = await db.insert_event(st.drone_id, st.session_id, "info",
+                                               "mode_change",
+                                               {"from": st.flight_mode, "to": mode})
+                    ev["drone"] = st.drone_name
+                    await manager.broadcast({"type": "event", "event": ev})
+                st.flight_mode, st.mode_pending = mode, None
+            else:                                      # 第 1 次見到新模式，設為候選待確認
+                st.mode_pending = mode
+                if st.flight_mode is None:             # 開機首次：直接定，不發事件
+                    st.flight_mode = mode
             await self._armed_transition(
                 st, bool(msg.base_mode & M.MAV_MODE_FLAG_SAFETY_ARMED))
         elif t == "GLOBAL_POSITION_INT":
