@@ -41,6 +41,12 @@ def import_plan(path: str) -> str:
         sys.exit("❌ 檔案內找不到足夠的導航航點")
     name = path.rsplit("/", 1)[-1]
     name = name[:-5] if name.endswith(".plan") else name
+    # issue 020 去重：同名任務重用既有記錄，不每飛新建一筆（否則比較頁按
+    # mission 分組後每次飛都是不同 mission、無法「同任務多次比較」）
+    existing = [m for m in call(f"{BACKEND}/api/missions") if m["name"] == name]
+    if existing:
+        print(f"📄 重用任務庫既有「{name}」（{existing[0]['id'][:8]}），不新建")
+        return existing[0]["id"]
     res = call(f"{BACKEND}/api/missions",
                {"name": name, "source": "plan-file", "waypoints": wps})
     chk = res.get("check") or {}

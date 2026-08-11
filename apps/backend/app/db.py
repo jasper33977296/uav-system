@@ -30,6 +30,12 @@ async def migrate() -> None:
     # 2026-08-10：模擬場景改為 link_sim 內建常數，拆除模擬器專用表
     await pool.execute("DROP TABLE IF EXISTS interference_zones")
     await pool.execute("DROP TABLE IF EXISTS cells")
+    # mav_sysid 遷移移到 backend（PM 2a：解耦「command 曾啟動過」的部署順序；
+    # command 仍保留 IF NOT EXISTS 無妨）
+    await pool.execute("ALTER TABLE drones ADD COLUMN IF NOT EXISTS mav_sysid INT")
+    # issue 020：每機「當前飛的任務」——command 上傳任務時設，create_session
+    # 據此綁 session.mission_id（任務↔架次因果鏈，非一次性補丁）
+    await pool.execute("ALTER TABLE drones ADD COLUMN IF NOT EXISTS current_mission_id UUID")
 
 
 async def drone_for_sysid(sysid: int) -> tuple[str, str]:
@@ -120,10 +126,13 @@ async def create_session(drone_id: str, link_mission: bool = True,
     """開一條航線紀錄。mission_id 指定時直接關聯（群飛模擬飛指定任務）；
     否則 link_mission=True 時關聯任務庫當下的啟用路徑（is_active）——
     語意是「操作員宣告要飛的那條」。回放頁據此疊預計路徑。"""
+    # 綁定序（issue 020，任務↔架次因果鏈）：明示 mission_id > 該機當前任務
+    # （command 上傳時設 drones.current_mission_id，可靠事實源）> is_active 後備
     row = await pool.fetchrow(
         """INSERT INTO flight_sessions (drone_id, started_at, mission_id)
            VALUES ($1, now(), COALESCE(
                    $3::uuid,
+                   (SELECT current_mission_id FROM drones WHERE id = $1),
                    CASE WHEN $2 THEN (SELECT id FROM missions WHERE is_active LIMIT 1) END))
            RETURNING id""",
         drone_id, link_mission, mission_id,

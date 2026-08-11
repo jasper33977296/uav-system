@@ -121,8 +121,9 @@ async def lifespan(app):
         id BIGSERIAL PRIMARY KEY, time TIMESTAMPTZ NOT NULL DEFAULT now(),
         sysid INT, action TEXT NOT NULL, params JSONB,
         result TEXT NOT NULL, detail TEXT)""")
-    # 單埠多機的身分對應欄位（issues/011；先建欄位，UI 對應後續接）
+    # 單埠多機的身分對應欄位（issues/011；backend migrate 也建，這裡防序）
     await pool.execute("ALTER TABLE drones ADD COLUMN IF NOT EXISTS mav_sysid INT")
+    await pool.execute("ALTER TABLE drones ADD COLUMN IF NOT EXISTS current_mission_id UUID")
     router = mav.MavRouter(settings.command_mavlink_url,
                            heartbeat=settings.enable_commands)
     router.start()
@@ -335,4 +336,8 @@ async def mission_upload(sysid: int, body: UploadIn):
     res = await _run(sysid, "mission_upload", mav.job_upload_mission,
                      build_items(wps),
                      params={"mission_id": body.mission_id, "items": len(wps)})
+    # issue 020：記「這台機當前飛的任務」——backend create_session 據此綁架次。
+    # sysid→drone 靠 drones.mav_sysid（backend 心跳時寫入）。
+    await pool.execute("UPDATE drones SET current_mission_id = $1 WHERE mav_sysid = $2",
+                       body.mission_id, sysid)
     return {**res, "check": report}

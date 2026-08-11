@@ -1,6 +1,6 @@
 # 020 · 架次未綁任務：新飛的資料在比較頁整個用不了
 
-- 狀態：open（2026-08-11 已診斷；PM 排程於「任務層資料模型」批次、多機驗收之後——**現在不動工**）
+- 狀態：closed（2026-08-11 修復並驗證；PM 插隊到佇列最前面因它擋研究主流程且孤兒架次持續累積）
 - 嚴重度：high（打斷使用者主研究流程：比較頁「同任務前後比較」）
 - 位置：`apps/backend/app/db.py:create_session`、`apps/command/app/main.py`、
   `scripts/fly-mission.py`
@@ -38,6 +38,27 @@
    同一 .plan 反覆飛＝多架次綁同一 mission → compare 可用。
 3. is_active 保留原用途（即時頁疊圖顯示），與架次綁定解耦。
 
-## 解決方式
+## 解決方式（2026-08-11）
 
-（closed 時補；含 SITL 驗證：飛任務→架次綁上 mission、再飛→重用同 mission）
+**前向綁定（因果鏈事實源＝command 上傳）**：
+- `drones.current_mission_id` 欄位（backend `migrate()`；順帶把 PM 2a 的
+  `mav_sysid` 遷移也移進 backend migrate，解耦部署順序）。
+- command `mission_upload` 成功後 `UPDATE drones SET current_mission_id`
+  （sysid→drone 靠 `drones.mav_sysid`）。
+- `create_session` 綁定序：明示 mission_id > 該機 current_mission_id >
+  is_active 後備。is_active 保留原用途（即時頁疊圖），與架次綁定解耦。
+- **去重**：`fly-mission.py` import 同名任務重用既有記錄，不每飛新建。
+
+**回填**：`scripts/backfill-session-mission.sql`（一次性，冪等）——以
+command_log 的 mission_upload 留痕為事實源，把孤兒架次綁回實際飛的任務。
+本機實測：55 孤兒中回填 21 筆（sim-uav-1 有對應留痕者）；complex-survey
+從 0 → **18 架次**，比較頁「同任務前後比較」恢復可用。綁不上的 34 筆＝
+swarm 模擬機（17，無 command_log）＋手動解鎖/command 服務前的舊架次
+＝資料斷代，維持 NULL 不強綁。
+
+**SITL 驗證**：上傳 complex-survey → arm → 新架次 mission_id 正確綁到該
+mission（032fe74f→b74aa544）；fly-mission 再飛同名 → 重用同一 mission。
+
+殘留（非本 issue，記錄）：既有 2 筆同名 complex-survey（duplicate）其一
+0 架次，是修復前 fly-mission 新建的 clutter；UI 側下拉附架次數即可自明
+（前端，設計師已註記）。
