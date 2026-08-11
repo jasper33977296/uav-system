@@ -498,12 +498,14 @@ a:focus-visible, button:focus-visible, input:focus-visible, select:focus-visible
 .cmp-tip .dot { margin-right: 5px; }
 .cmp-legend { display: flex; flex-wrap: wrap; gap: 14px; margin-top: 6px; font-size: 12px; color: var(--ink-2); }
 .cmp-legend .dot { margin-right: 5px; }
-/* 比較頁 3D 軌跡疊圖 */
+/* 比較頁 3D 軌跡疊圖。容器定位必須用兩層選擇器：maplibre-gl.css 對
+   .maplibregl-map 設 position:relative，單層 class 會被 cascade 順序蓋掉
+   （容器高度歸 0 黑屏，2026-08-11 驗收 bug）——同 .map-wrap 的既有解法 */
 .cmp3d {
-  position: relative; height: 400px; margin-top: 8px;
+  position: relative; height: 480px; margin-top: 8px;
   border-radius: 10px; overflow: hidden; background: var(--page);
 }
-.cmp3d-map { position: absolute; inset: 0; }
+.cmp3d .maplibregl-map { position: absolute; inset: 0; }
 .legend-right { left: auto; right: 12px; bottom: 12px; }
 .legend-row {
   display: flex; align-items: center; gap: 6px; width: 100%;

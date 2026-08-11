@@ -60,6 +60,7 @@ export default function CompareMap3D({
     mapRef.current = map;
 
     map.on("load", () => {
+      map.resize();   // 保險：容器尺寸若在載入後才定，canvas 跟上
       map.addSource("grid", { type: "geojson", data: groundGrid(origin[1], origin[0]) });
       map.addLayer({ id: "grid", type: "line", source: "grid",
         paint: { "line-color": "#262624", "line-width": 1 } });
