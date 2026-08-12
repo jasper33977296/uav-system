@@ -107,12 +107,16 @@ export default function MapView() {
     const id = s.selectedId ?? s.primaryId;
     return id ? s.fleet[id]?.drone_name ?? id : null;
   });
-  // 影像檢視才撈機清單：video_url 在無人機頁隨時可改，切進來時讀最新值
+  // §2.9 PiP 常駐需要影像源清單：開頁與換選中機時讀最新值（video_url
+  // 在無人機頁隨時可改；切進全幅檢視時也重讀一次）
   useEffect(() => {
-    if (view !== "video") return;
     fetch(`${API}/api/drones`).then((r) => r.json())
       .then(setVideoList).catch(() => setVideoList([]));
-  }, [view]);
+  }, [view, selId]);
+  // PiP 收合態（§2.9：小窗可收合成 📹 鈕）；換機自動展開回小窗
+  const [pipHidden, setPipHidden] = useState(false);
+  useEffect(() => { setPipHidden(false); }, [selId]);
+  const selUrl = videoList?.find((d) => d.id === selId)?.video_url ?? null;
 
 
   useEffect(() => {
@@ -361,12 +365,13 @@ export default function MapView() {
       <div className="top-stack">
         <button className={`drawer-btn ${panelOpen ? "on" : ""}`} title="詳細數值面板"
           onClick={() => useUavStore.getState().setPanelOpen(!panelOpen)}>▤</button>
-        <div className="view-toggle">
-          <button className={view === "map" ? "on" : ""}
-            onClick={() => setView("map")}>地圖</button>
-          <button className={view === "video" ? "on" : ""}
-            onClick={() => setView("video")}>影像</button>
-        </div>
+        {/* §2.9 檢視收斂：進影像＝點 PiP 放大（不另存兩套切換）；
+            全幅時只剩「地圖」返回鈕 */}
+        {view === "video" && (
+          <div className="view-toggle">
+            <button onClick={() => setView("map")}>地圖</button>
+          </div>
+        )}
         {/* 右欄只剩任務控制（使用者二次修訂：事件卡併入 ▤ 抽屜） */}
         <CommandPanel />
       </div>
@@ -392,8 +397,28 @@ export default function MapView() {
 
       {/* 圖例已併入專業抽屜的訊號品質卡（單一住所，第五輪）——地圖上不再常駐 */}
 
-      {/* 影像檢視：地圖保持 mounted（maplibre 重建昂貴且會失去視角），
-          影像用覆蓋層蓋上去；切回地圖即卸載播放器、停掉串流 */}
+      {/* §2.9 即時影像 PiP：選中機有影像源→右下 16:9 小窗（比例尺上方），
+          跟隨選中機自動換源；無源不畫。點小窗＝放大為全幅（既有影像檢視
+          收斂為放大態）；可收合成 📹 鈕 */}
+      {view === "map" && selId && selUrl && !pipHidden && (
+        <div className="video-pip" title="點擊放大"
+          onClick={() => setView("video")}>
+          <VideoPlayer key={`pip:${selId}:${selUrl}`} url={selUrl} />
+          <div className="video-tile-label">
+            <span className="dot" style={{ background: colorFor(selId) }} />
+            {selName}
+          </div>
+          <button className="pip-hide" title="收合影像小窗"
+            onClick={(e) => { e.stopPropagation(); setPipHidden(true); }}>—</button>
+        </div>
+      )}
+      {view === "map" && selId && selUrl && pipHidden && (
+        <button className="pip-restore" title="展開影像小窗"
+          onClick={() => setPipHidden(false)}>📹</button>
+      )}
+
+      {/* 影像檢視（§2.9 放大態）：地圖保持 mounted（maplibre 重建昂貴且會
+          失去視角），影像用覆蓋層蓋上去；切回地圖即卸載播放器、停掉串流 */}
       {view === "video" && (
         <div className="video-overlay">
           {selId == null ? (
