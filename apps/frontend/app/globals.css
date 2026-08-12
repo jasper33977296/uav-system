@@ -570,15 +570,22 @@ a:focus-visible, button:focus-visible, input:focus-visible, select:focus-visible
 .app-solo { grid-template-columns: 1fr; }
 .nav a { display: inline-flex; align-items: center; padding: 6px 10px; }
 
-.fleet-dots { position: absolute; top: 12px; left: 12px; z-index: 20; display: flex; gap: 8px; }
+.fleet-dots {
+  position: absolute; top: 12px; left: 12px; z-index: 20;
+  display: flex; gap: 8px; flex-wrap: wrap; max-width: 40%;
+}
+/* §0.1 硬規則：色點一律配機身文字（色盤只有 3 槽，第 4 台起同一灰，
+   純顏色無法識別；且「顏色永不單獨傳達語意」） */
 .fleet-dots button {
-  width: 16px; height: 16px; border-radius: 50%; padding: 0;
-  border: 2px solid transparent; cursor: pointer;
+  position: relative; display: inline-flex; align-items: center; gap: 6px;
+  padding: 3px 9px; border-radius: 999px; cursor: pointer;
+  font-size: 12px; color: var(--ink);
+  background: rgba(27, 26, 23, 0.72); border: 2px solid transparent;
   box-shadow: 0 2px 8px rgba(0, 0, 0, 0.4);
 }
+.fleet-dots button .dot { width: 10px; height: 10px; flex: none; }
 .fleet-dots button.on { border-color: var(--ink); }
 /* 編隊：◉ 目標集角標（外圈=焦點、角標=指揮對象，兩者可不同機） */
-.fleet-dots button { position: relative; }
 .fleet-dots button.tgt::after {
   content: ""; position: absolute; right: -3px; bottom: -3px;
   width: 7px; height: 7px; border-radius: 50%;

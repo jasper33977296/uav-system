@@ -1,4 +1,5 @@
 "use client";
+import { TextLayer } from "@deck.gl/layers";
 import { MapboxOverlay } from "@deck.gl/mapbox";
 import maplibregl from "maplibre-gl";
 import "maplibre-gl/dist/maplibre-gl.css";
@@ -9,7 +10,7 @@ import { colorFor, createDroneLayer, pickDrone, type ScreenHit } from "@/compone
 import SimpleHud from "@/components/SimpleHud";
 import VideoModal from "@/components/VideoModal";
 import VideoPlayer from "@/components/VideoPlayer";
-import { pathsLayer, routeLayer, type RouteRun } from "@/lib/deckRoute";
+import { pathsLayer, rgba, routeLayer, type RouteRun } from "@/lib/deckRoute";
 import { basePreview, separatePreview, unifiedPreview, type Wp } from "@/lib/formation";
 import { CANVAS, groundGrid, ribbon, trailLineString } from "@/lib/geo";
 import { API, LINK_CLASSES } from "@/lib/signal";
@@ -362,6 +363,28 @@ export default function MapView() {
         overlayRef.current?.setProps({ layers: [
           routeLayer("route3d", s.trails),
           pathsLayer("formation-preview", previewRef.current),
+          // 機身標籤（ui-spec §0.1 硬規則）：色點/球體一律配常駐文字——
+          // 第 4 台起色盤耗盡全落同一灰，只有顏色時兩台完全無法分辨；
+          // 且球體連 hover 都沒有。文字對任意機數都成立。
+          new TextLayer({
+            id: "drone-labels",
+            data: Object.entries(s.fleet)
+              .filter(([, t]) => t.lat != null && t.lon != null)
+              .map(([id, t]) => ({
+                id, name: t.drone_name || id.slice(0, 6),
+                pos: [t.lon!, t.lat!, (t.alt_rel ?? 0) + 6] as [number, number, number],
+                color: rgba(colorFor(id)),
+              })),
+            getPosition: (d: { pos: [number, number, number] }) => d.pos,
+            getText: (d: { name: string }) => d.name,
+            getColor: (d: { color: [number, number, number, number] }) => d.color,
+            getSize: 13,
+            getPixelOffset: [0, -14],       // 浮在球體上方，不蓋住機體
+            outlineWidth: 2.5,
+            outlineColor: [27, 26, 23, 255],   // 暖畫布底色描邊，任何背景可讀
+            fontSettings: { sdf: true },
+            updateTriggers: { getPosition: fleetIds, getText: fleetIds },
+          }),
         ] });
 
         // 地面投影仍是 maplibre setData（整源替換）：節流 1Hz 且僅樣本
@@ -398,13 +421,17 @@ export default function MapView() {
               className={`${id === selId ? "on" : ""}`
                 + ` ${formationOn && targetKey.split(",").includes(id) ? "tgt" : ""}`}
               title={useUavStore.getState().fleet[id]?.drone_name || id}
-              style={{ background: colorFor(id) }}
               onClick={() => {
                 // 編隊：點色點＝toggle 目標集（指揮誰）；單機：切焦點
                 const st = useUavStore.getState();
                 if (st.formation) st.toggleTarget(id);
                 else st.select(id);
-              }} />
+              }}>
+              {/* §0.1：色點一律配機身文字——3 台內是冗餘保險，超過 3 台
+                  色盤耗盡（第 4 台起同一灰）時文字是唯一識別依據 */}
+              <span className="dot" style={{ background: colorFor(id) }} />
+              {useUavStore.getState().fleet[id]?.drone_name || id.slice(0, 6)}
+            </button>
           ))}
         </div>
       )}
