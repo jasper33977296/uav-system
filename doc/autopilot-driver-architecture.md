@@ -92,21 +92,110 @@
 散落在 `mavlink_rx.py` 各處（不像 command 已收斂）。**先收斂再搬**，理由與上一輪
 相同：搬運時是「提取一處」而不是「全域搜捕」。
 
-## 5. 業界先例：QGroundControl 的 FirmwarePlugin
+## 5. 業界先例：QGroundControl 的 FirmwarePlugin（**已查證**）
 
-QGC 面對的是**完全相同的問題**（同時支援 PX4 與 ArduPilot），它的解法就是本提案
-的形狀：一個 `FirmwarePlugin` 抽象基底 ＋ `PX4FirmwarePlugin`／`APMFirmwarePlugin`
-兩個實作 ＋ 依 `MAV_AUTOPILOT` 選用的管理器，覆蓋的面向與我們高度重疊——飛行
-模式對映、arm／起飛／降落／RTL 等動作、任務項慣例、參數處理。
+快照位置：`reference/qgc/`（`FirmwarePlugin.h`／`FirmwarePluginManager.h`／
+`PX4FirmwarePlugin.h`／`APMFirmwarePlugin.h`，取於 2026-08-12）。以下數字都是
+從該快照量出來的，不再是既有認知。
 
-**這對定案的意義**：這不是我們發明的抽象，而是**同一個問題在成熟產品裡已經
-收斂出的答案**——一個支援多家自駕儀的地面站，最後都會長出這一層。
+QGC 面對的是**完全相同的問題**（同時支援 PX4 與 ArduPilot），解法就是本提案的
+形狀：`FirmwarePlugin` 抽象基底 ＋ 兩個實作 ＋ 依 `MAV_AUTOPILOT` 選用的管理器。
 
-> ⚠️ **誠實邊界**：以上是我對 QGC 架構的既有認知，`reference/` 目前**沒有** QGC
-> 的原始碼快照，我沒有逐項查證其 API 細節。**定案前建議拉一份快照進
-> `reference/qgc/`**，特別值得對照兩件事：(a) 它把哪些東西**留在**共用層而沒有
-> 下放到 plugin（那是抽象邊界的實證），(b) 它的 plugin 介面有多大——如果遠大於
-> 我們的 10 個動詞，代表我們低估了未來的差異點。
+### 5.1 對照 (a)：什麼留在共用層 → **我們的邊界畫對了**
+
+`FirmwarePlugin.h` **沒有任何成員狀態**，而幾乎每個方法都把 `Vehicle*` 當參數
+傳進來：
+
+```cpp
+virtual void initializeVehicle(Vehicle* vehicle) {}
+virtual bool isCapable(const Vehicle* vehicle, FirmwareCapabilities capabilities) const;
+virtual QStringList flightModes(Vehicle* vehicle);
+```
+
+也就是說 **plugin 是無狀態的「行為建議者」，機體狀態全部留在共用的 `Vehicle`**。
+這正是本提案的設計：驅動不持有狀態，遙測狀態留在 `backend/state.py`。**這一點
+不需要修改。**
+
+### 5.2 對照 (b)：介面有多大 → **比我們的 10 個大，但沒有 8 倍**
+
+| 量測 | 數字 |
+|---|---|
+| `FirmwarePlugin.h` 虛擬方法總數 | **81** |
+| PX4 覆寫 / APM 覆寫 | 50 / 42 |
+| **兩家都覆寫**（＝真正的分歧軸） | **40** |
+| 其中落在我們業務範圍內 | **約 30** |
+
+81 是**誤導性的比較**：其中很大一塊是我們刻意不做的事（UI 機體圖、韌體版本
+檢查、參數 metadata 檔、搖桿 TX 模式、馬達配置）。誠實的比較是 **30 對 10**。
+
+而這 30 之中，**大部分只是粒度差異而非我們漏掉的差異**：
+
+| QGC 方法群 | 數量 | 對應我們的 |
+|---|---|---|
+| 模式（`flightMode`／`flightModes`／`setFlightMode`／各具名模式存取子） | ~7 | 差異 1、2 |
+| guided 動作（`guidedModeTakeoff`／`RTL`／`Land`／`GotoLocation`／`ChangeAltitude`／`startMission`／`pauseVehicle`…） | ~12 | 差異 3、4（＋未來 `mission_start`） |
+| 任務慣例（`supportedMissionCommands`／`missionCommandOverrides`／`sendHomePositionToVehicle`） | ~4 | 差異 5 |
+| 連線初始化 `initializeVehicle` | 1 | 差異 6 |
+| 能力 `isCapable` | 1 | capabilities |
+| **每廠牌數值限制**（`minimumTakeoffAltitudeMeters`／`maximumHorizontalSpeedMultirotorMetersSecond`／空速上下限…） | ~5 | ❌ **沒有對應** |
+| **逐訊息方言修正**（`adjustIncomingMavlinkMessage`／`adjustOutgoingMavlinkMessageThreadSafe`） | 2 | ❌ **沒有對應** |
+
+**結論：我們漏掉的不是 20 個差異，是 2 個「軸」。** 其餘都是同一批知識切得更細。
+
+### 5.3 兩個漏掉的軸（兩個我們都已經以臨時形式踩過）
+
+**軸一：每廠牌數值限制。** QGC 讓 `minimumTakeoffAltitudeMeters` 逐韌體覆寫；
+我們的起飛高度是 `command/main.py:290` 的 `takeoff_alt: float = 10.0`——一個
+**全域 API 預設值，不分廠牌**。目前沒出事，只因為 10 m 對兩家都安全。這是
+「條件變了誰會發現」的同一個形狀：**沒有任何機制會在某廠牌下限不同時告訴我們**。
+
+**軸二：逐訊息方言修正。** `adjustIncomingMavlinkMessage` 是**兩家都覆寫**的方法
+——不是 APM 特例。它的存在說明：**有一類方言差異不是動詞，是「同一則訊息在不同
+廠牌要先修正再解讀」**。我們的 `mavlink_rx.py:238` `_handle()` 是單一 dispatch
+配內嵌分支，沒有這個鉤子；差異 8（EKF 訊息名）其實就是這一類，我們用 if 分支
+硬解了。
+
+### 5.4 這對介面定義的影響
+
+驅動契約在動詞之外要再加兩項（**新增，不是重畫**）：
+
+```
+Driver.limits()                      → 每廠牌數值限制（起飛下限、速度上限…）
+Driver.adjust_incoming(msg) / adjust_outgoing(msg)   → 逐訊息方言修正鉤子
+```
+
+`adjust_incoming` 同時讓差異 8 有正確的歸屬：它不該是 `decode_telemetry()` 裡的
+廠牌 if，而該是進 dispatch 前就被正規化掉。
+
+### 5.5 兩項新成員的規格（PM／UI-UX 2026-08-12 裁決，B1 實作依據）
+
+**`adjust_*` 的使用準則（規格，不是註解）**：
+
+> **需要知道「值代表什麼意思」的，就不屬於 adjust。** 正規化只認結構、不認
+> 語意——改訊息型別名／欄位名，讓下游看到單一標準形；不得對映模式、不得算
+> 就緒、不得構造指令。
+
+配套機制（防止它變成垃圾抽屜）：`adjust_*` **必須明文宣告它碰哪些訊息型別**，
+配一個測試釘住那份清單——與 `SEND_WHITELIST` 同一手法。往裡加東西就會測試失敗，
+逼加的人回來面對「這到底該不該是 adjust」。
+
+**還有一條 B0 實作時查出的硬約束**：訊息等價往往**只在某個範圍內成立**
+（實例：EKF 兩個 enum 只有 bit 1..512 同義，bit 1024 同位元不同意義）。所以
+每個等價宣告都要帶**適用範圍常數**，不能只寫「A 等於 B」。
+
+**`limits()` 是 UI 可讀的契約，不是內部常數**（UI-UX ui-spec §0.2c 條款 5b）：
+
+> 輸入欄位的預設值／最小值／最大值凡因機型而異者，一律由後端 `limits()` 隨
+> capability 提供，UI 不寫死。
+
+關鍵補充——**缺資料時要明確回「未知」，不得回通用值**。回一個通用預設會讓 UI
+無法區分「這是該廠牌的真實下限」與「這是我們湊的」，而 UI 端的約定是缺 limits
+就不套用任何數字（顯示佔位提示要求使用者輸入）。這與 `readiness()` 回
+`bool | None`、影像五態、`msg_registry` 停掉的 hz 留 null 是同一條原則：
+**缺乏證據不是給出一個看似權威數字的理由。**
+
+現況待修的實例：起飛高度 `apps/command/app/main.py` 的 `takeoff_alt: float = 10.0`
+（全域），前端寫死 min 3／max 100／預設 10。B1 落地後兩邊都改由 `limits()` 供給。
 
 ## 6. 與 019 MCP 的接口關係
 
@@ -137,12 +226,19 @@ MCP 對研究 agent 暴露的是**任務層動詞**（如 `submit_mission(N 台)
 | 5 | 任務上傳慣例 | `command/mav.py` `job_upload_mission` | `Driver.upload_mission()` | B1 |
 | 6 | 遙測串流初始化 | `backend/mavlink_rx.py` `_maintain_streams` | `Driver.on_connect()`／`keepalive()` | B2 |
 | 7 | 可飛判斷來源 | `backend/state.py` `readiness()` | `Driver.readiness()` | B2 |
-| 8 | EKF 健康訊息名 | `backend/mavlink_rx.py` | `Driver.decode_telemetry()` | B2 |
+| 8 | EKF 健康訊息名 | `backend/mavlink_rx.py` | `Driver.adjust_incoming()`（**§5.3 後修正**：進 dispatch 前正規化，不是解碼時分支） | B2 |
 | 9 | 空白參數慣例（NaN） | `command/mav.py` `job_takeoff` | `Driver` 內部常數 | B1 |
 | 10 | 搖桿來源前提 | `command/capabilities.py` | **執行期前提檢查**（不是驅動靜態表） | B3 |
 
 第 10 項刻意不進驅動的靜態能力表——它是**逐台的執行期事實**（這台機的參數值），
 與「這個驅動會不會講方言」是不同的東西（見 §3）。
+
+**§5 查證後追加的第 11、12 項**（不在原本 10 處之列，是 QGC 對照才浮出來的）：
+
+| # | 差異點 | 目前狀況 | 搬到 | 批次 |
+|---|---|---|---|---|
+| 11 | 每廠牌數值限制（起飛下限等） | `command/main.py:290` 全域預設 `10.0`，**不分廠牌** | `Driver.limits()` | B1 |
+| 12 | 逐訊息方言修正 | 無此概念（差異 8 以 if 分支硬解） | `Driver.adjust_incoming()` | B2 |
 
 ## 8. 不做什麼（範圍邊界）
 

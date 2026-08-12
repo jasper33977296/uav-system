@@ -28,7 +28,7 @@ import time
 
 from pymavlink import mavutil
 
-from . import db, msg_registry, video_rec
+from . import db, dialect, msg_registry, video_rec
 from .capture import Recorder
 from .config import settings
 from .state import LiveState, fleet, live
@@ -59,35 +59,8 @@ SEND_WHITELIST = {"MISSION_REQUEST_LIST", "MISSION_REQUEST_INT", "MISSION_ACK",
                   # 同樣是**唯讀請求**（要求對方送資料，不改變機上狀態）。
                   "REQUEST_DATA_STREAM"}
 
-# custom_mode → 人話。**方言分表**（issue 015／gap-analysis §2）：PX4 是
-# main<<16|sub<<24 的 union；ArduPilot 是整數模式號（隨載具型別而異，此處
-# Copter；Plane/Rover 另表，待驗）。名稱對齊前端顯示，前端純顯示不動。
-_AUTOPILOT_NAMES = {12: "px4", 3: "ardupilot"}   # MAV_AUTOPILOT_PX4 / _ARDUPILOTMEGA
-_PX4_MAIN = {1: "MANUAL", 2: "ALTCTL", 3: "POSCTL", 5: "ACRO",
-             6: "OFFBOARD", 7: "STABILIZED", 8: "RATTITUDE"}
-_PX4_AUTO = {1: "READY", 2: "TAKEOFF", 3: "HOLD", 4: "MISSION",
-             5: "RETURN_TO_LAUNCH", 6: "LAND", 8: "FOLLOW_ME", 9: "PRECLAND"}
-# ArduPilot Copter 模式號（ardupilot/copter-mode.h）
-_ARDU_COPTER = {0: "STABILIZE", 1: "ACRO", 2: "ALT_HOLD", 3: "AUTO", 4: "GUIDED",
-                5: "LOITER", 6: "RTL", 7: "CIRCLE", 9: "LAND", 11: "DRIFT",
-                13: "SPORT", 16: "POSHOLD", 17: "BRAKE", 18: "THROW",
-                20: "GUIDED_NOGPS", 21: "SMART_RTL", 27: "AUTO_RTL"}
-
-
-def autopilot_name(raw) -> str:
-    return _AUTOPILOT_NAMES.get(raw, "unknown")
-
-
-def _mode_name(custom_mode: int, autopilot_raw=None) -> str:
-    if not custom_mode:              # 0＝尚未設定模式（開機瞬間），不顯 MODE_0
-        return "—"
-    if autopilot_name(autopilot_raw) == "ardupilot":
-        return _ARDU_COPTER.get(custom_mode, f"MODE_{custom_mode}")
-    # 預設 PX4（含 unknown 暫按 PX4 解，維持既有行為）
-    main, sub = (custom_mode >> 16) & 0xFF, (custom_mode >> 24) & 0xFF
-    if main == 4:
-        return _PX4_AUTO.get(sub, f"AUTO_{sub}")
-    return _PX4_MAIN.get(main, f"MODE_{main}")
+# 方言知識全部集中在 `dialect.py`（issue 026 B0）。本檔不再持有任何廠牌表，
+# 也**不轉出** dialect 的名字——留轉出等於留下第二個看起來權威的位置。
 
 
 # MAV_SEVERITY(0-7) → 事件層級；7=DEBUG 不入流。EVENT 的外層 log level 也用
@@ -215,7 +188,7 @@ class MavlinkRx:
         """
         now = time.monotonic()
         for sysid, ent in list(self.sysids.items()):
-            if autopilot_name(ent["state"].autopilot_raw) != "ardupilot":
+            if not dialect.needs_stream_request(ent["state"].autopilot_raw):
                 continue
             if now - ent.get("stream_req_t", 0.0) < STREAM_REQ_S:
                 continue
@@ -312,7 +285,7 @@ class MavlinkRx:
             st.mav_state = state_name
             st.autopilot_raw = msg.autopilot        # 方言分表解碼與 UI 徽章用
             st.vehicle_type_raw = msg.type
-            mode = _mode_name(msg.custom_mode, msg.autopilot)
+            mode = dialect.mode_name(msg.custom_mode, msg.autopilot)
             # 防抖（同 cell_change 的 2-連續紀律）：撞號多來源會讓同 sysid 的模式
             # 每顆心跳在多值間翻打，噴 15/秒 mode_change 灌爆事件流（2026-08-11 事故）。
             # 新模式**連續 2 次**才提交＋發事件——翻打源每次都不同、永遠湊不齊 2 次→不噴；
@@ -398,17 +371,11 @@ class MavlinkRx:
             st.sensors_unhealthy = [
                 name for name, bit in _SENSOR_BITS
                 if (p_ & bit) and (e_ & bit) and not (h_ & bit)]
-        elif t == "ESTIMATOR_STATUS":       # PX4 的 EKF 健康回報
-            need = (M.ESTIMATOR_ATTITUDE | M.ESTIMATOR_VELOCITY_HORIZ
-                    | M.ESTIMATOR_POS_HORIZ_ABS)
-            st.ekf_ok = (msg.flags & need) == need
-        elif t == "EKF_STATUS_REPORT":      # ArduPilot 的（方言差異，015 實測）
-            # 同一件事兩個訊息名：PX4 發 ESTIMATOR_STATUS、ArduPilot 發
-            # EKF_STATUS_REPORT。只解 PX4 那個的話，ArduPilot 的 ekf_ok 永遠是
-            # None——而 ArduPilot 又不回報 PREARM 位，於是 readiness 永遠判不出來
-            # （只能誠實回「未知」）。解了這個，ArduPilot 才有可飛判斷的依據。
-            need = (M.EKF_ATTITUDE | M.EKF_VELOCITY_HORIZ | M.EKF_POS_HORIZ_ABS)
-            st.ekf_ok = (msg.flags & need) == need
+        elif t in dialect.EKF_MSG_TYPES:
+            # 訊息層方言（差異 8→12）：PX4 發 ESTIMATOR_STATUS、ArduPilot 發
+            # EKF_STATUS_REPORT，**同一件事兩個訊息名**，所需位元同義。等價的
+            # 邊界（哪些位元可以互換、哪些不行）寫在 dialect.py §1。
+            st.ekf_ok = dialect.ekf_ready(msg.flags)
         elif t == "EXTENDED_SYS_STATE":
             st.landed_state = _LANDED.get(msg.landed_state)
         elif t == "STATUSTEXT":

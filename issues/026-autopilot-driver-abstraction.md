@@ -89,6 +89,58 @@ capabilities()         # 本驅動宣告支援哪些動詞
 - **015**：本議題是 015 步驟 3（指令層抽象）的正式化與擴大。
 - **capabilities 四態**：見上第 3 點，一致性測試可讓它從人工判斷變成自動判定。
 
+## 進度
+
+### B0 backend 端方言收斂（2026-08-12 完成）
+
+**做了什麼**：backend 的廠牌差異原本散落在 `mavlink_rx.py`（模式表、串流補送、
+EKF 訊息名）與 `state.py`（就緒原因文字），全部收進新檔 `apps/backend/app/dialect.py`
+——與 command 端 `mav.py` 的 `dialect()` 對應，命名刻意對齊。
+
+**QGC 對照帶來的分類**（§5.3）：收進去時不是收成一坨，而是**分兩類**：
+
+| 類別 | 內容 | 去向 |
+|---|---|---|
+| **§1 訊息層** | 同一件事、不同訊息名（EKF：差異 8） | 未來 `Driver.adjust_incoming()` |
+| **§2 解讀層** | 同一個值、不同意義（模式 2、串流 6、就緒 7） | 未來 `Driver.decode_mode()` 等 |
+
+判準：**需要知道「值代表什麼意思」的，就不屬於訊息層。** 這一刀讓 `adjust_*`
+不會退化成什麼都往裡塞的垃圾抽屜（PM 裁決：此句入 B1 規格）。
+
+**過程中查出的實質風險（不是搬運，是新發現）**：`EKF_STATUS_REPORT` 當
+`ESTIMATOR_STATUS` 讀這件事，**只在 bit 1..512 成立**：
+
+    bit 1..512   兩邊逐位同名同義                          → 可互換
+    bit 1024     ESTIMATOR_GPS_GLITCH vs EKF_UNINITIALIZED → **同位元不同意義**
+    bit 32768    EKF_GPS_GLITCHING（ArduPilot 專有）
+
+我們目前只用 1|2|16，全在安全區內，所以今天沒事。但這正是「寫的時候是對的、
+用的時候沒人記得範圍」的典型——日後有人讀第 1024 位不會報錯，只會靜默給出錯的
+答案。已用 `EKF_ALIAS_SAFE_BITS` 常數＋測試釘住。
+
+**順帶修掉的方言洩漏**：`state.py` 的就緒原因寫死「PX4 預檢未過」。ArduPilot
+不回報 PREARM 位、`prearm_ok` 恆為 None，所以這行今天永遠不會對 ArduPilot 觸發
+——**但那是「條件剛好沒踩到」而不是「寫對了」**。改成 `dialect.prearm_label()`
+依實際廠牌取名。
+
+**零回歸驗證**（四台混機實跑，PX4 ×3 ＋ ArduPilot ×1）：
+
+| 檢查 | 結果 |
+|---|---|
+| 模式解讀 | sysid 1/2/3 = LAND/LAND/HOLD、sysid 10 = LAND（ArduPilot Copter 9）✔ |
+| ArduPilot `ekf_ok` | `True`——**證明合併後的 EKF 分支仍吃 `EKF_STATUS_REPORT`** ✔ |
+| capabilities | PX4 9/9、ArduPilot 7/9，與 B0 前逐鍵相同 ✔ |
+| `/api/drones` autopilot | 四台正確（走改過的 import）✔ |
+| `test-readonly-boundary` / `test-json-safe` | 均 OK（未被波及）✔ |
+| `test-dialect-boundary`（新） | OK |
+
+新增測試 `scripts/test-dialect-boundary.py`，沿用 read-only 白名單的同一手法。
+它有一條**反向檢查**：若安全區外哪天不再有分歧位元，測試會失敗要求放寬常數
+——留著一個過度保守又沒人知道為什麼的常數，比沒有還糟。
+
+`mavlink_rx.py` 不再持有任何廠牌表，**也不轉出** `dialect` 的名字（留轉出等於
+留下第二個看似權威的位置），測試第 8 項釘住這點。
+
 ## 解決方式
 
 （closed 時補）

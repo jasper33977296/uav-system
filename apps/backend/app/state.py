@@ -116,9 +116,11 @@ class LiveState:
         與本專案一貫做法同源：origin 不明留 `unknown` 不強標、影像零片段分
         `missing`／`off`／`no_source`、msg_registry 停掉的訊息 hz 留 null。
         """
+        from .dialect import prearm_label     # 就地 import 避免載入序循環
+
         reasons = []
         if self.prearm_ok is False:
-            reasons.append("PX4 預檢未過（arming checks）")
+            reasons.append(f"{prearm_label(self.autopilot_raw)} 預檢未過（arming checks）")
         reasons += [f"感測器異常：{s}" for s in self.sensors_unhealthy]
         if self.ekf_ok is False:
             reasons.append("EKF 未就緒")
@@ -139,7 +141,7 @@ class LiveState:
 
     def telemetry_dict(self) -> dict:
         ready, reasons = self.readiness()
-        from .mavlink_rx import autopilot_name   # 就地 import 避免載入序循環
+        from .dialect import autopilot_name      # 就地 import 避免載入序循環
         return {
             "ready": ready,
             "not_ready_reasons": reasons,

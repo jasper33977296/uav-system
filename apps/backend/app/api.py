@@ -18,7 +18,7 @@ router = APIRouter(prefix="/api")
 @router.get("/drones")
 async def list_drones():
     from .state import fleet
-    from .mavlink_rx import autopilot_name
+    from .dialect import autopilot_name
     rows = await db.pool.fetch("SELECT * FROM drones ORDER BY created_at")
     out = []
     for r in rows:
