@@ -1,6 +1,7 @@
 # 010 · missions 表的 drone_id 與 status 欄位閒置
 
-- 狀態：open
+- 狀態：**closed（2026-08-12，隨 023 一併結掉）**（**已併入 [023](023-missions-table-role-cleanup.md)**：
+  閒置欄位的根因是 missions 的角色與欄位不符，隨 023 的正名瘦身一併結掉）
 - 嚴重度：low
 - 位置：`db/init/01_schema.sql`（missions 表）
 - 建立：2026-08-04

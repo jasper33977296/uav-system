@@ -13,8 +13,23 @@
 - [ ] `MAVLINK_URL=udpin://0.0.0.0:14540`（backend 收資料通道）
 - [ ] `COMMAND_MAVLINK_URL=udpin://0.0.0.0:14541`（command 收指令通道；**不是** SITL 的 14550）
 - [ ] `ENABLE_COMMANDS`：**先 `false`**（只觀察、不發指令、不發 GCS 心跳）→ 首飛前單機驗收 OK 後才改 `true`
-- [ ] `COMPOSE_PROFILES` 不含 `sim`（生產環境不起 SITL；範本預設已無）
+- [ ] `COMPOSE_PROFILES` 不含 `sim`（生產環境不起 SITL **與測試影像流**；範本預設已無）
 - [ ] `AUTOREGISTER_SIMULATED=false`（自動註冊的是真機，別標成模擬）
+- [ ] `VIDEO_RETENTION_DAYS=7`（影像保留天數。**這一個變數同時餵錄製器清檔與 API 回給
+      前端顯示的天數**，所以畫面說幾天就是真的清幾天。改它要同步重算磁碟，見 §1b）
+- [ ] `VIDEO_RECORD_ENABLED=true`（預設開；特定實驗要關見 §4b 末）
+
+## 1b. 磁碟（有飛行影像時要先算）
+
+量測資料 30 天只有數 GB，**影像是磁碟的主要消耗者**（大兩三個數量級）。
+現行定案：**影像保留 7 天＋720p15**，以 3 台×每天 2 飛行小時計約
+**49 GB**（端到端實測；即時串流的 zerolatency 調校比離線編碼多約 40%）
+——現有磁碟（≥100GB）夠用。
+
+- [ ] 確認磁碟餘裕 ≥ 70GB（49GB 影像＋量測資料＋餘裕）
+- [ ] **改設定就要重算**：1080p30＋7 天＝95GB；720p15 但保留 30 天＝150GB；
+      1080p30＋30 天＝**407GB**（要加碟）。飛行時數比上述多也要按比例放大。
+      換算表見 [flight-video-design.md](flight-video-design.md) §6。
 
 ## 2. 起服務＋自檢
 
@@ -63,6 +78,81 @@
 - [ ] 地面站防火牆放行 UDP 14540／14541（機主動打進來）
 - [ ] （QGC 若要用）我方需**加聽 14550**（voxl 埠寫死），或機上架 mavlink-router 轉埠
 
+### 4.1 影像相關埠（**8189 UDP 最容易被忽略**）
+
+| 埠 | 方向 | 用途 | 不通的症狀 |
+|---|---|---|---|
+| **8554/TCP** | 機 → 地面站 | 相機 RTSP 推流進來 | 前端沒有影像入口、`paths/list` 空 |
+| **8889/TCP** | 瀏覽器 → 地面站 | WHEP 訊令（建立播放連線）| 影像窗轉圈或報錯 |
+| **8189/UDP** | 瀏覽器 ↔ 地面站 | **WebRTC 媒體本身** | ⚠️ **頁面一切正常、畫面全黑** |
+
+- [ ] 放行 8554/TCP、8889/TCP、**8189/UDP**
+- [ ] **跨 VPN／跨網段時特別確認 8189 UDP 通**——訊令走 TCP 會成功建立連線，媒體走
+      UDP 卻過不去，於是**頁面沒有任何錯誤、就是不出畫面**。這個症狀最容易被誤判成
+      「影像壞了」，實際是網路。
+
+## 4b. 飛行影像（issue 022）
+
+### 4b.1 服務組成（哪個要起、哪個絕對不能起）
+
+- [ ] **`uav-video`（MediaMTX）要起**——它是**正式元件**（收流／錄影／瀏覽器播放），
+      沒有掛 profile，`docker compose up -d` 會自動帶起。確認：
+      ```bash
+      docker ps --filter name=uav-video --format '{{.Names}} {{.Status}}'
+      ```
+- [ ] ⚠️ **`uav-video-testsrc-*` 絕對不能在真機環境跑**——它們推的測試彩條會與真相機
+      **搶同一條 path 名**（`uav-N`），結果是畫面變成測試圖樣或兩邊互踢。它們掛在
+      `sim` profile，只要 `.env` 沒有 `COMPOSE_PROFILES=sim` 就不會起。**動手確認**：
+      ```bash
+      docker ps --filter name=testsrc --format '{{.Names}}'   # 應該完全沒有輸出
+      ```
+
+### 4b.2 相機接入：**機端主動推流進來**
+
+**方向很重要：機上推 RTSP 到地面站，不是地面站去拉。** 5G 的機端通常在 NAT 後面，
+地面站主動連過去連不到；反過來由機端主動外連才成立（與 MAVLink／量測資料同一個道理）。
+
+- [ ] **第一步先用測試圖樣驗網路通**（在**機上**執行，先不接相機，排除相機變因）：
+      ```bash
+      ffmpeg -re -f lavfi -i testsrc2=size=1280x720:rate=15 \
+        -c:v libx264 -preset veryfast -tune zerolatency -g 30 -pix_fmt yuv420p \
+        -f rtsp -rtsp_transport tcp rtsp://<地面站IP>:8554/uav-1
+      ```
+- [ ] **通了再換真相機**（`-c copy` **不轉碼**：省機上 CPU，且畫質劣化是研究證據，
+      不該被地面站或機上重新編碼抹掉）：
+      ```bash
+      ffmpeg -rtsp_transport tcp -i rtsp://<相機IP>:554/<相機路徑> \
+        -c copy -f rtsp -rtsp_transport tcp rtsp://<地面站IP>:8554/uav-1
+      ```
+      `uav-1` 要換成**該機的 sysid**（sysid 2 就推 `uav-2`）——錄影與架次的對應靠這個名字。
+- [ ] **驗流真的進來了**（在地面站）：
+      ```bash
+      curl -s http://localhost:9997/v3/paths/list | python3 -m json.tool
+      ```
+      每台應有一列 `"name": "uav-N"`、`"ready": true`、`"tracks": ["H264"]`。
+- [ ] ⚠️ **編碼必須是 H264**（`tracks` 顯示的就是實際收到的）。H265 錄得下來但**瀏覽器
+      播不出**——相機請設 H.264 + yuv420p。
+- [ ] 建議相機設 **720p15、2 Mbps 上限**：磁碟與 5G 上行都吃得消（見 §1b），而研究看的
+      是鏈路品質與畫面劣化，幀率不需要高。
+
+### 4b.3 每台機的 `video_url`
+
+- [ ] 到前端「無人機」頁逐台設定「影像」：
+      `http://<地面站IP>:8889/uav-<sysid>/whep`
+- [ ] ⚠️ **`<地面站IP>` 必須是「操作端瀏覽器連得到」的位址**，不是 `localhost`，也不一定
+      是地面站自己看到的網卡 IP。判斷方法：**就用你在網址列開前端的那個位址**。
+      填錯的症狀是「其他功能都正常、只有影像空白」，很容易被誤判成影像壞掉。
+      （長期修法已列 backlog：`video_url` 只存 path、host 由前端動態帶，換位址永不失效。）
+
+### 4b.4 錄影行為與開關
+
+- [ ] 錄影**只在架次期間**（armed→disarmed）自動進行，待機不寫檔（可用 §1b 的磁碟估算）。
+- [ ] 落地後**多錄約 3 秒**是刻意的（避免切掉落地瞬間），不是異常。
+- [ ] **要在特定實驗關閉錄影**（例如影像上行會干擾被測鏈路時）：`.env` 設
+      `VIDEO_RECORD_ENABLED=false` → `docker compose up -d uav-backend`。
+      關閉時該架次會標記 `video_mode=off` 留痕，回放頁顯示「本趟未啟用錄影」——
+      **與「錄了但斷流」在資料上分得開**，不會事後分不清是沒錄還是錄失敗。
+
 ## 5. 首飛驗收順序（**單機先 → 編隊後**）
 
 ### 5a. 單機（每台各驗一次）
@@ -102,3 +192,21 @@
 | 有遙測、`check-onboard` 說位置空 | 機上 router 沒把 MAVLink 餵給 onboard node 的 PX4_URL | §3 第三條 lo 實例 |
 | 指令送出無反應 | `ENABLE_COMMANDS=false`／command 收在 14541 但機打 14540 | §1、§5a |
 | `check-onboard` 收 409 / source 非 modem | 地面站 `.env` 還是 `simulated` | §1 `LINK_SOURCE=modem` |
+| **頁面一切正常、影像窗全黑**（無錯誤訊息）| **8189/UDP 不通**：WHEP 訊令走 TCP 建得起連線，媒體走 UDP 過不去 | §4.1；跨 VPN／跨網段特別容易 |
+| 其他功能都好、**只有影像空白** | `video_url` 的 host 不是操作端瀏覽器連得到的位址 | §4b.3——用你網址列開前端的那個位址 |
+| 影像出現**測試彩條**而非相機畫面 | `uav-video-testsrc-*` 在跑，搶了同名 path | §4b.1：`docker ps --filter name=testsrc` 應為空 |
+| `paths/list` 有流但影像播不出 | 相機送 H265（錄得下來、瀏覽器播不出）| §4b.2：相機改 H.264 + yuv420p，看 `tracks` |
+| 架次回放**沒有影像**（`video_status`）| `off`＝本趟刻意沒錄／`no_source`＝該機沒來源／`expired`＝過保留期已清／`missing`＝**該錄卻沒錄到（故障）** | 只有 `missing` 要查：看 `uav-video` 是否活著、該 path 當時 ready |
+| 錄影一直沒有檔 | 錄影只在 armed 期間進行；待機不寫檔是正常 | §4b.4 |
+
+## 8. 從舊版升級（既有資料庫）
+
+- [ ] **先備份再啟動新版**：`docker exec uav-db pg_dump -U uav -d uav | gzip > backup.sql.gz`
+      （backend 啟動時會自動跑 schema 遷移，冪等但不可逆）
+- [ ] 023 遷移會**移除 `missions` 的 `status`／`geometry`／`drone_id`** 三個從未使用的欄位、
+      新增 `kind` 並自 `created_by` 回填、新增 `flight_sessions.mission_name` 快照並回填、
+      兩處外鍵改 `ON DELETE SET NULL`。**現有資料不受影響**（開發環境實測遷移前後
+      7 張表筆數完全一致）。若你有自己寫的查詢或腳本讀那三個欄位，要先改。
+- [ ] 022 遷移會新增 `video_segments` 表與 `flight_sessions.video_mode`。
+      **升級前的舊架次會被回填成 `video_mode='off'`**（它們本來就沒有錄影，
+      標成「本趟未啟用錄影」是事實；不回填的話會被判讀成「該錄卻沒錄到」的故障）。

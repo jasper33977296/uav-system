@@ -366,3 +366,22 @@ WS 與 arming 無關、前端一開著就一直連著。
   改完、一次 restart，避免中途 reload 載到半套。
 - 使用者/機隊實測進行中時，backend 改動挑安靜窗口（`GET :38001/healthz`
   三台持續 disarmed）＋部署前複驗，並知會協作者會有一次短重啟。
+
+### 開發注意事項：改 `docker-compose.yml` 一定要 recreate 才生效
+
+`--reload` 只重跑 **Python 程式碼**，它看不到 compose 的改動。**新增掛載
+（volumes）或環境變數（environment）後，容器不重建就完全不會生效**，而且
+失敗方式很隱晦——程式讀得到設定的「預設值」、掛載點則整個不存在。
+
+實際踩過（2026-08-12，022 影像）：幫 backend 加了 `videorec:/rec` 掛載與
+`VIDEO_*` 環境變數，只存檔沒重建 → 取影片端點一路回 410（`/rec` 在容器裡
+不存在），而 `settings.video_retention_days` 讀到的是程式預設值 7，**剛好與
+`.env` 相同所以看起來正常**，差點誤判成設定已生效。
+
+```bash
+docker compose up -d uav-backend      # 改 compose 後必須這一步（約 8s 中斷）
+docker exec uav-backend ls -d /rec    # 驗掛載真的進去了
+docker exec -w /srv uav-backend python3 -c "import os; print(os.environ.get('VIDEO_RETENTION_DAYS'))"
+```
+
+**驗收要看容器內的實際狀態，不要只看程式印出來的值**——預設值會假裝一切正常。

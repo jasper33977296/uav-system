@@ -44,6 +44,8 @@
 | [019](019-agent-mcp-interface.md) | MCP agent 介面：任務層工具＋因果鏈紀錄＋分析 API（終局目標定案）| medium | open | `doc/agent-mcp-goals.md` |
 | [020](020-session-mission-association-broken.md) | 架次未綁任務：新飛資料比較頁用不了 ✔回填驗證 | high | **closed** | `db.py:create_session` |
 | [021](021-vehicle-data-suite.md) | 機上資料：QGC 式全量即時資訊（Inspector/參數快照/ulog 回收，分四期）| medium | open | `issues/021` PM scope 定案 |
+| [022](022-flight-video.md) | 飛行影像：即時畫面＋架次錄影 mp4＋回放同步播放（地面錄製定案）| medium | open | `issues/022` |
+| [023](023-missions-table-role-cleanup.md) | missions 表正名瘦身：死欄位＋生成物污染＋刪除語意（含 010）| medium | open | `db/init/01_schema.sql` |
 
 「✔實測確認」= 2026-08-03 首次實飛（SITL 起飛 → 進干擾區 → RTL）取得的實際資料佐證，
 不只是讀碼推論。詳見 [progress/log/2026-08-03.md](../progress/log/2026-08-03.md)。
