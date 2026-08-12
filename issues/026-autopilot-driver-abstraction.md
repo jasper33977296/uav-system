@@ -1,6 +1,8 @@
 # 026 · 自駕儀驅動層抽象：把廠牌差異收進獨立驅動，系統只呼叫抽象動詞
 
-- 狀態：**needs-decision**（2026-08-12 使用者提議，先議不實作）
+- 狀態：**in-progress（架構規劃階段）**——2026-08-12 使用者拍板「要做抽象層，
+  先規劃系統架構」。後端出 `doc/autopilot-driver-architecture.md` 提案
+  （四個待決點各附建議方案）→ 使用者定案 → 才實作。
 - 嚴重度：medium（架構債，隨支援機型數線性惡化）
 - 位置：跨 `apps/backend/app/mavlink_rx.py`、`apps/command/app/mav.py`／`main.py`
 - 建立：2026-08-12
