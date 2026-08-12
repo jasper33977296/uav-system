@@ -368,22 +368,34 @@ export default function MapView() {
           // 且球體連 hover 都沒有。文字對任意機數都成立。
           new TextLayer({
             id: "drone-labels",
-            data: Object.entries(s.fleet)
-              .filter(([, t]) => t.lat != null && t.lon != null)
-              .map(([id, t]) => ({
+            // 同位堆疊：機隊停在同一起飛點時（實測三台相距 3–6 m）標籤會
+            // 疊成無法閱讀的一團——近距者依序往上錯開，各自仍帶機色
+            data: (() => {
+              const near = 20;   // m：視為「同一位置」的門檻
+              const list = Object.entries(s.fleet)
+                .filter(([, t]) => t.lat != null && t.lon != null)
+                .sort(([a], [b]) => (a < b ? -1 : 1));   // 順序穩定不跳動
+              return list.map(([id, t], i) => ({
                 id, name: t.drone_name || id.slice(0, 6),
                 pos: [t.lon!, t.lat!, (t.alt_rel ?? 0) + 6] as [number, number, number],
                 color: rgba(colorFor(id)),
-              })),
+                level: list.slice(0, i).filter(([, o]) =>
+                  Math.hypot((o.lat! - t.lat!) * 110574,
+                    (o.lon! - t.lon!) * 111320 * Math.cos(t.lat! * Math.PI / 180)) < near
+                ).length,
+              }));
+            })(),
             getPosition: (d: { pos: [number, number, number] }) => d.pos,
             getText: (d: { name: string }) => d.name,
             getColor: (d: { color: [number, number, number, number] }) => d.color,
             getSize: 13,
-            getPixelOffset: [0, -14],       // 浮在球體上方，不蓋住機體
+            // 浮在球體上方不蓋機體；同位者往上疊
+            getPixelOffset: (d: { level: number }) => [0, -14 - d.level * 14],
             outlineWidth: 2.5,
             outlineColor: [27, 26, 23, 255],   // 暖畫布底色描邊，任何背景可讀
             fontSettings: { sdf: true },
-            updateTriggers: { getPosition: fleetIds, getText: fleetIds },
+            updateTriggers: { getPosition: fleetIds, getText: fleetIds,
+              getPixelOffset: fleetIds },
           }),
         ] });
 
