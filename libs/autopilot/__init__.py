@@ -1,0 +1,91 @@
+"""自駕儀驅動層（issue 026）。
+
+用法：
+
+    from autopilot import get_driver
+    drv = get_driver(msg.autopilot)      # MAV_AUTOPILOT_* 原值
+    mode = drv.decode_mode(custom_mode)
+
+**廠牌判斷只在 `get_driver()` 這一處。** 呼叫端拿到驅動之後不得再問「這是哪一
+家」——那正是我們要消滅的東西（見 `doc/autopilot-driver-architecture.md`）。
+"""
+from .ardupilot import ArduPilotDriver
+from .driver import Limit, MessageEquivalence
+from .px4 import Px4Driver
+
+__all__ = ["get_driver", "autopilot_name", "Limit", "MessageEquivalence",
+           "Px4Driver", "ArduPilotDriver", "UnknownDriver"]
+
+_BY_RAW = {Px4Driver.autopilot_raw: Px4Driver, ArduPilotDriver.autopilot_raw: ArduPilotDriver}
+_NAMES = {Px4Driver.autopilot_raw: Px4Driver.name,
+          ArduPilotDriver.autopilot_raw: ArduPilotDriver.name}
+
+CAP_KEYS = ["arm", "takeoff", "land", "rtl", "hold",
+            "mission_upload", "mission_start", "mission_fly", "manual"]
+
+
+def autopilot_name(raw) -> str:
+    return _NAMES.get(raw, "unknown")
+
+
+class UnknownDriver:
+    """非 MAVLink 或未知自駕儀：全鎖，且**不假裝懂它的方言**。
+
+    模式解讀刻意沿用 PX4 的解法（維持既有行為），但能力全 `unsupported`——
+    看得到、送不出去。
+    """
+    name = "unknown"
+    autopilot_raw = None
+    modes: dict = {}
+    MESSAGE_ADJUSTMENTS = ()
+
+    def __init__(self):
+        self._px4 = Px4Driver()
+
+    def adjust_incoming(self, msg):
+        return msg
+
+    def adjust_outgoing(self, msg):
+        return msg
+
+    def decode_mode(self, custom_mode: int) -> str:
+        # 既有行為：unknown 暫按 PX4 解（B2 是搬遷，不改行為）
+        return self._px4.decode_mode(custom_mode)
+
+    def encode_mode(self, mode: str):
+        raise KeyError(f"未知自駕儀，無法編碼模式 {mode!r}")
+
+    def mode_matches(self, custom_mode: int, mode: str) -> bool:
+        return False
+
+    def takeoff_plan(self, alt, ground_amsl):
+        raise KeyError("未知自駕儀，無起飛序列")
+
+    def manual_prepare(self):
+        return None
+
+    def mission_line(self, items):
+        return items
+
+    def on_connect(self):
+        return []
+
+    def keepalive(self):
+        return []
+
+    def readiness_signals(self):
+        return ()
+
+    def limits(self):
+        return {}
+
+    def capabilities(self, ctx=None):
+        r = "非 MAVLink 或未知自駕儀，不支援指令"
+        return {k: "unsupported" for k in CAP_KEYS}, {k: r for k in CAP_KEYS}
+
+
+def get_driver(autopilot_raw):
+    """依 `MAV_AUTOPILOT_*` 取驅動。未知廠牌回 `UnknownDriver`（不丟例外——
+    未知機仍要能顯示遙測，只是不能下指令）。"""
+    cls = _BY_RAW.get(autopilot_raw)
+    return cls() if cls else UnknownDriver()

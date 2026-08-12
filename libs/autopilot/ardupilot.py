@@ -1,0 +1,166 @@
+"""ArduPilot（Copter）驅動（issue 026 B2）。
+
+內容是從 `apps/command/app/mav.py` 的 `dialect()`、`apps/backend/app/dialect.py`
+與 `apps/command/app/capabilities.py` **原樣提取**的 ArduPilot 分支——B2 是搬遷，
+不是改寫。任何行為變更都算回歸。
+
+Plane／Rover 的模式表不同，待驗；本檔目前只涵蓋 Copter。
+"""
+from .driver import Limit, MessageEquivalence
+
+NAME = "ardupilot"
+AUTOPILOT_RAW = 3                   # MAV_AUTOPILOT_ARDUPILOTMEGA
+GCS_SYSID = 254                     # 與 mav.GCS_SYSID 一致
+
+# DO_SET_MODE 的 **param2 直接是模式號**，沒有 sub。權威來源：
+# reference/ardupilot/copter-mode.h。**gap-analysis 列為 critical**——送錯數字
+# 會切到完全不同的模式。每個值都要在 SITL 讀回 HEARTBEAT 確認真的切到。
+MODES = {
+    "position": 16,   # POSHOLD：位置保持＋手動介入（對應 PX4 的 POSCTL 語意）
+    "mission":   3,   # AUTO
+    "hold":      5,   # LOITER
+    "rtl":       6,   # RTL
+    "land":      9,   # LAND
+    "guided":    4,   # GUIDED（起飛序列要先進這個模式）
+}
+
+# custom_mode 直接是模式號
+_COPTER = {0: "STABILIZE", 1: "ACRO", 2: "ALT_HOLD", 3: "AUTO", 4: "GUIDED",
+           5: "LOITER", 6: "RTL", 7: "CIRCLE", 9: "LAND", 11: "DRIFT",
+           13: "SPORT", 16: "POSHOLD", 17: "BRAKE", 18: "THROW",
+           20: "GUIDED_NOGPS", 21: "SMART_RTL", 27: "AUTO_RTL"}
+
+CAP_KEYS = ["arm", "takeoff", "land", "rtl", "hold",
+            "mission_upload", "mission_start", "mission_fly", "manual"]
+
+#: 015 實測：**ArduPilot 預設幾乎不送遙測**——只收得到 HEARTBEAT／PARAM_VALUE／
+#: STATUSTEXT／TIMESYNC 四種。送一次 REQUEST_DATA_STREAM 後變 32 種。
+STREAM_HZ = 4
+STREAM_REQ_S = 30.0
+
+
+class ArduPilotDriver:
+    name = NAME
+    autopilot_raw = AUTOPILOT_RAW
+    modes = MODES
+
+    #: 訊息層等價：ArduPilot 發 EKF_STATUS_REPORT，PX4 發 ESTIMATOR_STATUS。
+    #: **帶適用範圍**——只有 bit 1..512 逐位同義（見 B0 的實測）。
+    MESSAGE_ADJUSTMENTS = (
+        MessageEquivalence(
+            "EKF_STATUS_REPORT", "ESTIMATOR_STATUS",
+            safe_field_bits={"flags": 0x03FF},
+            note="bit 1024 兩邊不同義（ESTIMATOR_GPS_GLITCH vs EKF_UNINITIALIZED）；"
+                 "bit 32768 EKF_GPS_GLITCHING 為 ArduPilot 專有，無對應"),
+    )
+
+    # ── 訊息層：只改名，不解讀 ──────────────────────────────────────
+    def adjust_incoming(self, msg):
+        """把 ArduPilot 專有的訊息名正規化成標準形。
+
+        **只做宣告過的改名**，不判斷任何值的意義（見介面規格 §2.1）。
+        """
+        return msg
+
+    def adjust_outgoing(self, msg):
+        return msg
+
+    def normalized_type(self, msg_type: str) -> str:
+        """訊息型別的標準形——`MESSAGE_ADJUSTMENTS` 的查表結果。"""
+        for eq in self.MESSAGE_ADJUSTMENTS:
+            if eq.src_type == msg_type:
+                return eq.dst_type
+        return msg_type
+
+    # ── 模式 ────────────────────────────────────────────────────────
+    def decode_mode(self, custom_mode: int) -> str:
+        if not custom_mode:
+            return "—"
+        return _COPTER.get(custom_mode, f"MODE_{custom_mode}")
+
+    def encode_mode(self, mode: str) -> tuple[int, int]:
+        return (MODES[mode], 0)
+
+    def mode_matches(self, custom_mode: int, mode: str) -> bool:
+        return custom_mode == MODES[mode]
+
+    # ── 動作 ────────────────────────────────────────────────────────
+    def takeoff_plan(self, alt: float, ground_amsl: float | None) -> dict:
+        """Copter 的 NAV_TAKEOFF param7 是**相對高度**（送絕對海拔會差一整個
+        地面海拔、數百公尺），而且必須**先進 GUIDED 才能 arm 與起飛**。
+
+        空白參數用 **0.0 不用 NaN**——實測 2026-08-12：送 NaN 的 NAV_TAKEOFF
+        連 ACK 都沒有，指令被靜默丟棄。它的慣例是 0＝當前位置。
+        """
+        return {"needs_guided": True, "param7": alt,
+                "blank": 0.0, "alt_semantics": "relative"}
+
+    def manual_prepare(self) -> str | None:
+        return "position"            # POSHOLD
+
+    def mission_line(self, items: list[dict]) -> list[dict]:
+        """ArduPilot 把 **home 當 seq 0**，實際航點從 seq 1 起算。"""
+        if not items:
+            return items
+        f = items[0]
+        home = {**f, "seq": 0, "command": 16,      # MAV_CMD_NAV_WAYPOINT
+                "frame": 0,                        # MAV_FRAME_GLOBAL
+                "p1": 0, "p2": 0, "p3": 0, "p4": 0}
+        return [home] + [{**it, "seq": i + 1} for i, it in enumerate(items)]
+
+    # ── 連線與就緒 ──────────────────────────────────────────────────
+    def on_connect(self) -> list:
+        return [("REQUEST_DATA_STREAM", STREAM_HZ)]
+
+    def keepalive(self) -> list:
+        """**定期補送而不是只在註冊時送一次**：串流率設在自駕儀端，機端重開機、
+        換連線通道、或我方重連之後就沒了——只送一次的話，那些情況下會靜默失去
+        全部遙測（只剩心跳，看起來還「連著」）。
+        """
+        return [("REQUEST_DATA_STREAM", STREAM_HZ)]
+
+    def readiness_signals(self) -> tuple[str, ...]:
+        """**沒有 PREARM**：ArduPilot 不回報 PREARM_CHECK 位，只能靠 EKF。
+
+        如實缺席讓 `readiness()` 在只有心跳時回 None（未知），而不是拿次級訊號
+        （GPS 好）冒充權威判斷。
+        """
+        return ("ekf",)
+
+    # ── 值域與能力 ──────────────────────────────────────────────────
+    def limits(self) -> dict[str, Limit]:
+        return {"takeoff_alt_m": Limit(confidence="unverified")}
+
+    def capabilities(self, ctx: dict | None = None):
+        """015 驗收進行中：**逐鍵開**，不整組開。只有實際驗過的鍵才是 ok。"""
+        r = "ArduPilot 方言未經 SITL 驗證，僅觀察（見 issue 015）"
+        caps = {k: "unverified" for k in CAP_KEYS}
+        reasons = {k: r for k in CAP_KEYS}
+        # **逐鍵開，只開實際在 SITL 驗過的**（2026-08-12 015 驗收）：
+        #   mission_upload：方言分支（home 佔 seq 0）＋回讀逐項比對通過
+        #   hold/rtl/land：DO_SET_MODE 用 ArduPilot 模式號，且**讀回 HEARTBEAT
+        #     確認真的切到**（mode_engaged=True），不是只看 ACK
+        #   arm/takeoff：GUIDED→arm→NAV_TAKEOFF（相對高度、空白參數用 0 不用
+        #     NaN）實測爬到 15.0m
+        for _k in ("mission_upload", "hold", "rtl", "land", "arm", "takeoff"):
+            caps[_k] = "ok"
+            reasons.pop(_k, None)
+        # 以下**維持 unverified**（沒驗過就不開）：
+        #   mission_start/mission_fly：AUTO 任務執行整段尚未驗
+        #
+        # manual：ArduPilot 只接受 SYSID_MYGCS 指定來源的 MANUAL_CONTROL，
+        # 不符就靜默丟棄（無 ACK、事後偵測不到）。**連上時讀回該參數**，用具體
+        # 事實決定開不開，並在 reason 給出現值與該改成什麼
+        # （ui-spec §0.2c 條款 6：前提可事前查證時，就不要讓使用者用失敗去發現它）。
+        mygcs = (ctx or {}).get("sysid_mygcs")
+        if mygcs is None:
+            reasons["manual"] = ("尚未讀到機端 SYSID_MYGCS（剛連上或參數讀取中）"
+                                 "——搖桿需該值等於 254")
+        elif int(mygcs) == GCS_SYSID:
+            caps["manual"] = "ok"
+            reasons.pop("manual", None)
+        else:
+            reasons["manual"] = (
+                f"機端 SYSID_MYGCS={int(mygcs)}，需改為 {GCS_SYSID} 才會接受本系統的"
+                "搖桿指令（不改的話指令會被靜默丟棄、沒有任何錯誤訊息）")
+        return caps, reasons
