@@ -37,6 +37,7 @@ export default function MapView() {
   const planReq = useUavStore((s) => s.planReq);
   useEffect(() => { refreshPlanRef.current(); }, [planReq]);
   const ribbonGateRef = useRef({ t: 0, n: -1 });   // 地面投影重建節流
+  const pitchRef = useRef(55);   // 機體圖示的俯角尺寸補償用（見 IconLayer）
 
   // simple-first：專業面板抽屜；任務控制面板恆顯（自收合，ui-spec §2）
   const panelOpen = useUavStore((s) => s.panelOpen);
@@ -250,6 +251,9 @@ export default function MapView() {
       const upd = () => setBaseOutside(!inTW());
       upd();
       map.on("moveend", upd);
+      // 俯角變化即時反映到圖示尺寸補償（圖層本身在遙測更新時重建，5Hz）
+      pitchRef.current = map.getPitch();
+      map.on("pitch", () => { pitchRef.current = map.getPitch(); });
       setStyleReady(true);   // 底圖切換 effect 的閘：style 就緒才可動圖層
 
       // 地面基準：網格 50m 一格 + 起飛點雙圈錨點
@@ -426,6 +430,13 @@ export default function MapView() {
             getAngle: (d: { hdg: number | null | undefined }) =>
               (d.hdg == null ? 0 : -d.hdg),
             getSize: 44, sizeUnits: "pixels", billboard: false, pickable: true,
+            // 俯角尺寸補償（§2.4b 裁定）：貼地圖示在傾斜視角下被透視壓縮
+            // （短軸 ×cos(pitch)），放大以維持輪廓可辨。**不改 billboard**
+            // ——那會讓機頭方向不再對應地面方位，朝向淪為裝飾。
+            // 用 cos^-0.75 而非完全補償 cos^-1：完全補償會把圖示橫向撐得
+            // 過寬，部分補償在「看得出四旋翼」與「不過胖」之間取平衡
+            sizeScale: Math.min(2.2, Math.pow(
+              Math.max(0.2, Math.cos((pitchRef.current * Math.PI) / 180)), -0.75)),
             onHover: (info) => {
               const c = mapRef.current?.getCanvas();
               if (c) c.style.cursor = info.object ? "pointer" : "";
@@ -566,10 +577,10 @@ export default function MapView() {
             <button className={baseOn ? "on" : ""} onClick={() => setBase(true)}>影像</button>
           </span>
           {baseOn && baseOffline && <span className="meta">底圖離線</span>}
+          {/* 措辭經設計師定案：說明「為什麼沒有」而不只說「沒有」——
+              使用者才知道這既不是故障、也不是自己操作錯 */}
           {baseOn && !baseOffline && baseOutside && (
-            <span className="meta" title="國土測繪中心正射影像僅涵蓋臺灣">
-              此區無影像
-            </span>
+            <span className="meta">此區無影像（圖資僅涵蓋臺灣）</span>
           )}
         </div>
       </div>
