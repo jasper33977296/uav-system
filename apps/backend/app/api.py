@@ -8,6 +8,7 @@ from pydantic import BaseModel, Field, field_validator
 
 from . import db, groups, mavlink_rx, plan_check
 from .config import settings
+from .jsonsafe import dumps as jdumps
 from .link_events import transition as link_transition
 from .state import live
 
@@ -497,7 +498,7 @@ async def _store_mission(name: str, source: str, wps: list[dict]) -> str:
                 [(row["id"], w["seq"], w["lat"], w["lon"], w.get("alt"),
                   w.get("action", "waypoint"),
                   # MAVLink 保真度塞 params JSONB（閒置欄位正好承接）
-                  json.dumps({k: w[k] for k in ("command", "frame", "p1", "p2", "p3", "p4")
+                  jdumps({k: w[k] for k in ("command", "frame", "p1", "p2", "p3", "p4")
                               if w.get(k) is not None}) if w.get("command") is not None else None)
                  for w in wps])
     return str(row["id"])

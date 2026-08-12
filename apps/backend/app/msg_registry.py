@@ -20,6 +20,8 @@ import time
 
 from pymavlink import mavutil
 
+from .jsonsafe import json_safe
+
 M = mavutil.mavlink
 
 # SYS_STATUS 感測器位 → 友善短名（前端建議的 key）。未列的用 enum 名去前綴小寫
@@ -85,22 +87,9 @@ def record(st, msg) -> None:
 
 
 def _clean(v):
-    """欄位值轉 JSON-safe：
-    - float NaN/±Inf → None：瀏覽器 JSON.parse 不吃裸 NaN／Infinity，整包 throw
-      （PX4 常見：POSITION_TARGET_LOCAL_NED 的 x/y/z、ALTITUDE 的 *_terrain）。
-      **不可**改用 json allow_nan=False——那會變成後端 dumps 時 throw、整輪廣播掛。
-    - bytes → utf-8（截到首個 NUL）失敗則 list。
-    - list/tuple → 逐項遞迴（陣列欄位裡也可能藏 NaN）。"""
-    if isinstance(v, float):
-        return v if math.isfinite(v) else None
-    if isinstance(v, (bytes, bytearray)):
-        try:
-            return bytes(v).split(b"\x00", 1)[0].decode("utf-8", "replace")
-        except Exception:
-            return list(v)
-    if isinstance(v, (list, tuple)):
-        return [_clean(x) for x in v]
-    return v
+    """欄位值轉 JSON-safe——共用邊界清洗（見 jsonsafe.py：裸 NaN 會讓瀏覽器
+    JSON.parse 整包 throw）。這裡不再自己實作，避免各處清洗規則分岔。"""
+    return json_safe(v)
 
 
 def _decompose(msg):

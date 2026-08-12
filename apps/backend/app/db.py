@@ -5,6 +5,7 @@ import logging
 import asyncpg
 
 from .config import settings
+from .jsonsafe import dumps as jdumps
 from .state import LiveState
 
 log = logging.getLogger(__name__)
@@ -316,7 +317,7 @@ async def end_session(session_id: str) -> None:
     )
     await pool.execute(
         "UPDATE flight_sessions SET ended_at = now(), summary = $2 WHERE id = $1",
-        session_id, json.dumps({k: (float(v) if v is not None else None) if k not in ("samples_in_zone", "samples_total") else int(v or 0) for k, v in dict(summary).items()}),
+        session_id, jdumps({k: (float(v) if v is not None else None) if k not in ("samples_in_zone", "samples_total") else int(v or 0) for k, v in dict(summary).items()}),
     )
 
 
@@ -398,7 +399,7 @@ async def insert_link_sample(drone_id: str, session_id: str | None, m: dict) -> 
         m.get("rtt_ms"), m.get("jitter_ms"), m.get("packet_loss_pct"),
         m.get("throughput_up_kbps"), m.get("throughput_down_kbps"),
         m.get("in_interference_zone"), m.get("source", "modem"),
-        json.dumps(m["raw"]) if m.get("raw") is not None else None,
+        jdumps(m["raw"]) if m.get("raw") is not None else None,
     )
     return row is not None
 
@@ -414,24 +415,10 @@ def param_hash(params: dict) -> str:
     return hashlib.sha256(body.encode()).hexdigest()
 
 
-def _json_safe_params(params: dict) -> dict:
-    """NaN／±Inf → None。
-
-    PX4 有參數的值就是 NaN（未設定的預設）。Python 的 json.dumps 會原樣吐出裸
-    `NaN`，而那**不是合法 JSON**——PostgreSQL 直接拒收（`Token "NaN" is invalid`），
-    整個快照寫不進去。與 msg_registry 踩過的是同一類（那邊是瀏覽器 JSON.parse
-    整包 throw）：**裸 NaN 在 JSON 邊界永遠會炸**，跨邊界前一律轉成 null。
-    """
-    import math
-    return {k: (None if isinstance(v, float) and not math.isfinite(v) else v)
-            for k, v in params.items()}
-
-
 async def store_param_set(params: dict) -> str | None:
     """存一組參數（內容定址去重），回 param_sets.id。空的不存。"""
     if not params:
         return None
-    params = _json_safe_params(params)
     h = param_hash(params)
     row = await pool.fetchrow("SELECT id::text AS id FROM param_sets WHERE hash = $1", h)
     if row:
@@ -440,7 +427,7 @@ async def store_param_set(params: dict) -> str | None:
         """INSERT INTO param_sets (hash, param_count, params) VALUES ($1, $2, $3)
            ON CONFLICT (hash) DO UPDATE SET hash = EXCLUDED.hash
            RETURNING id::text AS id""",
-        h, len(params), json.dumps(params))
+        h, len(params), jdumps(params))
     return row["id"]
 
 
@@ -490,7 +477,7 @@ async def insert_event(drone_id: str, session_id: str | None,
         INSERT INTO events (drone_id, session_id, severity, type, detail, source)
         VALUES ($1, $2, $3, $4, $5, $6) RETURNING id, time
         """,
-        drone_id, session_id, severity, type_, json.dumps(detail), source,
+        drone_id, session_id, severity, type_, jdumps(detail), source,
     )
     return {"id": row["id"], "time": row["time"].isoformat(),
             "severity": severity, "type": type_, "detail": detail, "source": source}
@@ -502,7 +489,7 @@ async def bump_event(event_id: int, detail: dict) -> dict | None:
     （例：那列已被清理輪替掉，呼叫端退回新插一筆）。"""
     row = await pool.fetchrow(
         "UPDATE events SET detail = $2, time = now() WHERE id = $1 RETURNING time",
-        event_id, json.dumps(detail))
+        event_id, jdumps(detail))
     if row is None:
         return None
     return {"id": event_id, "time": row["time"].isoformat(), "detail": detail}

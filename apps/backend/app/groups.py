@@ -8,6 +8,7 @@ import json
 
 from . import db, plan_check
 from .config import settings
+from .jsonsafe import dumps as jdumps
 
 
 async def _wps(con, mission_id) -> list[dict]:
@@ -73,7 +74,7 @@ async def create_group(name: str, mode: str, base_mission_id, drones: list[dict]
             g = await con.fetchrow(
                 """INSERT INTO mission_groups (name, base_mission_id, mode, params)
                    VALUES ($1, $2, $3, $4) RETURNING id""",
-                name, base_mission_id, mode, json.dumps(used_params))
+                name, base_mission_id, mode, jdumps(used_params))
             gid = str(g["id"])
             base_wps = await _wps(con, base_mission_id) if mode == "unified" else None
             for i, d in enumerate(drones):
