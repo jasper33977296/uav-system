@@ -11,6 +11,7 @@ import { useEffect, useRef, useState } from "react";
 
 import { colorFor } from "@/components/droneLayer";
 import ManualControl from "@/components/ManualControl";
+import { modeLabel } from "@/lib/modeVerb";
 import { API, CLIENT_HEADERS, COMMAND_API } from "@/lib/signal";
 import { useUavStore } from "@/lib/store";
 
@@ -356,6 +357,9 @@ export default function CommandPanel() {
   const observeOnly = caps !== null && CAP_KEYS.every((k) => capState(k) !== "ok");
   const allUnsupported = caps !== null && CAP_KEYS.every((k) => capState(k) === "unsupported");
   const apLabel = dh?.autopilot ? AP_LABELS[dh.autopilot] ?? "未知機型" : null;
+  // 混機＝在線機中有 ≥2 種 autopilot：只有此時模式名才需要語意註記
+  const mixedFleet = new Set(Object.values(fleet)
+    .filter((t) => t.connected && t.autopilot).map((t) => t.autopilot)).size >= 2;
   // 受限態的逐鈕原因行（沿 not_ready_reasons 視覺語言，不用 tooltip）
   const capHints = (keys: CapKey[]) =>
     caps && !observeOnly
@@ -713,7 +717,11 @@ export default function CommandPanel() {
                 {live.ready ? "● 就緒" : "● 未就緒"}
               </span>);
             })()}
-            <span>{live?.flight_mode ?? "—"}</span>
+            {/* 模式顯示（§0.2d）：原廠名不翻譯；**混機時**才加語意括注
+                （PX4 HOLD 與 ArduPilot LOITER 是同一件事，單一廠牌無歧義
+                就不加字）。**要判斷模式請用 live.mode_verb，不得比對
+                flight_mode 字串**——比字串在混機環境必錯 */}
+            <span>{modeLabel(live?.flight_mode, live?.mode_verb, mixedFleet)}</span>
             <span>GPS {live?.gps_fix ?? "—"} · {live?.satellites ?? "—"}顆</span>
             <span>電量 {live?.battery_pct != null ? Math.round(live.battery_pct) : "—"}%</span>
             {/* 編隊入口（§2.5 漸進顯示）：≥2 機連線才出現，單機永遠看不到 */}

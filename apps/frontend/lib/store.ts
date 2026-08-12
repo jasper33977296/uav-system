@@ -35,6 +35,9 @@ export interface Telemetry {
   battery_pct: number | null; battery_voltage: number | null;
   gps_fix: number | null; satellites: number | null;
   flight_mode: string | null; armed: boolean;
+  // 廠牌無關的模式語意（§0.2d）：**判斷用這個、顯示用 flight_mode**。
+  // null 是常態（PX4 起飛中、手動類模式、ArduPilot SMART_RTL 皆為 null）
+  mode_verb?: string | null;
   autopilot?: string | null;         // "px4"|"ardupilot"|"unknown"（015 batch2）
   mav_sysid?: number | null;         // 當下 sysid（選中機統一 ca0a472；null=非 MAVLink）
   link_state?: string | null;        // 機上鏈路狀態（ok/stale/lost）
