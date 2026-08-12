@@ -356,6 +356,8 @@ export default function MapView() {
       const refreshPlan = async () => {
         try {
           let wps: any[] = [];
+          // 沒有啟用中的航線時後端回 404——那是正常態不是錯誤（!ok 就清空
+          // 疊圖）。console 會看到一則 404，不必追
           const ra = await fetch(`${API}/api/missions/active`);
           if (ra.ok) wps = ((await ra.json()).waypoints ?? []).filter((w: any) => w.lat && w.lon);
           const has = wps.length >= 2;
