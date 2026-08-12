@@ -292,6 +292,51 @@ a:focus-visible, button:focus-visible, input:focus-visible, select:focus-visible
   font-size: 9px; color: var(--muted);
 }
 
+/* ── 前後比較頁（ui-spec §6b，023）──────────────────────────────── */
+.ab-page {
+  height: 100%; overflow-y: auto; padding: 14px;
+  display: flex; flex-direction: column; gap: 14px;
+}
+.ab-head {
+  display: flex; align-items: center; gap: 12px; flex-wrap: wrap;
+  font-size: 13px;
+}
+.ab-cap {
+  display: inline-flex; align-items: center; gap: 6px;
+  background: var(--surface); border: 1px solid var(--border);
+  border-radius: 999px; padding: 3px 10px;
+}
+.ab-cap select, .ab-cap input {
+  background: transparent; color: var(--ink); border: none;
+  font-size: 12.5px; max-width: 260px;
+}
+.ab-cap input { border-bottom: 1px solid var(--accent); }
+.ab-chart svg { width: 100%; height: 220px; }
+.ab-chart .ax { fill: var(--muted); font-size: 11px; }
+.ab-verdict { font-size: 13px; color: var(--ink); margin-top: 6px; }
+.ab-verdict .meta { margin-left: 6px; }
+.ab-rsrp { display: flex; align-items: center; gap: 8px; margin-top: 4px; }
+.ab-rsrp svg { flex: 1; height: 24px; }
+.ab-sum td:first-child { white-space: nowrap; }
+.ab-sum .dot { display: inline-block; margin-right: 6px; }
+.ab-map {
+  height: clamp(280px, 42vh, 460px); border-radius: 8px; overflow: hidden;
+}
+.ab-legend {
+  display: flex; align-items: center; gap: 6px; flex-wrap: wrap;
+  font-size: 12px; color: var(--ink-2); margin-top: 8px;
+}
+.ab-legend .sw {
+  width: 14px; height: 10px; border-radius: 2px; display: inline-block;
+  margin-left: 8px;
+}
+.ab-legend .sw:first-child { margin-left: 0; }
+.ab-legend .sw-none {
+  background: repeating-linear-gradient(45deg, transparent 0 3px,
+    var(--muted) 3px 4px);
+  border: 1px solid var(--muted);
+}
+
 /* ── 回放影片同步（ui-spec §5.4）───────────────────────────────── */
 .replay-vid {
   position: absolute; right: 12px; top: 12px; z-index: 20;
