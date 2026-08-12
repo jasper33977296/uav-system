@@ -129,6 +129,11 @@ async def on_session_end(sysid: int | None) -> None:
     try:
         await asyncio.sleep(3.0)
         await set_record(sysid, False)
+        # 落地後追加幾次同步：週期迴圈是 30s 一輪，光靠它最久要 ~60s 才會把長度
+        # 結算並標 final，而使用者落地後**馬上就會開回放**。這裡快速收斂。
+        for delay in (5.0, 15.0, 30.0):
+            await asyncio.sleep(delay)
+            await sync_segments()
     except Exception:
         log.exception("影像：收錄失敗（不影響架次記錄）")
 
@@ -164,11 +169,16 @@ async def sync_segments() -> int:
                 continue
             session_id = await db.find_session_at(drone_id, started)
             await db.pool.execute(
+                # final：長度**與上一輪相同**才算定案。錄製中的段每輪都會變長，
+                # 所以「不再變長」就是結束的可靠訊號，不必額外去問錄製器狀態。
+                # 定案前 UI 不對尾端做斷言（否則會把還沒結算完的尾巴讀成斷流）。
                 """INSERT INTO video_segments
                      (drone_id, session_id, started_at, duration_s, path, source)
                    VALUES ($1, $2, $3, $4, $5, 'ground')
                    ON CONFLICT (drone_id, started_at) DO UPDATE
                      SET duration_s = EXCLUDED.duration_s,
+                         final = (video_segments.duration_s IS NOT NULL
+                                  AND video_segments.duration_s = EXCLUDED.duration_s),
                          session_id = COALESCE(video_segments.session_id,
                                                EXCLUDED.session_id)""",
                 drone_id, session_id, started, it.get("duration"), name)
@@ -231,7 +241,7 @@ async def session_video(session_id: str) -> dict:
         return {}
     segs = await db.pool.fetch(
         """SELECT id::text AS id, started_at, duration_s, codec, width, height,
-                  fps, bytes
+                  fps, bytes, final
            FROM video_segments WHERE session_id = $1 ORDER BY started_at""",
         session_id)
     # NULL **不能當成 'on'**：影像功能上線前的舊架次全是 NULL，當成 'on' 會讓
@@ -257,6 +267,9 @@ async def session_video(session_id: str) -> dict:
              "duration_s": g["duration_s"], "codec": g["codec"],
              "width": g["width"], "height": g["height"], "fps": g["fps"],
              "bytes": g["bytes"],
+             # false＝這段長度還可能變長（錄製器仍在結算），UI 不要對尾端斷言
+             # 「此時段無影像」——那會把正常錄影說成故障
+             "final": g["final"],
              "url": f"/api/video/segments/{g['id']}/file"}
             for g in segs
         ],

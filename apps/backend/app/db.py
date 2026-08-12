@@ -117,6 +117,12 @@ async def migrate() -> None:
         UNIQUE (drone_id, started_at))""")
     await pool.execute("CREATE INDEX IF NOT EXISTS idx_vseg_session "
                        "ON video_segments (session_id, started_at)")
+    # duration_s 會**事後長大**：錄製器的片段長度是逐步結算的，落地後一分鐘查到的
+    # 值可能還比最終值短好幾秒。把還沒定案的長度當權威用，尾端那幾秒就會落在涵蓋帶
+    # 外、被讀成「此時段無影像（斷流）」——**把正常錄影說成故障**。
+    # final=false 表示「這段還可能變長」，UI 據此不對尾端做斷言。
+    await pool.execute("ALTER TABLE video_segments "
+                       "ADD COLUMN IF NOT EXISTS final BOOLEAN NOT NULL DEFAULT false")
     # ── issue 023：missions 正名瘦身（路徑快照庫，不是任務庫）──────────────
     # kind 取代 created_by 兼差當判別欄。**加法不減法**：created_by 保留（歷史
     # 事實，留著零成本），只是不再被程式當分類用。
