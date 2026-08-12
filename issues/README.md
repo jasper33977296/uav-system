@@ -14,7 +14,11 @@
 | `open` | 已確認、待處理 |
 | `in-progress` | 修改中 |
 | `needs-decision` | 卡在設計取捨，需要先決定方向 |
+| `deferred` | **知情暫緩**：已查明、決定現階段不修，檔案內必須寫明**重啟觸發條件**（什麼情況要回來做）|
 | `closed` | 已修並驗證（在檔案末尾補「解決方式」與 commit）|
+
+慣例：設計文件裡的「已知限制／暫緩項」要在本索引留一條 `deferred` 入口——
+只寫在設計文件裡，等於只有讀那份文件的人看得到。
 
 - 嚴重度：`high`（擋到主要研究流程／示範）、`medium`（資料正確性或體驗受損）、
   `low`（清理、體感問題）。
@@ -45,7 +49,9 @@
 | [020](020-session-mission-association-broken.md) | 架次未綁任務：新飛資料比較頁用不了 ✔回填驗證 | high | **closed** | `db.py:create_session` |
 | [021](021-vehicle-data-suite.md) | 機上資料：QGC 式全量即時資訊（Inspector/參數快照/ulog 回收，分四期）| medium | open | `issues/021` PM scope 定案 |
 | [022](022-flight-video.md) | 飛行影像：即時畫面＋架次錄影 mp4＋回放同步播放（地面錄製定案）| medium | open | `issues/022` |
-| [023](023-missions-table-role-cleanup.md) | missions 表正名瘦身：死欄位＋生成物污染＋刪除語意（含 010）| medium | open | `db/init/01_schema.sql` |
+| [023](023-missions-table-role-cleanup.md) | missions 表正名瘦身：死欄位＋生成物污染＋刪除語意（含 010）| medium | **closed** | `db/init/01_schema.sql` |
+| [024](024-video-anchor-offset.md) | 影像時間錨點早 0.41s：暫緩修正，待真機實測（含重啟觸發條件）| low | deferred | `doc/flight-video-design.md` §9 |
+| [025](025-group-rtl-stagger-not-implemented.md) | 編隊 RTL 高度錯開未實作：separate 同高任務緊急返航無分離保證 | low | deferred | `doc/group-missions-design.md` §10.2 |
 
 「✔實測確認」= 2026-08-03 首次實飛（SITL 起飛 → 進干擾區 → RTL）取得的實際資料佐證，
 不只是讀碼推論。詳見 [progress/log/2026-08-03.md](../progress/log/2026-08-03.md)。
