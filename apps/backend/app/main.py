@@ -5,7 +5,7 @@ from contextlib import asynccontextmanager
 from fastapi import FastAPI, WebSocket, WebSocketDisconnect
 from fastapi.middleware.cors import CORSMiddleware
 
-from . import db, mavlink_rx, msg_registry
+from . import db, mavlink_rx, msg_registry, video_rec
 from .api import router
 from .config import settings
 from .link_events import transition as link_transition
@@ -145,6 +145,8 @@ async def lifespan(app: FastAPI):
         asyncio.create_task(_link_and_db_loop(), name="link-db-loop"),
         asyncio.create_task(_broadcast_loop(), name="ws-broadcast"),
         asyncio.create_task(_msg_registry_loop(), name="ws-msg-registry"),
+        # 影像（022）：片段入庫＋錄製狀態校正。獨立 task，例外自己吞
+        asyncio.create_task(video_rec.loop(), name="video-rec"),
     ]
     yield
     for t in tasks:

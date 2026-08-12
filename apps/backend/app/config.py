@@ -28,6 +28,13 @@ class Settings(BaseSettings):
     broadcast_hz: float = 5.0        # WebSocket 推送頻率
     db_write_hz: float = 1.0         # telemetry / link_metrics 入庫頻率
     msg_registry_hz: float = 2.0     # 014-B 泛型訊息登錄表廣播頻率（低於遙測 5Hz）
+    # 飛行影像（022）。**保留天數是單一事實源**：同一個 .env 變數同時餵
+    # docker-compose 的 MTX_PATHDEFAULTS_RECORDDELETEAFTER（錄製器實際清檔）與
+    # 這裡（API 回 retention_days 給前端顯示空態句）。寫死在 UI 或分兩處設定，
+    # 就會出現「UI 說 7 天、實際清 14 天」的假話。
+    video_retention_days: int = 7
+    video_record_enabled: bool = True   # 預設開；特定實驗可關（關閉會在架次留痕）
+    video_rec_dir: str = "/rec"         # 與 uav-video 共掛的錄影根目錄
     # 鏈路狀態門檻（ok / degraded / lost 三態，見 app/main.py:_link_transition）
     sinr_degraded_db: float = 5.0    # 低於此值進入 degraded
     sinr_lost_db: float = -2.0       # 低於此值進入 lost

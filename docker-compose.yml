@@ -60,6 +60,7 @@ services:
     volumes:
       - ./apps/backend/app:/srv/app  # 原始碼掛進去，改檔案 reload 立即生效
       - mavcap:/data/mavcap          # 原始層錄製（MAVLink tlog，滾動 30 天）
+      - videorec:/rec:ro             # 影像（022）：掃描錄影目錄入庫；唯讀＝寫入是 uav-video 的職責
     environment:
       # 全部由根目錄 .env 供值（見 .env.example）——新環境只改 .env
       DATABASE_URL: postgresql://uav:uav@localhost:${DB_PORT:-35432}/uav
@@ -68,6 +69,12 @@ services:
       AUTOREGISTER_SIMULATED: ${AUTOREGISTER_SIMULATED:-false}   # SITL/dev true：自動註冊標假機
       GEOFENCE_RADIUS_M: ${GEOFENCE_RADIUS_M:-50}
       GEOFENCE_ALT_M: ${GEOFENCE_ALT_M:-15}
+      # 影像（022）：**與 uav-video 用同一個 .env 變數**——錄製器據此清檔、
+      # backend 據此回 retention_days 給前端顯示。少傳這行兩邊就會漂移
+      # （UI 說 7 天、實際清 14 天），這正是要消滅的假話。
+      VIDEO_RETENTION_DAYS: ${VIDEO_RETENTION_DAYS:-7}
+      VIDEO_RECORD_ENABLED: ${VIDEO_RECORD_ENABLED:-true}
+      VIDEO_REC_DIR: ${VIDEO_REC_DIR:-/rec}
     depends_on:
       uav-db:
         condition: service_healthy
@@ -96,6 +103,10 @@ services:
     build: ./apps/command
     network_mode: host
     command: ["uvicorn", "app.main:app", "--reload",
+              # 與 backend 同款保險：--reload 的 graceful shutdown 會等連線關閉。
+              # command 沒有常駐 WS，不像 backend 那樣會被卡死，但長請求（任務上傳
+              # 握手可達 30s）同樣能拖住重啟——上限 3s，行為可預期。
+              "--timeout-graceful-shutdown", "3",
               "--host", "0.0.0.0", "--port", "${COMMAND_PORT:-38001}"]
     volumes:
       - ./apps/command/app:/srv/app
@@ -115,6 +126,68 @@ services:
       options: { max-size: "50m", max-file: "3" }
     restart: unless-stopped
 
+  # ── 飛行影像（issue 022；設計見 doc/flight-video-design.md）─────────────
+  # 錄影**不放進 backend**：backend 掛 --reload，改一行程式就重啟＝錄影中斷。
+  # 這是正式元件（真機部署要錄影），故不加 profile；測試來源才是鷹架（見下）。
+  uav-video:
+    container_name: uav-video
+    image: bluenviron/mediamtx:latest
+    network_mode: host          # 收機上 RTSP（跨 5G）＋供瀏覽器 WHEP
+    volumes:
+      - ./video/mediamtx.yml:/mediamtx.yml:ro
+      - videorec:/rec           # 錄影檔；保留天數見下方 env（單一事實源）
+    environment:
+      # **保留天數的單一事實源**＝這個 .env 變數：同時餵給錄製器（清檔）與
+      # backend（API 回 retention_days 給前端顯示空態句）。分成兩處寫死就會漂移
+      # ——UI 顯示「7 天」而實際清 14 天這種假話，正是要避免的。
+      MTX_PATHDEFAULTS_RECORDDELETEAFTER: ${VIDEO_RETENTION_DAYS:-7}d
+    logging:
+      driver: json-file
+      options: { max-size: "50m", max-file: "3" }
+    restart: unless-stopped
+
+  # 測試影像來源（開發鷹架，同 uav-sitl 的隔離做法）：真機部署的 .env 沒有
+  # COMPOSE_PROFILES=sim，`docker compose up -d` 天生不會帶起它。
+  # -re＝照真實時間推流；沒有它會瞬間灌完，時間錨點直接失真（設計 §5）。
+  # 三台各一條，畫面上打 UAV-N 大字＋不同底色——使用者切機時要能**一眼確認
+  # 畫面真的換了**（三個一模一樣的測試圖樣看起來像沒切換，等於白測）。
+  uav-video-testsrc-1:
+    <<: &testsrc-base
+      container_name: uav-video-testsrc-1
+      image: linuxserver/ffmpeg:latest
+      profiles: ["sim"]
+      network_mode: host
+      entrypoint: ["ffmpeg"]
+      depends_on: [uav-video]
+      logging:
+        driver: json-file
+        options: { max-size: "10m", max-file: "2" }
+      restart: unless-stopped
+    command: >-
+      -re -f lavfi -i testsrc2=size=1280x720:rate=15
+      -vf drawtext=text='UAV-1':fontsize=96:fontcolor=white:x=60:y=60:box=1:boxcolor=0x1e88e5@0.85:boxborderw=20
+      -c:v libx264 -preset veryfast -tune zerolatency -g 30 -pix_fmt yuv420p
+      -f rtsp rtsp://127.0.0.1:8554/uav-1
+
+  uav-video-testsrc-2:
+    <<: *testsrc-base
+    container_name: uav-video-testsrc-2
+    command: >-
+      -re -f lavfi -i testsrc2=size=1280x720:rate=15
+      -vf drawtext=text='UAV-2':fontsize=96:fontcolor=white:x=60:y=60:box=1:boxcolor=0x43a047@0.85:boxborderw=20
+      -c:v libx264 -preset veryfast -tune zerolatency -g 30 -pix_fmt yuv420p
+      -f rtsp rtsp://127.0.0.1:8554/uav-2
+
+  uav-video-testsrc-3:
+    <<: *testsrc-base
+    container_name: uav-video-testsrc-3
+    command: >-
+      -re -f lavfi -i testsrc2=size=1280x720:rate=15
+      -vf drawtext=text='UAV-3':fontsize=96:fontcolor=white:x=60:y=60:box=1:boxcolor=0xe53935@0.85:boxborderw=20
+      -c:v libx264 -preset veryfast -tune zerolatency -g 30 -pix_fmt yuv420p
+      -f rtsp rtsp://127.0.0.1:8554/uav-3
+
 volumes:
   dbdata:
   mavcap:
+  videorec:

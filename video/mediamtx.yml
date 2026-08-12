@@ -1,0 +1,48 @@
+# 地面站影像收流／錄製（issue 022；設計見 doc/flight-video-design.md）。
+#
+# 為什麼是獨立容器：錄影不能綁在 backend（--reload 改一行就中斷錄影）。
+# 為什麼是 fmp4：實測錄製中 SIGKILL，一般 mp4 的 moov atom 在檔尾 → 整個檔
+# 報廢（45MB 全損）；fmp4 完整可播。本案「斷流是常態＋地面站會重啟」，
+# 這是硬需求不是偏好。recordPartDuration 即 RPO（最壞丟 1 秒）。
+
+logLevel: info
+
+# API：架次觸發用（armed 開錄／disarmed 收錄，見 backend video_rec.py）
+api: yes
+apiAddress: :9997
+
+# 收流：機上 MediaMTX 或測試來源推 RTSP 進來
+rtsp: yes
+rtspAddress: :8554
+
+# 瀏覽器即時畫面（WHEP）：前端 video_url 指這裡，少一條跨 5G 的瀏覽器直連，
+# 且與「錄下來的」是同一份流
+webrtc: yes
+webrtcAddress: :8889
+
+hls: no
+rtmp: no
+srt: no
+
+# 依時間區間取片段（回放用；DB 仍是錨點的事實源，見設計 §4）
+playback: yes
+playbackAddress: :9996
+
+pathDefaults:
+  # 預設不錄——由 backend 依架次生命週期經 API 逐台打開（見設計 §3、§6b）。
+  # 這樣「沒錄」是明確的設定狀態，不是碰巧沒錄到。
+  record: no
+  recordPath: /rec/%path/%Y-%m-%d_%H-%M-%S-%f
+  recordFormat: fmp4
+  recordPartDuration: 1s        # ＝ RPO：系統崩潰最壞丟這麼多
+  recordSegmentDuration: 10m    # 段越短，崩潰損失上限越小、時間定位越細
+  # 保留天數**由 compose 的 MTX_PATHDEFAULTS_RECORDDELETEAFTER 覆寫**（單一事實源＝
+  # .env 的 VIDEO_RETENTION_DAYS，同時餵 backend 的 retention_days）。這裡的值只是
+  # 沒帶 env 時的後備，改這裡不會改到前端顯示的天數——要改請改 .env。
+  recordDeleteAfter: 168h       # 後備：7 天（使用者定案，影像與量測資料 30 天脫鉤）
+
+paths:
+  # 真機：每台一條 path，名稱用 uav-<sysid>，由 backend 依 mav_sysid 對應。
+  # 生產時 source 指向機上 MediaMTX；開發時由測試來源 publish 進來（source: publisher）。
+  # 用 all_others 讓測試來源不必預先宣告即可推流。
+  all_others:
