@@ -43,18 +43,38 @@ executor: "group_exec.GroupExecutor | None" = None
 ACTION_CMD = {"takeoff": 22, "waypoint": 16, "land": 21, "rtl": 20}
 
 
+def default_frame(cmd: int) -> int:
+    """該指令在沒有明給 frame 時該用哪個 frame。
+
+    **無座標的任務項用 `MAV_FRAME_MISSION`(2)，不是 GLOBAL_RELATIVE_ALT(3)。**
+    RTL(20)、CONDITION_*(112–159)、DO_*(176+) 都不帶經緯高，MAVLink 慣例是
+    frame 2；QGC 產的 .plan 也是這樣寫。
+
+    **為什麼要有這個函式**（2026-08-12 實測）：原本一律預設 3，於是**任何含
+    RTL 的任務都上不去**——機端回 `MAV_MISSION_UNSUPPORTED` 把**整包**拒收。
+    這條路徑連我方自己的 `action:"rtl"` 都會踩到（不是使用者給錯值的問題），
+    等於 plan_check 那句「最後一個導航項不是返航/降落」的建議**根本做不到**。
+    實測 sysid 3（PX4 SITL）：RTL 配 frame 0/3/5/6 全被拒，只有 frame 2 過。
+    """
+    return 2 if (cmd == 20 or cmd >= 112) else 3
+
+
 def build_items(wps: list[dict]) -> list[dict]:
     """MAVLink 保真度（對齊實戰工具 upload_mission.py）：新資料帶 .plan 的
-    原始 command/frame/p1–p4，原樣送出；舊資料由 action 推回、frame 3
-    （GLOBAL_RELATIVE_ALT，QGC 預設）、params 補 0。"""
+    原始 command/frame/p1–p4，原樣送出；舊資料由 action 推回、frame 依指令推
+    （見 `default_frame`——**不是一律 3**）、params 補 0。"""
     items = []
     for i, w in enumerate(wps):
         p = w.get("params")
         p = json.loads(p) if isinstance(p, str) else (p or {})
-        cmd = p.get("command") or ACTION_CMD.get((w.get("action") or "waypoint"), 16)
+        cmd = int(p.get("command") or ACTION_CMD.get((w.get("action") or "waypoint"), 16))
+        # 明給的 frame 一律照送（MAVLink 保真度）；沒給才依指令推。**不覆寫**
+        # 使用者/`.plan` 的顯式值——那是保真度的核心，寧可讓機端拒絕得明明白白，
+        # 也不要我方偷改成「看起來對」的值（顯式值不合理由 plan_check 事前示警）。
+        f = p.get("frame")
         items.append({
             "seq": i,
-            "frame": p.get("frame", 3),
+            "frame": default_frame(cmd) if f is None else int(f),
             "command": int(cmd),
             "p1": float(p.get("p1") or 0.0), "p2": float(p.get("p2") or 0.0),
             "p3": float(p.get("p3") or 0.0), "p4": float(p.get("p4") or 0.0),

@@ -54,6 +54,20 @@ def check_waypoints(wps: list[dict], fence_r: float, fence_alt: float,
         return {"ok": False, "problems": ["沒有航點"], "warnings": [],
                 "max_dist_m": 0.0, "fence_r": fence_r, "fence_alt": fence_alt}
 
+    # 顯式 frame 與指令不搭：**無座標的項（RTL、CONDITION_*、DO_*）必須是
+    # MAV_FRAME_MISSION(2)**，給 3 會讓機端以 MAV_MISSION_UNSUPPORTED 拒收
+    # **整包任務**。上傳層基於 MAVLink 保真度不會偷改顯式值，所以這裡要事前講
+    # ——否則使用者只會看到一句「機端拒絕任務」，完全不知道是哪一項、哪個欄位。
+    # （2026-08-12 實測 PX4 SITL：RTL 配 frame 0/3/5/6 全拒，只有 2 過。）
+    for w in wps:
+        c, fr = _cmd(w), w.get("frame")
+        if c is None or fr is None:
+            continue
+        if (c == _RTL or c >= 112) and int(fr) != 2:
+            problems.append(
+                f"seq {w.get('seq')}：command={c} 是無座標項，frame 應為 2"
+                f"（MAV_FRAME_MISSION），目前是 {fr}——機端會拒收整包任務")
+
     nav = [w for w in wps if _is_nav(w)]
     if not nav:
         problems.append("沒有任何導航項目")
