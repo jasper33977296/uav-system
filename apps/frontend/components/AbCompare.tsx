@@ -137,15 +137,23 @@ export default function AbCompare() {
     const dS = median(pts.map((c) => c.b_sinr! - c.a_sinr!));
     const rp = res.chainage.filter((c) => c.a_rsrp != null && c.b_rsrp != null);
     const dR = rp.length ? median(rp.map((c) => c.b_rsrp! - c.a_rsrp!)) : null;
-    const FLAT_R = 2, SIG_S = 1.5;     // 判定門檻（dB）：持平／顯著
+    const FLAT_R = 2, SIG_S = 1.5, TAIL = 3;   // 判定門檻（dB）：持平／顯著／尾部
+    // 局部變化分支（§6b 設計師裁定）：整段中位數持平但尾部顯著時，若只說
+    // 「無顯著變化」會與同頁摘要表的 Δp5 互相打臉——判讀句的責任不是說出
+    // 一個對的結論，是說出一個不與同頁其他證據衝突的結論
+    const dP5 = res.summary.b.p5 != null && res.summary.a.p5 != null
+      ? res.summary.b.p5 - res.summary.a.p5 : null;
     let txt: string;
     if (dR == null) txt = "無 RSRP 對照資料，無法判定變因";
     else if (Math.abs(dR) < FLAT_R && dS < -SIG_S) txt = "RSRP 大致持平而 SINR 下降 → 干擾簽名";
     else if (Math.abs(dR) < FLAT_R && dS > SIG_S) txt = "RSRP 大致持平而 SINR 上升 → 干擾減弱";
     else if (dR < -FLAT_R && dS < -SIG_S) txt = "RSRP 同步下降 → 變因可能不是干擾（距離、遮蔽或發射端）";
     else if (dR > FLAT_R && dS > SIG_S) txt = "RSRP 同步上升 → 變因可能不是干擾（距離、遮蔽或發射端）";
-    else txt = "無顯著變化";
-    return { txt, dS, dR };
+    else if (dP5 != null && Math.abs(dP5) >= TAIL) {
+      txt = `整段中位數持平，但最差 5% ${dP5 > 0 ? "改善" : "惡化"} `
+        + `${Math.abs(dP5).toFixed(1)} dB → 變化集中在局部區段（見主圖差值帶）`;
+    } else txt = "無顯著變化";
+    return { txt, dS, dR, dP5 };
   }, [res]);
 
   // 差值熱區地圖（沿用場域頁的暖畫布底＋地面網格）
@@ -293,8 +301,9 @@ export default function AbCompare() {
               {/* 判讀必須可反駁：句尾附依據，使用者能自行檢查系統的結論 */}
               <span className="meta">
                 （依據：ΔSINR 中位數 {f1(verdict.dS)} dB
-                {verdict.dR != null && `、ΔRSRP 中位數 ${f1(verdict.dR)} dB`}；
-                持平門檻 ±2 dB）
+                {verdict.dR != null && `、ΔRSRP 中位數 ${f1(verdict.dR)} dB`}
+                {verdict.dP5 != null && `、Δp5 ${f1(verdict.dP5)} dB`}；
+                持平門檻 ±2 dB、尾部門檻 ±3 dB）
               </span>
             </div>
           )}
