@@ -20,7 +20,8 @@ async def _wps(con, mission_id) -> list[dict]:
 async def _materialize(con, name: str, wps: list[dict], dz: float) -> str:
     """建一條具體任務：base 航點高度 += dz（帶座標的導航項才加）。回 mission_id。"""
     row = await con.fetchrow(
-        "INSERT INTO missions (name, created_by) VALUES ($1, 'group-gen') RETURNING id", name)
+        "INSERT INTO missions (name, created_by, kind) "
+        "VALUES ($1, 'group-gen', 'generated') RETURNING id", name)
     mid = row["id"]
     await con.executemany(
         """INSERT INTO waypoints (mission_id, seq, lat, lon, alt, action, params)
@@ -131,6 +132,6 @@ async def delete_group(gid: str) -> str:
             # 只清本群組地面生成的具體任務（separate 用的既有任務不動）
             if mids:
                 await con.execute(
-                    "DELETE FROM missions WHERE id = ANY($1) AND created_by = 'group-gen'",
+                    "DELETE FROM missions WHERE id = ANY($1) AND kind = 'generated'",
                     mids)
     return "deleted"

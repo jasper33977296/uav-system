@@ -85,6 +85,76 @@ async def migrate() -> None:
     # 標記不刪除）。預設 NULL＝未定＝API 視為 'unknown'（誠實：不確定就說不確定）。
     # 回填見 scripts/backfill-session-origin.sql；前向由 create_session 依觸發 client 標。
     await pool.execute("ALTER TABLE flight_sessions ADD COLUMN IF NOT EXISTS origin TEXT")
+    # ── 飛行影像（issue 022；doc/flight-video-design.md）────────────────────
+    # video_mode：'on'／'off'（本趟刻意不錄）／'no_source'（該機沒有影像來源）。
+    # 為什麼要這欄：零片段有三種完全不同的意思——**沒錄**（實驗設定）與
+    # **錄了但鏈路斷光**（實驗結果）對研究的意義相反，不能靠事後推測分辨。
+    await pool.execute(
+        "ALTER TABLE flight_sessions ADD COLUMN IF NOT EXISTS video_mode TEXT")
+    # 舊架次回填：影像功能上線前的架次本來就沒有錄影，標成 'off'（＝本趟未啟用
+    # 錄影，對它們是事實）。不回填的話 NULL 會被判讀成「該錄卻沒錄到」的故障，
+    # 整片歷史飛行都亮警報。只動**已結束**的架次——進行中的由 on_session_start
+    # 標，不能被這裡蓋掉。冪等（只補 NULL）。
+    await pool.execute(
+        "UPDATE flight_sessions SET video_mode = 'off' "
+        "WHERE video_mode IS NULL AND ended_at IS NOT NULL")
+    # 每段影片一列。started_at＝**影片第 0 秒對應的絕對時間**（錨點）：回放
+    # seek 用它換算段內 offset。逐段獨立錨點、不假設段段相接——段與段之間的
+    # 空白是斷流的證據，照實留白，不靜默拼接假裝連續（使用者硬約束）。
+    await pool.execute("""CREATE TABLE IF NOT EXISTS video_segments (
+        id         UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+        drone_id   UUID NOT NULL REFERENCES drones(id) ON DELETE CASCADE,
+        session_id UUID REFERENCES flight_sessions(id) ON DELETE CASCADE,
+        started_at TIMESTAMPTZ NOT NULL,
+        duration_s DOUBLE PRECISION,
+        path       TEXT NOT NULL,
+        codec      TEXT,
+        width      INT,
+        height     INT,
+        fps        DOUBLE PRECISION,
+        bytes      BIGINT,
+        source     TEXT NOT NULL DEFAULT 'ground',
+        UNIQUE (drone_id, started_at))""")
+    await pool.execute("CREATE INDEX IF NOT EXISTS idx_vseg_session "
+                       "ON video_segments (session_id, started_at)")
+    # ── issue 023：missions 正名瘦身（路徑快照庫，不是任務庫）──────────────
+    # kind 取代 created_by 兼差當判別欄。**加法不減法**：created_by 保留（歷史
+    # 事實，留著零成本），只是不再被程式當分類用。
+    await pool.execute("ALTER TABLE missions ADD COLUMN IF NOT EXISTS kind TEXT")
+    await pool.execute("""
+        UPDATE missions SET kind = CASE created_by
+            WHEN 'plan-file'      THEN 'imported'      -- 使用者匯入 .plan
+            WHEN 'vehicle'        THEN 'from-vehicle'  -- 從機上讀回
+            WHEN 'group-gen'      THEN 'generated'     -- 編隊地面展開
+            WHEN 'command-stage2' THEN 'generated'     -- 舊驗收測試的系統產物
+            ELSE 'imported' END
+        WHERE kind IS NULL""")
+    # 架次的路徑名稱快照：使用者定案「飛過的路徑可以刪，但飛行紀錄要永遠存在」。
+    # mission_id 是 ON DELETE SET NULL，刪路徑後回放頁只剩空白；留一份名字才能說
+    # 「飛的是 X（路徑已刪除）」而不是什麼都說不出來。
+    await pool.execute(
+        "ALTER TABLE flight_sessions ADD COLUMN IF NOT EXISTS mission_name TEXT")
+    await pool.execute("""
+        UPDATE flight_sessions fs SET mission_name = m.name
+        FROM missions m WHERE m.id = fs.mission_id AND fs.mission_name IS NULL""")
+    # 兩處外鍵原為 NO ACTION：刪「被編隊引用過的路徑」會 FK 違反丟 500（實測復現），
+    # 與「飛過的路徑可以刪」的定案直接衝突。改 SET NULL 讓它真的刪得掉。
+    for tbl, col in (("group_assignments", "mission_id"),
+                     ("mission_groups", "base_mission_id")):
+        await pool.execute(f"""
+            DO $$ BEGIN
+              IF EXISTS (SELECT 1 FROM pg_constraint
+                         WHERE conname = '{tbl}_{col}_fkey' AND confdeltype <> 'n') THEN
+                ALTER TABLE {tbl} DROP CONSTRAINT {tbl}_{col}_fkey;
+                ALTER TABLE {tbl} ADD CONSTRAINT {tbl}_{col}_fkey
+                  FOREIGN KEY ({col}) REFERENCES missions(id) ON DELETE SET NULL;
+              END IF;
+            END $$;""")
+    # 三個死欄位（從建表至今從未被寫入或讀取；遷移前以資料驗證過全為預設/NULL）。
+    # 它們是照「任務規劃工具」設計的，但本專案刻意不做規劃（規劃留 QGC）。
+    # drone_id 的唯一用途（刪機時清 NULL）已同批從 api.py 移除。
+    for col in ("status", "geometry", "drone_id"):
+        await pool.execute(f"ALTER TABLE missions DROP COLUMN IF EXISTS {col}")
 
 
 async def drone_for_sysid(sysid: int) -> tuple[str, str]:
@@ -182,18 +252,29 @@ async def create_session(drone_id: str, link_mission: bool = True,
     # 前向 origin 標記：該機 sysid 近 60s 有測試類 client（rig/test/acceptance）的
     # command_log → 'test'；否則 NULL（＝unknown，可由 backfill 再判）。用 command_log
     # 相關性、不做跨服務 drone 欄位 plumbing（會 racy）。與 backfill 同一判準。
+    # mission_name 快照（023）：路徑可被刪除（FK 是 SET NULL），但「飛行紀錄要
+    # 永遠存在」——留一份當下的名字，刪掉路徑後回放頁仍能說「飛的是 X（路徑已
+    # 刪除）」而不是一片空白。用 CTE 解一次 mission_id 再取名，避免把上面那串
+    # COALESCE 抄第二遍（抄兩遍遲早會分岔）。
     row = await pool.fetchrow(
-        """INSERT INTO flight_sessions (drone_id, started_at, mission_id, origin)
-           VALUES ($1, now(), COALESCE(
-                   $3::uuid,
-                   (SELECT current_mission_id FROM drones WHERE id = $1),
-                   CASE WHEN $2 THEN (SELECT id FROM missions WHERE is_active LIMIT 1) END),
-                   (CASE WHEN EXISTS (
+        """WITH resolved AS (
+             SELECT COALESCE(
+               $3::uuid,
+               (SELECT current_mission_id FROM drones WHERE id = $1),
+               CASE WHEN $2 THEN (SELECT id FROM missions WHERE is_active LIMIT 1) END
+             ) AS mid
+           )
+           INSERT INTO flight_sessions
+             (drone_id, started_at, mission_id, mission_name, origin)
+           SELECT $1, now(), r.mid,
+                  (SELECT name FROM missions WHERE id = r.mid),
+                  (CASE WHEN EXISTS (
                        SELECT 1 FROM command_log c
                        WHERE c.sysid = (SELECT mav_sysid FROM drones WHERE id = $1)
                          AND c.client ~* '(rig|test|acceptance)'
                          AND c.time > now() - interval '60 seconds'
-                   ) THEN 'test' END))
+                   ) THEN 'test' END)
+           FROM resolved r
            RETURNING id""",
         drone_id, link_mission, mission_id,
     )

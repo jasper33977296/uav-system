@@ -502,7 +502,8 @@ async def _store_plan(name: str, wps: list[dict]) -> str:
     async with pool.acquire() as con:
         async with con.transaction():
             row = await con.fetchrow(
-                "INSERT INTO missions (name, created_by) VALUES ($1, 'plan-file') RETURNING id",
+                "INSERT INTO missions (name, created_by, kind) "
+                "VALUES ($1, 'plan-file', 'imported') RETURNING id",
                 name)
             await con.executemany(
                 "INSERT INTO waypoints (mission_id, seq, lat, lon, alt, action, params) "

@@ -121,11 +121,9 @@ async def delete_drone(drone_id: str):
             for table in ("telemetry", "link_metrics", "events", "flight_sessions"):
                 r = await con.execute(f"DELETE FROM {table} WHERE drone_id = $1", drone_id)
                 counts[table] = int(r.split()[-1])
-            # 任務不陪葬：路徑不綁機（issue 010），只解除關聯。
-            # 不處理會踩 missions.drone_id 的 FK → 整筆交易 500。
-            r = await con.execute(
-                "UPDATE missions SET drone_id = NULL WHERE drone_id = $1", drone_id)
-            counts["missions_unlinked"] = int(r.split()[-1])
+            # 路徑不陪葬：missions 是「路徑快照」不綁機（issues/010、023）。
+            # 原本這裡要把 missions.drone_id 清 NULL 才不會踩 FK——該欄已於 023
+            # 移除（從建表至今無人寫入，唯一用途就是這行），故不再需要。
             r = await con.execute("DELETE FROM drones WHERE id = $1", drone_id)
     if r.split()[-1] == "0":
         raise HTTPException(404, "無此無人機")
@@ -354,6 +352,43 @@ async def delete_session(session_id: str):
     return {"deleted": counts}
 
 
+@router.get("/sessions/{session_id}/video")
+async def session_video(session_id: str):
+    """該架次的影像片段與狀態（契約見 doc/flight-video-design.md §8b）。
+
+    retention_days 動態帶出——事實源是 .env 的 VIDEO_RETENTION_DAYS，同一個
+    變數也餵給錄製器清檔，所以 UI 顯示的天數不可能與實際清檔行為不一致。
+    """
+    from . import video_rec
+    r = await video_rec.session_video(session_id)
+    if not r:
+        raise HTTPException(404, "無此航線")
+    return r
+
+
+@router.get("/video/segments/{segment_id}/file")
+async def video_segment_file(segment_id: str):
+    """單段影片檔（同源直供，前端免 CORS）。
+
+    影片檔不轉碼——原樣就是機上送來的樣子，畫質劣化是研究證據不是瑕疵。
+    """
+    from fastapi.responses import FileResponse
+    import os
+    row = await db.pool.fetchrow(
+        "SELECT path, started_at FROM video_segments WHERE id = $1", segment_id)
+    if row is None:
+        raise HTTPException(404, "無此影片片段")
+    # 片段檔名＝錄製器以段起始時間命名（見設計 §4：檔名只是線索，錨點在 DB）
+    d = os.path.join(settings.video_rec_dir, row["path"])
+    if not os.path.isdir(d):
+        raise HTTPException(410, "影像已不存在（可能已過保留期清除）")
+    stamp = row["started_at"].strftime("%Y-%m-%d_%H-%M-%S")
+    for name in sorted(os.listdir(d)):
+        if name.startswith(stamp) and name.endswith(".mp4"):
+            return FileResponse(os.path.join(d, name), media_type="video/mp4")
+    raise HTTPException(410, "影像已不存在（可能已過保留期清除）")
+
+
 @router.get("/events")
 async def list_events(limit: int = 100, session_id: str | None = None):
     if session_id:
@@ -427,8 +462,9 @@ async def _store_mission(name: str, source: str, wps: list[dict]) -> str:
     async with db.pool.acquire() as con:
         async with con.transaction():
             row = await con.fetchrow(
-                "INSERT INTO missions (name, created_by) VALUES ($1, $2) RETURNING id",
-                name, source)
+                "INSERT INTO missions (name, created_by, kind) "
+                "VALUES ($1, $2, $3) RETURNING id",
+                name, source, "from-vehicle" if source == "vehicle" else "imported")
             await con.executemany(
                 """INSERT INTO waypoints (mission_id, seq, lat, lon, alt, action, params)
                    VALUES ($1, $2, $3, $4, $5, $6, $7)""",
@@ -449,7 +485,7 @@ async def list_missions():
         SELECT m.id, m.name, m.created_by AS source, m.created_at, m.is_active,
                count(w.seq) AS waypoint_count
         FROM missions m LEFT JOIN waypoints w ON w.mission_id = m.id
-        WHERE m.created_by IS DISTINCT FROM 'group-gen'
+        WHERE m.kind IS DISTINCT FROM 'generated'
         GROUP BY m.id ORDER BY m.created_at DESC""")
     return [dict(r) for r in rows]
 
