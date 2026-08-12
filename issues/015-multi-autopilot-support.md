@@ -96,3 +96,30 @@ None——加上它不回報 PREARM 位，readiness 就永遠判不出來。補�
 PM 判準：**「驗證過」要指「整條路徑可用」，不是「這三個指令會被 ACK」**。
 順序：`REQUEST_DATA_STREAM`（✅ 已修）→ **ArduPilot 任務上傳修正（未做）** →
 重跑驗收 → 才逐鍵開 `rtl`／`hold`／`land`。
+
+
+## 2026-08-12 收盤狀態
+
+**ArduPilot 能力：7 項 ok**（`mission_upload`／`hold`／`rtl`／`land`／`arm`／
+`takeoff`／`manual`），皆為 SITL 實測驗過：
+- 三個模式讀回 HEARTBEAT 確認 `mode_engaged=True`（不只 ACK）
+- 起飛 GUIDED→arm→NAV_TAKEOFF 實測爬到 15.0m（相對高度語意正確）
+- `manual` 走**事前讀 `SYSID_MYGCS`**（見下），非人工判定
+
+**維持 unverified**：`mission_start`／`mission_fly`——AUTO 任務執行整段尚未驗。
+
+**混機編隊**：ArduPilot 的 arm 已開，但編隊執行序列第 3 步要切 MISSION、
+會用到 `mission_start`，**所以必須先驗 mission_start 才跑得動混機編隊**。
+
+### `manual` 的解法可能是「機端前提」類問題的通用解
+
+ArduPilot 只接受 `SYSID_MYGCS` 指定來源的 MANUAL_CONTROL，不符**靜默丟棄**；
+而 `MANUAL_CONTROL` 沒有 ACK，事後完全偵測不到。原本要標「受限」，但那承諾了
+我們兌現不了的失敗偵測。改為**連上時讀回該參數**（每 30 秒重讀）：等於 254 就開
+`ok`，不等於就鎖住並在 reason 給出**現值與該改成什麼**。
+
+已升為 ui-spec §0.2c 條款 6：**前提可事前查證時，就不要讓使用者用失敗去發現它。**
+
+⚠️ **注意目前 SITL 的 `SYSID_MYGCS` 已被我改成 254**（為了驗證正向路徑），
+所以現在看到 `manual=ok` 反映的是**被修改過的 SITL**，不是 ArduPilot 出廠預設
+（預設是 255＝鎖住）。真機接入時仍須依部署文件設定該參數。
