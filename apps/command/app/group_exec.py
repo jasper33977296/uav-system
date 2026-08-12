@@ -67,7 +67,7 @@ class GroupExecutor:
         if time.monotonic() - d.get("seen_mono", 0) > _FRESH_S:
             return {"reason": f"sysid {sysid} 心跳逾時 >{_FRESH_S:.0f}s（可能失聯）"}
         ap = caps.autopilot_name(d.get("autopilot"))
-        cap, reasons = caps.capabilities_for(ap)
+        cap, reasons = caps.capabilities_for(ap, d)
         for key in _REQUIRED_CAPS:
             if cap.get(key) != "ok":
                 return {"reason": f"{key} 能力={cap.get(key)}", "autopilot": ap,

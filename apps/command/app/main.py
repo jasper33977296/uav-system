@@ -88,7 +88,7 @@ def _require_capability(sysid: int, endpoint_key: str):
         raise HTTPException(409, f"sysid {sysid} 未連線（心跳未見）")
     ap = mav.caps.autopilot_name(router.autopilot_of(sysid))
     cap_key = mav.caps.ENDPOINT_CAP.get(endpoint_key, endpoint_key)
-    cap, reasons = mav.caps.capabilities_for(ap)
+    cap, reasons = mav.caps.capabilities_for(ap, (router.drones.get(sysid) or {}))
     state = cap.get(cap_key, "unsupported")
     if state != "ok":
         raise HTTPException(501, {

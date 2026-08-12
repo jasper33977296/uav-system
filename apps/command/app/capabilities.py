@@ -17,6 +17,7 @@ NAV_LOITER_UNLIM）在某機型 SITL 驗過，就把該機的 rtl/hold 開 "ok"�
 CAP_KEYS = ["arm", "takeoff", "land", "rtl", "hold",
             "mission_upload", "mission_start", "mission_fly", "manual"]
 
+GCS_SYSID = 254            # 與 mav.GCS_SYSID 一致（ArduPilot 的 SYSID_MYGCS 要等於它）
 AUTOPILOT_NAMES = {12: "px4", 3: "ardupilot"}   # MAV_AUTOPILOT_PX4 / _ARDUPILOTMEGA
 
 
@@ -24,8 +25,13 @@ def autopilot_name(raw) -> str:
     return AUTOPILOT_NAMES.get(raw, "unknown")
 
 
-def capabilities_for(ap_name: str):
-    """回傳 (capabilities dict, reasons dict)。reasons 只含非 ok 的鍵。"""
+def capabilities_for(ap_name: str, ctx: dict | None = None):
+    """回傳 (capabilities dict, reasons dict)。reasons 只含非 ok 的鍵。
+
+    `ctx`＝該機的 router 狀態（可含 `sysid_mygcs`）。**前提可事前查證時就查**
+    ——不要讓使用者按下按鈕、等一個永遠不會有的回應才發現前提沒滿足
+    （ui-spec §0.2c 條款 6）。
+    """
     if ap_name == "px4":
         return {k: "ok" for k in CAP_KEYS}, {}
     if ap_name == "ardupilot":
@@ -47,7 +53,20 @@ def capabilities_for(ap_name: str):
         #   manual：卡在機端 SYSID_MYGCS（我方 254 vs 預設 255），且 MANUAL_CONTROL
         #     沒有 ACK——能不能偵測失敗待設計師定案（見 issue 015）
         #   mission_start/mission_fly：任務執行整段尚未驗（AUTO 模式起跑行為未測）
-        reasons["manual"] = "需機端設定 SYSID_MYGCS=254，且我方無法確認是否已設（issue 015）"
+        # manual：ArduPilot 只接受 SYSID_MYGCS 指定來源的 MANUAL_CONTROL，
+        # 不符就靜默丟棄（無 ACK、事後偵測不到）。**連上時讀回該參數**，用具體
+        # 事實決定開不開，並在 reason 給出現值與該改成什麼。
+        mygcs = (ctx or {}).get("sysid_mygcs")
+        if mygcs is None:
+            reasons["manual"] = ("尚未讀到機端 SYSID_MYGCS（剛連上或參數讀取中）"
+                                 "——搖桿需該值等於 254")
+        elif int(mygcs) == GCS_SYSID:
+            caps["manual"] = "ok"
+            reasons.pop("manual", None)
+        else:
+            reasons["manual"] = (
+                f"機端 SYSID_MYGCS={int(mygcs)}，需改為 {GCS_SYSID} 才會接受本系統的"
+                "搖桿指令（不改的話指令會被靜默丟棄、沒有任何錯誤訊息）")
         return caps, reasons
     r = "非 MAVLink 或未知自駕儀，不支援指令"
     return {k: "unsupported" for k in CAP_KEYS}, {k: r for k in CAP_KEYS}

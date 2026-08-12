@@ -29,6 +29,7 @@ from . import capabilities as caps
 log = logging.getLogger("command.mav")
 M = mavutil.mavlink
 GCS_SYSID = 254
+MYGCS_REREAD_S = 30.0   # SYSID_MYGCS 重讀間隔（見 _recv：使用者改了要看得到）
 
 # MAV_TYPE → 粗略載具類別（選配，前端徽章分 ArduCopter/ArduPlane 用）
 _VEHICLE_TYPES = {2: "quadrotor", 13: "hexarotor", 14: "octorotor",
@@ -138,7 +139,7 @@ class MavRouter(threading.Thread):
         out = {}
         for sysid, d in self.drones.items():
             ap = caps.autopilot_name(d.get("autopilot"))
-            cap, reasons = caps.capabilities_for(ap)
+            cap, reasons = caps.capabilities_for(ap, d)
             out[str(sysid)] = {
                 "age_s": round(now - d.get("seen_mono", now), 1),
                 "armed": d.get("armed"),
@@ -256,10 +257,31 @@ class MavRouter(threading.Thread):
                     d["custom_mode"] = msg.custom_mode
                     d["autopilot"] = msg.autopilot   # 飛安：模式指令方言分家
                     d["type"] = msg.type             # （issue 015／gap-analysis.md）
+                    # **前提可事前查證時，就不要讓使用者用失敗去發現它**
+                    # （ui-spec §0.2c 條款 6）。ArduPilot 只信 SYSID_MYGCS 指定
+                    # 來源的 MANUAL_CONTROL，不符就**靜默丟棄**——而 MANUAL_CONTROL
+                    # 沒有 ACK，事後完全偵測不到。所以連上時直接把該參數讀回來，
+                    # 用「機端目前是 N、需改成 254」這種可行動的事實取代靜默失敗。
+                    # **定期重讀，不是讀到就不再問**：我們在 reason 裡叫使用者去改
+                    # 這個參數；只讀一次的話，他照做之後我方永遠不知道——按鈕繼續
+                    # 鎖著、訊息還在說「目前是 255」。那比不給提示更糟：告訴人去做，
+                    # 又無視他做了。（2026-08-12 反向驗證抓到：設成 254 後仍顯示 255。）
+                    if (caps.autopilot_name(msg.autopilot) == "ardupilot"
+                            and time.monotonic() - d.get("mygcs_req_t", 0) > MYGCS_REREAD_S):
+                        d["mygcs_req_t"] = time.monotonic()
+                        for pname in (b"SYSID_MYGCS", b"MAV_GCS_SYSID"):
+                            try:      # 新舊韌體參數改過名，兩個都問
+                                self._sendto(sysid, lambda m, pn=pname:
+                                             m.param_request_read_encode(sysid, 1, pn, -1))
+                            except CommandError:
+                                pass
                 elif msg.get_type() == "GLOBAL_POSITION_INT":
                     # per-sysid 相對高度——群組執行器「等到達高度才切 MISSION」的
                     # 依據（issue 013-B；單機 mission_fly 教訓的多機版，不靠 backend）
                     d["alt_rel"] = msg.relative_alt / 1000.0
+                elif msg.get_type() == "PARAM_VALUE":
+                    if msg.param_id in ("SYSID_MYGCS", "MAV_GCS_SYSID"):
+                        d["sysid_mygcs"] = int(msg.param_value)
                 elif msg.get_type() == "STATUSTEXT":
                     # PX4 的解釋（"Arming denied: ..."）——被拒時要能拿出來給人看。
                     # 實戰教訓：沒有這段文字，操作員只看到 result code 乾瞪眼
