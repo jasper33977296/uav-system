@@ -29,8 +29,14 @@ def capabilities_for(ap_name: str):
     if ap_name == "px4":
         return {k: "ok" for k in CAP_KEYS}, {}
     if ap_name == "ardupilot":
+        # 015 驗收進行中：**逐鍵開**，不整組開。只有實際驗過的鍵才是 ok。
         r = "ArduPilot 方言未經 SITL 驗證，僅觀察（見 issue 015）"
-        return {k: "unverified" for k in CAP_KEYS}, {k: r for k in CAP_KEYS}
+        caps = {k: "unverified" for k in CAP_KEYS}
+        reasons = {k: r for k in CAP_KEYS}
+        # mission_upload：方言分支（home 佔 seq 0）已實作並以 SITL 驗證
+        caps["mission_upload"] = "ok"
+        reasons.pop("mission_upload", None)
+        return caps, reasons
     r = "非 MAVLink 或未知自駕儀，不支援指令"
     return {k: "unsupported" for k in CAP_KEYS}, {k: r for k in CAP_KEYS}
 

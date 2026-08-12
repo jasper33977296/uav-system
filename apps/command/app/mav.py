@@ -334,6 +334,21 @@ def job_set_mode(r: MavRouter, sysid: int, mode: str,
         f"檢查前置條件/狀態）｜autopilot_notes={r.texts_since(sysid, time.monotonic() - 5)}")
 
 
+# ── 任務方言（issue 015 實測；issue 026 抽驅動時從這裡提取）──────────────
+# **本檔的方言分支集中在這一處**，不要散落到各 job_* 裡——之後把廠牌差異收進
+# 獨立驅動時，要能「把這一段提取出來」而不是全域搜捕。
+def mission_dialect(r: "MavRouter", sysid: int) -> dict:
+    """回傳該機的任務方言參數。
+
+    `home_at_seq0`：ArduPilot 把 **home 當 seq 0**，真航點從 seq 1 起。實測
+    （2026-08-12 ArduCopter SITL）：直接送 0..N-1 的話，**第一個航點會被 home
+    覆蓋而消失**，且回讀筆數相同（3 送 3 回）——靠比對筆數抓不到，只有逐項
+    比座標才會發現（現行回讀比對確實會 raise，所以症狀是上傳失敗而非靜默吃掉）。
+    """
+    ap = caps.autopilot_name((r.drones.get(sysid) or {}).get("autopilot"))
+    return {"home_at_seq0": ap == "ardupilot", "autopilot": ap}
+
+
 def job_upload_mission(r: MavRouter, sysid: int, items: list) -> dict:
     """完整上傳握手 → 機端 ACK → 回讀逐項比對 → 收 PX4 廣播的驗證訊息。
 
@@ -342,8 +357,19 @@ def job_upload_mission(r: MavRouter, sysid: int, items: list) -> dict:
     - 項目遺失由機端重複請求同 seq 自然補（協定內建），總期限 30 秒
     - 回讀的 REQUEST_LIST 重試 3 次、逐項重試 2 次
     """
-    n = len(items)
     mt = M.MAV_MISSION_TYPE_MISSION
+    d = mission_dialect(r, sysid)
+    # ArduPilot：seq 0 留給 home，真航點往後移一格（line[i] 是要送給機上的第 i 項）。
+    # 佔位用第一個航點的座標而不是 0,0,0——實測 ArduPilot 會用實際 home 覆蓋它，
+    # 但萬一某版本沒覆蓋，一個「任務起點附近」的 home 遠比 (0,0,0) 安全。
+    if d["home_at_seq0"] and items:
+        f = items[0]
+        home = {**f, "seq": 0, "command": M.MAV_CMD_NAV_WAYPOINT,
+                "frame": M.MAV_FRAME_GLOBAL, "p1": 0, "p2": 0, "p3": 0, "p4": 0}
+        line = [home] + [{**it, "seq": i + 1} for i, it in enumerate(items)]
+    else:
+        line = items
+    n = len(line)
     r._sendto(sysid, lambda m: m.mission_count_encode(sysid, 1, n, mt))
     last_count_tx = time.monotonic()
     handshake_started = False
@@ -362,7 +388,7 @@ def job_upload_mission(r: MavRouter, sysid: int, items: list) -> dict:
             ack = msg
             break
         handshake_started = True
-        it = items[msg.seq]
+        it = line[msg.seq]
         r._sendto(sysid, lambda m, it=it: m.mission_item_int_encode(
             sysid, 1, it["seq"], it["frame"], it["command"], 0, 1,
             it["p1"], it["p2"], it["p3"], it["p4"], it["x"], it["y"], it["z"], mt))
@@ -381,7 +407,11 @@ def job_upload_mission(r: MavRouter, sysid: int, items: list) -> dict:
             break
     if cnt is None or cnt.count != n:
         raise CommandError(f"回讀筆數不符：機上 {getattr(cnt, 'count', '無回應')}，預期 {n}")
-    for seq in range(n):
+    # 逐項比座標（不是只比筆數）——這個檢查是唯一會發現「機上內容跟我們以為的
+    # 不一樣」的東西。ArduPilot 的 seq 0 是機端自己的 home，內容本來就不等於我們
+    # 送的佔位值，**跳過它的內容比對**但仍要求它存在（筆數已含）。
+    skip = 1 if d["home_at_seq0"] else 0
+    for seq in range(skip, n):
         it = None
         for _ in range(2):
             r._sendto(sysid, lambda m, s=seq: m.mission_request_int_encode(sysid, 1, s, mt))
@@ -390,7 +420,7 @@ def job_upload_mission(r: MavRouter, sysid: int, items: list) -> dict:
                 break
         if it is None:
             raise CommandError(f"回讀第 {seq} 項逾時")
-        o = items[seq]
+        o = line[seq]
         if (it.command != o["command"] or abs(it.x - o["x"]) > 2
                 or abs(it.y - o["y"]) > 2 or abs(it.z - o["z"]) > 0.5):
             raise CommandError(f"回讀比對不符（seq {seq}）：機上內容與上傳不一致")
@@ -404,4 +434,7 @@ def job_upload_mission(r: MavRouter, sysid: int, items: list) -> dict:
         s = r._wait(sysid, ("STATUSTEXT",), timeout=0.5)
         if s is not None:
             notes.append(s.text.strip())
-    return {"uploaded": n, "verified": True, "autopilot_notes": notes}
+    # uploaded 回報**真航點數**（不含 ArduPilot 的 home 佔位），否則呼叫端與
+    # UI 會看到莫名多一項
+    return {"uploaded": len(items), "verified": True,
+            "autopilot_notes": notes, "wire_items": n}
