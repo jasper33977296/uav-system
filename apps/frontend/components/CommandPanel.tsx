@@ -341,9 +341,16 @@ export default function CommandPanel() {
   // 前後端可獨立部署）；不在 healthz.drones 的機（無心跳）面板本來就不出現
   const caps = dh?.capabilities ?? null;
   const capState = (k: CapKey): CapState => (caps ? caps[k] ?? "unsupported" : "ok");
-  const capReason = (k: CapKey) =>
-    dh?.capability_reasons?.[k] ??
-    (capState(k) === "unverified" ? "本機型尚未驗證" : "本機型不支援");
+  // 原因句只對「認得的態」下斷言：後端日後新增態（例如「受限」——需機端
+  // 設定才可用）時，不可沿用「本機型不支援」——那是把「有條件可用」說成
+  // 「做不到」。未知態一律走中性句，鎖定行為照舊（安全方向）。
+  const capReason = (k: CapKey) => {
+    const st = capState(k);
+    return dh?.capability_reasons?.[k]
+      ?? (st === "unverified" ? "本機型尚未驗證"
+        : st === "unsupported" ? "本機型不支援"
+        : "此能力目前不可用");
+  };
   // 僅觀察＝零 action 可用：整個指令區換成鎖定橫幅（含緊急鈕，PM 定案——
   // 會誤觸危險模式的 RTL 比沒有 RTL 更危險）
   const observeOnly = caps !== null && CAP_KEYS.every((k) => capState(k) !== "ok");
