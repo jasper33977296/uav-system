@@ -85,6 +85,22 @@ class ArduPilotDriver:
             return "—"
         return _COPTER.get(custom_mode, f"MODE_{custom_mode}")
 
+    def decode_verb(self, custom_mode: int) -> str | None:
+        """custom_mode → **廠牌無關的動詞**（hold／mission／rtl／land／position）。
+
+        顯示層仍用原廠模式名（那是機端真的在跑的東西，不翻譯）；本方法補的是
+        **語意層**，讓 UI 與 MCP 能問「這台在不在 hold」而不必知道 PX4 叫 HOLD、
+        ArduPilot 叫 LOITER（UI/UX 2026-08-12 要求）。
+
+        用 `mode_matches` 反查而不是另外維護一份反向表——兩份表一定會漂移。
+        """
+        if not custom_mode:
+            return None
+        for verb in self.modes:
+            if self.mode_matches(custom_mode, verb):
+                return verb
+        return None
+
     def encode_mode(self, mode: str) -> tuple[int, int]:
         return (MODES[mode], 0)
 

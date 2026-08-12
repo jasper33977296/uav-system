@@ -42,7 +42,8 @@ class LiveState:
     battery_voltage: float | None = None
     gps_fix: int | None = None
     satellites: int | None = None
-    flight_mode: str | None = None
+    flight_mode: str | None = None        # 機端原廠模式名（不翻譯）
+    mode_verb: str | None = None          # 廠牌無關語意（hold/mission/rtl/land/position）
     mode_pending: str | None = None    # mode_change 防抖候選（連續 2 次才算，見 mavlink_rx）
     armed: bool = False
 
@@ -168,6 +169,9 @@ class LiveState:
             "battery_voltage": self.battery_voltage,
             "gps_fix": self.gps_fix, "satellites": self.satellites,
             "flight_mode": self.flight_mode, "armed": self.armed,
+            # 顯示用 flight_mode（原廠名），判斷/分組用 mode_verb——PX4 的 HOLD
+            # 與 ArduPilot 的 LOITER 是同一件事，前端不該靠比字串知道這件事
+            "mode_verb": self.mode_verb,
             "link": self.link,
             # 錄影現況（022 §2.9 記錄燈說明用）：無進行中架次＝None
             "video_mode": self.video_mode,

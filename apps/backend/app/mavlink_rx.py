@@ -286,6 +286,7 @@ class MavlinkRx:
             st.autopilot_raw = msg.autopilot        # 方言分表解碼與 UI 徽章用
             st.vehicle_type_raw = msg.type
             mode = dialect.mode_name(msg.custom_mode, msg.autopilot)
+            st.mode_verb = dialect.mode_verb(msg.custom_mode, msg.autopilot)
             # 防抖（同 cell_change 的 2-連續紀律）：撞號多來源會讓同 sysid 的模式
             # 每顆心跳在多值間翻打，噴 15/秒 mode_change 灌爆事件流（2026-08-11 事故）。
             # 新模式**連續 2 次**才提交＋發事件——翻打源每次都不同、永遠湊不齊 2 次→不噴；

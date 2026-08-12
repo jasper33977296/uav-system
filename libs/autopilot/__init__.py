@@ -55,6 +55,9 @@ class UnknownDriver:
         # 既有行為：unknown 暫按 PX4 解（B2 是搬遷，不改行為）
         return self._px4.decode_mode(custom_mode)
 
+    def decode_verb(self, custom_mode: int) -> str | None:
+        return None                 # 不知道它的模式表，就不假裝解得出語意
+
     def encode_mode(self, mode: str):
         raise KeyError(f"未知自駕儀，無法編碼模式 {mode!r}")
 

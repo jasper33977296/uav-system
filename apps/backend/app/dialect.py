@@ -39,6 +39,11 @@ def mode_name(custom_mode: int, autopilot_raw=None) -> str:
     return get_driver(autopilot_raw).decode_mode(custom_mode)
 
 
+def mode_verb(custom_mode: int, autopilot_raw=None) -> str | None:
+    """廠牌無關的模式語意（見驅動的 decode_verb）。"""
+    return get_driver(autopilot_raw).decode_verb(custom_mode)
+
+
 def needs_stream_request(autopilot_raw) -> bool:
     return bool(get_driver(autopilot_raw).on_connect())
 
