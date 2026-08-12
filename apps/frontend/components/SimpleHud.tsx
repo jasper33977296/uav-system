@@ -158,6 +158,12 @@ export default function SimpleHud() {
   // failsafe：最近 30s 內的 critical failsafe 事件（自動處置進行中）
   const fsEvent = events.find((e) => e.severity === "critical" && /failsafe/i.test(e.type));
   const fsActive = !!fsEvent && Date.now() - new Date(fsEvent.time).getTime() < 30000;
+  // §2.9 影像錄製中斷：後端 warn 事件（暫定 type video_recording_*）——
+  // 錄影是附屬功能，句子必須明說主資料沒事，避免使用者誤以為飛行紀錄毀了
+  const vidFail = events.find((e) => /^video_recording/i.test(e.type)
+    && e.severity === "warning");
+  const vidFailActive = !!vidFail
+    && Date.now() - new Date(vidFail.time).getTime() < 30000;
 
   // 候選句（優先序）：key 用於「同一事件只通知一次」——條件解除後
   // key 歸零，下次再發生才會再跳
@@ -176,6 +182,9 @@ export default function SimpleHud() {
     : now - takeoffDeniedAt < 10000
       ? { key: `takeoff:${takeoffDeniedAt}`, t: "現在還不能起飛——點這裡看原因",
           sev: "warn" as const, expand: true }
+    : vidFailActive
+      ? { key: `vid:${vidFail!.id}`, t: "影像錄製中斷——遙測與紀錄不受影響",
+          sev: "warn" as const }
     : ageStale
       ? { key: "stale", t: "資料延遲——畫面可能不是最新", sev: "warn" as const }
     : gpsBad

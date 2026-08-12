@@ -20,6 +20,11 @@ export function evText(
     // ×N 折疊計數由事件卡的列尾徽章呈現，不進文字
     case "statustext":
       return `${d.text ?? ""}`;
+    // 影像錄製（022 §2.9）：錄影是附屬功能，句子明說主資料不受影響
+    case "video_recording_failed":
+    case "video_recording_interrupted":
+      return `影像錄製中斷${d.reason ? `（${d.reason}）` : ""}——遙測與紀錄不受影響`;
+    case "video_recording_resumed": return "影像錄製已恢復";
     case "link_degraded": return `訊號劣化 · ${sinr}`;
     case "link_lost":     return `訊號瀕斷 · ${sinr}`;
     case "link_recovered":return `訊號恢復 · ${sinr}`;

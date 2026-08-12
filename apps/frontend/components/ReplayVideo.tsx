@@ -16,6 +16,7 @@ export interface VideoSeg {
   id: string; url: string;
   started_at: string;                       // 該段第 0 秒的絕對時間（錨點）
   duration_s: number;
+  final?: boolean;                          // false＝長度未定案（仍在處理中）
   codec?: string | null; width?: number | null;   // Phase 2/3 才有值——
   height?: number | null; fps?: number | null;    // null 不畫、不用來源設定值填充
   bytes?: number | null;
@@ -88,6 +89,16 @@ export default function ReplayVideo({ video, rows, tCurMs, playing, speed,
     return tCurMs >= s && tCurMs < s + g.duration_s * 1000;
   }), [video.segments, tCurMs]);
 
+  // §5.4 final=false：長度未定案期間，「還沒算完」與「真的沒錄到」在資料上
+  // 無法區分——不可說故障（錄製中斷）也不可說空（無影像），走中性句
+  const processing = useMemo(() => {
+    if (seg) return false;
+    return video.segments.some((g) => {
+      const s = new Date(g.started_at).getTime();
+      return g.final === false && tCurMs >= s + g.duration_s * 1000;
+    });
+  }, [video.segments, tCurMs, seg]);
+
   // 同步引擎：時間軸→影片（seek＝絕對時刻−段錨點；漂移 >0.35s 校正）
   useEffect(() => {
     const v = videoRef.current;
@@ -143,6 +154,9 @@ export default function ReplayVideo({ video, rows, tCurMs, playing, speed,
         <video ref={videoRef} key={seg.id}
           src={seg.url.startsWith("http") ? seg.url : `${API}${seg.url}`}
           muted playsInline preload="auto" />
+      ) : processing ? (
+        // 長度未定案：不猜、但也不把未知說成故障（§5.4 中性句）
+        <div className="vid-gap vid-proc">影像處理中</div>
       ) : (
         // 涵蓋帶缺口＝真空白：不拼接、不定格假裝連續（§5.4 硬約束成對）
         <div className="vid-gap">此時段無影像（錄製中斷）</div>

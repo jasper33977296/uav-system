@@ -135,6 +135,14 @@ export default function Replay() {
     fetch(`${API}/api/sessions/${sessionId}/video`)
       .then((r) => (r.ok ? r.json() : null))
       .then(setVideo).catch(() => {});
+    // 段長未定案（final=false）→ 定期回抓，定案後涵蓋帶依實際長度重畫
+    const poll = setInterval(async () => {
+      const v: SessionVideo | null = await fetch(`${API}/api/sessions/${sessionId}/video`)
+        .then((r) => (r.ok ? r.json() : null)).catch(() => null);
+      if (!v) return;
+      setVideo(v);
+      if (v.segments.every((g) => g.final !== false)) clearInterval(poll);
+    }, 5000);
     fetch(`${API}/api/events?session_id=${sessionId}`)
       .then((r) => r.json())
       // REST 的 detail 是 JSONB 字串——解析成物件（modal 細節層要用）
@@ -143,6 +151,7 @@ export default function Replay() {
         detail: typeof e.detail === "string" ? JSON.parse(e.detail) : e.detail ?? {},
       }))))
       .catch(() => {});
+    return () => clearInterval(poll);
   }, [sessionId]);
 
   const [t0, t1] = useMemo(() => {
@@ -312,10 +321,20 @@ export default function Replay() {
                 <span className="vid-cover">
                   {video.segments.map((g) => {
                     const s = new Date(g.started_at).getTime();
-                    const L = Math.max(0, ((s - t0) / (t1 - t0 || 1)) * 100);
-                    const R = Math.min(100, ((s + g.duration_s * 1000 - t0) / (t1 - t0 || 1)) * 100);
+                    const e = s + g.duration_s * 1000;
+                    const pct = (t: number) => ((t - t0) / (t1 - t0 || 1)) * 100;
+                    const L = Math.max(0, pct(s));
+                    const R = Math.min(100, pct(e));
                     if (R <= 0 || L >= 100) return null;
-                    return <span key={g.id} style={{ left: `${L}%`, width: `${R - L}%` }} />;
+                    return (<span key={g.id}>
+                      <span style={{ left: `${L}%`, width: `${R - L}%` }} />
+                      {/* final=false 尾端：長度未定案——不畫成缺口（那是斷言
+                          沒錄到），以處理中樣式延伸到軸末（§5.4） */}
+                      {g.final === false && R < 100 && (
+                        <span className="cov-proc"
+                          style={{ left: `${R}%`, width: `${100 - R}%` }} />
+                      )}
+                    </span>);
                   })}
                 </span>
               )}

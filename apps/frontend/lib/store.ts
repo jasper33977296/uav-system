@@ -48,6 +48,8 @@ export interface Telemetry {
   ekf_ok?: boolean | null;
   sensors_unhealthy?: string[];
   imu?: ImuData | null;              // IMU 卡（§2.6）；WS telemetry 整包透傳
+  // 影像錄製現況（§2.9；022 暫定契約形，欄位缺＝記錄燈維持原文案不宣告影像）
+  video_mode?: "on" | "off" | "no_source" | null;
   link: Partial<LinkMetrics>;
 }
 

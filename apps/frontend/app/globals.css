@@ -321,10 +321,17 @@ a:focus-visible, button:focus-visible, input:focus-visible, select:focus-visible
   position: absolute; left: 0; right: 0; bottom: -1px; height: 3px;
   pointer-events: none;
 }
-.vid-cover > span {
+.vid-cover span {
   position: absolute; top: 0; height: 100%; border-radius: 1px;
   background: var(--series-1);
 }
+/* 長度未定案（final=false）的尾段：既非有影像也非缺口——虛化條紋 */
+.vid-cover span.cov-proc {
+  background: repeating-linear-gradient(90deg,
+    var(--series-1) 0 3px, transparent 3px 7px);
+  opacity: 0.5;
+}
+.vid-proc { color: var(--muted); background: var(--surface-2); }
 
 /* ── 事件詳情 modal（ui-spec §2.7）────────────────────────────── */
 .ev-tap { cursor: pointer; }

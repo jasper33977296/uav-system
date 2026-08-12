@@ -33,6 +33,11 @@ export default function AppShell({ children }: { children: React.ReactNode }) {
   // 與 backend 的入庫條件一致（armed 且已建立架次，見 issues/004）——
   // 這顆 chip 的語意就是「現在寫進資料庫的資料存不存在」，不能只看 armed
   const recording = Boolean(live?.armed && live?.session_id);
+  // §2.9：錄影不加燈，只擴充記錄燈 title；video_mode 缺（後端未發）＝
+  // 維持原文案，不宣告不知道的事
+  const recTitle = !recording ? "待機（不記錄）"
+    : live?.video_mode === "on" ? "記錄中——遙測＋影像"
+    : "記錄中（armed 且入庫）";
 
   return (
     <div className="shell">
@@ -54,7 +59,7 @@ export default function AppShell({ children }: { children: React.ReactNode }) {
         <span className="spacer" />
         {/* 狀態燈只留記錄燈（ui-spec §1）：後端/資料流異常已由 toast 與
             HUD 失聯樣式涵蓋。記錄＝armed 且入庫（#004：待機刻意不入庫） */}
-        <span className="rec-light" title={recording ? "記錄中（armed 且入庫）" : "待機（不記錄）"}>
+        <span className="rec-light" title={recTitle}>
           <span className={`rec-dot ${recording ? "on" : ""}`} />
           <span className={`rec-txt ${recording ? "on" : ""}`}>
             {recording ? "記錄中" : "未記錄"}
