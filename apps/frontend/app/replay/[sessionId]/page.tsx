@@ -1,15 +1,19 @@
 "use client";
+import { IconLayer } from "@deck.gl/layers";
 import { MapboxOverlay } from "@deck.gl/mapbox";
 import maplibregl from "maplibre-gl";
 import "maplibre-gl/dist/maplibre-gl.css";
 import { useParams, useRouter } from "next/navigation";
 import { Fragment, useEffect, useMemo, useRef, useState } from "react";
 
-import { colorFor, createDroneLayer } from "@/components/droneLayer";
+import BasemapToggle from "@/components/BasemapToggle";
+import { colorFor } from "@/components/droneLayer";
 import EventModal from "@/components/EventModal";
 import ReplayVideo, { type SessionVideo } from "@/components/ReplayVideo";
 import { SignalBars } from "@/components/SimpleHud";
 import { routeLayer } from "@/lib/deckRoute";
+import { useBasemap } from "@/lib/basemap";
+import { DRONE_ICON_SIZE, droneIconUrl } from "@/lib/droneIcon";
 import { evText } from "@/lib/evtext";
 import { CANVAS, groundGrid, pathArrows, ribbon, trailLineString } from "@/lib/geo";
 import { API, classifySinr } from "@/lib/signal";
@@ -18,7 +22,9 @@ import { useUavStore } from "@/lib/store";
 interface LinkRow {
   time: string; lat: number | null; lon: number | null; alt_rel: number | null;
   sinr: number | null; rtt_ms: number | null;
+  heading?: number | null;   // 由同回應的 telemetry 陣列補（link 本身不帶）
 }
+interface TelRow { time: string; heading: number | null }
 interface Ev {
   id: number; time: string; severity: string; type: string;
   detail: Record<string, unknown>;
@@ -115,13 +121,37 @@ export default function Replay() {
   const [idx, setIdx] = useState(0);
   const mapRef = useRef<maplibregl.Map | null>(null);
   const containerRef = useRef<HTMLDivElement>(null);
-  const cursorRef = useRef<LinkRow | null>(null);
+  const ovRef = useRef<MapboxOverlay | null>(null);
+  // §2.4b：回放是研究判讀主場景，空間定位需求不低於即時頁——同款底圖切換
+  const base = useBasemap();
 
   useEffect(() => {
     fetch(`${API}/api/sessions/${sessionId}/track`)
       .then((r) => r.json())
       .then((d) => {
-        const link = (d.link ?? []).filter((r: LinkRow) => r.lat != null && r.lon != null);
+        // heading 住 telemetry 陣列、訊號住 link 陣列（同一回應的兩個序列，
+        // 筆數與時間幾乎一致但非保證），以最近時間配對補上——機體圖示的
+        // 朝向是真實記錄的資料，不因為是回放就降級成無朝向
+        const tel: TelRow[] = (d.telemetry ?? []).filter(
+          (t: TelRow) => t.heading != null);
+        const telT = tel.map((t) => new Date(t.time).getTime());
+        const nearestHdg = (iso: string): number | null => {
+          if (!tel.length) return null;
+          const t = new Date(iso).getTime();
+          let lo = 0, hi = telT.length - 1;
+          while (lo < hi) {
+            const mid = (lo + hi) >> 1;
+            if (telT[mid] < t) lo = mid + 1; else hi = mid;
+          }
+          const cand = [lo, lo - 1].filter((i) => i >= 0 && i < tel.length);
+          const best = cand.reduce((a, b) =>
+            Math.abs(telT[a] - t) <= Math.abs(telT[b] - t) ? a : b);
+          // 差距過大＝那段沒有姿態記錄，寧可不畫朝向也不用鄰近時刻頂替
+          return Math.abs(telT[best] - t) <= 2000 ? tel[best].heading : null;
+        };
+        const link = (d.link ?? [])
+          .filter((r: LinkRow) => r.lat != null && r.lon != null)
+          .map((r: LinkRow) => ({ ...r, heading: nearestHdg(r.time) }));
         setRows(link);
         setIdx(link.length - 1);   // 預設停在終點：一眼看到整趟全貌
         setMeta(d.session ?? null);
@@ -188,6 +218,7 @@ export default function Replay() {
     mapRef.current = map;
 
     map.on("load", () => {
+      base.install(map);
       map.addSource("grid", { type: "geojson", data: groundGrid(first.lat!, first.lon!) });
       map.addLayer({ id: "grid", type: "line", source: "grid",
         paint: { "line-color": "#262624", "line-width": 1 } });
@@ -209,12 +240,11 @@ export default function Replay() {
           "line-opacity": 0.55 } });
 
       // 懸浮航跡：deck.gl PathLayer（route-render-tool-eval，取代 fill-extrusion）
-      map.addControl(new MapboxOverlay({ interleaved: true, layers: [
-        routeLayer("track3d", { track: rows
-          .filter((r) => r.lat != null && r.lon != null)
-          .map((r) => ({ lat: r.lat!, lon: r.lon!,
-                         sinr: r.sinr ?? null, alt: r.alt_rel ?? null })) }),
-      ] }) as unknown as maplibregl.IControl);
+      // 游標圖示層同掛此 overlay，scrub 時只換該層（軌跡層資料同參考、不重建）
+      const ov = new MapboxOverlay({ interleaved: true, layers: [] });
+      ovRef.current = ov;
+      map.addControl(ov as unknown as maplibregl.IControl);
+      pushLayersRef.current();
 
       // 預計任務路徑（航線開的當下所關聯的任務）：灰絲帶＋地面虛線
       if (plan.length >= 2) {
@@ -240,21 +270,49 @@ export default function Replay() {
           "fill-extrusion-height": ["get", "top"], "fill-extrusion-base": ["get", "base"],
           "fill-extrusion-opacity": 0.9 } });
 
-      // 回放游標：three.js 球體（與即時頁的機體一致）
-      map.addLayer(createDroneLayer("cursor-ball", () => {
-        const r = cursorRef.current;
-        if (!r || r.lat == null || r.lon == null) return [];
-        return [{ id: "cursor", lat: r.lat, lon: r.lon, alt: r.alt_rel ?? 0, color: "#3987e5" }];
-      }));
+      // 回放游標：與即時頁同一套 2D 機體圖示（§2.4b 一致化裁定）——
+      // 朝向是真實記錄的資料，回放不因此降級呈現。白色外圈作強調，
+      // 避免被誤讀為「軌跡上的一個點」
     });
     return () => { map.remove(); mapRef.current = null; };
   }, [rows, plan]);
 
-  // scrub → 球體游標（球體層每幀讀 cursorRef，觸發一次重繪即可）
+  // 軌跡層：資料只在 rows 變時重建（scrub 不重建，避免每格都重算路徑）
+  const trackLayer = useMemo(() => routeLayer("track3d", { track: rows
+    .filter((r) => r.lat != null && r.lon != null)
+    .map((r) => ({ lat: r.lat!, lon: r.lon!,
+                   sinr: r.sinr ?? null, alt: r.alt_rel ?? null })) }), [rows]);
+
+  // scrub → 游標圖示（§2.4b：與即時頁同一套機體圖示、隨當時 heading 旋轉）
+  const pushLayersRef = useRef<() => void>(() => {});
   useEffect(() => {
-    cursorRef.current = rows[idx] ?? null;
-    mapRef.current?.triggerRepaint();
-  }, [idx, rows]);
+    pushLayersRef.current = () => {
+      const r = rows[idx];
+      ovRef.current?.setProps({ layers: [
+        trackLayer,
+        ...(r && r.lat != null && r.lon != null ? [new IconLayer({
+          id: "cursor-icon",
+          data: [{ pos: [r.lon, r.lat, r.alt_rel ?? 0] as [number, number, number],
+                   hdg: r.heading }],
+          getPosition: (d: { pos: [number, number, number] }) => d.pos,
+          getIcon: () => ({
+            url: droneIconUrl("#3987e5", r.heading != null, true),
+            width: DRONE_ICON_SIZE, height: DRONE_ICON_SIZE,
+            anchorX: DRONE_ICON_SIZE / 2, anchorY: DRONE_ICON_SIZE / 2, mask: false,
+          }),
+          getAngle: (d: { hdg: number | null | undefined }) =>
+            (d.hdg == null ? 0 : -d.hdg),
+          // 游標比即時頁的機體大一級（§2.4b 配套：與軌跡點視覺可分，
+          // 不被誤讀為「軌跡上的一個點」）；同樣做俯角壓縮補償
+          getSize: 52, sizeUnits: "pixels", billboard: false,
+          sizeScale: Math.min(2.2, Math.pow(Math.max(0.2,
+            Math.cos(((mapRef.current?.getPitch() ?? 55) * Math.PI) / 180)), -0.75)),
+          updateTriggers: { getIcon: `${r.heading}`, getPosition: idx },
+        })] : []),
+      ] });
+    };
+    pushLayersRef.current();
+  }, [idx, rows, trackLayer]);
 
   // 播放（ui-spec §5）：1Hz 樣本 → 每 1000/speed ms 前進一格；到底自停
   const [playing, setPlaying] = useState(false);
@@ -305,6 +363,13 @@ export default function Replay() {
 
       <div className="replay-map" ref={containerRef}>
         {!rows.length && <div className="empty" style={{ padding: 20 }}>載入軌跡中…（若架次無樣本則無可回放）</div>}
+        {/* 回放頁沒有圖例卡，底圖切換獨立浮在左下（同即時頁位置與三態） */}
+        {rows.length > 0 && (
+          <div className="legend replay-legend">
+            <BasemapToggle on={base.on} set={base.set}
+              offline={base.offline} outside={base.outside} />
+          </div>
+        )}
       </div>
 
       {/* §5.4 影片同步窗：時鐘源＝回放 transport，影片跟隨 */}

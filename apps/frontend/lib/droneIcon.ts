@@ -11,7 +11,7 @@
 
 const SIZE = 64;   // 畫布邊長（icon 圖素），實際顯示大小由 getSize 決定
 
-function svg(color: string, nosed: boolean): string {
+function svg(color: string, nosed: boolean, halo: boolean): string {
   const arms = [45, 135, 225, 315].map((deg) => {
     const r = (deg * Math.PI) / 180;
     const x = 32 + Math.cos(r) * 19, y = 32 + Math.sin(r) * 19;
@@ -27,8 +27,17 @@ function svg(color: string, nosed: boolean): string {
     ? `<polygon points="32,4 27,14 37,14" fill="${color}" stroke="#141310"
          stroke-width="2" stroke-linejoin="round"/>`
     : "";
+  // 白色外圈（回放游標用）：暗色描邊在深底上與軌跡分不開——游標必須
+  // 一眼可辨為「現在在看的時刻」，而不是軌跡上的一個點
+  const haloG = halo
+    ? `<g stroke="rgba(255,255,255,0.9)" stroke-width="7" fill="none"
+         stroke-linecap="round">${armLines}</g>
+       <g stroke="rgba(255,255,255,0.9)" stroke-width="6" fill="none">
+         ${arms}<rect x="24" y="24" width="16" height="16" rx="4"/></g>`
+    : "";
   return `<svg xmlns="http://www.w3.org/2000/svg" width="${SIZE}" height="${SIZE}"
     viewBox="0 0 64 64">
+    ${haloG}
     <g stroke="#141310" stroke-width="3.5" fill="none" stroke-linecap="round">
       ${armLines}
     </g>
@@ -42,12 +51,13 @@ function svg(color: string, nosed: boolean): string {
 
 const cache = new Map<string, string>();
 
-/** 回傳可直接餵給 IconLayer 的 data URI（同色同造型只產一次） */
-export function droneIconUrl(color: string, nosed: boolean): string {
-  const key = `${color}|${nosed}`;
+/** 回傳可直接餵給 IconLayer 的 data URI（同色同造型只產一次）。
+ * halo＝白色外圈，回放游標用（與軌跡視覺可分，§2.4b 配套要求）。 */
+export function droneIconUrl(color: string, nosed: boolean, halo = false): string {
+  const key = `${color}|${nosed}|${halo}`;
   let url = cache.get(key);
   if (!url) {
-    url = `data:image/svg+xml;charset=utf-8,${encodeURIComponent(svg(color, nosed))}`;
+    url = `data:image/svg+xml;charset=utf-8,${encodeURIComponent(svg(color, nosed, halo))}`;
     cache.set(key, url);
   }
   return url;

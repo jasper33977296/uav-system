@@ -314,6 +314,13 @@ a:focus-visible, button:focus-visible, input:focus-visible, select:focus-visible
   font-size: 12.5px; max-width: 260px;
 }
 .ab-cap input { border-bottom: 1px solid var(--accent); }
+/* 回放頁沒有圖例卡：底圖切換自成一張小卡，位置與即時頁圖例一致 */
+.replay-legend {
+  position: absolute; left: 12px; bottom: 12px; z-index: 20;
+  padding: 6px 10px;
+}
+.replay-legend .legend-base { margin-top: 0; }
+
 /* 圖例內的底圖切換（§2.4b）：不新增浮動按鈕 */
 .legend-base { display: flex; align-items: center; gap: 6px; margin-top: 4px; }
 .legend-base .seg { display: inline-flex; border-radius: 6px; overflow: hidden; }

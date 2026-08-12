@@ -5,11 +5,13 @@ import maplibregl from "maplibre-gl";
 import "maplibre-gl/dist/maplibre-gl.css";
 import { useEffect, useRef, useState } from "react";
 
+import BasemapToggle from "@/components/BasemapToggle";
 import CommandPanel from "@/components/CommandPanel";
 import { colorFor } from "@/components/droneLayer";
 import SimpleHud from "@/components/SimpleHud";
 import VideoModal from "@/components/VideoModal";
 import VideoPlayer from "@/components/VideoPlayer";
+import { useBasemap } from "@/lib/basemap";
 import { pathsLayer, rgba, routeLayer, type RouteRun } from "@/lib/deckRoute";
 import { DRONE_ICON_SIZE, droneIconUrl } from "@/lib/droneIcon";
 import { basePreview, separatePreview, unifiedPreview, type Wp } from "@/lib/formation";
@@ -114,34 +116,8 @@ export default function MapView() {
     fetch(`${API}/api/drones`).then((r) => r.json())
       .then(setVideoList).catch(() => setVideoList([]));
   }, [view, selId]);
-  // §2.4b 底圖（NLSC 正射影像，opt-in）：預設關＝深色畫布（離線保證與
-  // 對比基準不變）；開關住圖例卡內、狀態記憶；瓦片抓不到時退回深色並
-  // 在圖例標「底圖離線」——不留白畫布假裝使用者關掉了
-  const [baseOn, setBaseOn] = useState(false);
-  const [baseOffline, setBaseOffline] = useState(false);
-  // 涵蓋範圍外＝第三種狀態，與「離線」不同：NLSC 只有臺灣的正射影像，
-  // 圖磚伺服器對境外座標**回 200 但給空白磚**（實測瑞士 SITL 區 1.7KB
-  // vs 台北 31KB）——不說的話畫面表現是「開了卻沒變化」，使用者只會
-  // 以為壞了。境外時如實說明而非讓人猜
-  const [baseOutside, setBaseOutside] = useState(false);
-  useEffect(() => { setBaseOn(localStorage.getItem("map-basemap") === "1"); }, []);
-  const setBase = (v: boolean) => {
-    setBaseOn(v);
-    setBaseOffline(false);
-    localStorage.setItem("map-basemap", v ? "1" : "0");
-  };
-
-  // 底圖顯隱：只切 visibility，不重建地圖（deck overlay 不受影響）。
-  // 需等 style 載入：map 物件在建構後就存在，但 style 未就緒時呼叫
-  // getLayer 會在 maplibre 內部炸掉（實測整頁白畫面）
-  const [styleReady, setStyleReady] = useState(false);
-  useEffect(() => {
-    const map = mapRef.current;
-    if (!styleReady || !map || !map.getLayer("basemap")) return;
-    const v = baseOn && !baseOffline ? "visible" : "none";
-    map.setLayoutProperty("basemap", "visibility", v);
-    map.setLayoutProperty("basemap-dim", "visibility", v);
-  }, [baseOn, baseOffline, styleReady]);
+  // §2.4b 底圖：狀態與圖層安裝抽到 lib/basemap（與回放頁共用同一實作）
+  const base = useBasemap();
 
   // PiP 收合態（§2.9：小窗可收合成 📹 鈕）；換機自動展開回小窗
   const [pipHidden, setPipHidden] = useState(false);
@@ -221,40 +197,7 @@ export default function MapView() {
     mapRef.current = map;
 
     map.on("load", async () => {
-      // §2.4b 底圖：NLSC 正射影像（WMTS，GoogleMapsCompatible 切圖）＋
-      // 其上一層暖色暗化——分級色必須在最亮地物（水泥/屋頂）上仍可辨。
-      // 兩層都建但預設隱藏，切換只動 visibility（不重建地圖）
-      map.addSource("nlsc", {
-        type: "raster", tileSize: 256, maxzoom: 20,
-        attribution: "© 內政部國土測繪中心",
-        tiles: ["https://wmts.nlsc.gov.tw/wmts/PHOTO2/default/GoogleMapsCompatible/{z}/{y}/{x}"],
-      });
-      map.addLayer({
-        id: "basemap", type: "raster", source: "nlsc",
-        layout: { visibility: "none" }, paint: { "raster-opacity": 1 },
-      });
-      map.addLayer({
-        id: "basemap-dim", type: "background",
-        layout: { visibility: "none" },
-        paint: { "background-color": CANVAS, "background-opacity": 0.5 },
-      });
-      // 瓦片抓不到＝離線：退回深色畫布並如實標示（見圖例列）
-      map.on("error", (e) => {
-        const src = (e as unknown as { sourceId?: string }).sourceId;
-        if (src === "nlsc") setBaseOffline(true);
-      });
-      // 涵蓋範圍偵測（臺灣本島＋離島的寬鬆包絡）
-      const inTW = () => {
-        const c = map.getCenter();
-        return c.lng > 118 && c.lng < 123.5 && c.lat > 20 && c.lat < 26.5;
-      };
-      const upd = () => setBaseOutside(!inTW());
-      upd();
-      map.on("moveend", upd);
-      // 俯角變化即時反映到圖示尺寸補償（圖層本身在遙測更新時重建，5Hz）
-      pitchRef.current = map.getPitch();
-      map.on("pitch", () => { pitchRef.current = map.getPitch(); });
-      setStyleReady(true);   // 底圖切換 effect 的閘：style 就緒才可動圖層
+      base.install(map);
 
       // 地面基準：網格 50m 一格 + 起飛點雙圈錨點
       map.addSource("grid", { type: "geojson", data: groundGrid(HOME[1], HOME[0]) });
@@ -571,20 +514,8 @@ export default function MapView() {
           <span className="dot" style={{ background: "transparent", border: "1.5px solid #8f8b80" }} />
           起飛點
         </div>
-        {/* 底圖切換（§2.4b）：不新增浮動按鈕；離線時如實標示而非靜默退回 */}
-        <div className="row legend-base">
-          底圖
-          <span className="seg">
-            <button className={!baseOn ? "on" : ""} onClick={() => setBase(false)}>無</button>
-            <button className={baseOn ? "on" : ""} onClick={() => setBase(true)}>影像</button>
-          </span>
-          {baseOn && baseOffline && <span className="meta">底圖離線</span>}
-          {/* 措辭經設計師定案：說明「為什麼沒有」而不只說「沒有」——
-              使用者才知道這既不是故障、也不是自己操作錯 */}
-          {baseOn && !baseOffline && baseOutside && (
-            <span className="meta">此區無影像（圖資僅涵蓋臺灣）</span>
-          )}
-        </div>
+        <BasemapToggle on={base.on} set={base.set}
+          offline={base.offline} outside={base.outside} />
       </div>
 
       {/* 圖例已併入專業抽屜的訊號品質卡（單一住所，第五輪）——地圖上不再常駐 */}
