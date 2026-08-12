@@ -53,6 +53,11 @@ def _build_sensor_bits():
 
 _SENSOR_BITS = _build_sensor_bits()
 _EWMA_A = 0.3            # hz 速率的指數移動平均係數（平滑瞬時 1/dt 抖動）
+# 同一個 datagram 裡背靠背到達的訊息（任務上傳的 MISSION_ITEM_INT 是典型）相隔
+# 只有數十 µs，1/dt 會是幾萬「Hz」——那是**送達方式**不是串流速率。低於這個間隔
+# 一律不拿來更新速率：不知道就別編一個數字。
+_BURST_DT = 0.002        # 2ms（＝500Hz）以下視為突發送達，不計入速率
+_STALE_FLOOR_S = 5.0     # 久未再現就不報速率（見 _live_hz）
 
 
 def record(st, msg) -> None:
@@ -72,7 +77,7 @@ def record(st, msg) -> None:
         st.msg_registry[mid] = {"msg": msg, "last": now, "hz": None}
         return
     dt = now - e["last"]
-    if dt > 0:
+    if dt >= _BURST_DT:      # 突發送達（同 datagram 背靠背）不更新速率，見 _BURST_DT
         inst = 1.0 / dt
         e["hz"] = inst if e["hz"] is None else _EWMA_A * inst + (1 - _EWMA_A) * e["hz"]
     e["msg"] = msg
@@ -112,6 +117,20 @@ def _decompose(msg):
     return fields, u_out, d_out
 
 
+def _live_hz(hz, age_s):
+    """只在速率**還成立**時才報，否則回 None（前端留白）。
+
+    事件式／突發訊息（任務上傳的 MISSION_ITEM_INT、一次性通知）會在爆量當下把
+    EWMA 推上去，之後再也不來——速率就**凍在那個數字**、還帶著愈長的齡。畫面
+    顯示「7023 Hz、234 秒前」是自相矛盾的謊：既然 234 秒沒來，就沒有「當前速率」
+    這回事。門檻取該訊息自身週期的 3 倍（至少 5 秒）：1Hz 的訊息 5 秒不來算停，
+    0.2Hz 的（每 5 秒才一筆）要 15 秒不來才算停，不會誤殺慢速訊息。
+    """
+    if not hz or hz <= 0:
+        return None
+    return None if age_s > max(_STALE_FLOOR_S, 3.0 / hz) else round(hz, 2)
+
+
 def _sensors(sys_status_msg) -> list:
     """SYS_STATUS → [{name, ok}]：只發 present 位（有這顆），ok＝health 位。
     present=0 的直接省——「沒這顆」與「有但不健康(ok=false)」分明。"""
@@ -129,11 +148,12 @@ def snapshot(st) -> dict:
         msg = e["msg"]
         t = msg.get_type()
         fields, units, displays = _decompose(msg)
+        age_s = now - e["last"]
         entry = {
             "id": mid,
             "name": None if t.startswith("UNKNOWN_") else t,   # 未知 msgid→null，UI 顯 #id
-            "hz": round(e["hz"], 2) if e["hz"] else None,
-            "age_s": round(now - e["last"], 2),
+            "hz": _live_hz(e["hz"], age_s),   # 停了就留白，不報凍住的假速率
+            "age_s": round(age_s, 2),
             "fields": fields,
             "units": units,
         }
