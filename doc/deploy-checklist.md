@@ -82,7 +82,8 @@
 
 | 埠 | 方向 | 用途 | 不通的症狀 |
 |---|---|---|---|
-| **8554/TCP** | 機 → 地面站 | 相機 RTSP 推流進來 | 前端沒有影像入口、`paths/list` 空 |
+| **554/TCP**（機端）| 地面站 → 機 | **拉流：地面站去連相機 RTSP**（RB5 不主動推）| `paths/list` 的 path 一直 not ready |
+| **8554/TCP** | 機 → 地面站 | 僅「退回推流」備案時才需要 | 用推流備案時前端沒有影像入口 |
 | **8889/TCP** | 瀏覽器 → 地面站 | WHEP 訊令（建立播放連線）| 影像窗轉圈或報錯 |
 | **8189/UDP** | 瀏覽器 ↔ 地面站 | **WebRTC 媒體本身** | ⚠️ **頁面一切正常、畫面全黑** |
 
@@ -107,33 +108,52 @@
       docker ps --filter name=testsrc --format '{{.Names}}'   # 應該完全沒有輸出
       ```
 
-### 4b.2 相機接入：**機端主動推流進來**
+### 4b.2 相機接入：**地面站主動去拉**（RB5 的 RTSP 不會自己推）
 
-**方向很重要：機上推 RTSP 到地面站，不是地面站去拉。** 5G 的機端通常在 NAT 後面，
-地面站主動連過去連不到；反過來由機端主動外連才成立（與 MAVLink／量測資料同一個道理）。
+⚠️ **方向與 MAVLink／量測資料相反，這是本節最需要現場確認的前提。** RB5 的
+RTSP 伺服器不會主動推送，要地面站當 client 去拉；而系統其餘部分都是「機端主動
+外連」（因為 5G 機端多在 NAT 後）。**拉得到拉不到，取決於你的私有 5G＋VPN 拓撲，
+請實測。**
 
-- [ ] **第一步先用測試圖樣驗網路通**（在**機上**執行，先不接相機，排除相機變因）：
+- [ ] **先確認地面站連得到機端**（這一步不過，後面都不用做）：
       ```bash
-      ffmpeg -re -f lavfi -i testsrc2=size=1280x720:rate=15 \
-        -c:v libx264 -preset veryfast -tune zerolatency -g 30 -pix_fmt yuv420p \
-        -f rtsp -rtsp_transport tcp rtsp://<地面站IP>:8554/uav-1
+      ping <機IP>                                   # 路由通不通
+      nc -vz <機IP> 554                             # RTSP 埠開不開（或相機用的埠）
       ```
-- [ ] **通了再換真相機**（`-c copy` **不轉碼**：省機上 CPU，且畫質劣化是研究證據，
-      不該被地面站或機上重新編碼抹掉）：
+      不通就跳到本節末的「退回推流」。
+- [ ] **用 ffmpeg 先確認拉得到影像**（排除 MediaMTX 變因）：
       ```bash
-      ffmpeg -rtsp_transport tcp -i rtsp://<相機IP>:554/<相機路徑> \
-        -c copy -f rtsp -rtsp_transport tcp rtsp://<地面站IP>:8554/uav-1
+      ffmpeg -rtsp_transport tcp -i rtsp://<機IP>:554/<路徑> -t 5 -f null -
       ```
-      `uav-1` 要換成**該機的 sysid**（sysid 2 就推 `uav-2`）——錄影與架次的對應靠這個名字。
-- [ ] **驗流真的進來了**（在地面站）：
+      看得到 `Stream #0:0: Video: h264` 就對了；**編碼必須是 H.264**
+      （H.265 錄得下來但瀏覽器播不出）。
+- [ ] **設定 MediaMTX 逐台拉流**（`video/mediamtx.yml` 的 `paths`，`uav-N` 對應該機 sysid）：
+      ```yaml
+      paths:
+        uav-1:
+          source: rtsp://<機1IP>:554/<路徑>
+          sourceOnDemand: yes      # 沒人看也沒在錄就不拉——閒置不佔 5G 上行
+        uav-2:
+          source: rtsp://<機2IP>:554/<路徑>
+          sourceOnDemand: yes
+      ```
+      改完 `docker compose up -d uav-video`（改設定檔要重建，見 deployment.md）。
+- [ ] **驗流真的進來了**（地面站）：
       ```bash
       curl -s http://localhost:9997/v3/paths/list | python3 -m json.tool
       ```
-      每台應有一列 `"name": "uav-N"`、`"ready": true`、`"tracks": ["H264"]`。
-- [ ] ⚠️ **編碼必須是 H264**（`tracks` 顯示的就是實際收到的）。H265 錄得下來但**瀏覽器
-      播不出**——相機請設 H.264 + yuv420p。
-- [ ] 建議相機設 **720p15、2 Mbps 上限**：磁碟與 5G 上行都吃得消（見 §1b），而研究看的
-      是鏈路品質與畫面劣化，幀率不需要高。
+      每台應有 `"name": "uav-N"`、`"ready": true`、`"tracks": ["H264"]`。
+      （`sourceOnDemand: yes` 時要先有人看或正在錄，`ready` 才會是 true。）
+- [ ] 建議相機設 **720p15、2 Mbps 上限**：磁碟與 5G 上行都吃得消（見 §1b）。
+
+**退回推流（拉不到時）**：在 RB5 上跑一支推流程序把相機 RTSP 推到地面站——
+MediaMTX 兩種都吃、不必改架構，代價是機端多一個要顧的常駐程序：
+```bash
+# 在機上執行（<地面站IP> 與 uav-N 換成實際值）
+ffmpeg -rtsp_transport tcp -i rtsp://<相機IP>:554/<路徑> \
+  -c copy -f rtsp -rtsp_transport tcp rtsp://<地面站IP>:8554/uav-1
+```
+此時 `mediamtx.yml` 的該 path 維持 `source: publisher`（預設）。
 
 ### 4b.3 每台機的 `video_url`
 
