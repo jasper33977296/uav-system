@@ -39,8 +39,9 @@ const fmtHms = (t: string) =>
 const fmtVal = (v: unknown): string =>
   typeof v === "number" && !Number.isInteger(v) ? v.toFixed(3) : String(v);
 
-export default function EventModal({ ev, onClose }: {
+export default function EventModal({ ev, onClose, mixed = false }: {
   ev: ModalEvent; onClose: () => void;
+  mixed?: boolean;   // 混機時模式句加語意括注（§0.2d）
 }) {
   const [copied, setCopied] = useState(false);
   useEffect(() => {
@@ -65,7 +66,7 @@ export default function EventModal({ ev, onClose }: {
 
   const copyAll = () => {
     const lines = [
-      `[${sev.label}] ${evText(ev as Parameters<typeof evText>[0])}`,
+      `[${sev.label}] ${evText(ev as Parameters<typeof evText>[0], { mixed })}`,
       `時間 ${fmtMs(ev.time)}`
         + (count > 1 && ev.timeFirst ? `（首次 ${fmtMs(ev.timeFirst)}，×${count}）` : ""),
       `${ev.drone ?? "—"} · ${srcTxt} · type=${ev.type} · id=${ev.id}`,
@@ -84,7 +85,7 @@ export default function EventModal({ ev, onClose }: {
       <div className="evm card" role="dialog" aria-modal="true"
         aria-label="事件詳情" onClick={(e) => e.stopPropagation()}>
         <div className="evm-head">
-          <span className="evm-title">{evText(ev as Parameters<typeof evText>[0])}</span>
+          <span className="evm-title">{evText(ev as Parameters<typeof evText>[0], { mixed })}</span>
           <span className="chip">
             <span className="dot" style={{ background: sev.color }} />{sev.label}
           </span>

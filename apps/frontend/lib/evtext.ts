@@ -1,10 +1,15 @@
 /** 事件以人話呈現：JSON 直出是畫面最大的視覺雜訊（simple-first：
  * 事件 log 是唯一的常駐文字區，句式必須是人話）。
  * SidePanel 與簡約 HUD 的事件列共用。 */
+import { modeLabel } from "@/lib/modeVerb";
 import type { UavEvent } from "@/lib/store";
 
 export function evText(
   e: Pick<UavEvent, "type" | "detail"> & { severity?: UavEvent["severity"] },
+  // 混機（≥2 種 autopilot 在線）時模式名加語意括注（§0.2d 規則 3）。
+  // **判斷模式請用 detail 的 *_verb，不得比對模式名字串**——PX4 HOLD 與
+  // ArduPilot LOITER 是同一件事，比字串在混機必錯
+  opts: { mixed?: boolean } = {},
 ): string {
   const d = e.detail as Record<string, number | string | boolean | undefined>;
   const sinr = typeof d.sinr === "number" ? `SINR ${d.sinr.toFixed(1)} dB` : "";
@@ -28,7 +33,13 @@ export function evText(
     case "link_degraded": return `訊號劣化 · ${sinr}`;
     case "link_lost":     return `訊號瀕斷 · ${sinr}`;
     case "link_recovered":return `訊號恢復 · ${sinr}`;
-    case "mode_change":   return `模式 ${d.from ?? "?"} → ${d.to ?? "?"}`;
+    case "mode_change": {
+      // 原廠名不翻譯；verb 缺或未知一律不註記（不猜、不硬翻）
+      const m = (name: unknown, verb: unknown) =>
+        modeLabel(typeof name === "string" ? name : "?",
+          typeof verb === "string" ? verb : null, opts.mixed === true);
+      return `模式 ${m(d.from, d.from_verb)} → ${m(d.to, d.to_verb)}`;
+    }
     // sysid 位址變更（47a384d 後 note 已是完整中文句，補來源位址即可）
     case "sysid_addr_change":
       return `${d.note ?? "sysid 來源位址變更"}`

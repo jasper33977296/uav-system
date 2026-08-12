@@ -69,6 +69,9 @@ export function Battery({ pct, plain = false }: {
  * 篩選（不記憶）；×N 折疊徽章列尾膠囊、fold 原地更新時閃現一次。 */
 export function EventsCard() {
   const events = useUavStore((s) => s.events);
+  // 混機（≥2 種 autopilot 在線）才在模式句加語意括注（§0.2d 規則 3）
+  const mixed = useUavStore((s) => new Set(Object.values(s.fleet)
+    .filter((t) => t.connected && t.autopilot).map((t) => t.autopilot)).size >= 2);
   const [src, setSrc] = useState<"all" | "vehicle" | "system">("all");
   // 事件詳情 modal（§2.7）：單一 modal、新點替換；存 id 不存物件——
   // fold 就地更新時 modal 跟著長 ×N
@@ -102,7 +105,7 @@ export function EventsCard() {
                 background: e.severity === "critical" ? "#a01818"
                   : e.severity === "warning" ? "#fab219" : "#8f8b80" }} />
               <time>{evTime(e.time)}</time>
-              <span className="detail">{evText(e)}</span>
+              <span className="detail">{evText(e, { mixed })}</span>
               {/* key 帶 count：fold 遞增即重掛徽章 → CSS 動畫閃現一次 */}
               {count > 1 && (
                 <span className="ev-count" key={`${e.id}:${count}`}>×{count}</span>
@@ -112,7 +115,7 @@ export function EventsCard() {
         })}
       </div>
       {openEv && (
-        <EventModal onClose={() => setOpenEvId(null)}
+        <EventModal onClose={() => setOpenEvId(null)} mixed={mixed}
           ev={{ ...openEv,
             // REST 補歷史的事件只有 drone_id——查 fleet 補機名
             drone: openEv.drone ?? (openEv.drone_id
