@@ -636,13 +636,14 @@ a:focus-visible, button:focus-visible, input:focus-visible, select:focus-visible
   border: 1px solid var(--hairline);
 }
 
-/* 異常 toast（ui-spec §2.2）：導覽下方、**地圖可視區**置中——以右上三件套
-   最大佔位（面板 300＋切換＋▤＋間距 ≈ 480px）扣除後的自由區為基準，
-   1366 窄幅不再壓到 ▤（2026-08-11 驗收發現）；寬度收窄可換行 */
+/* 異常 toast（ui-spec §2.2 對正，使用者現場反饋）：**整個視窗**水平置中
+   （fixed 脫離容器定位脈絡——先前 absolute 吃到地圖區寬度，抽屜開時偏位）、
+   垂直導覽列（48px）下方 12px；右上三件套不影響定位——toast 短暫且層級
+   最高，寧可蓋住也不偏移（舊「地圖自由區置中」方案廢止） */
 .hud-toast {
-  position: absolute; left: calc((100% - 480px) / 2); transform: translateX(-50%);
-  top: 10px; max-width: min(calc(100% - 512px), 560px);
-  z-index: 40; font-size: 14px; padding: 8px 14px 8px 16px; border-radius: 10px;
+  position: fixed; left: 50%; transform: translateX(-50%);
+  top: 60px; max-width: min(calc(100vw - 24px), 560px);
+  z-index: 70; font-size: 14px; padding: 8px 14px 8px 16px; border-radius: 10px;
   background: var(--status-warn-bg); color: var(--status-warn);
   border: none; cursor: pointer; display: flex; align-items: center; gap: 10px;
   box-shadow: 0 4px 16px rgba(0, 0, 0, 0.35);

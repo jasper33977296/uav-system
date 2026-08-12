@@ -118,6 +118,55 @@ export default function MapView() {
   useEffect(() => { setPipHidden(false); }, [selId]);
   const selUrl = videoList?.find((d) => d.id === selId)?.video_url ?? null;
 
+  // §2.9 PiP 自由拖曳（使用者現場反饋）：拖窗身移動、<5px 視為點擊（放大）、
+  // 邊界夾限（四邊 8px、上界避開導覽列）、位置記憶（key 獨立於面板）、
+  // 不做吸附避讓——使用者拖到哪就是哪（與任務控制面板同哲學）
+  const pipRef = useRef<HTMLDivElement>(null);
+  const [pipPos, setPipPos] = useState<{ x: number; y: number } | null>(null);
+  const pipPosRef = useRef(pipPos);
+  useEffect(() => { pipPosRef.current = pipPos; }, [pipPos]);
+  const clampPip = (p: { x: number; y: number }) => {
+    const w = pipRef.current?.offsetWidth ?? 280;
+    const h = pipRef.current?.offsetHeight ?? 158;
+    return {
+      x: Math.max(8, Math.min(p.x, window.innerWidth - w - 8)),
+      y: Math.max(56, Math.min(p.y, window.innerHeight - h - 8)),
+    };
+  };
+  useEffect(() => {
+    try {
+      // 載入時夾限一次：視窗縮小後舊記憶座標可能已在畫面外
+      const saved = localStorage.getItem("video-pip-pos");
+      if (saved) setPipPos(clampPip(JSON.parse(saved)));
+    } catch { /* 壞值用預設位置 */ }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+  const pipDrag = useRef<{ dx: number; dy: number; sx: number; sy: number;
+    moved: boolean } | null>(null);
+  function pipDown(e: React.PointerEvent) {
+    if ((e.target as Element).closest(".pip-hide")) return;   // 收合鈕不啟動拖曳
+    const r = pipRef.current!.getBoundingClientRect();
+    pipDrag.current = { dx: e.clientX - r.left, dy: e.clientY - r.top,
+      sx: e.clientX, sy: e.clientY, moved: false };
+    (e.currentTarget as Element).setPointerCapture(e.pointerId);
+  }
+  function pipMove(e: React.PointerEvent) {
+    const d = pipDrag.current;
+    if (!d) return;
+    if (!d.moved && Math.hypot(e.clientX - d.sx, e.clientY - d.sy) < 5) return;
+    d.moved = true;
+    setPipPos(clampPip({ x: e.clientX - d.dx, y: e.clientY - d.dy }));
+  }
+  function pipUp() {
+    const d = pipDrag.current;
+    pipDrag.current = null;
+    if (!d) return;
+    if (!d.moved) setView("video");                            // 點擊＝放大
+    else if (pipPosRef.current) {
+      localStorage.setItem("video-pip-pos", JSON.stringify(pipPosRef.current));
+    }
+  }
+
 
   useEffect(() => {
     const map = new maplibregl.Map({
@@ -401,9 +450,15 @@ export default function MapView() {
           跟隨選中機自動換源；無源不畫。點小窗＝放大為全幅（既有影像檢視
           收斂為放大態）；可收合成 📹 鈕 */}
       {view === "map" && selId && selUrl && !pipHidden && (
-        <div className="video-pip" title="點擊放大"
-          onClick={() => setView("video")}>
-          <VideoPlayer key={`pip:${selId}:${selUrl}`} url={selUrl} />
+        <div className="video-pip" ref={pipRef} title="點擊放大／拖曳移動"
+          style={pipPos ? { position: "fixed", left: pipPos.x, top: pipPos.y,
+            right: "auto", bottom: "auto" } : undefined}
+          onPointerDown={pipDown} onPointerMove={pipMove}
+          onPointerUp={pipUp} onPointerCancel={pipUp}>
+          <VideoPlayer key={`pip:${selId}:${selUrl}`} url={selUrl}
+            controls={false} />
+          {/* 機身識別徽章：§2.9 明文「不得因簡約原則移除」——真相機階段
+              三台畫面可能極相似，這是唯一辨識依據 */}
           <div className="video-tile-label">
             <span className="dot" style={{ background: colorFor(selId) }} />
             {selName}

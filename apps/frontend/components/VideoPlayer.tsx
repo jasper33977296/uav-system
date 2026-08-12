@@ -30,7 +30,10 @@ async function startWhep(url: string, pc: RTCPeerConnection): Promise<void> {
   await pc.setRemoteDescription({ type: "answer", sdp: await res.text() });
 }
 
-export default function VideoPlayer({ url }: { url: string }) {
+export default function VideoPlayer({ url, controls = true }: {
+  url: string;
+  controls?: boolean;   // PiP 小窗關閉原生控制條（窗身整面拖曳，§2.9）
+}) {
   const [mode, setMode] = useState<Mode>(
     /\/whep\b/i.test(url) ? "whep" : /mjpe?g/i.test(url) ? "mjpeg" : "video");
   const [err, setErr] = useState<string | null>(null);
@@ -66,7 +69,7 @@ export default function VideoPlayer({ url }: { url: string }) {
     <video
       ref={videoRef}
       src={mode === "video" ? url : undefined}
-      autoPlay muted playsInline controls
+      autoPlay muted playsInline controls={controls}
       onError={() => { setMode("error"); setErr("video 元素無法播放此來源"); }}
     />
   );
