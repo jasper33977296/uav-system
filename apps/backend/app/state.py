@@ -65,6 +65,10 @@ class LiveState:
     # 014 Phase B 泛型訊息登錄表：msgid → {msg, last(mono), hz}。mavlink_rx 對每則
     # 收到的訊息 record()，_msg_registry_loop 定時 snapshot 廣播（見 msg_registry.py）。
     msg_registry: dict = field(default_factory=dict)
+    # 本架次的錄影現況（022）：'on'／'off'／'no_source'，**沒有進行中的架次時為
+    # None**——前端據此決定記錄燈的說明文字；None／非 on 就維持原文案，不宣告
+    # 自己不知道的事。詞彙沿用 flight_sessions.video_mode，不另造一套。
+    video_mode: str | None = None
     # serving cell 追蹤（換手事件；issue 002 教訓＝防抖）：serving_pci 是已確認的
     # 現任 PCI，pci_pending 是待確認候選（連續 2 次才算換手，事件層防抖）
     serving_pci: int | None = None
@@ -138,6 +142,8 @@ class LiveState:
             "gps_fix": self.gps_fix, "satellites": self.satellites,
             "flight_mode": self.flight_mode, "armed": self.armed,
             "link": self.link,
+            # 錄影現況（022 §2.9 記錄燈說明用）：無進行中架次＝None
+            "video_mode": self.video_mode,
             "link_state": self.link_state,
             "link_age_s": self.link_age_s,   # None = 從未收到；大於門檻 = 失聯
         }

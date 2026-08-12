@@ -467,13 +467,13 @@ class MavlinkRx:
             log.info("session started: %s（%s）", st.session_id, st.drone_name)
             # 影像（022）走背景：本 worker 是單執行緒，這裡 await 住（HTTP 逾時
             # 2s）會讓整條 MAVLink 處理停擺。影像是附加價值，不准拖累飛行資料。
-            asyncio.create_task(video_rec.on_session_start(st.session_id, st.sysid))
+            asyncio.create_task(video_rec.on_session_start(st.session_id, st.sysid, st))
         elif not armed and st.armed:
             sid, st.session_id, st.armed = st.session_id, None, False
             if sid:
                 await db.end_session(sid)
                 log.info("session ended: %s", sid)
-            asyncio.create_task(video_rec.on_session_end(st.sysid))
+            asyncio.create_task(video_rec.on_session_end(st.sysid, st))
 
     # ── 任務讀回（白名單內的查詢對話）───────────────────────────
     def _send(self, sysid: int, msg_obj) -> None:

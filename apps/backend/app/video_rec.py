@@ -32,6 +32,7 @@ log = logging.getLogger(__name__)
 API = "http://127.0.0.1:9997"        # MediaMTX 控制 API（開關錄影）
 PLAYBACK = "http://127.0.0.1:9996"   # MediaMTX playback（列片段：start/duration）
 TIMEOUT = 2.0                        # 短逾時：錄影服務掛掉不准拖慢架次邏輯
+_stream_ok: dict[int, bool] = {}   # sysid → 上一輪來源是否正常（事件去抖）
 SYNC_S = 30.0                        # 片段入庫週期（落地後才要看，不必即時）
 
 
@@ -108,25 +109,51 @@ async def decide_video_mode(sysid: int | None) -> str:
 # 收錄還要等 3s），整條 MAVLink 處理就停擺——影像絕不能拖累飛行資料。
 # 也因此兩支都自己吞例外：背景 task 的例外沒人接，會變成靜默的
 # 「Task exception was never retrieved」。
-async def on_session_start(session_id: str, sysid: int | None) -> None:
+async def on_session_start(session_id: str, sysid: int | None, st=None) -> None:
     """架次開始：標 video_mode（零片段的三種意思靠它分辨）＋開錄。"""
     try:
         mode = await decide_video_mode(sysid)
         await db.pool.execute(
             "UPDATE flight_sessions SET video_mode = $2 WHERE id = $1",
             session_id, mode)
+        if st is not None:
+            st.video_mode = mode          # 前端記錄燈說明用（telemetry 帶出去）
         if mode == "on" and sysid is not None:
-            await set_record(sysid, True)
-            log.info("影像：架次 %s 開錄（sysid %s）", session_id[:8], sysid)
+            ok = await set_record(sysid, True)
+            if ok:
+                log.info("影像：架次 %s 開錄（sysid %s）", session_id[:8], sysid)
+            else:
+                # 該錄卻開不起來——這是故障，必須讓操作員看得見，不能只留在日誌
+                await _emit(st, "video_recording_failed",
+                            "錄製服務未回應，本架次開錄失敗")
     except Exception:
         log.exception("影像：架次開始處理失敗（架次記錄本身不受影響）")
 
 
-async def on_session_end(sysid: int | None) -> None:
+async def _emit(st, type_: str, reason: str, severity: str = "warning") -> None:
+    """發錄影相關事件到事件流（前端據此出人話句＋toast）。
+
+    影像的問題**不准影響飛行資料**，所以這裡自己吞例外：發不出事件也只是少一則
+    通知，不能反過來把架次流程弄壞。"""
+    if st is None or not st.drone_id:
+        return
+    try:
+        from .ws import manager
+        ev = await db.insert_event(st.drone_id, st.session_id, severity, type_,
+                                   {"reason": reason})
+        ev["drone"] = st.drone_name
+        await manager.broadcast({"type": "event", "event": ev})
+    except Exception:
+        log.exception("影像：事件送出失敗（不影響飛行資料）")
+
+
+async def on_session_end(sysid: int | None, st=None) -> None:
     """架次結束：延遲收錄——收尾片段還在寫，馬上關會切掉最後幾秒。"""
     if sysid is None:
         return
     try:
+        if st is not None:
+            st.video_mode = None      # 架次結束＝沒有「當前錄影現況」可言
         await asyncio.sleep(3.0)
         await set_record(sysid, False)
         # 落地後追加幾次同步：週期迴圈是 30s 一輪，光靠它最久要 ~60s 才會把長度
@@ -214,8 +241,21 @@ async def reconcile() -> None:
         return
     from .state import fleet
     for st in list(fleet.values()):
-        if st.armed and st.sysid:
-            await set_record(st.sysid, True)
+        if not (st.armed and st.sysid):
+            continue
+        await set_record(st.sysid, True)
+        if st.video_mode != "on":
+            continue
+        # 飛行中來源斷了＝錄影中斷。**只在狀態變化時發事件**（去抖），否則每
+        # 30 秒一則會淹掉事件流。恢復時也發一則，讓時間軸看得出中斷區間。
+        ready = await stream_ready(st.sysid)
+        was_ok = _stream_ok.get(st.sysid, True)
+        if not ready and was_ok:
+            await _emit(st, "video_recording_failed", "影像來源中斷，錄影暫停")
+        elif ready and not was_ok:
+            await _emit(st, "video_recording_resumed", "影像來源恢復，錄影續錄",
+                        severity="info")
+        _stream_ok[st.sysid] = ready
 
 
 async def loop() -> None:
