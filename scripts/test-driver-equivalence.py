@@ -185,6 +185,22 @@ def main():
             if not eq.note:
                 fails.append(f"{eq.src_type}→{eq.dst_type} 沒說明範圍外為何不成立")
 
+    # ── 10. 送出模式時不得直接索引廠牌表（安全鏈方言洩漏的防再犯）──────
+    #    2026-08-12 實測抓到：`_tick_manual` 的失聯自動懸停寫死
+    #    `PX4_MODES["hold"]`＝(4,3)，而 ArduPilot 的 param2 直接是模式號——
+    #    4 是 **GUIDED** 不是 LOITER(5)。**ArduPilot 機在操作者失聯時會被切進
+    #    GUIDED，而不是程式承諾的 Hold**。B0/B1/B2 都沒抓到，因為它直接讀模組層
+    #    的表、沒有經過 dialect()。這兩個名字現在只准用於 API 參數驗證。
+    mav_now = (ROOT / "apps/command/app/mav.py").read_text(encoding="utf-8")
+    for tbl in ("PX4_MODES", "ARDU_COPTER_MODES"):
+        for ln_no, ln in enumerate(mav_now.split("\n"), 1):
+            if ln.lstrip().startswith("#"):
+                continue
+            if f"{tbl}[" in ln:
+                fails.append(
+                    f"mav.py:{ln_no} 直接索引 {tbl}[...]——送出的模式必須走"
+                    f" driver.encode_mode()，否則對非 PX4 機會送出錯誤的模式號")
+
     if fails:
         print("驅動等價測試 **失敗**（B2 搬遷改變了行為）：")
         for f in fails[:40]:

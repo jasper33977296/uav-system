@@ -194,10 +194,21 @@ class MavRouter(threading.Thread):
                 m["active"] = False
                 # 失聯 → 自主懸停。fire-and-forget（不等 ACK）：等 ACK 會阻塞
                 # router 執行緒數秒，害其他機的心跳斷掉觸發它們的 datalink
-                # failsafe。就算此指令偶爾漏掉也安全——中位搖桿的 POSCTL 本來
-                # 就在原地懸停，且停送 MANUAL_CONTROL 時 PX4 自身的
+                # failsafe。就算此指令偶爾漏掉也安全——中位搖桿的位置模式本來
+                # 就在原地懸停，且停送 MANUAL_CONTROL 時自駕儀自身的
                 # manual-control-loss failsafe 也會接管。
-                main, sub = PX4_MODES["hold"]
+                #
+                # **模式編碼一定要走驅動**（2026-08-12 實測抓到）：這裡原本寫死
+                # `PX4_MODES["hold"]`＝(4,3)，而 ArduPilot 的 DO_SET_MODE param2
+                # 直接是模式號——4 是 **GUIDED**，不是 LOITER(5)。於是 ArduPilot
+                # 機在操作者失聯時會被切進 GUIDED，而不是程式承諾的 Hold。
+                # 這是**安全鏈裡的方言洩漏**，B0/B1/B2 都沒抓到，因為它直接讀
+                # 模組層的表、沒有經過 dialect()。
+                drv = _autopilot.get_driver((self.drones.get(sysid) or {}).get("autopilot"))
+                try:
+                    main, sub = drv.encode_mode("hold")
+                except KeyError:            # 未知廠牌：不亂送模式，停送搖桿即可
+                    continue
                 try:
                     self._sendto(sysid, lambda mm: mm.command_long_encode(
                         sysid, 1, M.MAV_CMD_DO_SET_MODE, 0,
