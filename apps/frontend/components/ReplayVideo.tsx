@@ -1,7 +1,7 @@
 "use client";
 import { useEffect, useMemo, useRef, useState } from "react";
 
-import { classifySinr } from "@/lib/signal";
+import { API, classifySinr } from "@/lib/signal";
 
 /** 回放影片同步（ui-spec §5.4，022——使用者核准 2026-08-12）。
  *
@@ -139,8 +139,10 @@ export default function ReplayVideo({ video, rows, tCurMs, playing, speed,
       onPointerDown={down} onPointerMove={move}
       onPointerUp={up} onPointerCancel={up}>
       {seg ? (
-        <video ref={videoRef} key={seg.id} src={seg.url} muted playsInline
-          preload="auto" />
+        // url 是後端相對路徑（實測 /api/video/segments/{id}/file）——補 API 前綴
+        <video ref={videoRef} key={seg.id}
+          src={seg.url.startsWith("http") ? seg.url : `${API}${seg.url}`}
+          muted playsInline preload="auto" />
       ) : (
         // 涵蓋帶缺口＝真空白：不拼接、不定格假裝連續（§5.4 硬約束成對）
         <div className="vid-gap">此時段無影像（錄製中斷）</div>
