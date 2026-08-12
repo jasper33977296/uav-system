@@ -104,8 +104,18 @@ class LiveState:
             return None
         return round(_time.monotonic() - self.link_seen_mono, 2)
 
-    def readiness(self) -> tuple[bool, list]:
-        """就緒判定＋不就緒原因（給前端顯示；權威訊號是 prearm_ok）。"""
+    def readiness(self) -> tuple[bool | None, list]:
+        """就緒判定＋不就緒原因（給前端顯示；權威訊號是 prearm_ok）。
+
+        **沒有依據時回 None（未知），不回 True。** 「就緒」是對飛安狀態的斷言，
+        而剛連上、只收到心跳的那段時間，我們對預檢／GPS／感測器一無所知——
+        那時候說「就緒」是憑空斷言。實測抓到（2026-08-12 ArduPilot 驗收機）：
+        位置／GPS／電量全 null，卻因為「沒有任何反對證據」而回報 ready=true，
+        前端據此點了綠燈。**缺乏證據不是通過的理由。**
+
+        與本專案一貫做法同源：origin 不明留 `unknown` 不強標、影像零片段分
+        `missing`／`off`／`no_source`、msg_registry 停掉的訊息 hz 留 null。
+        """
         reasons = []
         if self.prearm_ok is False:
             reasons.append("PX4 預檢未過（arming checks）")
@@ -116,6 +126,14 @@ class LiveState:
             reasons.append(f"GPS 未定位（fix={self.gps_fix}）")
         if self.mav_state in ("CRITICAL", "EMERGENCY", "FLIGHT_TERMINATION"):
             reasons.append(f"failsafe 狀態：{self.mav_state}")
+        if not reasons:
+            # 沒有反對證據 ≠ 就緒——還要有**權威依據**才敢斷言「可飛」。
+            # 權威訊號只有 prearm_ok（PX4 的 arming checks 總結）與 ekf_ok；
+            # **GPS 好不算數**：GPS 定位良好但預檢未過（羅盤未校正、EKF 未收斂…）
+            # 完全可能，拿 GPS 當「就緒」的依據就是用次級訊號冒充權威判斷。
+            # 反向證據仍然有效——GPS 未定位這類「我們知道它不行」照樣回 False。
+            if self.prearm_ok is None and self.ekf_ok is None:
+                return None, ["尚未收到預檢／EKF 狀態，無法判定就緒"]
         # prearm_ok=None＝韌體不回報 PREARM 位元，退回次級訊號判定
         return (not reasons and self.prearm_ok is not False), reasons
 
