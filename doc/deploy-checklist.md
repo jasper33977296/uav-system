@@ -166,6 +166,11 @@
       單機 arm→takeoff→RTL 走一遍（前端或 `POST :38001/api/command/<sysid>/takeoff`），落地正常
 - [ ] armed 時 DB 真的有新 `telemetry`／`link_metrics` 列（check-onboard 第 6 項會抽查）
 
+- [ ] **路徑管理頁「從機上讀回」實際點一次**，確認任務入庫。
+      ⚠️ 這條路徑**在多機模擬環境曾長期不通**（fanout 的 backend 腿是單向的、
+      backend 送不出查詢，2026-08-12 才修），沒人發現只因為沒人用過——**真機是
+      第一次真正驗證它**，請務必實際點一次而不是假設它會動。
+
 ### 5b. 編隊（≥2 台，單機都過之後）
 - [ ] 前端建群組任務（unified 或 separate）→ 執行 → 各機 phase 逐台推進到 flying
 - [ ] 緊急鈕：群組 RTL-all／abort 能全撤、各機安全返航落地
