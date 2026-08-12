@@ -7,3 +7,8 @@ node_modules/
 /.env
 /.onboard-buffer.sqlite3
 backups/
+
+# 一致性測試結果（issue 026 B3）：**逐環境產生的證據，不是原始碼**。
+# 進版控會變成「某台機某個時刻的結果」被當成全體事實——而它的語意本來就是
+# 「這個環境、這個韌體版本、這個時間點驗過」。要跑就在該環境自己跑一次。
+data/conformance/
