@@ -5,8 +5,9 @@ import "maplibre-gl/dist/maplibre-gl.css";
 import { useParams, useRouter } from "next/navigation";
 import { useEffect, useMemo, useRef, useState } from "react";
 
-import { createDroneLayer } from "@/components/droneLayer";
+import { colorFor, createDroneLayer } from "@/components/droneLayer";
 import EventModal from "@/components/EventModal";
+import ReplayVideo, { type SessionVideo } from "@/components/ReplayVideo";
 import { SignalBars } from "@/components/SimpleHud";
 import { routeLayer } from "@/lib/deckRoute";
 import { evText } from "@/lib/evtext";
@@ -103,7 +104,9 @@ export default function Replay() {
   const router = useRouter();
   const [rows, setRows] = useState<LinkRow[]>([]);
   const [meta, setMeta] = useState<{ mission_id: string | null;
-    mission_name: string | null; drone_name?: string | null } | null>(null);
+    mission_name: string | null; drone_name?: string | null;
+    drone_id?: string | null } | null>(null);
+  const [video, setVideo] = useState<SessionVideo | null>(null);   // §5.4
   const [plan, setPlan] = useState<{ lat: number; lon: number; alt: number | null }[]>([]);
   const [events, setEvents] = useState<Ev[]>([]);
   const [openEv, setOpenEv] = useState<Ev | null>(null);   // 事件詳情 modal（§2.7）
@@ -128,6 +131,10 @@ export default function Replay() {
             .catch(() => {});
       })
       .catch(() => {});
+    // §5.4 影片中繼資料：video_status 五態全後端算（UI 不做日期運算）
+    fetch(`${API}/api/sessions/${sessionId}/video`)
+      .then((r) => (r.ok ? r.json() : null))
+      .then(setVideo).catch(() => {});
     fetch(`${API}/api/events?session_id=${sessionId}`)
       .then((r) => r.json())
       // REST 的 detail 是 JSONB 字串——解析成物件（modal 細節層要用）
@@ -272,6 +279,8 @@ export default function Replay() {
             { month: "numeric", day: "numeric", hour: "2-digit", minute: "2-digit",
               hour12: false })}
           {meta?.mission_name && ` · ${meta.mission_name}`}
+          {/* opt-out 留痕（§5.4）：未錄影＝正常態，弱字不宣告 */}
+          {video?.video_status === "off" && "　本趟未錄影"}
         </span>
       </div>
 
@@ -279,14 +288,38 @@ export default function Replay() {
         {!rows.length && <div className="empty" style={{ padding: 20 }}>載入軌跡中…（若架次無樣本則無可回放）</div>}
       </div>
 
+      {/* §5.4 影片同步窗：時鐘源＝回放 transport，影片跟隨 */}
+      {video && rows.length > 1 && cur && (
+        <ReplayVideo video={video} rows={rows}
+          tCurMs={new Date(cur.time).getTime()}
+          playing={playing} speed={speed}
+          droneName={meta?.drone_name ?? null}
+          droneColor={meta?.drone_id ? colorFor(meta.drone_id) : "#8f8b80"} />
+      )}
+
       {rows.length > 1 && (
         <div className="timeline">
           {/* 播放＋時間軸＋游標處 ▲高度/訊號格；速度收 ⋯（§7 預設） */}
           <div className="scrub-row">
             <button className="btn-plain btn-sm" title="播放/暫停（空白鍵）"
               onClick={() => setPlaying((p) => !p)}>{playing ? "⏸" : "▶"}</button>
-            <input type="range" min={0} max={rows.length - 1} value={idx}
-                   onChange={(e) => { setIdx(Number(e.target.value)); setPlaying(false); }} />
+            <span className="scrub-wrap">
+              <input type="range" min={0} max={rows.length - 1} value={idx}
+                     onChange={(e) => { setIdx(Number(e.target.value)); setPlaying(false); }} />
+              {/* §5.4 影像涵蓋帶：3px 薄帶、段間空白＝真空白（不拼接）；
+                  expired 不顯示（影像已清除，畫涵蓋帶會謊稱資料還在） */}
+              {video?.video_status === "available" && video.segments.length > 0 && (
+                <span className="vid-cover">
+                  {video.segments.map((g) => {
+                    const s = new Date(g.started_at).getTime();
+                    const L = Math.max(0, ((s - t0) / (t1 - t0 || 1)) * 100);
+                    const R = Math.min(100, ((s + g.duration_s * 1000 - t0) / (t1 - t0 || 1)) * 100);
+                    if (R <= 0 || L >= 100) return null;
+                    return <span key={g.id} style={{ left: `${L}%`, width: `${R - L}%` }} />;
+                  })}
+                </span>
+              )}
+            </span>
             <span className="scrub-read">
               {cur && new Date(cur.time).toLocaleTimeString("zh-TW", { hour12: false })}
               　▲{fmt(cur?.alt_rel, 0)}m

@@ -28,6 +28,7 @@ interface Session {
     avg_sinr?: number | null; min_sinr?: number | null; avg_rtt_ms?: number | null;
     max_alt_rel?: number | null; samples_total?: number;
   } | null;
+  video_mode?: string | null;   // §5.4：off＝未錄影弱字標記（有錄不標）
 }
 
 const fmt = (v: number | null | undefined, d = 1) => (v == null ? "—" : v.toFixed(d));
@@ -265,7 +266,12 @@ export default function Drones() {
                     title="點擊回放這條航線"
                     onClick={() => router.push(`/replay/${s.id}`)}
                   >
-                    <td>{new Date(s.started_at).toLocaleString("zh-TW", { hour12: false })}</td>
+                    <td>
+                      {new Date(s.started_at).toLocaleString("zh-TW", { hour12: false })}
+                      {/* §5.4 opt-out 留痕：未錄影弱字；有錄的不標（正常不宣告） */}
+                      {s.video_mode === "off" &&
+                        <span className="meta" style={{ marginLeft: 6 }}>未錄影</span>}
+                    </td>
                     <td>{s.mission_name ?? "—"}</td>
                     <td>{duration(s.started_at, s.ended_at)}</td>
                     <td className="num">{s.summary?.samples_total ?? "—"}</td>
