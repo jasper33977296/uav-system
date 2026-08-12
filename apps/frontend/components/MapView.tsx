@@ -1,16 +1,17 @@
 "use client";
-import { TextLayer } from "@deck.gl/layers";
+import { IconLayer, TextLayer } from "@deck.gl/layers";
 import { MapboxOverlay } from "@deck.gl/mapbox";
 import maplibregl from "maplibre-gl";
 import "maplibre-gl/dist/maplibre-gl.css";
 import { useEffect, useRef, useState } from "react";
 
 import CommandPanel from "@/components/CommandPanel";
-import { colorFor, createDroneLayer, pickDrone, type ScreenHit } from "@/components/droneLayer";
+import { colorFor } from "@/components/droneLayer";
 import SimpleHud from "@/components/SimpleHud";
 import VideoModal from "@/components/VideoModal";
 import VideoPlayer from "@/components/VideoPlayer";
 import { pathsLayer, rgba, routeLayer, type RouteRun } from "@/lib/deckRoute";
+import { DRONE_ICON_SIZE, droneIconUrl } from "@/lib/droneIcon";
 import { basePreview, separatePreview, unifiedPreview, type Wp } from "@/lib/formation";
 import { CANVAS, groundGrid, ribbon, trailLineString } from "@/lib/geo";
 import { API, LINK_CLASSES } from "@/lib/signal";
@@ -27,9 +28,7 @@ interface DroneVideo { id: string; name: string; video_url: string | null }
 export default function MapView() {
   const containerRef = useRef<HTMLDivElement>(null);
   const mapRef = useRef<maplibregl.Map | null>(null);
-  const markerRef = useRef<maplibregl.Marker | null>(null);
   const centeredRef = useRef(false);
-  const hitsRef = useRef<Map<string, ScreenHit>>(new Map());
   const [videoDrone, setVideoDrone] = useState<string | null>(null);
   const coordRef = useRef<HTMLDivElement>(null);
   const overlayRef = useRef<MapboxOverlay | null>(null);
@@ -114,6 +113,35 @@ export default function MapView() {
     fetch(`${API}/api/drones`).then((r) => r.json())
       .then(setVideoList).catch(() => setVideoList([]));
   }, [view, selId]);
+  // §2.4b 底圖（NLSC 正射影像，opt-in）：預設關＝深色畫布（離線保證與
+  // 對比基準不變）；開關住圖例卡內、狀態記憶；瓦片抓不到時退回深色並
+  // 在圖例標「底圖離線」——不留白畫布假裝使用者關掉了
+  const [baseOn, setBaseOn] = useState(false);
+  const [baseOffline, setBaseOffline] = useState(false);
+  // 涵蓋範圍外＝第三種狀態，與「離線」不同：NLSC 只有臺灣的正射影像，
+  // 圖磚伺服器對境外座標**回 200 但給空白磚**（實測瑞士 SITL 區 1.7KB
+  // vs 台北 31KB）——不說的話畫面表現是「開了卻沒變化」，使用者只會
+  // 以為壞了。境外時如實說明而非讓人猜
+  const [baseOutside, setBaseOutside] = useState(false);
+  useEffect(() => { setBaseOn(localStorage.getItem("map-basemap") === "1"); }, []);
+  const setBase = (v: boolean) => {
+    setBaseOn(v);
+    setBaseOffline(false);
+    localStorage.setItem("map-basemap", v ? "1" : "0");
+  };
+
+  // 底圖顯隱：只切 visibility，不重建地圖（deck overlay 不受影響）。
+  // 需等 style 載入：map 物件在建構後就存在，但 style 未就緒時呼叫
+  // getLayer 會在 maplibre 內部炸掉（實測整頁白畫面）
+  const [styleReady, setStyleReady] = useState(false);
+  useEffect(() => {
+    const map = mapRef.current;
+    if (!styleReady || !map || !map.getLayer("basemap")) return;
+    const v = baseOn && !baseOffline ? "visible" : "none";
+    map.setLayoutProperty("basemap", "visibility", v);
+    map.setLayoutProperty("basemap-dim", "visibility", v);
+  }, [baseOn, baseOffline, styleReady]);
+
   // PiP 收合態（§2.9：小窗可收合成 📹 鈕）；換機自動展開回小窗
   const [pipHidden, setPipHidden] = useState(false);
   useEffect(() => { setPipHidden(false); }, [selId]);
@@ -192,6 +220,38 @@ export default function MapView() {
     mapRef.current = map;
 
     map.on("load", async () => {
+      // §2.4b 底圖：NLSC 正射影像（WMTS，GoogleMapsCompatible 切圖）＋
+      // 其上一層暖色暗化——分級色必須在最亮地物（水泥/屋頂）上仍可辨。
+      // 兩層都建但預設隱藏，切換只動 visibility（不重建地圖）
+      map.addSource("nlsc", {
+        type: "raster", tileSize: 256, maxzoom: 20,
+        attribution: "© 內政部國土測繪中心",
+        tiles: ["https://wmts.nlsc.gov.tw/wmts/PHOTO2/default/GoogleMapsCompatible/{z}/{y}/{x}"],
+      });
+      map.addLayer({
+        id: "basemap", type: "raster", source: "nlsc",
+        layout: { visibility: "none" }, paint: { "raster-opacity": 1 },
+      });
+      map.addLayer({
+        id: "basemap-dim", type: "background",
+        layout: { visibility: "none" },
+        paint: { "background-color": CANVAS, "background-opacity": 0.5 },
+      });
+      // 瓦片抓不到＝離線：退回深色畫布並如實標示（見圖例列）
+      map.on("error", (e) => {
+        const src = (e as unknown as { sourceId?: string }).sourceId;
+        if (src === "nlsc") setBaseOffline(true);
+      });
+      // 涵蓋範圍偵測（臺灣本島＋離島的寬鬆包絡）
+      const inTW = () => {
+        const c = map.getCenter();
+        return c.lng > 118 && c.lng < 123.5 && c.lat > 20 && c.lat < 26.5;
+      };
+      const upd = () => setBaseOutside(!inTW());
+      upd();
+      map.on("moveend", upd);
+      setStyleReady(true);   // 底圖切換 effect 的閘：style 就緒才可動圖層
+
       // 地面基準：網格 50m 一格 + 起飛點雙圈錨點
       map.addSource("grid", { type: "geojson", data: groundGrid(HOME[1], HOME[0]) });
       map.addLayer({
@@ -239,28 +299,15 @@ export default function MapView() {
       map.addControl(overlay as unknown as maplibregl.IControl);
       overlayRef.current = overlay;
 
-      // 無人機本體：three.js 正圓球體，浮在實際高度。
-      // 讀整個 fleet——多機時幾台就畫幾台，顏色依出現順序取機隊色盤。
-      map.addLayer(createDroneLayer("drones", () =>
-        Object.entries(useUavStore.getState().fleet)
-          .filter(([, t]) => t.lat != null && t.lon != null)
-          .map(([id, t]) => ({
-            id, lat: t.lat!, lon: t.lon!, alt: t.alt_rel ?? 0, color: colorFor(id),
-          })), hitsRef.current));
+      // 機體表示自 §2.4b 起改為 2D 四旋翼俯視圖示（deck IconLayer，見
+      // setProps 處）：俯視剪影能表達朝向、在正射影像底圖上也辨識得出來，
+      // 球體做不到（正圓沒有朝向）。three.js 球體層程式碼保留未掛載——
+      // 若 2D 效果不佳要回退，把下面這行解註即可（PM 定案：3D 模型不做）
+      // map.addLayer(createDroneLayer("drones", () => …));
 
-      // 點擊機體 → 即時畫面 modal（自訂層不在 queryRenderedFeatures 裡，
-      // 用 render 時算好的螢幕位置自行命中）
-      map.on("click", (e) => {
-        const id = pickDrone(hitsRef.current, e.point.x, e.point.y);
-        if (!id) return;
-        // 編隊模式：點機體球＝切焦點（看誰）；單機模式照舊開即時影像
-        const st = useUavStore.getState();
-        if (st.formation) st.select(id);
-        else setVideoDrone(id);
-      });
+      // 點擊機體改由 deck IconLayer 的 onClick 承接（圖示層是 pickable，
+      // 不再需要自算螢幕命中——那是 three.js 自訂層時代的做法）
       map.on("mousemove", (e) => {
-        map.getCanvas().style.cursor =
-          pickDrone(hitsRef.current, e.point.x, e.point.y) ? "pointer" : "";
         // 游標經緯度（issue 017 P1）：直接寫 DOM——60Hz 的 mousemove
         // 走 React state 會整個元件重渲染
         if (coordRef.current) {
@@ -341,14 +388,9 @@ export default function MapView() {
         const t = s.live;
         if (!map || !t || t.lat == null || t.lon == null) return;
 
-        if (!markerRef.current) {
-          const el = document.createElement("div");
-          el.className = "drone-marker";
-          markerRef.current = new maplibregl.Marker({ element: el, rotationAlignment: "map" })
-            .setLngLat([t.lon, t.lat])
-            .addTo(map);
-        }
-        markerRef.current.setLngLat([t.lon, t.lat]).setRotation(t.heading ?? 0);
+        // 舊的主機方向標（三角 marker）自 §2.4b 起移除：機體圖示本身已
+        // 帶朝向，兩個朝向指示同時出現＝同一資訊兩個住所，且它只畫主機、
+        // 與多機圖示不一致（heading 缺值時還會固定指北——假朝向）
 
         if (!centeredRef.current) {
           centeredRef.current = true;
@@ -363,6 +405,40 @@ export default function MapView() {
         overlayRef.current?.setProps({ layers: [
           routeLayer("route3d", s.trails),
           pathsLayer("formation-preview", previewRef.current),
+          // §2.4b 機體圖示：2D 四旋翼俯視剪影、著識別色、隨 heading 旋轉。
+          // billboard:false＝貼地平面，傾斜視角下自然透視、且跟著地圖旋轉，
+          // 朝向語意才成立。heading 缺值→對稱造型且不旋轉（不假裝朝向）
+          new IconLayer({
+            id: "drone-icons",
+            data: Object.entries(s.fleet)
+              .filter(([, t]) => t.lat != null && t.lon != null)
+              .map(([id, t]) => ({
+                id, hdg: t.heading,
+                pos: [t.lon!, t.lat!, t.alt_rel ?? 0] as [number, number, number],
+                url: droneIconUrl(colorFor(id), t.heading != null),
+              })),
+            getPosition: (d: { pos: [number, number, number] }) => d.pos,
+            getIcon: (d: { url: string }) => ({
+              url: d.url, width: DRONE_ICON_SIZE, height: DRONE_ICON_SIZE,
+              anchorX: DRONE_ICON_SIZE / 2, anchorY: DRONE_ICON_SIZE / 2, mask: false,
+            }),
+            // deck 角度為逆時針、heading 為順時針自北——取負值對齊
+            getAngle: (d: { hdg: number | null | undefined }) =>
+              (d.hdg == null ? 0 : -d.hdg),
+            getSize: 44, sizeUnits: "pixels", billboard: false, pickable: true,
+            onHover: (info) => {
+              const c = mapRef.current?.getCanvas();
+              if (c) c.style.cursor = info.object ? "pointer" : "";
+            },
+            onClick: (info) => {
+              const id = (info.object as { id: string } | null)?.id;
+              if (!id) return true;
+              const st = useUavStore.getState();
+              if (st.formation) st.select(id); else setVideoDrone(id);
+              return true;
+            },
+            updateTriggers: { getIcon: fleetIds, getPosition: fleetIds },
+          }),
           // 機身標籤（ui-spec §0.1 硬規則）：色點/球體一律配常駐文字——
           // 第 4 台起色盤耗盡全落同一灰，只有顏色時兩台完全無法分辨；
           // 且球體連 hover 都沒有。文字對任意機數都成立。
@@ -467,6 +543,7 @@ export default function MapView() {
       {/* 軌跡顏色圖例：回歸左下常駐（ui-spec §2 使用者定案），HUD 上方 */}
       <div className="legend">
         <h4>訊號品質</h4>
+        {/* 底圖切換住圖例卡內（§2.4b）：圖例本就是「地圖上有什麼」的說明處 */}
         {LINK_CLASSES.map((c) => (
           <div className="row" key={c.key}>
             <span className="dot" style={{ background: c.color }} />
@@ -480,6 +557,20 @@ export default function MapView() {
         <div className="row">
           <span className="dot" style={{ background: "transparent", border: "1.5px solid #8f8b80" }} />
           起飛點
+        </div>
+        {/* 底圖切換（§2.4b）：不新增浮動按鈕；離線時如實標示而非靜默退回 */}
+        <div className="row legend-base">
+          底圖
+          <span className="seg">
+            <button className={!baseOn ? "on" : ""} onClick={() => setBase(false)}>無</button>
+            <button className={baseOn ? "on" : ""} onClick={() => setBase(true)}>影像</button>
+          </span>
+          {baseOn && baseOffline && <span className="meta">底圖離線</span>}
+          {baseOn && !baseOffline && baseOutside && (
+            <span className="meta" title="國土測繪中心正射影像僅涵蓋臺灣">
+              此區無影像
+            </span>
+          )}
         </div>
       </div>
 

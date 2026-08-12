@@ -33,12 +33,13 @@ _BASE_TAKEOFF_ALT = 10.0  # 分層起飛基準高度（相對）；逐台再加 
 
 
 class GroupExecutor:
-    def __init__(self, router, pool, build_items, audit, live_fn):
+    def __init__(self, router, pool, build_items, audit):
         self.router = router
         self.pool = pool
         self._build_items = build_items     # main.build_items（避免循環 import，注入）
         self._audit = audit                 # main._audit
-        self._live = live_fn                # main._live（主機即時態，取地面海拔近似）
+        # **刻意不注入 backend /api/live**：那個端點只回主機，拿它當全隊的地面
+        # 海拔來源是錯的（見 _ground_amsl_for）。高度一律走 router 的 per-sysid。
         self.runs: dict[str, dict] = {}     # gid → {task, abort: asyncio.Event}
 
     # ── 載入群組（command 與 backend 共用同一 DB）──────────────────
@@ -157,7 +158,6 @@ class GroupExecutor:
         if isinstance(params, str):
             params = json.loads(params)
         vsep = float((params or {}).get("vsep_m", 5.0))
-        ground_amsl = await self._ground_amsl()
         try:
             # Phase 1：UPLOAD（逐台材料化任務上傳＋回讀比對）
             for m in members:
@@ -202,7 +202,8 @@ class GroupExecutor:
                     return
                 await self._set_phase(gid, m["drone_id"], "starting")
                 m["_alt_target"] = _BASE_TAKEOFF_ALT + m["layer_index"] * vsep
-                amsl = ((ground_amsl + m["_alt_target"]) if ground_amsl is not None
+                g_amsl = self._ground_amsl_for(m["mav_sysid"])   # **逐台**，不是全隊一個
+                amsl = ((g_amsl + m["_alt_target"]) if g_amsl is not None
                         else m["_alt_target"])   # NAV_TAKEOFF param7=AMSL、經緯/偏航 NaN=原地
                 try:
                     await self._submit_audited(
@@ -255,14 +256,20 @@ class GroupExecutor:
                 return True
         return False
 
-    async def _ground_amsl(self):
-        """地面海拔近似。[收尾] 骨架用主機 /api/live 當代理，真機需 per-sysid alt。"""
-        try:
-            d = await self._live()
-            if d.get("alt_msl") is not None and d.get("alt_rel") is not None:
-                return d["alt_msl"] - d["alt_rel"]
-        except Exception:
-            pass
+    def _ground_amsl_for(self, sysid):
+        """該機的地面海拔（NAV_TAKEOFF param7=AMSL 用）。
+
+        取代原本的 `_ground_amsl()`——那個讀 backend `/api/live`，而該端點只回
+        **主機**，等於拿主機的地面海拔去算全隊每一台的絕對起飛高度。原註解已
+        自承是骨架代理（「真機需 per-sysid alt」）；SITL 全機同址所以差值為零、
+        看不出來，**真機分散部署就會差一整個地面高差**。
+
+        改讀 router 的 per-sysid 紀錄（mav.py GLOBAL_POSITION_INT），與「等到達
+        高度才切 MISSION」同源。拿不到就回 None＝退回相對高度語意。
+        """
+        d = (self.router.drones.get(sysid) or {}) if self.router else {}
+        if d.get("alt_msl") is not None and d.get("alt_rel") is not None:
+            return d["alt_msl"] - d["alt_rel"]
         return None
 
     async def _fail_group(self, gid, members, reason):

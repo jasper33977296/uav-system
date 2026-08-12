@@ -147,6 +147,11 @@ class MavRouter(threading.Thread):
                 "autopilot": ap,                       # 字串枚舉 px4/ardupilot/unknown
                 "autopilot_raw": d.get("autopilot"),   # MAV_AUTOPILOT_*，除錯用
                 "vehicle_type": _VEHICLE_TYPES.get(d.get("type")),
+                # per-sysid 高度：起飛序列與群組執行器的判斷依據。**列在這裡是
+                # 因為它看不見的時候，「讀到別台的高度」這種 bug 也看不見**
+                # （2026-08-12：單機 mission_fly 讀主機高度，錯了多久沒人知道）。
+                "alt_rel": d.get("alt_rel"),
+                "alt_msl": d.get("alt_msl"),
                 "capabilities": cap,                   # 伺服器端 gating 唯一真相
                 "capability_reasons": reasons,
             }
@@ -276,9 +281,14 @@ class MavRouter(threading.Thread):
                             except CommandError:
                                 pass
                 elif msg.get_type() == "GLOBAL_POSITION_INT":
-                    # per-sysid 相對高度——群組執行器「等到達高度才切 MISSION」的
-                    # 依據（issue 013-B；單機 mission_fly 教訓的多機版，不靠 backend）
+                    # per-sysid 高度——「等到達高度才切 MISSION」的依據
+                    # （issue 013-B；單機 mission_fly 教訓的多機版，不靠 backend）。
+                    # **單機路徑原本漏了這一課**：mission_fly 與 _do_takeoff 讀
+                    # backend `/api/live`，而那個端點只回**主機**——飛非主機時
+                    # 拿到的是別台的高度（2026-08-12 前端驗收實測：uav-s2 起飛
+                    # 成功卻回報 -0.04m，那是停在地面的主機）。已改為與這裡同源。
                     d["alt_rel"] = msg.relative_alt / 1000.0
+                    d["alt_msl"] = msg.alt / 1000.0
                 elif msg.get_type() == "PARAM_VALUE":
                     if msg.param_id in ("SYSID_MYGCS", "MAV_GCS_SYSID"):
                         d["sysid_mygcs"] = int(msg.param_value)

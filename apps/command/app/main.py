@@ -142,7 +142,7 @@ async def lifespan(app):
     router = mav.MavRouter(settings.command_mavlink_url,
                            heartbeat=settings.enable_commands)
     router.start()
-    executor = group_exec.GroupExecutor(router, pool, build_items, _audit, _live)
+    executor = group_exec.GroupExecutor(router, pool, build_items, _audit)
     log.info("command 服務啟動：%s（enable_commands=%s，sysid=%d）",
              settings.command_mavlink_url, settings.enable_commands, mav.GCS_SYSID)
     yield
@@ -215,18 +215,20 @@ class TakeoffIn(BaseModel):
 async def _do_takeoff(sysid: int, alt: float) -> dict:
     """解鎖（未解鎖時）→ NAV_TAKEOFF 到指定相對高度。
 
-    PX4 的 MAV_CMD_NAV_TAKEOFF param7 是**絕對海拔**——用 live 的
+    PX4 的 MAV_CMD_NAV_TAKEOFF param7 是**絕對海拔**——用該機的
     alt_msl - alt_rel 推地面海拔再加目標高度；經緯度/偏航給 NaN＝原地。
     """
     # 地面海拔只有 PX4 需要（它的 param7 是絕對海拔）；ArduPilot 用相對高度，
-    # 拿不到 live 也能起飛。方言差異在 mav.job_takeoff 裡，這裡不判斷廠牌。
+    # 拿不到也能起飛。方言差異在 mav.job_takeoff 裡，這裡不判斷廠牌。
+    #
+    # **必須取這一台的高度**：原本讀 backend `/api/live`，而那個端點只回**主機**
+    # ——飛非主機時等於拿別台的地面海拔去算絕對起飛高度。SITL 全機同址所以差值
+    # 為零、看不出來；真機分散部署就會差一整個地面高差。改讀 router 的 per-sysid
+    # 紀錄（與群組執行器同源）。
+    dd = (router.drones.get(sysid) if router else None) or {}
     ground_amsl = None
-    try:
-        d = await _live()
-        if d.get("alt_msl") is not None and d.get("alt_rel") is not None:
-            ground_amsl = d["alt_msl"] - d["alt_rel"]
-    except Exception:
-        pass
+    if dd.get("alt_msl") is not None and dd.get("alt_rel") is not None:
+        ground_amsl = dd["alt_msl"] - dd["alt_rel"]
     res = await _run(sysid, f"takeoff:{alt}m", mav.job_takeoff, alt, ground_amsl)
     return res.get("steps", res)
 
@@ -309,11 +311,18 @@ async def mission_fly(sysid: int, body: FlyIn):
     steps.update(await _do_takeoff(sysid, body.takeoff_alt))
 
     # 等高度實際到達（80% 即視為到位，PX4 收斂段不必等滿）
+    # **必須看這一台的高度**：原本讀 backend `/api/live`，而那個端點只回**主機**。
+    # 飛非主機時這個判斷完全與目標機無關——2026-08-12 前端驗收實測，uav-s2 起飛
+    # 成功卻回報「未達目標高度（-0.04m）」，那個 -0.04 是停在地面的主機。
+    # 反方向更危險：**主機在空中而目標機沒起來時，這個檢查會通過**，於是把一台
+    # 還在地面的機切進 AUTO.MISSION——正是本序列存在的理由（2026-08-11 教訓）被
+    # 架空。群組執行器早就改用 per-sysid（mav.py GLOBAL_POSITION_INT），單機路徑
+    # 漏了同一課，現在同源。
     deadline = asyncio.get_running_loop().time() + body.alt_timeout_s
     alt = None
     while asyncio.get_running_loop().time() < deadline:
         await asyncio.sleep(1.0)
-        alt = (await _live()).get("alt_rel")
+        alt = ((router.drones.get(sysid) if router else None) or {}).get("alt_rel")
         if alt is not None and alt >= body.takeoff_alt * 0.8:
             break
     else:

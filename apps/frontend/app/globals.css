@@ -119,14 +119,8 @@ a:focus-visible, button:focus-visible, input:focus-visible, select:focus-visible
 .legend .row { display: flex; align-items: center; gap: 6px; color: var(--ink-2); line-height: 1.7; }
 .dot { width: 8px; height: 8px; border-radius: 50%; flex: none; }
 
-/* 無人機圖示 */
-.drone-marker {
-  width: 0; height: 0;
-  border-left: 9px solid transparent;
-  border-right: 9px solid transparent;
-  border-bottom: 24px solid var(--series-1);
-  filter: drop-shadow(0 1px 2px rgba(0, 0, 0, 0.4));
-}
+/* 舊的主機方向標三角已隨 §2.4b 移除（機體圖示自帶朝向，見 lib/droneIcon.ts）——
+   樣式一併清掉，避免留下沒有對應元件的死規則 */
 
 /* 側欄 */
 .panel {
@@ -320,6 +314,15 @@ a:focus-visible, button:focus-visible, input:focus-visible, select:focus-visible
   font-size: 12.5px; max-width: 260px;
 }
 .ab-cap input { border-bottom: 1px solid var(--accent); }
+/* 圖例內的底圖切換（§2.4b）：不新增浮動按鈕 */
+.legend-base { display: flex; align-items: center; gap: 6px; margin-top: 4px; }
+.legend-base .seg { display: inline-flex; border-radius: 6px; overflow: hidden; }
+.legend-base .seg button {
+  font-size: 11px; padding: 2px 8px; cursor: pointer;
+  background: var(--surface-2); color: var(--muted); border: none;
+}
+.legend-base .seg button.on { background: var(--surface); color: var(--ink); }
+
 .ab-testtoggle {
   display: inline-flex; align-items: center; gap: 5px;
   font-size: 12px; color: var(--muted); cursor: pointer;
