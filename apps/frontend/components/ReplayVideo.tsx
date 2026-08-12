@@ -164,7 +164,7 @@ export default function ReplayVideo({ video, rows, tCurMs, playing, speed,
       {/* 機身識別徽章：§2.9/§5.4 明文不得因簡約原則移除 */}
       <div className="video-tile-label">
         <span className="dot" style={{ background: droneColor }} />
-        {droneName ?? "—"}
+        {droneName || "未知機身"}
       </div>
       {band && <div className="vid-band" style={{ background: band }} />}
     </div>

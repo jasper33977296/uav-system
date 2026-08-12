@@ -473,7 +473,7 @@ export default function CommandPanel() {
             // 風險擋在行動點：逐台原因（未驗證/低電/未就緒），伺服器端同步 gate
             const riskHints = targetIds.flatMap((id) => {
               const t = fleet[id];
-              const name = t?.drone_name ?? id.slice(0, 6);
+              const name = t?.drone_name || id.slice(0, 6);
               if (!t || !t.connected) return [`${name}：已離線`];
               const out: string[] = [];
               const tsid = t.mav_sysid != null ? String(t.mav_sysid) : null;
@@ -514,7 +514,7 @@ export default function CommandPanel() {
                 {(groupRun?.assignments ?? []).map((a) => (
                   <div className="run-row" key={a.drone_id}>
                     <span className="dot" style={{ background: colorFor(a.drone_id) }} />
-                    <span>{a.drone_name ?? a.drone_id.slice(0, 6)}</span>
+                    <span>{a.drone_name || a.drone_id.slice(0, 6)}</span>
                     <span className="spacer" />
                     <span className={a.phase.includes("failed") || a.phase === "rejected"
                       ? "run-err" : "run-ok"}>
@@ -525,7 +525,7 @@ export default function CommandPanel() {
                 {/* 失敗必須看得見：結構化原因原文逐台列出 */}
                 {(groupRun?.assignments ?? []).filter((a) => a.error?.msg).map((a) => (
                   <div className="cmd-result err" key={`e${a.drone_id}`}>
-                    {a.drone_name ?? a.drone_id.slice(0, 6)}：{a.error!.msg}
+                    {a.drone_name || a.drone_id.slice(0, 6)}：{a.error!.msg}
                     {a.error!.hint ? `——${a.error!.hint}` : ""}
                     {a.error!.autopilot_notes?.length
                       ? `｜自駕儀：${a.error!.autopilot_notes.join("；")}` : ""}
@@ -554,7 +554,7 @@ export default function CommandPanel() {
               {/* gate 擋（409＝序列未啟動）：逐台原因原文 */}
               {gateRejects?.map((m, i) => (
                 <div className="cmd-ready warn" key={i}>
-                  ✗ {m.drone_name ?? "?"}：{m.reason ?? ""}
+                  ✗ {m.drone_name || "?"}：{m.reason ?? ""}
                   {m.hint ? `——${m.hint}` : ""}
                 </div>
               ))}
@@ -564,15 +564,15 @@ export default function CommandPanel() {
                 {members.map(([id, t]) => {
                   const noCh = t.mav_sysid == null;
                   const risky = riskHints.some((h) =>
-                    h.startsWith(t.drone_name ?? id.slice(0, 6)));
+                    h.startsWith(t.drone_name || id.slice(0, 6)));
                   return (
                     <button key={id} disabled={noCh}
-                      title={noCh ? "無指令通道（非 MAVLink）" : t.drone_name ?? id}
+                      title={noCh ? "無指令通道（非 MAVLink）" : t.drone_name || id}
                       className={`member ${targetIds.includes(id) ? "tgt" : ""}`
                         + ` ${id === focusId ? "focus" : ""} ${risky ? "warn" : ""}`}
                       onClick={() => useUavStore.getState().toggleTarget(id)}>
                       <span className="dot" style={{ background: colorFor(id) }} />
-                      {t.drone_name ?? id.slice(0, 6)}
+                      {t.drone_name || id.slice(0, 6)}
                     </button>
                   );
                 })}
@@ -645,7 +645,7 @@ export default function CommandPanel() {
                         : draftGroup.assignments.find(
                             (x) => x.drone_id === label
                               || String(x.mav_sysid ?? "") === label);
-                      return hit?.drone_name ?? label;
+                      return hit?.drone_name || label;
                     };
                     return (
                       <div className="cmd-ready warn" key={i}>
@@ -656,7 +656,7 @@ export default function CommandPanel() {
                 )}
                 {draftGroup.assignments.map((a) => (
                   <div className="hint-line" key={a.drone_id}>
-                    · {a.drone_name ?? a.drone_id.slice(0, 6)}
+                    · {a.drone_name || a.drone_id.slice(0, 6)}
                     　layer {a.layer_index}
                     {a.mav_sysid != null ? `　sysid ${a.mav_sysid}` : ""}
                   </div>
@@ -672,7 +672,7 @@ export default function CommandPanel() {
           {/* 明示對象機：遙測與指令按鈕永遠是同一台（選中機統一） */}
           <div className="cmd-status">
             <span className="st-target">
-              {live?.drone_name ?? "—"}{sid ? `（sysid ${sid}）` : ""}
+              {live?.drone_name || "—"}{sid ? `（sysid ${sid}）` : ""}
             </span>
             {/* 機型 chip（§2.6 安置：身分歸身分——自抽屜專業數值卡移入） */}
             {apLabel && <span className="chip">{apLabel}</span>}

@@ -75,7 +75,7 @@ function InspectorSheet({ droneId, onClose }: { droneId: string; onClose: () => 
                     return n;
                   })}>
                   {/* 未知型別顯示 id 不隱藏（§2.8 文字圖）——收到什麼列什麼 */}
-                  <span className="insp-name">{m.name ?? `#${m.id}`}</span>
+                  <span className="insp-name">{m.name || `#${m.id}`}</span>
                   {/* hz=null＝一次性/首見訊息還沒有率（實測 MISSION_ACK 炸過
                       toFixed 整頁白屏）。設計師裁定：null 欄留空——「還不知道」
                       不是 0.0 也不是 —；型別名照列（收到什麼列什麼） */}
@@ -130,9 +130,12 @@ export default function OnboardDataCard() {
       {reg.sensors.length > 0 && (
         <div className="obd-sensors">
           <span className="imu-lab">感測</span>
-          {reg.sensors.map((sn) => (
-            <span key={sn.name} className={`obd-sn ${sn.ok ? "" : "obd-bad"}`}>
-              {sn.ok ? "●" : "✗"}{SENSOR_LABELS[sn.name] ?? sn.name}
+          {/* 名稱空值不可只畫一顆點——「某個感測正常/故障但不說是哪顆」等於
+              有標籤而無意義（?? 擋不住空字串，識別字串一律用 ||） */}
+          {reg.sensors.map((sn, i) => (
+            <span key={`${sn.name || "?"}:${i}`}
+              className={`obd-sn ${sn.ok ? "" : "obd-bad"}`}>
+              {sn.ok ? "●" : "✗"}{SENSOR_LABELS[sn.name] || sn.name || "未知感測"}
             </span>
           ))}
         </div>

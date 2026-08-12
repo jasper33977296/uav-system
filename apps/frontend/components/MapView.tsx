@@ -105,7 +105,7 @@ export default function MapView() {
   const selId = useUavStore((s) => s.selectedId ?? s.primaryId);
   const selName = useUavStore((s) => {
     const id = s.selectedId ?? s.primaryId;
-    return id ? s.fleet[id]?.drone_name ?? id : null;
+    return id ? s.fleet[id]?.drone_name || id : null;
   });
   // §2.9 PiP 常駐需要影像源清單：開頁與換選中機時讀最新值（video_url
   // 在無人機頁隨時可改；切進全幅檢視時也重讀一次）
@@ -397,7 +397,7 @@ export default function MapView() {
             <button key={id}
               className={`${id === selId ? "on" : ""}`
                 + ` ${formationOn && targetKey.split(",").includes(id) ? "tgt" : ""}`}
-              title={useUavStore.getState().fleet[id]?.drone_name ?? id}
+              title={useUavStore.getState().fleet[id]?.drone_name || id}
               style={{ background: colorFor(id) }}
               onClick={() => {
                 // 編隊：點色點＝toggle 目標集（指揮誰）；單機：切焦點
@@ -508,7 +508,7 @@ export default function MapView() {
       {videoDrone && (
         <VideoModal
           droneId={videoDrone}
-          name={useUavStore.getState().fleet[videoDrone]?.drone_name ?? videoDrone}
+          name={useUavStore.getState().fleet[videoDrone]?.drone_name || videoDrone}
           color={colorFor(videoDrone)}
           onClose={() => setVideoDrone(null)}
         />
