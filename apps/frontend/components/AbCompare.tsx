@@ -29,6 +29,7 @@ interface SessRow {
   id: string; drone_name: string; started_at: string;
   mission_id: string | null; mission_name: string | null;
   note: string | null;
+  origin?: string | null;      // 'test'＝rig/驗收觸發的架次
   summary: { samples_total?: number } | string | null;
 }
 
@@ -58,15 +59,20 @@ export default function AbCompare() {
   const [plan, setPlan] = useState<{ lat: number; lon: number }[] | null>(null);
   const [hover, setHover] = useState<DeltaCell | null>(null);
   const [noteEdit, setNoteEdit] = useState<string | null>(null);
+  const [showTest, setShowTest] = useState(false);   // 測試架次是否列入選單
 
-  // 架次清單（有樣本的才可比較——門檻與場域頁一致）
+  // 架次清單（有樣本的才可比較——門檻與場域頁一致）。
+  // 測試架次（origin='test'）後端預設不回：比較頁本來就該以真飛行為主，
+  // 但驗收/實驗用的測試飛行也需要看得到——一律抓回、以開關切換並如實
+  // 顯示隱藏了幾筆（不能讓使用者以為架次憑空消失）
   useEffect(() => {
-    fetch(`${API}/api/sessions?limit=500&min_samples=10`)
+    fetch(`${API}/api/sessions?limit=500&min_samples=10&include_test=true`)
       .then((r) => r.json())
       .then((rows: SessRow[]) => {
         setSessions(rows);
         const q = new URLSearchParams(window.location.search);
         const qa = q.get("a"), qb = q.get("b");
+        if (q.get("test") === "1") setShowTest(true);
         // 預設：**同一條航線**飛過 ≥2 趟者取最近兩趟（前＝較早、後＝較晚）。
         // 不同航線的兩趟沒有共同里程軸，預設選到它們等於一開頁就是錯的比較
         const byMission = new Map<string, SessRow[]>();
@@ -94,6 +100,11 @@ export default function AbCompare() {
 
   const aSess = sessions.find((s) => s.id === aId) ?? null;
   const bSess = sessions.find((s) => s.id === bId) ?? null;
+  // 選單內容：預設只列真飛行；已選中的架次即使是測試也保留在選項裡，
+  // 否則切換開關時選擇會憑空消失
+  const listed = sessions.filter((r) => showTest || r.origin !== "test"
+    || r.id === aId || r.id === bId);
+  const hiddenTest = sessions.filter((r) => r.origin === "test").length;
 
   // 參考路徑：兩趟共用同一計畫航線時以它為基準（共同 X 軸的最佳來源）
   useEffect(() => {
@@ -230,9 +241,10 @@ export default function AbCompare() {
       <span className="meta">{label}</span>
       <span className="dot" style={{ background: color }} />
       <select value={s?.id ?? ""} onChange={(e) => onPick(e.target.value)}>
-        {sessions.map((r) => (
+        {listed.map((r) => (
           <option key={r.id} value={r.id}>
             {fmtT(r.started_at)}　{r.drone_name}{r.note ? `　${r.note}` : ""}
+            {r.origin === "test" ? "　［測試］" : ""}
           </option>
         ))}
       </select>
@@ -267,6 +279,14 @@ export default function AbCompare() {
         <span className="spacer" />
         {capsule(aSess, "前", A_COLOR, setAId)}
         {capsule(bSess, "後", B_COLOR, setBId)}
+        {/* 隱藏的測試架次如實揭露＋可切換（不能讓使用者以為架次消失了） */}
+        {hiddenTest > 0 && (
+          <label className="ab-testtoggle" title="測試/驗收觸發的架次（origin=test）">
+            <input type="checkbox" checked={showTest}
+              onChange={(e) => setShowTest(e.target.checked)} />
+            含測試架次（{hiddenTest}）
+          </label>
+        )}
       </div>
 
       {!ready && <div className="card"><div className="empty">載入兩趟軌跡中…</div></div>}
