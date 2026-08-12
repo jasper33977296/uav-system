@@ -37,6 +37,8 @@ from .ws import manager
 log = logging.getLogger(__name__)
 M = mavutil.mavlink
 GCS_SYSID = 254
+STREAM_REQ_S = 30.0          # ArduPilot 串流請求補送間隔（見 _maintain_streams）
+STREAM_HZ = 4                # 請求的串流率（夠前端 5Hz 顯示，不灌爆 5G）
 ADDR_WARN_COOLDOWN = 30.0    # 同 sysid 撞號告警去抖（秒）：避免告警風暴
 STX_CHUNK_LEN = 50           # STATUSTEXT text 欄位長度：滿 50＝還有下一段
 STX_STALE_S = 3.0            # 分段末段掉包，殘段逾時丟棄（秒）
@@ -48,7 +50,14 @@ STX_FOLD_S = 15.0            # 同句連續重複在此窗內折疊計數（秒�
 # 模組的邊界定義（「不含改變機上狀態的能力」）。**PARAM_SET 永遠不得加入**——
 # 參數編輯是 QGC 的職權，本系統只記錄「當時設定是什麼」，不去改它。
 SEND_WHITELIST = {"MISSION_REQUEST_LIST", "MISSION_REQUEST_INT", "MISSION_ACK",
-                  "PARAM_REQUEST_LIST", "PARAM_REQUEST_READ"}
+                  "PARAM_REQUEST_LIST", "PARAM_REQUEST_READ",
+                  # 015 實測：**ArduPilot 預設幾乎不送遙測**——我方只收得到
+                  # HEARTBEAT/PARAM_VALUE/STATUSTEXT/TIMESYNC 四種，沒有位置、
+                  # GPS、電量、SYS_STATUS。送一次 REQUEST_DATA_STREAM 後變 32 種。
+                  # 沒有它，接 ArduPilot 機＝「連得上但等於瞎的」。PX4 預設就串流，
+                  # 所以這件事在只測 PX4 的時候永遠不會暴露。
+                  # 同樣是**唯讀請求**（要求對方送資料，不改變機上狀態）。
+                  "REQUEST_DATA_STREAM"}
 
 # custom_mode → 人話。**方言分表**（issue 015／gap-analysis §2）：PX4 是
 # main<<16|sub<<24 的 union；ArduPilot 是整數模式號（隨載具型別而異，此處
@@ -190,10 +199,32 @@ class MavlinkRx:
         return asyncio.create_task(self._worker(), name="mavlink-rx")
 
     def refresh_connected(self, stale_s: float = 5.0) -> None:
-        """由外部週期迴圈呼叫：太久沒訊息的機標記失聯。"""
+        """由外部週期迴圈呼叫：太久沒訊息的機標記失聯，順便維持 ArduPilot 串流。"""
         now = time.monotonic()
         for ent in self.sysids.values():
             ent["state"].connected = (now - ent["seen"]) < stale_s
+        self._maintain_streams()
+
+    def _maintain_streams(self) -> None:
+        """ArduPilot 要主動要求才會送遙測（015 實測，見 SEND_WHITELIST 註解）。
+
+        **定期補送而不是只在註冊時送一次**：串流率是設在自駕儀端的，機端重開機、
+        換連線通道、或我方重連之後就沒了——只送一次的話，那些情況下會靜默失去
+        全部遙測（只剩心跳，看起來還「連著」）。每 STREAM_REQ_S 補一次，成本是
+        一則小訊息。PX4 預設就串流，不需要也不送。
+        """
+        now = time.monotonic()
+        for sysid, ent in list(self.sysids.items()):
+            if autopilot_name(ent["state"].autopilot_raw) != "ardupilot":
+                continue
+            if now - ent.get("stream_req_t", 0.0) < STREAM_REQ_S:
+                continue
+            ent["stream_req_t"] = now
+            try:
+                self._send(sysid, self.enc.request_data_stream_encode(
+                    sysid, 1, M.MAV_DATA_STREAM_ALL, STREAM_HZ, 1))
+            except Exception:
+                log.exception("ArduPilot 串流請求送出失敗（sysid %s）", sysid)
 
     # ── 訊息消化（單一 worker，順序保證＝架次賦值紀律的前提）────────
     async def _worker(self):
@@ -367,9 +398,16 @@ class MavlinkRx:
             st.sensors_unhealthy = [
                 name for name, bit in _SENSOR_BITS
                 if (p_ & bit) and (e_ & bit) and not (h_ & bit)]
-        elif t == "ESTIMATOR_STATUS":
+        elif t == "ESTIMATOR_STATUS":       # PX4 的 EKF 健康回報
             need = (M.ESTIMATOR_ATTITUDE | M.ESTIMATOR_VELOCITY_HORIZ
                     | M.ESTIMATOR_POS_HORIZ_ABS)
+            st.ekf_ok = (msg.flags & need) == need
+        elif t == "EKF_STATUS_REPORT":      # ArduPilot 的（方言差異，015 實測）
+            # 同一件事兩個訊息名：PX4 發 ESTIMATOR_STATUS、ArduPilot 發
+            # EKF_STATUS_REPORT。只解 PX4 那個的話，ArduPilot 的 ekf_ok 永遠是
+            # None——而 ArduPilot 又不回報 PREARM 位，於是 readiness 永遠判不出來
+            # （只能誠實回「未知」）。解了這個，ArduPilot 才有可飛判斷的依據。
+            need = (M.EKF_ATTITUDE | M.EKF_VELOCITY_HORIZ | M.EKF_POS_HORIZ_ABS)
             st.ekf_ok = (msg.flags & need) == need
         elif t == "EXTENDED_SYS_STATE":
             st.landed_state = _LANDED.get(msg.landed_state)

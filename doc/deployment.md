@@ -349,6 +349,25 @@ build；開發加 `docker-compose.dev.yml` 覆寫＝bind mount + 熱重載。
 前端程式碼變更後，部署環境要 `docker compose up -d --build` 重建映像
 （build 產物在映像內）；開發環境改檔即生效。
 
+## 接 ArduPilot 機的機端前提（與 RB5 兩 port 設定同一類）
+
+2026-08-12 以 ArduCopter SITL 實測（見 [issues/015](../issues/015-multi-autopilot-support.md)）。
+接 ArduPilot 機時**必須**先處理下面三件，否則會遇到「看起來連上了但不對勁」：
+
+1. **機端 `SYSID_MYGCS` 要設成 254**（我方 GCS 的 sysid）。ArduPilot 預設只信
+   255 來源的 `MANUAL_CONTROL`／RC override——不改的話**搖桿完全沒反應而且沒有
+   任何錯誤訊息**（靜默丟棄）。新版韌體該參數改名為 `MAV_GCS_SYSID`。
+2. **遙測要靠我方主動要求**：ArduPilot 預設幾乎不送（只有心跳等 4 種訊息）。
+   backend 會在註冊後送 `REQUEST_DATA_STREAM` 並每 30 秒補送——**這是預期行為，
+   不是多餘流量**；沒有它整台機是瞎的。
+3. **不能用 SYS_STATUS 判斷 ArduPilot 可不可飛**：它不回報 `PREARM_CHECK` 位
+   （實測 present=False）。就緒判定改看 EKF（`EKF_STATUS_REPORT`）與感測器健康位，
+   預檢失敗的具體原因走 STATUSTEXT。
+
+> ⚠️ **任務上傳目前不支援 ArduPilot**：ArduPilot 把 home 當 seq 0，直接送
+> 0..N-1 會讓**第一個航點被 home 覆蓋而消失**（且回讀筆數相同、比對抓不到）。
+> 修正前請勿用本系統對 ArduPilot 機上傳任務。
+
 ### 開發注意事項：backend `--reload` 會被常駐 WebSocket 卡死
 
 開發環境 backend 掛 bind mount + `uvicorn --reload`，改 `apps/backend/app/`

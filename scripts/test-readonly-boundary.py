@@ -28,6 +28,7 @@ EXPECTED = {
     "MISSION_ACK",
     "PARAM_REQUEST_LIST",     # 021 Phase 2：參數快照（唯讀查詢）
     "PARAM_REQUEST_READ",
+    "REQUEST_DATA_STREAM",    # 015：ArduPilot 不主動串流，要求對方送資料（唯讀）
 }
 
 # 這些**永遠不該**出現在白名單裡。PARAM_SET 尤其關鍵：參數編輯是 QGC 的職權，

@@ -48,3 +48,51 @@ ArduPilot 任務 seq 0＝home 的回讀位移（待驗證）。
 ## 解決方式
 
 （closed 時補）
+
+## ArduPilot SITL 驗收結果（2026-08-12 實測）
+
+環境：ArduCopter SITL（sysid 10）**接進機隊的單埠 fanout**，與 3 台 PX4 混跑
+——驗的是「多廠牌混機共存」，不只是「ArduPilot 單獨能跑」。混機的 sysid demux、
+逐台 autopilot 判定、逐台 capabilities 全部正常。
+
+### 🔴 最大的發現（原本不在待驗證清單裡）
+
+**ArduPilot 預設幾乎不送遙測。** 我方只收到 4 種訊息：`HEARTBEAT`／`PARAM_VALUE`
+／`STATUSTEXT`／`TIMESYNC`——沒有位置、GPS、電量、SYS_STATUS。送一次
+`REQUEST_DATA_STREAM` 之後變 **32 種**。也就是說，接一台真的 ArduPilot 機，在修正
+前會是「**連得上但等於瞎的**」（心跳有、清單看得到、但沒有任何遙測）。
+
+PX4 預設就串流，所以這件事在只測 PX4 的時候永遠不會暴露——**這是「只測過一種
+自駕儀就以為理解了協定」的典型代價**。
+
+修正：`SEND_WHITELIST` 加 `REQUEST_DATA_STREAM`（唯讀請求），註冊後送出並**每 30
+秒補送**（串流率設在自駕儀端，機端重開／換通道／我方重連之後就沒了，只送一次會
+靜默失去全部遙測）。實測：重啟 ArduPilot 後遙測**自動恢復**（34 種訊息）。
+
+### 三個待驗證項的答案
+
+| 項目 | 結果 |
+|---|---|
+| **A. 任務 seq 0＝home** | **確認，且是靜默資料遺失不是位移**。上傳 3 個航點，回讀**筆數仍是 3**，但 seq 0 被 home 覆蓋（frame=0 絕對高度）、**第一個航點消失**。因為筆數不變，「比對筆數」的檢查抓不到。正解：上傳 ArduPilot 時 home 佔 seq 0、真航點從 seq 1 起（count=N+1）。**現行 `job_upload_mission` 直送 0..N-1，接 ArduPilot 會每次吃掉第一個航點——尚未修正。** |
+| **B. `SYSID_MYGCS`** | **確認不相容**。機端值 255，我方 GCS sysid 254 → 我方 `MANUAL_CONTROL` 被**靜默丟棄**（無錯誤、搖桿純粹沒反應）。解法：機端設 `SYSID_MYGCS=254`（機端前提設定），或我方 sysid 做成每機設定。 |
+| **C. PREARM 位** | **確認不支援**。ArduPilot 的 SYS_STATUS `PREARM_CHECK present=False`（PX4 是 True）→ **不能用 SYS_STATUS 對 ArduPilot 做可飛判斷**，它的預檢原因走 STATUSTEXT。 |
+| **D. 可攜指令** | **全部 ACCEPTED**：`NAV_LOITER_UNLIM`（Hold）／`NAV_RETURN_TO_LAUNCH`（RTL）／`NAV_LAND`（Land）。任務上傳握手本身也正常（ACK=0）。 |
+
+### 第四個方言差異（查 C 時順帶挖到）
+
+**EKF 健康回報的訊息名不同**：PX4 發 `ESTIMATOR_STATUS`、**ArduPilot 發
+`EKF_STATUS_REPORT`**。我們原本只解 PX4 那個，所以 ArduPilot 的 `ekf_ok` 永遠是
+None——加上它不回報 PREARM 位，readiness 就永遠判不出來。補上解析後，ArduPilot
+才有可飛判斷的依據（實測 ready 由 null 變成有依據的 true）。
+
+### readiness 的連帶修正
+
+原本「沒有反對證據」就回 `ready=true`，包括**什麼權威訊號都還沒收到**的情況
+（ArduPilot 驗收機實測：prearm/ekf 皆 null 卻宣告就緒）。改為無權威依據時回
+`null`＋理由。**GPS 好不算數**——GPS 定位良好但預檢未過完全可能。
+
+### 尚未完成（capabilities 維持全鎖）
+
+PM 判準：**「驗證過」要指「整條路徑可用」，不是「這三個指令會被 ACK」**。
+順序：`REQUEST_DATA_STREAM`（✅ 已修）→ **ArduPilot 任務上傳修正（未做）** →
+重跑驗收 → 才逐鍵開 `rtl`／`hold`／`land`。
