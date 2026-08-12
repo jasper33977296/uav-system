@@ -24,6 +24,8 @@ import time
 
 from pymavlink import mavutil
 
+import autopilot as _autopilot          # 共用驅動層（libs/，PYTHONPATH=/srv/libs）
+
 from . import capabilities as caps
 
 log = logging.getLogger("command.mav")
@@ -35,61 +37,32 @@ MYGCS_REREAD_S = 30.0   # SYSID_MYGCS 重讀間隔（見 _recv：使用者改了
 _VEHICLE_TYPES = {2: "quadrotor", 13: "hexarotor", 14: "octorotor",
                   1: "fixed_wing", 10: "ground_rover", 12: "submarine"}
 
-# ── 方言表（**單一集中處**；issue 026 抽驅動時整段提取，不要散落到各 job_*）──
-# PX4 custom mode（DO_SET_MODE 的 param2/param3：main_mode/sub_mode）
-PX4_MODES = {
-    "position": (3, 0),  # POSCTL（手動位置控制：搖桿→速度，鬆手懸停）
-    "mission": (4, 4),   # AUTO.MISSION
-    "hold":    (4, 3),   # AUTO.LOITER
-    "rtl":     (4, 5),   # AUTO.RTL
-    "land":    (4, 6),   # AUTO.LAND
-}
+# ── 方言：**已搬到共用驅動層 `libs/autopilot/`**（issue 026 B2）────────
+# backend 與 command 兩個服務共用同一份，編譯期就一致，不需要漂移偵測。
+# **不要把廠牌知識加回這裡**——加在 libs/autopilot/<廠牌>.py。
 
-
-# ArduPilot Copter 模式號（DO_SET_MODE 的 **param2 直接是模式號**，沒有 sub）。
-# 權威來源：reference/ardupilot/copter-mode.h。**gap-analysis 列為 critical**——
-# 送錯數字會切到完全不同的模式（例：把 9=LAND 誤當 PX4 的編碼送出去）。
-# 每個值都要在 SITL 讀回 HEARTBEAT 確認真的切到，不能只看 ACK。
-ARDU_COPTER_MODES = {
-    "position": 16,   # POSHOLD：位置保持＋手動介入（對應 PX4 的 POSCTL 語意）
-    "mission":   3,   # AUTO
-    "hold":      5,   # LOITER
-    "rtl":       6,   # RTL
-    "land":      9,   # LAND
-    "guided":    4,   # GUIDED（起飛序列要先進這個模式）
-}
+#: 給 API 參數驗證用（main.py 檢查 mode 是否合法）。以 PX4 的模式集為準，
+#: 與搬遷前相同——ArduPilot 多一個 guided，那是起飛序列內部用的，不對外開放。
+PX4_MODES = _autopilot.Px4Driver.modes
+ARDU_COPTER_MODES = _autopilot.ArduPilotDriver.modes
 
 
 def dialect(r: "MavRouter", sysid: int) -> dict:
-    """該機的方言參數（模式編碼／任務慣例／起飛語意）。**方言判斷只在這裡做。**
+    """該機的方言參數。**判斷只在這裡做一次，其餘 job_* 只讀這個 dict。**
 
-    - `mode_num(name)`：回 DO_SET_MODE 要送的值；PX4 是 (main, sub)、
-      ArduPilot 是單一模式號。
-    - `mode_matches(cm, name)`：拿 HEARTBEAT 的 custom_mode 驗證真的切過去了。
-    - `home_at_seq0`：ArduPilot 把 home 當 seq 0（見 job_upload_mission）。
-    - `takeoff_alt_is_relative`：ArduPilot 的 NAV_TAKEOFF param7 是**相對高度**，
-      PX4 是絕對海拔——送錯會差一整個地面海拔（數百公尺）。
-    - `takeoff_needs_guided`：Copter 必須先進 GUIDED 才能 arm＋起飛。
+    形狀維持搬遷前不變（呼叫端零改動）；內容改由驅動提供。
     """
-    ap = caps.autopilot_name((r.drones.get(sysid) or {}).get("autopilot"))
-    if ap == "ardupilot":
-        return {
-            "autopilot": ap,
-            "home_at_seq0": True,
-            "takeoff_alt_is_relative": True,
-            "takeoff_needs_guided": True,
-            "mode_num": lambda n: (ARDU_COPTER_MODES[n], 0),
-            "mode_matches": lambda cm, n: cm == ARDU_COPTER_MODES[n],
-            "modes": ARDU_COPTER_MODES,
-        }
+    raw = (r.drones.get(sysid) or {}).get("autopilot")
+    drv = _autopilot.get_driver(raw)
     return {
-        "autopilot": ap,
-        "home_at_seq0": False,
-        "takeoff_alt_is_relative": False,
-        "takeoff_needs_guided": False,
-        "mode_num": lambda n: PX4_MODES[n],
-        "mode_matches": lambda cm, n: ((cm >> 16) & 0xFF, (cm >> 24) & 0xFF) == PX4_MODES[n],
-        "modes": PX4_MODES,
+        "autopilot": _autopilot.autopilot_name(raw),
+        "driver": drv,
+        "home_at_seq0": drv.home_at_seq0,
+        "takeoff_alt_is_relative": drv.takeoff_alt_is_relative,
+        "takeoff_needs_guided": drv.takeoff_needs_guided,
+        "mode_num": drv.encode_mode,
+        "mode_matches": drv.mode_matches,
+        "modes": drv.modes,
     }
 
 

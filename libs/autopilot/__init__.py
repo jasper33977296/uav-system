@@ -37,6 +37,9 @@ class UnknownDriver:
     name = "unknown"
     autopilot_raw = None
     modes: dict = {}
+    home_at_seq0 = False
+    takeoff_alt_is_relative = False
+    takeoff_needs_guided = False
     MESSAGE_ADJUSTMENTS = ()
 
     def __init__(self):

@@ -49,7 +49,9 @@ services:
   # 任何終端 session，機器重開也會自己回來（restart: unless-stopped）。
   uav-backend:
     container_name: uav-backend
-    build: ./apps/backend
+    build:
+      context: .                       # repo 根：映像要裝得到共用的 libs/autopilot
+      dockerfile: apps/backend/Dockerfile
     network_mode: host          # 直接收 SITL 的 UDP；API 服務於 :${BACKEND_PORT:-38000}
     command: ["uvicorn", "app.main:app", "--reload",
               # --reload 的 graceful shutdown 會等連線關閉，前端 /ws/telemetry 常駐
@@ -59,11 +61,15 @@ services:
               "--host", "0.0.0.0", "--port", "${BACKEND_PORT:-38000}"]
     volumes:
       - ./apps/backend/app:/srv/app  # 原始碼掛進去，改檔案 reload 立即生效
+      # 共用驅動層也掛進來：不掛的話 --reload 看不到 libs/ 的改動，開發時會
+      # 出現「改了沒反應」，而映像裡那份是舊的（issue 026 B2）
+      - ./libs:/srv/libs:ro
       - mavcap:/data/mavcap          # 原始層錄製（MAVLink tlog，滾動 30 天）
       - videorec:/rec:ro             # 影像（022）：掃描錄影目錄入庫；唯讀＝寫入是 uav-video 的職責
     environment:
       # 全部由根目錄 .env 供值（見 .env.example）——新環境只改 .env
       DATABASE_URL: postgresql://uav:uav@localhost:${DB_PORT:-35432}/uav
+      PYTHONPATH: /srv/libs        # 共用驅動層（libs/autopilot）
       MAVLINK_URL: ${MAVLINK_URL:-udpin://0.0.0.0:14540}
       LINK_SOURCE: ${LINK_SOURCE:-simulated}
       AUTOREGISTER_SIMULATED: ${AUTOREGISTER_SIMULATED:-false}   # SITL/dev true：自動註冊標假機
@@ -100,7 +106,9 @@ services:
   # ENABLE_COMMANDS 預設 false——顯式開啟前只觀察不指揮（也不發 GCS 心跳）。
   uav-command:
     container_name: uav-command
-    build: ./apps/command
+    build:
+      context: .                       # repo 根：映像要裝得到共用的 libs/autopilot
+      dockerfile: apps/command/Dockerfile
     network_mode: host
     command: ["uvicorn", "app.main:app", "--reload",
               # 與 backend 同款保險：--reload 的 graceful shutdown 會等連線關閉。
@@ -110,9 +118,13 @@ services:
               "--host", "0.0.0.0", "--port", "${COMMAND_PORT:-38001}"]
     volumes:
       - ./apps/command/app:/srv/app
+      # 共用驅動層也掛進來：不掛的話 --reload 看不到 libs/ 的改動，開發時會
+      # 出現「改了沒反應」，而映像裡那份是舊的（issue 026 B2）
+      - ./libs:/srv/libs:ro
       - ./missions:/srv/missions:ro   # 航線檔（外部觸發 GET /api/plans、POST /api/start）；唯讀
     environment:
       DATABASE_URL: postgresql://uav:uav@localhost:${DB_PORT:-35432}/uav
+      PYTHONPATH: /srv/libs        # 共用驅動層（libs/autopilot）
       MISSIONS_DIR: ${MISSIONS_DIR:-/srv/missions}
       COMMAND_MAVLINK_URL: ${COMMAND_MAVLINK_URL:-udpin://0.0.0.0:14541}
       ENABLE_COMMANDS: ${ENABLE_COMMANDS:-false}

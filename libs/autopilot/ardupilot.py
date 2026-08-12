@@ -44,6 +44,13 @@ class ArduPilotDriver:
     autopilot_raw = AUTOPILOT_RAW
     modes = MODES
 
+    #: 任務線序：ArduPilot 把 home 當 seq 0，實際航點從 seq 1 起算
+    home_at_seq0 = True
+    #: NAV_TAKEOFF 的 param7 是相對高度（送絕對海拔會差一整個地面海拔）
+    takeoff_alt_is_relative = True
+    #: Copter 必須先進 GUIDED 才能 arm 與起飛
+    takeoff_needs_guided = True
+
     #: 訊息層等價：ArduPilot 發 EKF_STATUS_REPORT，PX4 發 ESTIMATOR_STATUS。
     #: **帶適用範圍**——只有 bit 1..512 逐位同義（見 B0 的實測）。
     MESSAGE_ADJUSTMENTS = (
@@ -92,7 +99,7 @@ class ArduPilotDriver:
         空白參數用 **0.0 不用 NaN**——實測 2026-08-12：送 NaN 的 NAV_TAKEOFF
         連 ACK 都沒有，指令被靜默丟棄。它的慣例是 0＝當前位置。
         """
-        return {"needs_guided": True, "param7": alt,
+        return {"needs_guided": self.takeoff_needs_guided, "param7": alt,
                 "blank": 0.0, "alt_semantics": "relative"}
 
     def manual_prepare(self) -> str | None:

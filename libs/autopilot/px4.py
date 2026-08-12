@@ -33,6 +33,13 @@ class Px4Driver:
     autopilot_raw = AUTOPILOT_RAW
     modes = MODES
 
+    #: 任務線序：PX4 不把 home 當 seq 0
+    home_at_seq0 = False
+    #: NAV_TAKEOFF 的 param7 是絕對海拔
+    takeoff_alt_is_relative = False
+    #: 不需要先進 GUIDED
+    takeoff_needs_guided = False
+
     #: PX4 不需要任何訊息層改名——它發的就是我們的標準形。
     MESSAGE_ADJUSTMENTS = ()
 
@@ -66,7 +73,8 @@ class Px4Driver:
         """
         if ground_amsl is None:
             raise ValueError("PX4 起飛需要地面海拔（GPS/EKF 未就緒）")
-        return {"needs_guided": False, "param7": ground_amsl + alt,
+        return {"needs_guided": self.takeoff_needs_guided,
+                "param7": ground_amsl + alt,
                 "blank": float("nan"), "alt_semantics": "amsl"}
 
     def manual_prepare(self) -> str | None:

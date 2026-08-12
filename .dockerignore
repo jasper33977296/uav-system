@@ -1,0 +1,33 @@
+# build context 收斂（issue 026 B2）。
+#
+# backend 與 command 的 build context 從各自的 apps/<svc>/ 改成 **repo 根**，
+# 目的是讓映像裝得到共用的 `libs/autopilot`。代價是 context 會把整個 repo 送給
+# docker daemon——沒有這份清單的話是 1.1GB（其中 912MB 是前端的 node_modules
+# 與 .next），每次建置都要傳一次。
+#
+# 前端映像另有自己的 build context（apps/frontend），不受本檔影響。
+
+.git
+.gitignore
+
+# 前端建置產物與相依（後端映像完全用不到）
+apps/frontend/node_modules
+apps/frontend/.next
+apps/frontend/out
+**/node_modules
+
+# 執行期資料：錄影、tlog、DB 備份——體積大且不該進映像
+data
+backups
+video/recordings
+
+# 文件與研究素材（映像不需要，但 repo 要留）
+doc
+issues
+progress
+reference
+
+# 開發雜物
+**/__pycache__
+**/*.pyc
+.tmpdiag

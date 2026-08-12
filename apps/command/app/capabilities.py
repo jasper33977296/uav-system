@@ -1,5 +1,7 @@
-"""每機能力描述子（issue 015）：capabilities 是**伺服器端 gating 的唯一真相**，
-同時給前端 UI——UI 與實際放行永不背離（descriptor 驅動）。
+"""command 對共用驅動層的轉接（issue 026 B2）。
+
+**能力判定已經搬到 `libs/autopilot/<廠牌>.py` 的 `Driver.capabilities()`**。
+本檔剩下的是端點對映與轉出，讓既有呼叫端（`main.py` 的 gating）不必改形狀。
 
 四態語意（PM 定案）對映到每鍵三值：
   可控   → "ok"          指令會照常送、已驗證
@@ -7,22 +9,14 @@
   不可控 → "unsupported" 非 MAVLink／未知自駕儀
   （「受限」＝部分鍵 ok、部分非 ok，由逐鍵值自然表達）
 
-短期靜態表：PX4 全 ok；ArduPilot 全 unverified（待可攜指令＋SITL 驗收後
-逐鍵開 ok）；unknown 全 unsupported。可攜 RTL/Hold（NAV_RETURN_TO_LAUNCH／
-NAV_LOITER_UNLIM）在某機型 SITL 驗過，就把該機的 rtl/hold 開 "ok"——
-前端零改動自動開鈕、後端同步放行。
+**不要把新的能力規則加回這裡**——加在驅動裡，否則 backend 與 command 又會各自
+長出一份判斷。
 """
-
-# 鍵名對齊 command 端點語意（disarm 前端跟 arm 同值，不另列）
-CAP_KEYS = ["arm", "takeoff", "land", "rtl", "hold",
-            "mission_upload", "mission_start", "mission_fly", "manual"]
+from autopilot import CAP_KEYS, autopilot_name, get_driver  # noqa: F401
 
 GCS_SYSID = 254            # 與 mav.GCS_SYSID 一致（ArduPilot 的 SYSID_MYGCS 要等於它）
-AUTOPILOT_NAMES = {12: "px4", 3: "ardupilot"}   # MAV_AUTOPILOT_PX4 / _ARDUPILOTMEGA
 
-
-def autopilot_name(raw) -> str:
-    return AUTOPILOT_NAMES.get(raw, "unknown")
+_RAW_BY_NAME = {"px4": 12, "ardupilot": 3}
 
 
 def capabilities_for(ap_name: str, ctx: dict | None = None):
@@ -31,45 +25,11 @@ def capabilities_for(ap_name: str, ctx: dict | None = None):
     `ctx`＝該機的 router 狀態（可含 `sysid_mygcs`）。**前提可事前查證時就查**
     ——不要讓使用者按下按鈕、等一個永遠不會有的回應才發現前提沒滿足
     （ui-spec §0.2c 條款 6）。
+
+    保留 `ap_name`（字串）介面：呼叫端手上就是字串，改成傳原值只是把轉換
+    推給每個呼叫點。
     """
-    if ap_name == "px4":
-        return {k: "ok" for k in CAP_KEYS}, {}
-    if ap_name == "ardupilot":
-        # 015 驗收進行中：**逐鍵開**，不整組開。只有實際驗過的鍵才是 ok。
-        r = "ArduPilot 方言未經 SITL 驗證，僅觀察（見 issue 015）"
-        caps = {k: "unverified" for k in CAP_KEYS}
-        reasons = {k: r for k in CAP_KEYS}
-        # mission_upload：方言分支（home 佔 seq 0）已實作並以 SITL 驗證
-        # **逐鍵開，只開實際在 SITL 驗過的**（2026-08-12 015 驗收）：
-        #   mission_upload：方言分支（home 佔 seq 0）＋回讀逐項比對通過
-        #   hold/rtl/land：DO_SET_MODE 用 ArduPilot 模式號，且**讀回 HEARTBEAT
-        #     確認真的切到**（mode_engaged=True），不是只看 ACK
-        #   arm/takeoff：GUIDED→arm→NAV_TAKEOFF（相對高度、空白參數用 0 不用
-        #     NaN）實測爬到 15.0m
-        for _k in ("mission_upload", "hold", "rtl", "land", "arm", "takeoff"):
-            caps[_k] = "ok"
-            reasons.pop(_k, None)
-        # 以下**維持 unverified**（沒驗過就不開）：
-        #   manual：卡在機端 SYSID_MYGCS（我方 254 vs 預設 255），且 MANUAL_CONTROL
-        #     沒有 ACK——能不能偵測失敗待設計師定案（見 issue 015）
-        #   mission_start/mission_fly：任務執行整段尚未驗（AUTO 模式起跑行為未測）
-        # manual：ArduPilot 只接受 SYSID_MYGCS 指定來源的 MANUAL_CONTROL，
-        # 不符就靜默丟棄（無 ACK、事後偵測不到）。**連上時讀回該參數**，用具體
-        # 事實決定開不開，並在 reason 給出現值與該改成什麼。
-        mygcs = (ctx or {}).get("sysid_mygcs")
-        if mygcs is None:
-            reasons["manual"] = ("尚未讀到機端 SYSID_MYGCS（剛連上或參數讀取中）"
-                                 "——搖桿需該值等於 254")
-        elif int(mygcs) == GCS_SYSID:
-            caps["manual"] = "ok"
-            reasons.pop("manual", None)
-        else:
-            reasons["manual"] = (
-                f"機端 SYSID_MYGCS={int(mygcs)}，需改為 {GCS_SYSID} 才會接受本系統的"
-                "搖桿指令（不改的話指令會被靜默丟棄、沒有任何錯誤訊息）")
-        return caps, reasons
-    r = "非 MAVLink 或未知自駕儀，不支援指令"
-    return {k: "unsupported" for k in CAP_KEYS}, {k: r for k in CAP_KEYS}
+    return get_driver(_RAW_BY_NAME.get(ap_name)).capabilities(ctx)
 
 
 # 端點 → 需要的能力鍵（gating 用）

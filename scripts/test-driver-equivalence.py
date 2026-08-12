@@ -8,13 +8,20 @@
 本測試在**切換呼叫端之前**跑：新舊兩份實作同時存在時比對，過了才動 call site。
 順序反過來（先切再驗）的話，發現不一致時已經在線上了。
 
-跑法（主機，不需容器；三邊都是純 stdlib）：
+**搬遷完成後它仍然有效**：舊實作已經被薄轉接層取代，直接 import 會變成拿新的
+比新的（循環、必然通過）。所以本測試改成**從 git 取搬遷基準點的原始碼**來比——
+比較對象是「B2 動手之前那一版的行為」，這讓它從一次性的搬遷驗證變成長期的回歸
+護欄：日後有人改驅動而不自覺改了行為，這裡就會擋下。
+
+跑法（主機，不需容器；比較的三邊都是純 stdlib）：
     python3 scripts/test-driver-equivalence.py
 """
 import ast
 import importlib.util
 import pathlib
+import subprocess
 import sys
+import tempfile
 
 ROOT = pathlib.Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT / "libs"))
@@ -22,34 +29,52 @@ sys.path.insert(0, str(ROOT / "libs"))
 import autopilot  # noqa: E402
 
 
-def _load(path, name):
-    spec = importlib.util.spec_from_file_location(name, path)
+#: 搬遷基準點：B2 把呼叫端切到驅動層**之前**的最後一個 commit。
+#: 比較對象固定在這裡，才問得出「行為跟搬之前一樣嗎」。
+BASELINE = "41471cc"
+
+
+def _git_show(path: str) -> str:
+    """取基準點版本的原始碼。搬遷後工作區那份已是轉接層，拿它比是循環論證。"""
+    return subprocess.run(["git", "show", f"{BASELINE}:{path}"],
+                          cwd=ROOT, capture_output=True, text=True,
+                          check=True).stdout
+
+
+def _load_old(path: str, name: str):
+    src = _git_show(path)
+    with tempfile.NamedTemporaryFile("w", suffix=".py", delete=False,
+                                     encoding="utf-8") as fh:
+        fh.write(src)
+        tmp = fh.name
+    spec = importlib.util.spec_from_file_location(name, tmp)
     mod = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(mod)
     return mod
 
 
-def _literal_from_source(path, varname):
+def _literal_from_source(src: str, varname: str):
     """從原始碼取字面量常數，**不 import 該模組**。
 
     `apps/command/app/mav.py` 會 import pymavlink 與起執行緒，主機上不一定裝得起來，
     而我們只需要它的方言表。用 ast 取值＝不執行任何程式碼。
     """
-    tree = ast.parse(pathlib.Path(path).read_text(encoding="utf-8"))
+    tree = ast.parse(src)
     for node in tree.body:
         if isinstance(node, ast.Assign):
             for t in node.targets:
                 if isinstance(t, ast.Name) and t.id == varname:
                     return ast.literal_eval(node.value)
-    raise KeyError(f"{path} 裡找不到 {varname}")
+    raise KeyError(f"基準點原始碼裡找不到 {varname}")
 
 
 def main():
     fails = []
-    old_dialect = _load(ROOT / "apps/backend/app/dialect.py", "old_dialect")
-    old_caps = _load(ROOT / "apps/command/app/capabilities.py", "old_caps")
-    px4_modes = _literal_from_source(ROOT / "apps/command/app/mav.py", "PX4_MODES")
-    ardu_modes = _literal_from_source(ROOT / "apps/command/app/mav.py", "ARDU_COPTER_MODES")
+    old_dialect = _load_old("apps/backend/app/dialect.py", "old_dialect")
+    old_caps = _load_old("apps/command/app/capabilities.py", "old_caps")
+    mav_src = _git_show("apps/command/app/mav.py")
+    px4_modes = _literal_from_source(mav_src, "PX4_MODES")
+    ardu_modes = _literal_from_source(mav_src, "ARDU_COPTER_MODES")
 
     # ── 1. decode_mode：掃過整個會出現的值域，不是抽幾個 ────────────
     #    PX4 的 custom_mode 是 main<<16|sub<<24，兩個位元組各掃滿。
@@ -167,7 +192,7 @@ def main():
         if len(fails) > 40:
             print(f"  …另有 {len(fails) - 40} 項")
         return 1
-    print("驅動等價測試 OK：模式解讀 512+ 組、能力 4 廠牌 × 6 ctx 逐鍵含原因文字、"
+    print(f"驅動等價測試 OK（對照基準點 {BASELINE}）：模式解讀 512+ 組、能力 4 廠牌 × 6 ctx 逐鍵含原因文字、"
           "模式表逐鍵、起飛/線序/就緒/等價宣告皆與舊實作相同")
     return 0
 
