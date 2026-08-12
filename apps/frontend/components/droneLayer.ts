@@ -25,9 +25,11 @@ export interface DronePos {
     暖畫布驗證失敗（藍↔紫 protan ΔE 4.8），前 3 槽 all-pairs 通過。
     identity 與 status（綠/黃/橘/紅＝SINR 分級）依舊不互相冒充。 */
 export const DRONE_PALETTE = ["#3987e5", "#d95926", "#199e70"];
-const DRONE_OVERFLOW = "#8f8b80";   // 第 4 機起色相循環停止（=muted），
-                                    // 識別靠常駐 sysid chip 文字；>3 機的
-                                    // 識別設計等 013 群組任務另出
+const DRONE_OVERFLOW = "#8f8b80";   // 第 4 機起色相循環停止（=muted）：
+  // 多台同灰，**顏色不再是識別依據**。識別由常駐機身文字承擔——機隊 chip
+  // 與 3D 球體標籤（MapView 的 drone-labels TextLayer），ui-spec §0.1 硬規則。
+  // （舊註解曾寫「識別靠常駐 sysid chip」，但該 chip 在「選中機統一」那批
+  //  已移除、註解沒跟著改——紙上緩解讓人以為已處理而停止檢查，2026-08-12 修正）
 
 // 機隊配色：依首次出現順序指派（主機先廣播 → 取第一色）。
 // 球體、地面投影、選擇器圓點共用同一份對應，全站一致。
