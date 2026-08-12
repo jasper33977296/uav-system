@@ -87,12 +87,20 @@ export default function Missions() {
   }, []);
   useEffect(reload, [reload]);
 
-  async function call(path: string, init?: RequestInit) {
+  async function call(path: string, init?: RequestInit, showCheck = false) {
     setErr(null); setBusy(true);
+    if (showCheck) setReport(null);
     try {
       const res = await fetch(`${API}${path}`, init);
-      if (!res.ok) setErr((await res.json()).detail ?? `失敗（${res.status}）`);
-      else reload();
+      const body = await res.json().catch(() => null);
+      if (!res.ok) setErr(body?.detail ?? `失敗（${res.status}）`);
+      else {
+        // 讀回的任務同樣要出預檢報告：機上那份可能違反現行圍欄/高度上限，
+        // 回應裡帶了 check 卻不顯示＝把已知問題藏起來（上傳 .plan 有顯示，
+        // 讀回沒有＝同一種資料兩套待遇）
+        if (showCheck) setReport(body?.check ?? null);
+        reload();
+      }
     } catch (e) {
       setErr(String(e));
     } finally {
@@ -211,7 +219,7 @@ export default function Missions() {
       {/* 技術操作：從機上讀回（全域動作，不屬於任一卡） */}
       <div>
         <button className="btn-plain btn-sm" disabled={busy}
-          onClick={() => call("/api/missions/from-vehicle", { method: "POST" })}>
+          onClick={() => call("/api/missions/from-vehicle", { method: "POST" }, true)}>
           從機上讀回
         </button>
       </div>
