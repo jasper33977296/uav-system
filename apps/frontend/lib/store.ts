@@ -40,7 +40,7 @@ export interface Telemetry {
   link_state?: string | null;        // 機上鏈路狀態（ok/stale/lost）
   link_age_s?: number | null;        // 距最後一筆機上資料的秒數（失聯預警用）
   // 飛行就緒（QGC「Ready To Fly」同源訊號）
-  ready?: boolean;
+  ready?: boolean | null;   // null＝判斷依據未到齊（§0.2b：不知道，非未就緒）
   not_ready_reasons?: string[];
   mav_state?: string | null;            // STANDBY / ACTIVE / CRITICAL…
   landed_state?: string | null;         // on_ground / in_air / takeoff / landing

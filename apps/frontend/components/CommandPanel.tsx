@@ -436,10 +436,20 @@ export default function CommandPanel() {
         onPointerUp={dragEnd} onPointerCancel={dragEnd}>
         <span className="name">任務控制</span>
         {/* 首行＝就緒點＋主按鈕（ui-spec §2：主按鈕併入面板，HUD 不放） */}
-        {health.enabled && sid && live && (
-          <span className="dot" title={live.ready ? "就緒" : "未就緒"} style={{
-            background: live.ready ? "var(--status-ok)" : "var(--status-serious)" }} />
-        )}
+        {/* 收合態的就緒點同樣三分（§0.2b）：不知道＝灰空心，不可落成
+            「未就緒」的橘實心（面板收合時這顆點是唯一的就緒訊息） */}
+        {health.enabled && sid && live && (() => {
+          const unknown = live.ready == null
+            || (live.ready && live.prearm_ok == null && live.ekf_ok == null);
+          return (
+            <span className="dot"
+              title={unknown ? "尚無足夠遙測——無法判定就緒"
+                : live.ready ? "就緒" : "未就緒"}
+              style={unknown
+                ? { background: "transparent", border: "1.5px solid var(--muted)" }
+                : { background: live.ready ? "var(--status-ok)" : "var(--status-serious)" }} />
+          );
+        })()}
         {!health.enabled && <span className="meta">未啟用</span>}
         {health.enabled && !live && <span className="meta">無遙測</span>}
         {health.enabled && noChannel && <span className="meta">無指令通道</span>}
@@ -484,7 +494,10 @@ export default function CommandPanel() {
               if (t.battery_pct != null && t.battery_pct < 20) {
                 out.push(`${name}：電量 ${Math.round(t.battery_pct)}%`);
               }
+              // 三分（§0.2b）：false＝知道不行；null＝不知道，同樣要說，
+              // 但句子不可冒充「未就緒」（那是有依據的斷言）
               if (t.ready === false) out.push(`${name}：未就緒`);
+              else if (t.ready == null) out.push(`${name}：尚無足夠遙測`);
               return out;
             });
             // ── 進度視圖（執行中接管面板；過程唯一互動＝中止）──
@@ -676,9 +689,23 @@ export default function CommandPanel() {
             </span>
             {/* 機型 chip（§2.6 安置：身分歸身分——自抽屜專業數值卡移入） */}
             {apLabel && <span className="chip">{apLabel}</span>}
-            <span className={live?.ready ? "st-ok" : "st-warn"}>
-              {live ? (live.ready ? "● 就緒" : "● 未就緒") : "● 無遙測"}
-            </span>
+            {/* 就緒三分（ui-spec §0.2b）：知道行＝綠實心／知道不行＝黃實心＋
+                原因／**不知道＝灰空心，不做斷言**。ready 為 null（或 true 但
+                判斷依據 prearm_ok、ekf_ok 皆缺席）都屬「不知道」——把不知道
+                顯示成「未就緒」是假裝知道，顯示成「就緒」更糟。
+                「不知道」絕不用紅：會讓操作者把剛連上的正常機當故障處置。 */}
+            {(() => {
+              const unknown = !live || live.ready == null
+                || (live.ready && live.prearm_ok == null && live.ekf_ok == null);
+              if (unknown) {
+                return (<span className="st-unk">
+                  ○ {live ? "尚無足夠遙測" : "無遙測"}
+                </span>);
+              }
+              return (<span className={live.ready ? "st-ok" : "st-warn"}>
+                {live.ready ? "● 就緒" : "● 未就緒"}
+              </span>);
+            })()}
             <span>{live?.flight_mode ?? "—"}</span>
             <span>GPS {live?.gps_fix ?? "—"} · {live?.satellites ?? "—"}顆</span>
             <span>電量 {live?.battery_pct != null ? Math.round(live.battery_pct) : "—"}%</span>
@@ -693,7 +720,9 @@ export default function CommandPanel() {
               </button>
             )}
           </div>
-          {live && !live.ready && (live.not_ready_reasons ?? []).map((r, i) => (
+          {/* 原因行：未就緒（知道不行）與遙測不足（不知道）都要說明白——
+              後端在 ready=null 時也帶原因句（「尚未收到 SYS_STATUS…」） */}
+          {live && live.ready !== true && (live.not_ready_reasons ?? []).map((r, i) => (
             <div className="hint-line" key={i}>· {r}</div>
           ))}
           {/* sysid chips 移除（選中機統一）：換機＝左上機隊色點／側欄，

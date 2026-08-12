@@ -773,6 +773,9 @@ a:focus-visible, button:focus-visible, input:focus-visible, select:focus-visible
 .cmd-status .st-target { color: var(--ink); font-weight: 600; }
 .cmd-status .st-ok { color: var(--status-ok); font-weight: 600; }
 .cmd-status .st-warn { color: var(--status-serious); font-weight: 600; }
+/* 遙測不足＝不知道（§0.2b）：灰空心、不加粗——刻意不像斷言，
+   且絕不用紅（不知道被當故障處置比不顯示更糟） */
+.cmd-status .st-unk { color: var(--muted); }
 
 /* 虛擬搖桿（手動控制） */
 .joy-row { display: flex; gap: 12px; justify-content: space-around; padding: 4px 0; }
