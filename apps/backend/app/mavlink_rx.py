@@ -44,7 +44,11 @@ STX_FOLD_S = 15.0            # 同句連續重複在此窗內折疊計數（秒�
 
 # read-only 邊界的實體：能離開這個 socket 的訊息類型只有這三種（任務下載
 # 的查詢對話）。要發任何別的，這行 assert 就是攔你的人。
-SEND_WHITELIST = {"MISSION_REQUEST_LIST", "MISSION_REQUEST_INT", "MISSION_ACK"}
+# 021 Phase 2 新增 PARAM_REQUEST_LIST／PARAM_REQUEST_READ：**唯讀查詢**，符合本
+# 模組的邊界定義（「不含改變機上狀態的能力」）。**PARAM_SET 永遠不得加入**——
+# 參數編輯是 QGC 的職權，本系統只記錄「當時設定是什麼」，不去改它。
+SEND_WHITELIST = {"MISSION_REQUEST_LIST", "MISSION_REQUEST_INT", "MISSION_ACK",
+                  "PARAM_REQUEST_LIST", "PARAM_REQUEST_READ"}
 
 # custom_mode → 人話。**方言分表**（issue 015／gap-analysis §2）：PX4 是
 # main<<16|sub<<24 的 union；ArduPilot 是整數模式號（隨載具型別而異，此處
@@ -235,6 +239,12 @@ class MavlinkRx:
             self.by_drone[drone_id] = sysid
             log.info("sysid %d → %s（%s）", sysid, name,
                      "既有主機" if st is live else "自動註冊")
+            # 021 Phase 2：連線即抓一次參數表（唯讀）。之後改參數時 PX4 會主動
+            # 廣播 PARAM_VALUE，由下面的處理分支自動更新，不必重抓。
+            try:
+                self._send(sysid, self.enc.param_request_list_encode(sysid, 1))
+            except Exception:
+                log.exception("參數表請求送出失敗（不影響其他資料）")
         elif ent["addr"] != addr:
             # 撞號（兩台同 sysid）或換網路——必須看得見，混料比斷線嚴重。
             # 去抖（issue 016 RB5 sysid=1 bug 場景）：兩源撞號會每次心跳交替、
@@ -292,6 +302,11 @@ class MavlinkRx:
                     st.flight_mode = mode
             await self._armed_transition(
                 st, bool(msg.base_mode & M.MAV_MODE_FLAG_SAFETY_ARMED))
+        elif t == "PARAM_VALUE":
+            # 兩個來源共用這條路徑：連線時我方請求的整批回應、以及**有人改參數時
+            # PX4 主動廣播的單筆**。後者是快照保持忠實的關鍵（QGC 調完參數再飛）。
+            st.params[msg.param_id] = msg.param_value
+            st.param_total = msg.param_count
         elif t == "GLOBAL_POSITION_INT":
             st.lat = msg.lat / 1e7
             st.lon = msg.lon / 1e7
@@ -468,6 +483,9 @@ class MavlinkRx:
             # 影像（022）走背景：本 worker 是單執行緒，這裡 await 住（HTTP 逾時
             # 2s）會讓整條 MAVLink 處理停擺。影像是附加價值，不准拖累飛行資料。
             asyncio.create_task(video_rec.on_session_start(st.session_id, st.sysid, st))
+            # 021 Phase 2：參數快照也走背景（851 筆的 JSONB 寫入不該卡住 rx worker）
+            asyncio.create_task(
+                db.snapshot_params_for_session(st.session_id, st))
         elif not armed and st.armed:
             sid, st.session_id, st.armed = st.session_id, None, False
             if sid:
@@ -478,8 +496,13 @@ class MavlinkRx:
     # ── 任務讀回（白名單內的查詢對話）───────────────────────────
     def _send(self, sysid: int, msg_obj) -> None:
         name = msg_obj.get_type()
-        assert name in SEND_WHITELIST, \
-            f"{name} 不在發送白名單——read-only 邊界（改變機上狀態走 command 服務）"
+        if name not in SEND_WHITELIST:
+            # **明確 raise 而非 assert**：assert 在 `python -O` 下會被整段移除，
+            # 而這裡是本服務 read-only 邊界的唯一守門員（模擬環境的拓撲限制已
+            # 拿掉，見 sim-fleet/mav_fanout.py），不能是一個可被最佳化掉的檢查。
+            raise PermissionError(
+                f"{name} 不在發送白名單——read-only 邊界"
+                "（改變機上狀態的指令走 command 服務）")
         ent = self.sysids.get(sysid)
         if not ent:
             raise RuntimeError(f"sysid {sysid} 未連線")

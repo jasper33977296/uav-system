@@ -352,6 +352,32 @@ async def delete_session(session_id: str):
     return {"deleted": counts}
 
 
+@router.get("/sessions/{session_id}/params")
+async def session_params(session_id: str):
+    """該架次的機上參數快照（021 Phase 2，唯讀）。
+
+    實驗可重現性用：這一趟到底是用什麼設定飛的。**沒有快照就誠實回 null**
+    ——可能是該機還沒抓完參數、或是影像功能上線前的舊架次，不要拿「現在的」
+    參數冒充「當時的」（那會讓事後分析以為設定沒變過）。
+    """
+    row = await db.pool.fetchrow(
+        """SELECT ps.id::text AS id, ps.hash, ps.param_count, ps.params,
+                  ps.first_seen
+           FROM flight_sessions fs
+           LEFT JOIN param_sets ps ON ps.id = fs.param_set_id
+           WHERE fs.id = $1""", session_id)
+    if row is None:
+        raise HTTPException(404, "無此航線")
+    if row["id"] is None:
+        return {"param_set_id": None, "params": None,
+                "note": "本架次沒有參數快照（該機未完成參數讀取，或為功能上線前的舊架次）"}
+    return {"param_set_id": row["id"], "hash": row["hash"],
+            "param_count": row["param_count"],
+            "first_seen": row["first_seen"].isoformat(),
+            "params": json.loads(row["params"]) if isinstance(row["params"], str)
+                      else row["params"]}
+
+
 @router.get("/sessions/{session_id}/video")
 async def session_video(session_id: str):
     """該架次的影像片段與狀態（契約見 doc/flight-video-design.md §8b）。

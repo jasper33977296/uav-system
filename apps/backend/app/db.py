@@ -123,6 +123,18 @@ async def migrate() -> None:
     # final=false 表示「這段還可能變長」，UI 據此不對尾端做斷言。
     await pool.execute("ALTER TABLE video_segments "
                        "ADD COLUMN IF NOT EXISTS final BOOLEAN NOT NULL DEFAULT false")
+    # ── issue 021 Phase 2：每架次的機上參數快照（唯讀，實驗可重現性）────────
+    # **內容定址**：參數在飛行之間通常不變，每架次存一份 851 筆會囤大量重複。
+    # 同一組設定只存一列（hash 唯一），架次只記參照。
+    await pool.execute("""CREATE TABLE IF NOT EXISTS param_sets (
+        id          UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+        hash        TEXT NOT NULL UNIQUE,
+        param_count INT  NOT NULL,
+        params      JSONB NOT NULL,
+        first_seen  TIMESTAMPTZ NOT NULL DEFAULT now())""")
+    await pool.execute(
+        "ALTER TABLE flight_sessions ADD COLUMN IF NOT EXISTS param_set_id UUID "
+        "REFERENCES param_sets(id) ON DELETE SET NULL")
     # ── issue 023：missions 正名瘦身（路徑快照庫，不是任務庫）──────────────
     # kind 取代 created_by 兼差當判別欄。**加法不減法**：created_by 保留（歷史
     # 事實，留著零成本），只是不再被程式當分類用。
@@ -389,6 +401,61 @@ async def insert_link_sample(drone_id: str, session_id: str | None, m: dict) -> 
         json.dumps(m["raw"]) if m.get("raw") is not None else None,
     )
     return row is not None
+
+
+def param_hash(params: dict) -> str:
+    """對**排序後**的 (名稱, 值) 序列做雜湊。
+
+    排序是必要的：PARAM_VALUE 是非同步到達、每次抓取順序都不同，不正規化的話
+    同一組設定會算出不同雜湊，去重直接失效。值統一用 repr 以固定浮點表示法。
+    """
+    import hashlib
+    body = "\n".join(f"{k}={params[k]!r}" for k in sorted(params))
+    return hashlib.sha256(body.encode()).hexdigest()
+
+
+async def store_param_set(params: dict) -> str | None:
+    """存一組參數（內容定址去重），回 param_sets.id。空的不存。"""
+    if not params:
+        return None
+    h = param_hash(params)
+    row = await pool.fetchrow("SELECT id::text AS id FROM param_sets WHERE hash = $1", h)
+    if row:
+        return row["id"]                      # 同一組設定已存在，直接參照
+    row = await pool.fetchrow(
+        """INSERT INTO param_sets (hash, param_count, params) VALUES ($1, $2, $3)
+           ON CONFLICT (hash) DO UPDATE SET hash = EXCLUDED.hash
+           RETURNING id::text AS id""",
+        h, len(params), json.dumps(params))
+    return row["id"]
+
+
+async def snapshot_params_for_session(session_id: str, st) -> None:
+    """把該機當下的參數表綁到架次上（背景執行，不擋 rx worker）。
+
+    **抓不完整就不綁**（len < 機端宣告的總數）：綁一份殘缺的快照比沒有快照更糟
+    ——事後看起來像「當時就是這些設定」，實際上只是還沒收完。
+
+    **會重試**：參數表是連線後才開始收（851 筆約 3 秒），而「剛連上就 arm」是
+    真實情境（尤其地面站重啟後飛機還在飛）。一次性快照會在這種時候抓到空的，
+    所以隔一段時間再看幾次；期間 st.params 由 PARAM_VALUE 分支持續填。
+    """
+    import asyncio as _asyncio
+    for delay in (0.0, 3.0, 10.0, 30.0):
+        if delay:
+            await _asyncio.sleep(delay)
+        params, total = dict(st.params), st.param_total
+        if params and not (total and len(params) < total):
+            pid = await store_param_set(params)
+            if pid:
+                await pool.execute(
+                    "UPDATE flight_sessions SET param_set_id = $2 WHERE id = $1",
+                    session_id, pid)
+                log.info("參數快照：架次 %s ← %d 筆參數（param_set %s）",
+                         session_id[:8], len(params), pid[:8])
+            return
+    log.info("參數快照放棄：架次 %s 等不到完整參數表（已收 %d / 宣告 %s）",
+             session_id[:8], len(st.params), st.param_total)
 
 
 async def insert_event(drone_id: str, session_id: str | None,

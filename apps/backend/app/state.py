@@ -69,6 +69,13 @@ class LiveState:
     # None**——前端據此決定記錄燈的說明文字；None／非 on 就維持原文案，不宣告
     # 自己不知道的事。詞彙沿用 flight_sessions.video_mode，不另造一套。
     video_mode: str | None = None
+    # 機上參數表（021 Phase 2）：name → value。**唯讀快照**，用於實驗可重現性
+    # （這一趟到底是用什麼設定飛的）。連線時抓一次，之後靠 PX4 改參數時主動
+    # 廣播的 PARAM_VALUE 自動更新——只做連線那一次的話，「用 QGC 調完參數再飛」
+    # 這個最常見的流程就會讓快照過期。param_total 是機端宣告的總數，
+    # len(params)==param_total 才算抓完整。
+    params: dict = field(default_factory=dict)
+    param_total: int | None = None
     # serving cell 追蹤（換手事件；issue 002 教訓＝防抖）：serving_pci 是已確認的
     # 現任 PCI，pci_pending 是待確認候選（連續 2 次才算換手，事件層防抖）
     serving_pci: int | None = None
