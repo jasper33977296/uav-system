@@ -93,6 +93,19 @@ mission/start）就正常。
 `Preflight Fail: Battery unhealthy`，`prearm_ok=False`。arm 被拒即中止起飛的
 保護有正常作動。
 
+## ⚠️ 這個修正的 commit 標題不是它自己的
+
+修正的程式碼**落在 `8bc1e53`**——一個標題寫「底圖與機體圖示（ui-spec §2.4b）」
+的前端 commit 裡。原因：多個 session 共用同一個工作目錄，我把檔案 `git add` 之後
+還沒 commit，另一個 session 先 commit 了，**暫存區的內容被一起帶走**。
+
+記在這裡是因為：日後有人用 `git log` 找「起飛高度讀錯機」的修正，**在那個標題底下
+永遠找不到**。要看改動請直接 `git show 8bc1e53 -- apps/command/`。
+
+教訓（已回報 PM）：在共用工作目錄裡，**暫存區本身就是共用狀態**。`git add` 與
+`git commit` 之間的空窗期，任何 session 的 commit 都會把你的暫存內容一起提交。
+處理方式：add 完立刻 commit，不要留空窗。
+
 ## 相關
 
 - 013-B 群組任務（做對的那一半）
