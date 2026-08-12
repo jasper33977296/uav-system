@@ -218,17 +218,17 @@ async def _do_takeoff(sysid: int, alt: float) -> dict:
     PX4 的 MAV_CMD_NAV_TAKEOFF param7 是**絕對海拔**——用 live 的
     alt_msl - alt_rel 推地面海拔再加目標高度；經緯度/偏航給 NaN＝原地。
     """
-    d = await _live()
-    if d.get("alt_msl") is None or d.get("alt_rel") is None:
-        raise HTTPException(409, "沒有高度資料（GPS/EKF 未就緒），無法起飛")
-    target_amsl = (d["alt_msl"] - d["alt_rel"]) + alt
-    steps = {}
-    if not d.get("armed"):
-        steps["arm"] = await _run(sysid, "arm", mav.job_command, 400, [1.0])
-    steps["takeoff"] = await _run(
-        sysid, f"takeoff:{alt}m", mav.job_command, 22,
-        [0.0, 0.0, 0.0, math.nan, math.nan, math.nan, target_amsl])
-    return steps
+    # 地面海拔只有 PX4 需要（它的 param7 是絕對海拔）；ArduPilot 用相對高度，
+    # 拿不到 live 也能起飛。方言差異在 mav.job_takeoff 裡，這裡不判斷廠牌。
+    ground_amsl = None
+    try:
+        d = await _live()
+        if d.get("alt_msl") is not None and d.get("alt_rel") is not None:
+            ground_amsl = d["alt_msl"] - d["alt_rel"]
+    except Exception:
+        pass
+    res = await _run(sysid, f"takeoff:{alt}m", mav.job_takeoff, alt, ground_amsl)
+    return res.get("steps", res)
 
 
 class ManualIn(BaseModel):

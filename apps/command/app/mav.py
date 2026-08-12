@@ -34,6 +34,7 @@ GCS_SYSID = 254
 _VEHICLE_TYPES = {2: "quadrotor", 13: "hexarotor", 14: "octorotor",
                   1: "fixed_wing", 10: "ground_rover", 12: "submarine"}
 
+# ── 方言表（**單一集中處**；issue 026 抽驅動時整段提取，不要散落到各 job_*）──
 # PX4 custom mode（DO_SET_MODE 的 param2/param3：main_mode/sub_mode）
 PX4_MODES = {
     "position": (3, 0),  # POSCTL（手動位置控制：搖桿→速度，鬆手懸停）
@@ -42,6 +43,53 @@ PX4_MODES = {
     "rtl":     (4, 5),   # AUTO.RTL
     "land":    (4, 6),   # AUTO.LAND
 }
+
+
+# ArduPilot Copter 模式號（DO_SET_MODE 的 **param2 直接是模式號**，沒有 sub）。
+# 權威來源：reference/ardupilot/copter-mode.h。**gap-analysis 列為 critical**——
+# 送錯數字會切到完全不同的模式（例：把 9=LAND 誤當 PX4 的編碼送出去）。
+# 每個值都要在 SITL 讀回 HEARTBEAT 確認真的切到，不能只看 ACK。
+ARDU_COPTER_MODES = {
+    "position": 16,   # POSHOLD：位置保持＋手動介入（對應 PX4 的 POSCTL 語意）
+    "mission":   3,   # AUTO
+    "hold":      5,   # LOITER
+    "rtl":       6,   # RTL
+    "land":      9,   # LAND
+    "guided":    4,   # GUIDED（起飛序列要先進這個模式）
+}
+
+
+def dialect(r: "MavRouter", sysid: int) -> dict:
+    """該機的方言參數（模式編碼／任務慣例／起飛語意）。**方言判斷只在這裡做。**
+
+    - `mode_num(name)`：回 DO_SET_MODE 要送的值；PX4 是 (main, sub)、
+      ArduPilot 是單一模式號。
+    - `mode_matches(cm, name)`：拿 HEARTBEAT 的 custom_mode 驗證真的切過去了。
+    - `home_at_seq0`：ArduPilot 把 home 當 seq 0（見 job_upload_mission）。
+    - `takeoff_alt_is_relative`：ArduPilot 的 NAV_TAKEOFF param7 是**相對高度**，
+      PX4 是絕對海拔——送錯會差一整個地面海拔（數百公尺）。
+    - `takeoff_needs_guided`：Copter 必須先進 GUIDED 才能 arm＋起飛。
+    """
+    ap = caps.autopilot_name((r.drones.get(sysid) or {}).get("autopilot"))
+    if ap == "ardupilot":
+        return {
+            "autopilot": ap,
+            "home_at_seq0": True,
+            "takeoff_alt_is_relative": True,
+            "takeoff_needs_guided": True,
+            "mode_num": lambda n: (ARDU_COPTER_MODES[n], 0),
+            "mode_matches": lambda cm, n: cm == ARDU_COPTER_MODES[n],
+            "modes": ARDU_COPTER_MODES,
+        }
+    return {
+        "autopilot": ap,
+        "home_at_seq0": False,
+        "takeoff_alt_is_relative": False,
+        "takeoff_needs_guided": False,
+        "mode_num": lambda n: PX4_MODES[n],
+        "mode_matches": lambda cm, n: ((cm >> 16) & 0xFF, (cm >> 24) & 0xFF) == PX4_MODES[n],
+        "modes": PX4_MODES,
+    }
 
 
 class CommandError(Exception):
@@ -316,17 +364,20 @@ def job_set_mode(r: MavRouter, sysid: int, mode: str,
     「原地降落」看到 OK，機卻沒切、繼續原本動作（若在爬升就像「降落讓它飛高」）。
     故 ACCEPTED 後還要看 HEARTBEAT 確認轉到目標模式，沒轉就重試、再不行明示失敗。
     """
-    main, sub = PX4_MODES[mode]
+    d = dialect(r, sysid)
+    if mode not in d["modes"]:
+        raise CommandError(f"{d['autopilot']} 不支援模式 {mode}")
+    p2, p3 = d["mode_num"](mode)
     for attempt in range(1, retries + 1):
         res = job_command(r, sysid, M.MAV_CMD_DO_SET_MODE,
-                          [M.MAV_MODE_FLAG_CUSTOM_MODE_ENABLED, main, sub])
+                          [M.MAV_MODE_FLAG_CUSTOM_MODE_ENABLED, p2, p3])
         if not res.get("accepted"):
             return res            # 明確被拒（帶原因）——不是「沒生效」，直接回
         deadline = time.monotonic() + verify_timeout
         while time.monotonic() < deadline:
             r._wait(sysid, ("HEARTBEAT",), timeout=1.2)
             cm = (r.drones.get(sysid) or {}).get("custom_mode")
-            if cm is not None and ((cm >> 16) & 0xFF, (cm >> 24) & 0xFF) == (main, sub):
+            if cm is not None and d["mode_matches"](cm, mode):
                 return {**res, "mode_engaged": True, "attempts_mode": attempt}
     raise CommandError(
         f"模式 {mode} 已被接受但未生效——DO_SET_MODE 回 ACCEPTED，但機端 "
@@ -337,16 +388,47 @@ def job_set_mode(r: MavRouter, sysid: int, mode: str,
 # ── 任務方言（issue 015 實測；issue 026 抽驅動時從這裡提取）──────────────
 # **本檔的方言分支集中在這一處**，不要散落到各 job_* 裡——之後把廠牌差異收進
 # 獨立驅動時，要能「把這一段提取出來」而不是全域搜捕。
-def mission_dialect(r: "MavRouter", sysid: int) -> dict:
-    """回傳該機的任務方言參數。
+def job_takeoff(r: MavRouter, sysid: int, alt: float, ground_amsl=None) -> dict:
+    """起飛序列（方言差異集中在這裡，見 dialect()）。
 
-    `home_at_seq0`：ArduPilot 把 **home 當 seq 0**，真航點從 seq 1 起。實測
-    （2026-08-12 ArduCopter SITL）：直接送 0..N-1 的話，**第一個航點會被 home
-    覆蓋而消失**，且回讀筆數相同（3 送 3 回）——靠比對筆數抓不到，只有逐項
-    比座標才會發現（現行回讀比對確實會 raise，所以症狀是上傳失敗而非靜默吃掉）。
+    - **PX4**：NAV_TAKEOFF 的 param7 是**絕對海拔**，要用地面海拔＋目標高度。
+    - **ArduPilot Copter**：param7 是**相對高度**（送絕對海拔會差一整個地面
+      海拔、數百公尺），而且必須**先進 GUIDED 才能 arm 與起飛**。
+
+    回傳逐步結果，任一步失敗就往上拋（呼叫端已有留痕與錯誤呈現）。
     """
-    ap = caps.autopilot_name((r.drones.get(sysid) or {}).get("autopilot"))
-    return {"home_at_seq0": ap == "ardupilot", "autopilot": ap}
+    d = dialect(r, sysid)
+    steps = {}
+    if d["takeoff_needs_guided"]:
+        # Copter 在 LOITER/STABILIZE 下 arm 了也不會照指令起飛——先進 GUIDED
+        steps["guided"] = job_set_mode(r, sysid, "guided")
+    if not (r.drones.get(sysid) or {}).get("armed"):
+        res = job_command(r, sysid, 400, [1.0])
+        steps["arm"] = res
+        # **解鎖失敗就停**：繼續送 NAV_TAKEOFF 的話，機端會回 ACCEPTED（指令本身
+        # 合法）但飛機根本沒解鎖、不會離地——操作員看到「takeoff: ACCEPTED」卻
+        # 什麼也沒發生。舊版靠 _run 在 arm 被拒時直接拋出，改寫成 job 之後要自己
+        # 顧這件事（2026-08-12 回歸測試抓到）。
+        if not res.get("accepted"):
+            raise CommandError(
+                "解鎖被拒（%s），未送出起飛指令" % res.get("result", "?")
+                + ("｜" + "；".join(res.get("autopilot_notes", []))
+                   if res.get("autopilot_notes") else ""))
+    if d["takeoff_alt_is_relative"]:
+        p7 = alt
+    else:
+        if ground_amsl is None:
+            raise CommandError("PX4 起飛需要地面海拔（GPS/EKF 未就緒）")
+        p7 = ground_amsl + alt
+    # 偏航/經緯度：PX4 用 NaN 表示「用當前值」；**ArduPilot 對 NaN 沒有 ACK**
+    # （實測 2026-08-12：送 NaN 的 NAV_TAKEOFF 連 ACK 都沒有，指令被靜默丟棄），
+    # 它的慣例是 0＝當前位置。又一個方言差異。
+    blank = 0.0 if d["takeoff_alt_is_relative"] else float("nan")
+    steps["takeoff"] = job_command(
+        r, sysid, M.MAV_CMD_NAV_TAKEOFF,
+        [0.0, 0.0, 0.0, blank, blank, blank, p7])
+    return {"steps": steps, "alt_param7": p7,
+            "alt_semantics": "relative" if d["takeoff_alt_is_relative"] else "amsl"}
 
 
 def job_upload_mission(r: MavRouter, sysid: int, items: list) -> dict:
@@ -358,7 +440,7 @@ def job_upload_mission(r: MavRouter, sysid: int, items: list) -> dict:
     - 回讀的 REQUEST_LIST 重試 3 次、逐項重試 2 次
     """
     mt = M.MAV_MISSION_TYPE_MISSION
-    d = mission_dialect(r, sysid)
+    d = dialect(r, sysid)
     # ArduPilot：seq 0 留給 home，真航點往後移一格（line[i] 是要送給機上的第 i 項）。
     # 佔位用第一個航點的座標而不是 0,0,0——實測 ArduPilot 會用實際 home 覆蓋它，
     # 但萬一某版本沒覆蓋，一個「任務起點附近」的 home 遠比 (0,0,0) 安全。

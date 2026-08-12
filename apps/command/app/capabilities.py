@@ -34,8 +34,20 @@ def capabilities_for(ap_name: str):
         caps = {k: "unverified" for k in CAP_KEYS}
         reasons = {k: r for k in CAP_KEYS}
         # mission_upload：方言分支（home 佔 seq 0）已實作並以 SITL 驗證
-        caps["mission_upload"] = "ok"
-        reasons.pop("mission_upload", None)
+        # **逐鍵開，只開實際在 SITL 驗過的**（2026-08-12 015 驗收）：
+        #   mission_upload：方言分支（home 佔 seq 0）＋回讀逐項比對通過
+        #   hold/rtl/land：DO_SET_MODE 用 ArduPilot 模式號，且**讀回 HEARTBEAT
+        #     確認真的切到**（mode_engaged=True），不是只看 ACK
+        #   arm/takeoff：GUIDED→arm→NAV_TAKEOFF（相對高度、空白參數用 0 不用
+        #     NaN）實測爬到 15.0m
+        for _k in ("mission_upload", "hold", "rtl", "land", "arm", "takeoff"):
+            caps[_k] = "ok"
+            reasons.pop(_k, None)
+        # 以下**維持 unverified**（沒驗過就不開）：
+        #   manual：卡在機端 SYSID_MYGCS（我方 254 vs 預設 255），且 MANUAL_CONTROL
+        #     沒有 ACK——能不能偵測失敗待設計師定案（見 issue 015）
+        #   mission_start/mission_fly：任務執行整段尚未驗（AUTO 模式起跑行為未測）
+        reasons["manual"] = "需機端設定 SYSID_MYGCS=254，且我方無法確認是否已設（issue 015）"
         return caps, reasons
     r = "非 MAVLink 或未知自駕儀，不支援指令"
     return {k: "unsupported" for k in CAP_KEYS}, {k: r for k in CAP_KEYS}

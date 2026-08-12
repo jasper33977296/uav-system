@@ -73,7 +73,7 @@ PX4 預設就串流，所以這件事在只測 PX4 的時候永遠不會暴露�
 
 | 項目 | 結果 |
 |---|---|
-| **A. 任務 seq 0＝home** | **確認，且是靜默資料遺失不是位移**。上傳 3 個航點，回讀**筆數仍是 3**，但 seq 0 被 home 覆蓋（frame=0 絕對高度）、**第一個航點消失**。因為筆數不變，「比對筆數」的檢查抓不到。正解：上傳 ArduPilot 時 home 佔 seq 0、真航點從 seq 1 起（count=N+1）。**現行 `job_upload_mission` 直送 0..N-1，接 ArduPilot 會每次吃掉第一個航點——尚未修正。** |
+| **A. 任務 seq 0＝home** | **確認。**<br>**協定層原始行為**（用獨立腳本繞過產品程式觀察）：上傳 3 個航點，回讀**筆數仍是 3**，但 seq 0 被機端 home 覆蓋（frame=0 絕對高度）、**我方第一個航點消失**——筆數不變，所以只比筆數的檢查抓不到。<br>**產品層實際症狀（更正 2026-08-12）**：`job_upload_mission` 的回讀比對**本來就是逐項比座標**（不是只比筆數），所以它會在 seq 0 比對不符時 raise「回讀比對不符」→ **ArduPilot 上傳一律大聲失敗，不是靜默吃掉航點**。訊息看起來像機上內容錯亂，仍然不能用，但飛安意義與「靜默遺失」完全不同。<br>**已修（`de339c0`）**：`mission_dialect()` 方言分支——home 佔 seq 0、真航點從 seq 1 起（線上 count=N+1），回讀跳過 seq 0 的內容比對、其餘對齊偏移後照常逐項比。PX4 路徑一個位元組未變。實測 PX4 `wire_items=4`／ArduPilot `wire_items=5`，兩者 verified=true。 |
 | **B. `SYSID_MYGCS`** | **確認不相容**。機端值 255，我方 GCS sysid 254 → 我方 `MANUAL_CONTROL` 被**靜默丟棄**（無錯誤、搖桿純粹沒反應）。解法：機端設 `SYSID_MYGCS=254`（機端前提設定），或我方 sysid 做成每機設定。 |
 | **C. PREARM 位** | **確認不支援**。ArduPilot 的 SYS_STATUS `PREARM_CHECK present=False`（PX4 是 True）→ **不能用 SYS_STATUS 對 ArduPilot 做可飛判斷**，它的預檢原因走 STATUSTEXT。 |
 | **D. 可攜指令** | **全部 ACCEPTED**：`NAV_LOITER_UNLIM`（Hold）／`NAV_RETURN_TO_LAUNCH`（RTL）／`NAV_LAND`（Land）。任務上傳握手本身也正常（ACK=0）。 |
