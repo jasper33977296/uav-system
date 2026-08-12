@@ -3,7 +3,7 @@ import { MapboxOverlay } from "@deck.gl/mapbox";
 import maplibregl from "maplibre-gl";
 import "maplibre-gl/dist/maplibre-gl.css";
 import { useParams, useRouter } from "next/navigation";
-import { useEffect, useMemo, useRef, useState } from "react";
+import { Fragment, useEffect, useMemo, useRef, useState } from "react";
 
 import { colorFor, createDroneLayer } from "@/components/droneLayer";
 import EventModal from "@/components/EventModal";
@@ -13,6 +13,7 @@ import { routeLayer } from "@/lib/deckRoute";
 import { evText } from "@/lib/evtext";
 import { CANVAS, groundGrid, pathArrows, ribbon, trailLineString } from "@/lib/geo";
 import { API, classifySinr } from "@/lib/signal";
+import { useUavStore } from "@/lib/store";
 
 interface LinkRow {
   time: string; lat: number | null; lon: number | null; alt_rel: number | null;
@@ -22,6 +23,7 @@ interface Ev {
   id: number; time: string; severity: string; type: string;
   detail: Record<string, unknown>;
   source?: string | null;
+  drone_id?: string | null;
 }
 
 const fmt = (v: number | null | undefined, d = 1) => (v == null ? "—" : v.toFixed(d));
@@ -153,6 +155,14 @@ export default function Replay() {
       .catch(() => {});
     return () => clearInterval(poll);
   }, [sessionId]);
+
+  // 影片窗識別徽章（§2.9/§5.4：唯一辨識依據，不得缺）——track 的 session
+  // 物件沒帶機身欄位，用事件的 drone_id 補（同架次事件已在手，零額外請求），
+  // 機名再查機隊 store；都查不到就顯 id 前綴，不編造
+  const fleet = useUavStore((s) => s.fleet);
+  const vidDroneId = meta?.drone_id ?? events.find((e) => e.drone_id)?.drone_id ?? null;
+  const vidDroneName = meta?.drone_name
+    ?? (vidDroneId ? fleet[vidDroneId]?.drone_name ?? `#${vidDroneId.slice(0, 8)}` : null);
 
   const [t0, t1] = useMemo(() => {
     if (!rows.length) return [0, 1];
@@ -302,8 +312,8 @@ export default function Replay() {
         <ReplayVideo video={video} rows={rows}
           tCurMs={new Date(cur.time).getTime()}
           playing={playing} speed={speed}
-          droneName={meta?.drone_name ?? null}
-          droneColor={meta?.drone_id ? colorFor(meta.drone_id) : "#8f8b80"} />
+          droneName={vidDroneName}
+          droneColor={vidDroneId ? colorFor(vidDroneId) : "#8f8b80"} />
       )}
 
       {rows.length > 1 && (
@@ -326,7 +336,7 @@ export default function Replay() {
                     const L = Math.max(0, pct(s));
                     const R = Math.min(100, pct(e));
                     if (R <= 0 || L >= 100) return null;
-                    return (<span key={g.id}>
+                    return (<Fragment key={g.id}>
                       <span style={{ left: `${L}%`, width: `${R - L}%` }} />
                       {/* final=false 尾端：長度未定案——不畫成缺口（那是斷言
                           沒錄到），以處理中樣式延伸到軸末（§5.4） */}
@@ -334,7 +344,7 @@ export default function Replay() {
                         <span className="cov-proc"
                           style={{ left: `${R}%`, width: `${100 - R}%` }} />
                       )}
-                    </span>);
+                    </Fragment>);
                   })}
                 </span>
               )}

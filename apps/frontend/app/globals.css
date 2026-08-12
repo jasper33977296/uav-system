@@ -321,7 +321,7 @@ a:focus-visible, button:focus-visible, input:focus-visible, select:focus-visible
   position: absolute; left: 0; right: 0; bottom: -1px; height: 3px;
   pointer-events: none;
 }
-.vid-cover span {
+.vid-cover > span {
   position: absolute; top: 0; height: 100%; border-radius: 1px;
   background: var(--series-1);
 }
