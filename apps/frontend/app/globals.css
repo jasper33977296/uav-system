@@ -272,6 +272,15 @@ a:focus-visible, button:focus-visible, input:focus-visible, select:focus-visible
   font-variant-numeric: tabular-nums;
 }
 .imu-sub b { color: var(--ink); font-weight: 600; }
+/* 座標列（§2.6）：等寬 6 位小數、整列可點＝複製 */
+.imu-pos {
+  grid-column: 2 / -1; justify-self: start; text-align: left;
+  background: none; border: none; padding: 0; cursor: pointer;
+  color: var(--ink); font-size: 12.5px;
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-variant-numeric: tabular-nums;
+}
+.imu-pos:hover { color: var(--accent); }
 /* 振動量條：0–90 橫軌、30/60 門檻刻度、x/y/z 三細條 */
 .imu-vib { align-items: center; }
 .vib-track {

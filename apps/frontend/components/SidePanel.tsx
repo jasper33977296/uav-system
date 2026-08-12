@@ -205,9 +205,42 @@ function ImuCard({ live }: { live: Telemetry | null }) {
             </span>
           </div>
         )}
+        {/* 選中機座標（§2.6：簡約重整時被收掉、使用者要求回來）。放這裡
+            而非 HUD：座標是「查詢時才要」的精確值，非常駐掃視項。
+            與地圖右下的游標經緯度並存——那是「你指的位置」，這是「機在
+            的位置」。相對高度在此重複顯示是刻意例外：抄座標時通常連高度
+            一起抄，兩個數字分處畫面兩端會抄錯。無座標整列不畫。 */}
+        <PosRow live={live} />
       </div>
     </div>
   );
+}
+
+function PosRow({ live }: { live: Telemetry | null }) {
+  const [copied, setCopied] = useState(false);
+  if (live?.lat == null || live?.lon == null) return null;
+  const txt = `${live.lat.toFixed(6)}, ${live.lon.toFixed(6)}`;
+  const copy = () => {
+    navigator.clipboard.writeText(
+      live.alt_rel != null ? `${txt}, ${live.alt_rel.toFixed(1)}m` : txt)
+      .then(() => { setCopied(true); setTimeout(() => setCopied(false), 1500); })
+      .catch(() => {});
+  };
+  return (<>
+    <div className="imu-row">
+      <span className="imu-lab">位置</span>
+      <button className="imu-pos" onClick={copy} title="點擊複製座標（含高度）">
+        {txt}<span className="imu-unit"> {copied ? "已複製" : "⧉"}</span>
+      </button>
+    </div>
+    {live.alt_rel != null && (
+      <div className="imu-row">
+        <span className="imu-lab" />
+        <span className="imu-sub">相對高度 <b>{live.alt_rel.toFixed(1)}</b>
+          <span className="imu-unit"> m</span></span>
+      </div>
+    )}
+  </>);
 }
 
 export default function SidePanel() {
