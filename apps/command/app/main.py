@@ -187,9 +187,55 @@ async def healthz():
             "gcs_sysid": mav.GCS_SYSID, "drones": router.snapshot()}
 
 
+#: 「解鎖後機體會自己動」的模式動詞。在這些模式下裸 arm ＝ 立即自主飛行。
+#: 用**動詞**不是模式名——PX4 叫 MISSION、ArduPilot 叫 AUTO，比字串會漏
+#: （030 的教訓）。`guided` 不在此列：那是「解鎖後等指令」的正常起飛前置。
+_AUTO_EXEC_VERBS = {"mission", "rtl", "land"}
+
+
+def _guard_bare_arm(sysid: int) -> None:
+    """裸 arm 前的模式檢查（issue 031）。
+
+    **為什麼系統要擋而不是靠紀律**：2026-08-13 有人對一台停在 MISSION 模式、
+    機上載有任務的機下裸 arm，它立即自主起飛爬到 50m——真機上就是 fly-away。
+    那正是 issue 028 危害描述的人工重演（「把一台還在地面的機切進 AUTO.MISSION」）：
+    028 修掉了程式會犯的版本，這次證明人也會犯。
+
+    而 MCP 之後 **agent 也會下 arm**——agent 不會累，但也不會「想到先看模式」。
+    系統**已經知道**當前模式（HEARTBEAT 一直在報），知情不阻攔說不過去。
+
+    只擋這個 HTTP 端點：內部序列（`_do_takeoff`、群組執行器）直接呼叫
+    `job_command`，那些 arm 是**有意圖的**（起飛序列的一步），不該被擋。
+    """
+    d = (router.drones.get(sysid) or {}) if router else {}
+    cm = d.get("custom_mode")
+    if cm is None:
+        return                      # 還沒收到心跳＝不知道模式，不亂擋（能力 gating 另有把關）
+    drv = mav.dialect(router, sysid)["driver"]
+    verb = drv.decode_verb(cm)
+    if verb not in _AUTO_EXEC_VERBS:
+        return
+    mode_name = drv.decode_mode(cm)
+    raise HTTPException(409, {
+        "msg": f"這台機目前在 {mode_name} 模式，解鎖後會**立即開始自主飛行**",
+        "hint": "若只是要解鎖（例如測試或地面檢查）：先切 hold 再 arm。"
+                "若本來就要讓它飛任務：走 mission/fly 序列"
+                "（它會上傳→解鎖→起飛→到高度才切任務，每步都驗過），"
+                "不要用裸 arm。",
+        "flight_mode": mode_name, "mode_verb": verb, "sysid": sysid,
+        "override": "確定要在此模式下解鎖，帶 intent=start_mission 再送一次",
+    })
+
+
 @app.post("/api/command/{sysid}/arm")
-async def arm(sysid: int):
+async def arm(sysid: int, intent: str | None = None):
     _require_enabled(); _require_capability(sysid, "arm")
+    if intent != "start_mission":
+        _guard_bare_arm(sysid)
+    else:
+        # 顯式意圖仍然留痕——**繞過安全檢查這件事本身要看得見**
+        await _audit(sysid, "arm", {"intent": intent}, "accepted",
+                     "帶 intent=start_mission 繞過自動模式 arm 防護（031）")
     return await _run(sysid, "arm", mav.job_command, 400, [1.0])
 
 
