@@ -219,7 +219,19 @@ export default function AbCompare() {
       ovRef.current = ov;
       setMapReady(true);
     });
-    return () => { map.remove(); mapRef.current = null; };
+    // cleanup 必須把**與這張地圖同生命週期的東西全部歸零**，不只 mapRef：
+    //   - `ovRef` 還指著已銷毀的 overlay，推層會推進不存在的東西
+    //   - `mapReady` 留在 true 時，新地圖 load 後的 setMapReady(true) 是
+    //     no-op（React 不重渲染）→ 推層 effect 再也沒有觸發條件 →
+    //     **新 overlay 永遠停在 layers: []，熱區一片空白**
+    // 本頁是唯一 deps 非 [] 的地圖（[ready]：容器只在有資料時渲染），
+    // 所以只有這裡會重建、也只有這裡會踩到
+    return () => {
+      map.remove();
+      mapRef.current = null;
+      ovRef.current = null;
+      setMapReady(false);
+    };
   }, [ready]);
 
   useEffect(() => {
