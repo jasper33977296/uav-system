@@ -160,17 +160,33 @@ export default function AbCompare() {
     // 一個對的結論，是說出一個不與同頁其他證據衝突的結論
     const dP5 = res.summary.b.p5 != null && res.summary.a.p5 != null
       ? res.summary.b.p5 - res.summary.a.p5 : null;
+    // **摘要表的 Δ 與判讀句的中位數是不同的統計量**：表上是「各自中位數
+    // 之差」median(後)−median(前)，句子裡是「逐段差值的中位數」
+    // median(後ᵢ−前ᵢ)。前趟在 700m 驟降、後趟在 1000m 才降時，逐段差值
+    // 中位數是 0 而整體中位數差 15.8——兩個數字都對卻互相打臉。
+    // 守門條件因此要涵蓋**摘要表任一欄的顯著差異**，不能只看尾部
+    const dP50 = res.summary.b.p50 != null && res.summary.a.p50 != null
+      ? res.summary.b.p50 - res.summary.a.p50 : null;
     let txt: string;
     if (dR == null) txt = "無 RSRP 對照資料，無法判定變因";
     else if (Math.abs(dR) < FLAT_R && dS < -SIG_S) txt = "RSRP 大致持平而 SINR 下降 → 符合外部雜訊升高的特徵";
     else if (Math.abs(dR) < FLAT_R && dS > SIG_S) txt = "RSRP 大致持平而 SINR 上升 → 符合外部雜訊下降的特徵";
     else if (dR < -FLAT_R && dS < -SIG_S) txt = "RSRP 同步下降 → 變因在訊號強度側（距離、遮蔽或發射端）";
     else if (dR > FLAT_R && dS > SIG_S) txt = "RSRP 同步上升 → 變因在訊號強度側（距離、遮蔽或發射端）";
-    else if (dP5 != null && Math.abs(dP5) >= TAIL) {
-      txt = `整段中位數持平，但最差 5% ${dP5 > 0 ? "改善" : "惡化"} `
-        + `${Math.abs(dP5).toFixed(1)} dB → 變化集中在局部區段（見主圖差值帶）`;
+    else if ((dP5 != null && Math.abs(dP5) >= TAIL)
+             || (dP50 != null && Math.abs(dP50) >= TAIL)) {
+      // 只要摘要表任一欄顯示顯著差異，判讀句就不得說「無顯著變化」
+      const bits: string[] = [];
+      if (dP50 != null && Math.abs(dP50) >= TAIL) {
+        bits.push(`整體中位數${dP50 > 0 ? "改善" : "惡化"} ${Math.abs(dP50).toFixed(1)} dB`);
+      }
+      if (dP5 != null && Math.abs(dP5) >= TAIL) {
+        bits.push(`最差 5% ${dP5 > 0 ? "改善" : "惡化"} ${Math.abs(dP5).toFixed(1)} dB`);
+      }
+      txt = `逐段差值中位數持平，但${bits.join("、")}`
+        + " → 變化集中在局部區段（見主圖差值帶）";
     } else txt = "無顯著變化";
-    return { txt, dS, dR, dP5 };
+    return { txt, dS, dR, dP5, dP50 };
   }, [res]);
 
   // 差值熱區地圖（沿用場域頁的暖畫布底＋地面網格）
@@ -334,10 +350,13 @@ export default function AbCompare() {
               ⓘ {verdict.txt}
               {/* 判讀必須可反駁：句尾附依據，使用者能自行檢查系統的結論 */}
               <span className="meta">
-                （依據：ΔSINR 中位數 {f1(verdict.dS)} dB
-                {verdict.dR != null && `、ΔRSRP 中位數 ${f1(verdict.dR)} dB`}
+                {/* 標明統計量：判讀句用「逐段差值」、摘要表用「各自中位數
+                    之差」——同名不同義會讓兩個都對的數字看起來互相矛盾 */}
+                （依據：SINR 逐段差值中位數 {f1(verdict.dS)} dB
+                {verdict.dR != null && `、RSRP 逐段差值中位數 ${f1(verdict.dR)} dB`}
+                {verdict.dP50 != null && `、整體 P50 差 ${f1(verdict.dP50)} dB`}
                 {verdict.dP5 != null && `、Δp5 ${f1(verdict.dP5)} dB`}；
-                持平門檻 ±2 dB、尾部門檻 ±3 dB）
+                持平門檻 ±2 dB、表列顯著門檻 ±3 dB）
               </span>
             </div>
           )}
