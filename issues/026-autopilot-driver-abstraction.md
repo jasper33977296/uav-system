@@ -141,6 +141,57 @@ EKF 訊息名）與 `state.py`（就緒原因文字），全部收進新檔 `app
 `mavlink_rx.py` 不再持有任何廠牌表，**也不轉出** `dialect` 的名字（留轉出等於
 留下第二個看似權威的位置），測試第 8 項釘住這點。
 
+### B1／B2 完成（2026-08-12）
+
+- **B1**：介面定義 13 成員（`libs/autopilot/driver.py` ＋ `doc/autopilot-driver-interface.md`）。
+  兩條教訓做成**型別**而非註解：`MessageEquivalence` 強制帶適用範圍、`Limit` 在
+  建構期擋掉「confidence=unverified 卻有數字」。
+- **B2**：兩端切到共用驅動層，`libs/` 進 repo 根 build context。零回歸——
+  capabilities 逐鍵相同（含 reasons 逐字）、ready／mode 逐台相同，**設計師獨立
+  跑他自己的基準線 diff 也全綠**。等價測試改為對照 git 基準點 `41471cc`，
+  從一次性搬遷驗證變成長期回歸護欄。
+
+### B3 進行中（2026-08-12 停在此）
+
+**已完成**：測試套骨架（`scripts/conformance/`）＋六條測項。
+
+| 測項 | px4 | ardupilot | 覆蓋的能力鍵 |
+|---|---|---|---|
+| `mode_set` | pass | pass | hold／rtl／land |
+| `mission_upload` | pass | pass | mission_upload |
+| `manual_failsafe` | pass | pass | manual（之一） |
+| `takeoff` | pass | pass | arm／takeoff |
+| `manual_stick` | **skip** | pass | manual（之一） |
+| `mission_fly` | pass | **skip** | mission_start／mission_fly |
+
+`dryrun.py` 對照「現況 vs 改由測試推導」：**缺口從 8 降到 1**。
+**gating 尚未切換**（規則：清單為空才切）。
+
+跑測逼出三個測試套自身的缺陷，都已修——其中第一條最重要：
+
+> **機端拒絕 ≠ 方言錯誤。** 電池不健康而拒絕解鎖被記成 `fail`，那是**誣賴驅動**，
+> 而在能力值改由測試推導之後會讓一個好好的動詞被鎖住。這正是本套測試開宗明義
+> 宣告要分清的「一致性測試 vs 執行期前提檢查」——**設計時寫下的區分，實跑才
+> 發現自己沒做到**。
+
+另外兩條：`skip` 不得覆蓋既有 `pass`（skip 是「這次沒新證據」，不是「舊證據作廢」）；
+能力 gating 擋下要單獨分類（記成 fail 等於宣稱「驗過而且壞了」）。
+
+### 兩個未決項（下一段的起點）
+
+**(A) 能力 gating 的 bootstrap 雞生蛋。** 動詞是 `unverified` → API 拒發 →
+一致性測試跑不了 → 永遠拿不到證據。**刻意不繞過**（繞過等於測一條產品上不存在
+的路徑）。使用者定案：做一個「**一次性人工放行**」機制——每次 trial 都要明確
+放行（不是給測試身分常設權限）、**只對 `is_simulated` 機**、全程 `command_log`
+留痕標 trial、結果落地即失效。設計先過目再實作。
+
+**(B) PX4 airborne 進不了 POSCTL。** 空中持續回
+`Switching to POSCTL is currently not available`，持續送設定點 25s 仍被拒；地面
+切則正常。線索：產品的 `manual_start` 在 2026-08-11 已 SITL 驗證可用，而
+`mav.py` 註解明寫「POSCTL 需要**已存在的手動控制串流**才會接受切換」——產品的
+順序是**先建立串流、再切模式**。待比對測試序列與該順序的差異。
+**「測試進不去」與「能力不存在」是兩回事**，未查明前不接受降級。
+
 ## 解決方式
 
 （closed 時補）
