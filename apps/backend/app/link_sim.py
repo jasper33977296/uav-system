@@ -42,12 +42,27 @@ def _clamp(v: float, lo: float, hi: float) -> float:
 # 原為 cells / interference_zones 兩張表，2026-08-10 拆除——場景是模擬器的
 # 內部細節，不佔正式 schema；真機階段的「已知干擾源」由實測資料自己揭露
 # （樣本帶 cell_id/PCI 與座標，事後可歸因，不需要預先標注表）。
+# **場景座標必須跟著機隊出生點走**（2026-08-13 從蘇黎世搬到臺北大稻埕）。
+# 機在台北、干擾區留在蘇黎世的話，模擬 5G 會永遠平坦——SINR 不會掉、
+# `in_interference_zone` 永遠 false，**整個研究情境靜默失效**：畫面一切正常，
+# 只是那條「飛進干擾區訊號變差」的曲線再也不會出現。
+#
+# 搬遷時保持**相對幾何**（相對 home 的距離與方位不變），而不是平移經緯度差值
+# ——經度一度的長度隨緯度變（蘇黎世 47.4° vs 臺北 25.06°，差約 25%），
+# 直接搬差值會把場景橫向壓扁 25%。換算成公尺再套用才對：
+#
+#   sim-gnb-1     93.9m @208.5°   sim-gnb-2    444.3m @ 35.3°
+#   sim-jammer-A 195.7m @  0.1°（半徑 120m，涵蓋 home 正北 76~316m）
+#
+# 出生點若再變（`FLEET_HOME`），這裡要一起換算——**兩者是同一個場景的兩半**。
+_HOME = (25.0554, 121.5065)          # 與 sim-fleet/fleet.sh 的 FLEET_HOME 對齊
+
 DEFAULT_CELLS = [
-    {"name": "sim-gnb-1", "lat": 47.3970, "lon": 8.5450, "pci": 101, "band": "n78"},
-    {"name": "sim-gnb-2", "lat": 47.4010, "lon": 8.5490, "pci": 205, "band": "n78"},
+    {"name": "sim-gnb-1", "lat": 25.054658, "lon": 121.506056, "pci": 101, "band": "n78"},
+    {"name": "sim-gnb-2", "lat": 25.058658, "lon": 121.509045, "pci": 205, "band": "n78"},
 ]
 DEFAULT_ZONES = [
-    {"name": "sim-jammer-A", "center_lat": 47.3995, "center_lon": 8.5456,
+    {"name": "sim-jammer-A", "center_lat": 25.057158, "center_lon": 121.506504,
      "radius_m": 120.0, "severity_db": 25.0},   # 區內 SINR 最深 -25dB
 ]
 
