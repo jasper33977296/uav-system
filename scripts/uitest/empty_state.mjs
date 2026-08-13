@@ -406,6 +406,30 @@ const CASES = [
       return { pass: ok, note: ok ? "說出「無法取得航線資料」" : `畫面：${t.slice(0, 140)}` };
     },
   },
+  {
+    name: "[實測] drones-three-states｜機隊頁 讀取中／無法連線／尚無無人機 三分",
+    async run(b) {
+      const mk = async (fulfill) => {
+        const page = await (await b.newContext({ viewport: { width: 1400, height: 900 } })).newPage();
+        await page.route("**/api/drones**", fulfill);
+        await page.route("**/api/sessions**", (r) => r.fulfill({ json: [] }));
+        await page.routeWebSocket(/\/ws\/telemetry/, () => {});
+        await page.goto(`${URL_BASE}/drones`, { waitUntil: "networkidle", timeout: 30000 });
+        await page.waitForTimeout(1200);
+        const t = (await page.locator("body").innerText()).replace(/\s+/g, " ");
+        await page.context().close();
+        return t;
+      };
+      const empty = await mk((r) => r.fulfill({ json: [] }));
+      const down = await mk((r) => r.fulfill({ status: 500, json: { detail: "boom" } }));
+      // 這個形狀不需要任何事情出錯就在說謊，所以斷言的是**文案本身**：
+      // 沒有機與連不上不得共用一句話
+      const ok = /尚無無人機/.test(empty) && !/無法連線/.test(empty)
+        && /無法連線到 backend/.test(down) && !/尚無無人機/.test(down);
+      return { pass: ok, note: ok ? "空→「尚無無人機」；500→「無法連線到 backend」"
+        : `空:${empty.slice(0, 60)} ／ 500:${down.slice(0, 60)}` };
+    },
+  },
 ];
 
 /** 反向驗證：資料存在但拿不到（後端 500）時，rest-history 的斷言必須失敗。

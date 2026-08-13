@@ -44,6 +44,12 @@ function duration(a: string, b: string | null): string {
 export default function Drones() {
   const router = useRouter();
   const [drones, setDrones] = useState<Drone[]>([]);
+  // 三態各自有話（§0.2e）：原本「讀取中，或 backend 未連線」把兩種狀態塞進
+  // 同一句——讀取卡住時看起來像 backend 掛了、backend 掛了時看起來像還在讀，
+  // **兩個都沒真的宣告**。這頁尤其不能混：沒有機與連不上，處置完全不同。
+  // 這個形狀不需要任何事情出錯就在說謊，所以錯誤注入測不到，只能讀文案
+  const [dronesLoaded, setDronesLoaded] = useState(false);
+  const [dronesErr, setDronesErr] = useState(false);
   const [sessions, setSessions] = useState<Session[]>([]);
   const [name, setName] = useState("");
   const [url, setUrl] = useState("");
@@ -78,8 +84,9 @@ export default function Drones() {
   const reload = useCallback(() => {
     // 取得失敗經 catch 說出來（見 lib/fetchJson.ts）：空清單＝「沒有無人機／
     // 沒有航線」是一個宣告，我方取不到時不該替後端宣告
-    getJson<Drone[]>(`${API}/api/drones`).then(setDrones)
-      .catch(() => setErr("無法取得無人機清單"));
+    getJson<Drone[]>(`${API}/api/drones`)
+      .then((d) => { setDrones(d); setDronesLoaded(true); setDronesErr(false); })
+      .catch(() => { setDronesErr(true); setErr("無法取得無人機清單"); });
     getJson<any[]>(`${API}/api/sessions`)
       .then((rows) =>
         setSessions(
@@ -306,7 +313,10 @@ export default function Drones() {
         );
       })}
       {drones.length === 0 && (
-        <div className="card"><div className="empty">讀取中，或 backend 未連線</div></div>
+        <div className="card"><div className="empty">
+          {dronesErr ? "無法連線到 backend"
+            : dronesLoaded ? "尚無無人機" : "讀取中…"}
+        </div></div>
       )}
 
       {toDelete && (
