@@ -6,6 +6,8 @@
 ## 慣例
 
 - 檔名：`NNN-短標題-用連字號.md`，編號遞增不重用。
+- **配號請找 PM**：多 session 並行編輯本索引，自行取號會撞號（實際發生過：
+  018 被兩案同時取用）。要開新 issue 先向 PM 要號，或由 PM 代開。
 - 新問題從 [TEMPLATE.md](TEMPLATE.md) 複製。
 - 狀態寫在檔案開頭的欄位，同時更新下方索引表：
 
@@ -36,14 +38,14 @@
 | [007](007-heading-never-populated.md) | `heading` 從未訂閱，地圖機頭永遠指北 ✔實測確認 | medium | **closed** | `backend/app/ingest.py` |
 | [008](008-readme-test-script-port-conflict.md) | README 測試腳本用 14540，與 backend 搶埠 | low | **closed** | `README.md:65` |
 | [009](009-sitl-log-fills-disk.md) | SITL 沒掛 TTY，log 以 4.9GB/hr 寫爆磁碟 ✔實測確認 | critical | **closed** | `docker-compose.yml` |
-| [010](010-missions-idle-columns.md) | missions.drone_id / status 欄位閒置（無資料來源）| low | open | `db/init/01_schema.sql` |
-| [011](011-register-drone-not-wired.md) | 「註冊無人機」表單未接線（建立資料列但不會連線）| low | open | `apps/frontend/app/drones/page.tsx` |
-| [012](012-command-service.md) | command 服務：自製 GCS 指令能力（取代 QGC 作業流程）| medium | open | `doc/gcs-replacement.md` §1 |
-| [013](013-group-missions.md) | 群組任務：群飛 group 概念同時配置路徑 | medium | open | `doc/gcs-replacement.md` §3 |
+| [010](010-missions-idle-columns.md) | missions.drone_id / status 欄位閒置 → 併入 023 一起結掉 | low | **closed** | `db/init/01_schema.sql` |
+| [011](011-register-drone-not-wired.md) | 「註冊無人機」表單未接線 → 單埠多機自動註冊取代；多機實測過 | low | **closed** | `apps/frontend/app/drones/page.tsx` |
+| [012](012-command-service.md) | command 服務：自製 GCS 指令能力——已為系統核心，階段交付完成（真機 failsafe 實測列部署清單）| medium | **closed** | `doc/gcs-replacement.md` §1 |
+| [013](013-group-missions.md) | 群組任務：V1 全案收官（skew/RTL 實測）；V2/V3 自動指派歸 019 目標層 | medium | **closed** | `doc/gcs-replacement.md` §3 |
 | [014](014-two-tier-collection.md) | 兩層收集：機上傳出資訊全數收集（原始層已實作）| medium | in-progress | `apps/backend/app/capture.py` |
 | [015](015-multi-autopilot-support.md) | 跨自駕儀支援：硬編碼 PX4 方言，非 PX4 機不可控（部分指令有飛安風險）| high | open | `reference/gap-analysis.md` |
 | [016](016-rb5-platform-connectivity.md) | RB5 平台連線層：廣播 :14550／埠寫死／sysid bug，兩通道設計不會自動成立 | high | open | `reference/gap-analysis.md` §0 |
-| [017](017-live-3d-visual-quality.md) | 即時頁 3D 呈現粗糙：絲帶段間無 join＋平塗；「真 3D 地圖」需求 | medium | open | `apps/frontend/lib/geo.ts` |
+| [017](017-live-3d-visual-quality.md) | 即時頁 3D 品質：P1 join／P2 deck.gl／P3 底圖＋圖示全數收官（3D 機模另案）| medium | **closed** | `apps/frontend/lib/geo.ts` |
 | [018](018-event-detail-plain-language.md) | 事件 detail 人話化＋新增 serving cell 變更事件 | low | open | 前端事件流＋backend 事件結構 |
 | [019](019-agent-mcp-interface.md) | MCP agent 介面：任務層工具＋因果鏈紀錄＋分析 API（終局目標定案）| medium | open | `doc/agent-mcp-goals.md` |
 | [020](020-session-mission-association-broken.md) | 架次未綁任務：新飛資料比較頁用不了 ✔回填驗證 | high | **closed** | `db.py:create_session` |

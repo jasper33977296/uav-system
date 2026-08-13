@@ -1,6 +1,9 @@
 # 012 · command 服務：自製 GCS 的指令能力（取代 QGC 作業流程）
 
-- 狀態：in-progress（階段 2 核心＋階段 3 控制 UI 2026-08-10 落地；真機心跳 failsafe 實測待做）
+- 狀態：**closed（2026-08-13 索引對帳時正式收案）**——command 服務早已是系統核心
+  （單機/多機指令、編隊執行器、capabilities gating、驅動層皆建於其上）。
+  惟一未竟項「真機心跳 failsafe 實測」已列入 `doc/deploy-checklist.md`
+  首飛驗收順序，於使用者上機時執行，不再由本 issue 追蹤。
 - 嚴重度：medium（新能力，非缺陷；GCS 取代計畫的承重結構）
 - 位置：`apps/command/`；設計見 `doc/gcs-replacement.md` §1
 - 建立：2026-08-10

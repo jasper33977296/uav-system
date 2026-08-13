@@ -1,6 +1,9 @@
 # 017 · 即時頁 3D 呈現粗糙：路徑線品質與「真 3D 地圖」需求
 
-- 狀態：open（PM 2026-08-11 三題全數定案，見下方「定案」節）
+- 狀態：**closed（2026-08-13）**——P1 絲帶 join 修繕（實飛驗收）、P2 由 deck.gl
+  PathLayer 選型吸收（顆粒/閃爍雙解）、P3 底圖（NLSC 正射影像 opt-in、暗化 80%
+  CVD 實測定案）＋2D 四旋翼圖示（隨 heading 旋轉）全數收官。
+  後續「3D 機體模型」為使用者 2026-08-13 新需求，由設計師提案另立 issue 追蹤。
 - 嚴重度：medium
 - 位置：`apps/frontend/lib/geo.ts`（ribbon/segQuad）、`apps/frontend/components/MapView.tsx`
 - 建立：2026-08-11（使用者回報）
