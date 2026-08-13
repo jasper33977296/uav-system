@@ -241,30 +241,6 @@ export default function MapView() {
         },
       });
 
-      // 實際路徑：deck.gl PathLayer（route-render-tool-eval 定案，取代
-      // fill-extrusion 絲帶）——interleaved 模式與 maplibre 同一 GL context，
-      // 與 three.js 球體自訂層共存（interop 是選型條件 3，落地後實測）
-      const overlay = new MapboxOverlay({ interleaved: true, layers: [] });
-      map.addControl(overlay as unknown as maplibregl.IControl);
-      overlayRef.current = overlay;
-
-      // 機體表示自 §2.4b 起改為 2D 四旋翼俯視圖示（deck IconLayer，見
-      // setProps 處）：俯視剪影能表達朝向、在正射影像底圖上也辨識得出來，
-      // 球體做不到（正圓沒有朝向）。three.js 球體層程式碼保留未掛載——
-      // 若 2D 效果不佳要回退，把下面這行解註即可（PM 定案：3D 模型不做）
-      // map.addLayer(createDroneLayer("drones", () => …));
-
-      // 點擊機體改由 deck IconLayer 的 onClick 承接（圖示層是 pickable，
-      // 不再需要自算螢幕命中——那是 three.js 自訂層時代的做法）
-      map.on("mousemove", (e) => {
-        // 游標經緯度（issue 017 P1）：直接寫 DOM——60Hz 的 mousemove
-        // 走 React state 會整個元件重渲染
-        if (coordRef.current) {
-          coordRef.current.textContent =
-            `${e.lngLat.lat.toFixed(6)}, ${e.lngLat.lng.toFixed(6)}`;
-        }
-      });
-
       // 任務疊圖：**只**畫任務庫的啟用路徑（路徑管理頁「顯示於即時頁」）。
       // 使用者的顯隱選擇是唯一真相——全部隱藏就什麼都不畫，
       // 不退回機上任務（那個備援曾讓「隱藏」失效，見 2026-08-05 修正；
@@ -297,6 +273,35 @@ export default function MapView() {
         paint: { "circle-radius": 4, "circle-color": "transparent",
                  "circle-stroke-width": 1.5, "circle-stroke-color": "#8f8b80" },
       }, "trail-line");
+
+      // ⚠ 繪製順序（§2.4c）：**計畫路徑必須在 deck overlay 之前建立**。
+      // interleaved overlay 掛上時插在「當下最上層」，之後才 addLayer 的
+      // maplibre 圖層會蓋在 deck 之上——先前計畫路徑正是建在 overlay 之後，
+      // 於是灰色「應該飛的線」蓋住實際軌跡，連機體圖示都會被蓋（違反
+      // §2.4c「圖示永不被覆蓋」）。**產出（實測軌跡）不得被輸入（計畫）遮蔽。**
+      // 實際路徑：deck.gl PathLayer（route-render-tool-eval 定案，取代
+      // fill-extrusion 絲帶）——interleaved 模式與 maplibre 同一 GL context，
+      // 與 three.js 球體自訂層共存（interop 是選型條件 3，落地後實測）
+      const overlay = new MapboxOverlay({ interleaved: true, layers: [] });
+      map.addControl(overlay as unknown as maplibregl.IControl);
+      overlayRef.current = overlay;
+
+      // 機體表示自 §2.4b 起改為 2D 四旋翼俯視圖示（deck IconLayer，見
+      // setProps 處）：俯視剪影能表達朝向、在正射影像底圖上也辨識得出來，
+      // 球體做不到（正圓沒有朝向）。three.js 球體層程式碼保留未掛載——
+      // 若 2D 效果不佳要回退，把下面這行解註即可（PM 定案：3D 模型不做）
+      // map.addLayer(createDroneLayer("drones", () => …));
+
+      // 點擊機體改由 deck IconLayer 的 onClick 承接（圖示層是 pickable，
+      // 不再需要自算螢幕命中——那是 three.js 自訂層時代的做法）
+      map.on("mousemove", (e) => {
+        // 游標經緯度（issue 017 P1）：直接寫 DOM——60Hz 的 mousemove
+        // 走 React state 會整個元件重渲染
+        if (coordRef.current) {
+          coordRef.current.textContent =
+            `${e.lngLat.lat.toFixed(6)}, ${e.lngLat.lng.toFixed(6)}`;
+        }
+      });
 
       const refreshPlan = async () => {
         try {

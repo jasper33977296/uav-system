@@ -219,13 +219,6 @@ export default function Replay() {
           "line-width": ["interpolate", ["linear"], ["zoom"], 12, 1, 16, 2, 20, 3.5],
           "line-opacity": 0.55 } });
 
-      // 懸浮航跡：deck.gl PathLayer（route-render-tool-eval，取代 fill-extrusion）
-      // 游標圖示層同掛此 overlay，scrub 時只換該層（軌跡層資料同參考、不重建）
-      const ov = new MapboxOverlay({ interleaved: true, layers: [] });
-      ovRef.current = ov;
-      map.addControl(ov as unknown as maplibregl.IControl);
-      pushLayersRef.current();
-
       // 預計任務路徑（航線開的當下所關聯的任務）：灰絲帶＋地面虛線
       if (plan.length >= 2) {
         map.addSource("plan3d", { type: "geojson",
@@ -249,6 +242,15 @@ export default function Replay() {
         paint: { "fill-extrusion-color": "#e8eaed",
           "fill-extrusion-height": ["get", "top"], "fill-extrusion-base": ["get", "base"],
           "fill-extrusion-opacity": 0.9 } });
+
+      // ⚠ 順序同即時頁（§2.4c）：計畫路徑必須先建，deck overlay 後掛——
+      // 否則灰色計畫路徑會蓋住實測軌跡與游標圖示（產出不得被輸入遮蔽）
+      // 懸浮航跡：deck.gl PathLayer（route-render-tool-eval，取代 fill-extrusion）
+      // 游標圖示層同掛此 overlay，scrub 時只換該層（軌跡層資料同參考、不重建）
+      const ov = new MapboxOverlay({ interleaved: true, layers: [] });
+      ovRef.current = ov;
+      map.addControl(ov as unknown as maplibregl.IControl);
+      pushLayersRef.current();
 
       // 回放游標：與即時頁同一套 2D 機體圖示（§2.4b 一致化裁定）——
       // 朝向是真實記錄的資料，回放不因此降級呈現。白色外圈作強調，
