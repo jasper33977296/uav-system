@@ -1,0 +1,8 @@
+{
+  "name": "uav-uitest",
+  "private": true,
+  "type": "module",
+  "description": "空態鑑別測試（見 empty_state.mjs 檔頭）。與前端專案分開安裝，避免動到容器的 node_modules named volume——那個 volume 一旦缺套件會讓整站 500（2026-08-13 實測）。",
+  "scripts": { "empty-state": "node empty_state.mjs" },
+  "devDependencies": { "playwright-core": "^1.49.0" }
+}
