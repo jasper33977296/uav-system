@@ -37,6 +37,24 @@ AUTO.MISSION」）——028 修掉了程式會犯的版本，這次證明**人�
 拒絕訊息要人話（沿用 capability_reasons 風格）：說明機在什麼模式、arm 會
 發生什麼、該怎麼做。
 
+## 同族第二條：搖桿值可構成 disarm 手勢（2026-08-13 查出，待實作）
+
+`MAN_ARM_GESTURE` 預設開啟，PX4 參數文件原文：「moving the left stick to the
+lower right arms and **to the lower left disarms the vehicle**」。左搖桿＝
+油門(z)＋偏航(r)，左下＝油門最低＋偏航全左。
+
+我方編碼（`mav.py:_tick_manual`）：`z_wire = 500 + z*500`、`r_wire = r*1000`，
+所以前端送 `z=-1.0, r=-1.0` 時線上就是 `z=0, r=-1000`——**正是那個手勢**。
+而 `_tick_manual` 對搖桿值**沒有任何過濾**。
+
+**與 031 本體同一個形狀**：系統知道那個組合會停馬達，卻照送。
+
+**待查證（SITL 可安全驗，比讀碼可信）**：PX4 對空中的手勢 disarm 是否有前置
+條件（是否檢查 land-detected 或限特定模式）。**若有，這條與「空中誤判著陸」
+就是串聯而非獨立的兩個候選**。驗法：空中送 `z=0, r=-1000` 看會不會掉。
+
+**待實作**：飛行中不得送出構成 disarm 手勢的組合（或 z 極低時夾住 r）。
+
 ## 解決方式
 
 （closed 時補）

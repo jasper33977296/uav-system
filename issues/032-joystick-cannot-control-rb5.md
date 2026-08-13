@@ -58,6 +58,20 @@ PX4 全部參數裡也沒有以 GCS sysid 為條件的手動控制閘門。「�
 ArduPilot `SYSID_MYGCS` 的機制）。值為 3 時**不得顯示成可用**——那是我們事前
 查不出來的執行期事實，誠實的標記是 `unverified`。
 
+## 與墜落事故的耦合：一個 ulog 欄位同時裁決兩案（PM 2026-08-13）
+
+墜落候選之一是「我方送出的搖桿值構成 PX4 的解除鎖定手勢」（`MAN_ARM_GESTURE`
+預設開啟，油門最低＋偏航全左＝disarm）。這條與本案主嫌**互斥耦合**：
+
+- **若 RB5 真的是 RC-first-wins**（本案主嫌成立）→ 我方 MANUAL_CONTROL 被忽略
+  → **手勢也送不進去**，那條墜落候選同時被排除。
+- **若 ulog 顯示 disarm reason ＝手勢、且當時 `manual_control_setpoint` 的值
+  來自我方** → 證明我方搖桿流**確實有進到飛控** → 本案的「搖桿控不了」
+  **就不是「被忽略」，而是別的環節**（模式前提、mux、或值域）。
+
+**所以這兩案不能各自查**：ulog 裡 disarm 原因與 `manual_control_setpoint` 那
+兩個欄位，會同時決定本案的結論方向。
+
 ## 解決方式
 
 （closed 時補）
