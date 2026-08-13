@@ -81,14 +81,20 @@ export function EventsCard() {
     src === "all" || (src === "vehicle" ? e.source === "vehicle" : e.source !== "vehicle"));
   const evTime = (t: string) =>
     new Date(t).toLocaleTimeString("zh-TW", { hour12: false });
-  // 014 字典版本旗標（§2.7 c）：unknown **面板層標一次**——現階段恆真，
-  // 逐事件標是零區辨力的純噪音；用次要文字色而非警告色，因為那是我方的
-  // 能力缺口（還沒做版本比對），不是機上異常
-  const dictUnknown = shown.some((e) => e.detail?.dict_fw_match === "unknown");
+  // 014 字典版本旗標（§2.7 c）：unknown 用次要文字色而非警告色——那是我方
+  // 的能力缺口（還沒做版本比對），不是機上異常。
+  // **去重的前提是零區辨力**：全體皆 unknown 時逐事件標＝每列掛同一句廢話，
+  // 所以標頭標一次；但只要有一筆不是 unknown（版本路徑落地後多機各自韌體，
+  // 會出現 A 機 match、B 機 unknown），那句全域話就把局部缺口誇大成全體缺口
+  // ——此時改逐事件標，讓它指得出是哪幾筆。兩個方向都要成立
+  const dictFlags = shown.map((e) => e.detail?.dict_fw_match)
+    .filter((m): m is string => typeof m === "string");
+  const dictUnknownAll = dictFlags.length > 0
+    && dictFlags.every((m) => m === "unknown");
   return (
     <div className="card card-grow">
       <h3>事件
-        {dictUnknown && (
+        {dictUnknownAll && (
           <span className="ev-dictnote">未能確認字典版本與機上韌體相符</span>
         )}
         <span className="ev-filter">
@@ -113,9 +119,15 @@ export function EventsCard() {
                   : e.severity === "warning" ? "#fab219" : "#8f8b80" }} />
               <time>{evTime(e.time)}</time>
               <span className="detail">{evText(e, { mixed })}</span>
-              {/* mismatch 才逐事件標：那是真的有區辨力（這筆翻譯可能不準） */}
+              {/* mismatch 一律逐事件標（本來就有區辨力）；unknown 只在混合態
+                  逐事件標，形狀與顏色都與 mismatch 分開（? 不是 ⚠、次要色
+                  不是警告色）——未確認不是異常 */}
               {e.detail?.dict_fw_match === "mismatch" && (
                 <span className="ev-mismatch" title="版本不符，翻譯可能不準">⚠</span>
+              )}
+              {!dictUnknownAll && e.detail?.dict_fw_match === "unknown" && (
+                <span className="ev-unknown"
+                  title="未能確認字典版本與機上韌體相符">?</span>
               )}
               {/* key 帶 count：fold 遞增即重掛徽章 → CSS 動畫閃現一次 */}
               {count > 1 && (

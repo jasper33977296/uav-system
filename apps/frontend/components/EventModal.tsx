@@ -102,11 +102,22 @@ export default function EventModal({ ev, onClose, mixed = false }: {
         {decoded && ev.type === "vehicle_event" && (
           <pre className="evm-text">{decoded}</pre>
         )}
-        {/* 版本旗標（§2.7 c）：mismatch 在 modal 給完整句子——列上只有 ⚠，
-            細節層才說明為什麼；unknown 不在此重複（面板層已標一次） */}
+        {/* 版本旗標（§2.7 c）：**去重單位是視圖不是頁面**——modal 的遮罩
+            （.evm-mask，fixed inset:0）會把事件卡標頭那句蓋掉，使用者正在這裡
+            讀翻譯而唯一的版本聲明看不見，所以 unknown 也要在 modal 標一次。
+            回放頁沒有事件流卡，靠這裡涵蓋（不為那頁發明頁面層位置）。
+            mismatch 給完整句子＋warn 底，unknown 用次要色，兩者仍分得開 */}
         {d.dict_fw_match === "mismatch" && (
           <div className="evm-mismatch">
             ⚠ 版本不符，翻譯可能不準
+            {typeof d.dict_fw === "string" && (
+              <span className="imu-unit">（字典 {d.dict_fw}）</span>
+            )}
+          </div>
+        )}
+        {d.dict_fw_match === "unknown" && (
+          <div className="evm-dictnote">
+            未能確認字典版本與機上韌體相符
             {typeof d.dict_fw === "string" && (
               <span className="imu-unit">（字典 {d.dict_fw}）</span>
             )}
