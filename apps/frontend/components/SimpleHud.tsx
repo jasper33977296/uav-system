@@ -69,6 +69,7 @@ export function Battery({ pct, plain = false }: {
  * 篩選（不記憶）；×N 折疊徽章列尾膠囊、fold 原地更新時閃現一次。 */
 export function EventsCard() {
   const events = useUavStore((s) => s.events);
+  const eventsFailed = useUavStore((s) => s.eventsFailed);
   // 混機（≥2 種 autopilot 在線）才在模式句加語意括注（§0.2d 規則 3）
   const mixed = useUavStore((s) => new Set(Object.values(s.fleet)
     .filter((t) => t.connected && t.autopilot).map((t) => t.autopilot)).size >= 2);
@@ -106,7 +107,11 @@ export function EventsCard() {
         </span>
       </h3>
       <div className="events">
-        {shown.length === 0 && <div className="empty">尚無事件</div>}
+        {/* 空事件流有兩個成因：真的沒事件、或我方取不到。同形而語意相反——
+            前者說「沒有異常發生」，後者只能說「我不知道」（§0.2e） */}
+        {shown.length === 0 && (
+          <div className="empty">{eventsFailed ? "無法取得事件" : "尚無事件"}</div>
+        )}
         {shown.map((e) => {
           const count = (e.type === "statustext" || e.type === "vehicle_event")
             && typeof e.detail.count === "number" ? e.detail.count : 0;

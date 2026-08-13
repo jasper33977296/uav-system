@@ -9,6 +9,7 @@ import { compareAlongPath, deltaCells, type ChainPoint, type DeltaCell, type Sam
   from "@/lib/chainage";
 import CompareTabs from "@/components/CompareTabs";
 import { CANVAS, groundGrid } from "@/lib/geo";
+import { getJson } from "@/lib/fetchJson";
 import { API, CLIENT_HEADERS } from "@/lib/signal";
 import { firstFleetPos } from "@/lib/store";
 
@@ -55,6 +56,9 @@ function divergeRGB(d: number, max = 8): [number, number, number] {
 
 export default function AbCompare() {
   const [sessions, setSessions] = useState<SessRow[]>([]);
+  // 「還在載入」與「取不到」必須分開說：兩者都是畫面空白，但前者會好、
+  // 後者不會，而且後者若沿用載入中的字樣就是永遠的謊（§0.2e）
+  const [loadErr, setLoadErr] = useState<string | null>(null);
   const [aId, setAId] = useState<string | null>(null);
   const [bId, setBId] = useState<string | null>(null);
   const [tracks, setTracks] = useState<Record<string, Sample[]>>({});
@@ -68,8 +72,8 @@ export default function AbCompare() {
   // 但驗收/實驗用的測試飛行也需要看得到——一律抓回、以開關切換並如實
   // 顯示隱藏了幾筆（不能讓使用者以為架次憑空消失）
   useEffect(() => {
-    fetch(`${API}/api/sessions?limit=500&min_samples=10&include_test=true`)
-      .then((r) => r.json())
+    // 取得失敗不得變成「沒有可比較的架次」（見 lib/fetchJson.ts）
+    getJson<SessRow[]>(`${API}/api/sessions?limit=500&min_samples=10&include_test=true`)
       .then((rows: SessRow[]) => {
         setSessions(rows);
         const q = new URLSearchParams(window.location.search);
@@ -86,17 +90,18 @@ export default function AbCompare() {
         setAId(qa ?? pair?.[1]?.id ?? null);   // 清單為時間新→舊，[1] 是較早的＝前
         setBId(qb ?? pair?.[0]?.id ?? null);
       })
-      .catch(() => {});
+      .catch(() => setLoadErr("無法取得架次清單"));
   }, []);
 
   // 兩趟軌跡（各抓一次即快取）
   useEffect(() => {
     for (const id of [aId, bId]) {
       if (!id || tracks[id]) continue;
-      fetch(`${API}/api/sessions/${id}/track`)
-        .then((r) => r.json())
+      getJson<{ link?: Sample[] }>(`${API}/api/sessions/${id}/track`)
         .then((d) => setTracks((t) => ({ ...t, [id]: (d.link ?? []) as Sample[] })))
-        .catch(() => {});
+        // `d.link ?? []` 在 HTTP 錯誤時會得到空陣列 → 畫面說「這趟沒量測」，
+        // 那是把我方的取得失敗說成對方沒資料（§0.2e）
+        .catch(() => setLoadErr("無法取得軌跡"));
     }
   }, [aId, bId, tracks]);
 
@@ -331,7 +336,11 @@ export default function AbCompare() {
         )}
       </div>
 
-      {!ready && <div className="card"><div className="empty">載入兩趟軌跡中…</div></div>}
+      {!ready && (
+        <div className="card">
+          <div className="empty">{loadErr ?? "載入兩趟軌跡中…"}</div>
+        </div>
+      )}
 
       {/* 兩趟沒有共同里程區間＝沿路徑比較無從談起（實測會發生：一趟飛完
           走廊、另一趟只在起飛點做指令驗收）。不畫空圖假裝有比較，明說 */}

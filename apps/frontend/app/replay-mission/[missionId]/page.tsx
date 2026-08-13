@@ -8,6 +8,7 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import { createDroneLayer, DRONE_PALETTE } from "@/components/droneLayer";
 import { routeLayer } from "@/lib/deckRoute";
 import { CANVAS, groundGrid, ribbon, trailLineString } from "@/lib/geo";
+import { getJson } from "@/lib/fetchJson";
 import { API } from "@/lib/signal";
 
 /** 任務視角回放：同一條路徑的一或多條航線（可跨機、跨時間）同步重飛。
@@ -80,6 +81,9 @@ export default function MissionReplay() {
   const [name, setName] = useState("");
   const [sessions, setSessions] = useState<Sess[]>([]);
   const [dropped, setDropped] = useState(0);
+  // 載入中／取不到／真的沒有——三態各自要有自己的話（§0.2e）
+  const [loaded, setLoaded] = useState(false);
+  const [loadErr, setLoadErr] = useState(false);
   const [tracks, setTracks] = useState<Record<string, LinkRow[]>>({});
   const [plan, setPlan] = useState<{ lat: number; lon: number; alt: number | null }[]>([]);
   const [sec, setSec] = useState(0);
@@ -96,8 +100,8 @@ export default function MissionReplay() {
       .then((r) => (r.ok ? r.json() : null))
       .then((m) => m && setPlan(m.waypoints.filter((w: any) => w.lat && w.lon)))
       .catch(() => {});
-    fetch(`${API}/api/sessions?mission_id=${missionId}&limit=100`)
-      .then((r) => r.json())
+    // 取得失敗不得說成「此路徑尚無已完成的航線」（見 lib/fetchJson.ts）
+    getJson<any[]>(`${API}/api/sessions?mission_id=${missionId}&limit=100`)
       .then(async (rows: any[]) => {
         const done = rows.filter((r) => r.ended_at);
         setDropped(Math.max(0, done.length - MAX_OVERLAY));
@@ -106,12 +110,13 @@ export default function MissionReplay() {
         if (take[0]?.mission_name) setName(take[0].mission_name);
         const result: Record<string, LinkRow[]> = {};
         for (const s of take) {
-          const d = await fetch(`${API}/api/sessions/${s.id}/track`).then((r) => r.json());
+          const d = await getJson<{ link?: LinkRow[] }>(`${API}/api/sessions/${s.id}/track`);
           result[s.id] = (d.link ?? []).filter((r: LinkRow) => r.lat != null && r.lon != null);
         }
         setTracks(result);
+        setLoaded(true);
       })
-      .catch(() => {});
+      .catch(() => setLoadErr(true));
   }, [missionId]);
 
   // 每條航線的相對時間基準與總長
@@ -263,7 +268,13 @@ export default function MissionReplay() {
       </div>
 
       <div className="replay-map" ref={containerRef}>
-        {!series.length && <div className="empty" style={{ padding: 20 }}>載入中，或此路徑尚無已完成的航線</div>}
+        {/* 三態各自有話（§0.2e）：原本「載入中，或此路徑尚無已完成的航線」
+            把兩種狀態塞進同一句，等於兩個都沒宣告；取不到更不能算在對方頭上 */}
+        {!series.length && (
+          <div className="empty" style={{ padding: 20 }}>
+            {loadErr ? "無法取得航線資料"
+              : loaded ? "此路徑尚無已完成的航線" : "載入中…"}</div>
+        )}
       </div>
 
       {series.length > 0 && (

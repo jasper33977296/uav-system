@@ -375,17 +375,55 @@ const CASES = [
         : `空態正確=${/這趟沒有訊號量測/.test(empty)} 錯誤頁誤宣告=${/這趟沒有訊號量測/.test(err)}` };
     },
   },
+  {
+    name: "[實測] ab-fetch-fail｜比較頁取不到 → 說「無法取得」，不說「載入中」也不說沒得比",
+    async run(b) {
+      const page = await (await b.newContext({ viewport: { width: 1400, height: 900 } })).newPage();
+      await page.route("**/api/sessions**", (r) => r.fulfill({ status: 500, json: { detail: "boom" } }));
+      await page.routeWebSocket(/\/ws\/telemetry/, () => {});
+      await page.goto(`${URL_BASE}/compare/ab`, { waitUntil: "networkidle", timeout: 30000 });
+      await page.waitForTimeout(1500);
+      const t = (await page.locator("body").innerText()).replace(/\s+/g, " ");
+      await page.context().close();
+      const ok = /無法取得架次清單|無法取得軌跡/.test(t) && !/載入兩趟軌跡中/.test(t)
+        && !/沒有共同的里程區間/.test(t);
+      return { pass: ok, note: ok ? "說出「無法取得…」"
+        : `畫面：${t.slice(0, 140)}` };
+    },
+  },
+  {
+    name: "[實測] mission-replay-fail｜比對回放取不到 → 不說「此路徑尚無已完成的航線」",
+    async run(b) {
+      const page = await (await b.newContext({ viewport: { width: 1400, height: 900 } })).newPage();
+      await page.route("**/api/sessions**", (r) => r.fulfill({ status: 500, json: { detail: "boom" } }));
+      await page.route("**/api/missions/*/waypoints*", (r) => r.fulfill({ json: { waypoints: [] } }));
+      await page.routeWebSocket(/\/ws\/telemetry/, () => {});
+      await page.goto(`${URL_BASE}/replay-mission/test-mission`, { waitUntil: "networkidle", timeout: 30000 });
+      await page.waitForTimeout(1500);
+      const t = (await page.locator("body").innerText()).replace(/\s+/g, " ");
+      await page.context().close();
+      const ok = /無法取得航線資料/.test(t) && !/尚無已完成的航線/.test(t);
+      return { pass: ok, note: ok ? "說出「無法取得航線資料」" : `畫面：${t.slice(0, 140)}` };
+    },
+  },
 ];
 
 /** 反向驗證：資料存在但拿不到（後端 500）時，rest-history 的斷言必須失敗。
  * 這一項若「通過」，代表整套測試沒有鑑別力——比任何單一測項失敗都嚴重。 */
 async function discrimination(b) {
   const p = await openHud(b, { rest: [ev(1, OK(1)), ev(2, OK(2))], restStatus: 500 });
-  const r = await readCard(p); await p.context().close();
+  const r = await readCard(p);
+  const txt = (await p.locator(".events .empty").allInnerTexts()).join("");
+  await p.context().close();
   const assertionWouldPass = r.rows === 2 && r.texts.length === 2;
-  return { pass: !assertionWouldPass, note: assertionWouldPass
+  // **這一項曾經把缺陷寫成通過條件**：先前只斷言「斷言會失敗」，而畫面顯示的
+  // 是「尚無事件」——後端掛掉時宣告飛機一切正常，正是我們排第一位的那句謊。
+  // 現在同時要求畫面說出「無法取得事件」且「尚無事件」不得出現
+  const honest = /無法取得事件/.test(txt) && !/尚無事件/.test(txt);
+  return { pass: !assertionWouldPass && honest, note: assertionWouldPass
     ? "斷言在後端 500 時仍通過＝這套測試量不出東西"
-    : `後端 500 → 列=${r.rows}、畫面${r.empty ? "顯示「尚無事件」" : "無空態"}，斷言確實失敗` };
+    : honest ? `後端 500 → 列=0 且畫面說「無法取得事件」（不是「尚無事件」）`
+      : `後端 500 → 畫面顯示「${txt}」＝把取得失敗說成沒有異常發生` };
 }
 
 /** 第二個鑑別力自檢——這一項同時是本套的**主題實例**：

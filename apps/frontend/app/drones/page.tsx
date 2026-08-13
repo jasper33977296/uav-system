@@ -4,6 +4,7 @@ import { useCallback, useEffect, useState } from "react";
 
 import ConfirmModal from "@/components/ConfirmModal";
 import { Battery, SignalBars } from "@/components/SimpleHud";
+import { getJson } from "@/lib/fetchJson";
 import { parseJsonb } from "@/lib/jsonb";
 import { API } from "@/lib/signal";
 import { useUavStore } from "@/lib/store";
@@ -75,9 +76,11 @@ export default function Drones() {
     });
 
   const reload = useCallback(() => {
-    fetch(`${API}/api/drones`).then((r) => r.json()).then(setDrones).catch(() => {});
-    fetch(`${API}/api/sessions`)
-      .then((r) => r.json())
+    // 取得失敗經 catch 說出來（見 lib/fetchJson.ts）：空清單＝「沒有無人機／
+    // 沒有航線」是一個宣告，我方取不到時不該替後端宣告
+    getJson<Drone[]>(`${API}/api/drones`).then(setDrones)
+      .catch(() => setErr("無法取得無人機清單"));
+    getJson<any[]>(`${API}/api/sessions`)
       .then((rows) =>
         setSessions(
           // 逐列解析：一筆 summary 壞掉不得讓整份架次清單消失
@@ -88,7 +91,7 @@ export default function Drones() {
           })
         )
       )
-      .catch(() => {});
+      .catch(() => setErr("無法取得航線清單"));
   }, []);
   useEffect(reload, [reload]);
 

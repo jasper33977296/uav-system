@@ -1,25 +1,29 @@
 "use client";
 import { useEffect } from "react";
 
+import { getJson } from "./fetchJson";
 import { eventDetail } from "./jsonb";
 import { API, WS_URL } from "./signal";
 import { useUavStore } from "./store";
 
 /** 連上 backend 的 telemetry WebSocket，自動重連。 */
 export function useTelemetry() {
-  const { setLive, setWsConnected, pushEvent, seedEvents, setRegistry } = useUavStore();
+  const { setLive, setWsConnected, pushEvent, seedEvents, setRegistry,
+    setEventsFailed } = useUavStore();
 
   // 事件流開頁先補歷史：WS 只送「開頁之後」的事件，中途開頁會漏掉先前的
   // 轉換（實際發生過：飛行中開頁，degraded/lost 都發過了，畫面卻是「尚無事件」）。
   useEffect(() => {
-    fetch(`${API}/api/events?limit=20`)
-      .then((r) => r.json())
-      .then((rows) =>
+    // getJson：HTTP 4xx/5xx 要拋——否則 500 的錯誤 body 會被當成空清單，
+    // 畫面顯示「尚無事件」＝在後端掛掉時宣告飛機一切正常（見 lib/fetchJson.ts）
+    getJson<any[]>(`${API}/api/events?limit=20`)
+      .then((rows) => {
         // 逐列解析、單列失敗不毀整批（成因與呈現規則見 lib/jsonb.ts）
-        seedEvents(rows.map((e: any) => ({ ...e, detail: eventDetail(e.detail) })))
-      )
-      .catch(() => {});
-  }, [seedEvents]);
+        seedEvents(rows.map((e: any) => ({ ...e, detail: eventDetail(e.detail) })));
+        setEventsFailed(false);
+      })
+      .catch(() => setEventsFailed(true));
+  }, [seedEvents, setEventsFailed]);
 
   useEffect(() => {
     let ws: WebSocket | null = null;

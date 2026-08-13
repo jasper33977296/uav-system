@@ -148,6 +148,10 @@ interface UavStore {
   setRegistry: (droneId: string, r: DroneRegistry) => void;
   pushEvent: (e: UavEvent, fold?: boolean) => void;
   seedEvents: (es: UavEvent[]) => void;
+  // 事件歷史取得失敗（§0.2e）：沒有這個旗標的話，後端掛掉時事件卡會顯示
+  // 「尚無事件」＝**宣告沒有異常發生**，那是本 UI 最強的安心宣告
+  eventsFailed: boolean;
+  setEventsFailed: (v: boolean) => void;
 }
 
 export const useUavStore = create<UavStore>((set) => ({
@@ -237,6 +241,8 @@ export const useUavStore = create<UavStore>((set) => ({
       const seen = new Set(s.events.map((e) => e.id));
       return { events: [...s.events, ...es.filter((e) => !seen.has(e.id))].slice(0, 100) };
     }),
+  eventsFailed: false,
+  setEventsFailed: (v) => set({ eventsFailed: v }),
 }));
 
 /** 地圖初始中心：取第一台有座標的機。

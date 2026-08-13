@@ -18,6 +18,7 @@ import { lodFactor } from "@/lib/droneMesh";
 import { droneMeshLayers } from "@/lib/droneMeshLayer";
 import { basePreview, separatePreview, unifiedPreview, type Wp } from "@/lib/formation";
 import { CANVAS, groundGrid, ribbon, trailLineString } from "@/lib/geo";
+import { getJson } from "@/lib/fetchJson";
 import { API, LINK_CLASSES } from "@/lib/signal";
 import { firstFleetPos, useUavStore } from "@/lib/store";
 
@@ -115,7 +116,9 @@ export default function MapView() {
   // §2.9 PiP 常駐需要影像源清單：開頁與換選中機時讀最新值（video_url
   // 在無人機頁隨時可改；切進全幅檢視時也重讀一次）
   useEffect(() => {
-    fetch(`${API}/api/drones`).then((r) => r.json())
+    // HTTP 錯誤走 catch（見 lib/fetchJson.ts）——空清單＝「沒有影像源」是
+    // 一個宣告，取不到時不該由我方替後端宣告
+    getJson<DroneVideo[]>(`${API}/api/drones`)
       .then(setVideoList).catch(() => setVideoList([]));
   }, [view, selId]);
   // §2.4b 底圖：狀態與圖層安裝抽到 lib/basemap（與回放頁共用同一實作）

@@ -4,6 +4,7 @@ import { useCallback, useEffect, useRef, useState } from "react";
 
 import { colorFor } from "@/components/droneLayer";
 import MissionThumb3D from "@/components/MissionThumb3D";
+import { getJson } from "@/lib/fetchJson";
 import { parseJsonb } from "@/lib/jsonb";
 import { API } from "@/lib/signal";
 
@@ -69,8 +70,8 @@ export default function Missions() {
   useEffect(() => {
     for (const m of missions) {
       if (thumbs[m.id]) continue;
-      fetch(`${API}/api/missions/${m.id}/waypoints`)
-        .then((r) => r.json())
+      // 縮圖取不到＝該卡無縮圖（顯性缺口，不會假裝沒事），沿用靜默 catch
+      getJson<{ waypoints?: any[] }>(`${API}/api/missions/${m.id}/waypoints`)
         .then((d) => setThumbs((t) => ({ ...t, [m.id]: d.waypoints ?? [] })))
         .catch(() => {});
     }
@@ -78,15 +79,16 @@ export default function Missions() {
   }, [missions]);
 
   const reload = useCallback(() => {
-    fetch(`${API}/api/missions`).then((r) => r.json()).then(setMissions).catch(() => {});
-    fetch(`${API}/api/sessions?limit=200`)
-      .then((r) => r.json())
+    // 見 lib/fetchJson.ts：取不到不得變成「沒有路徑／沒有航線」
+    getJson<Mission[]>(`${API}/api/missions`).then(setMissions)
+      .catch(() => setErr("無法取得路徑清單"));
+    getJson<any[]>(`${API}/api/sessions?limit=200`)
       // 逐列解析：一筆 summary 壞掉不得讓整份架次清單消失（見 lib/jsonb.ts）
       .then((rows) => setSessions(rows.map((r: any) => {
         const v = parseJsonb(r.summary);
         return { ...r, summary: v.ok ? v.value : null };
       })))
-      .catch(() => {});
+      .catch(() => setErr("無法取得航線清單"));
   }, []);
   useEffect(reload, [reload]);
 
