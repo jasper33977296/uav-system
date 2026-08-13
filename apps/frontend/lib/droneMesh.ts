@@ -56,11 +56,26 @@ function pushBox(
   }
 }
 
-/** 建一個扁圓盤（旋翼）：上下兩面＋側環 */
+/** 建一個圓柱（機身/旋翼盤共用）：上下兩面＋側環——側環讓它在低俯角下
+ * 仍有實體高度（2D 圖示的核心差別就在這裡） */
 function pushDisc(
   pos: number[], nrm: number[], idx: number[],
   cx: number, cy: number, cz: number, r: number, h: number, seg = 12,
 ) {
+  // 側環（先畫，法線朝外）
+  const ringBase = pos.length / 3;
+  for (let i = 0; i <= seg; i++) {
+    const a = (i / seg) * Math.PI * 2;
+    const nx = Math.cos(a), ny = Math.sin(a);
+    pos.push(cx + nx * r, cy + ny * r, cz + h);
+    nrm.push(nx, ny, 0);
+    pos.push(cx + nx * r, cy + ny * r, cz - h);
+    nrm.push(nx, ny, 0);
+  }
+  for (let i = 0; i < seg; i++) {
+    const b0 = ringBase + i * 2;
+    idx.push(b0, b0 + 1, b0 + 3, b0, b0 + 3, b0 + 2);
+  }
   for (const [zSign, nz] of [[1, 1], [-1, -1]] as const) {
     const center = pos.length / 3;
     pos.push(cx, cy, cz + zSign * h);
@@ -84,8 +99,9 @@ let cached: MeshData | null = null;
 export function droneMesh(): MeshData {
   if (cached) return cached;
   const pos: number[] = [], nrm: number[] = [], idx: number[] = [];
-  // 機身：1.0 × 1.0 × 0.34 m（半邊長）
-  pushBox(pos, nrm, idx, 0, 0, 0, 0.5, 0.5, 0.17);
+  // 機身：圓柱（半徑 0.62m、半高 0.22m）——側環給它實體厚度，
+  // 低俯角時看得出「這是一個有高度的物體」而不是貼地的圖片
+  pushDisc(pos, nrm, idx, 0, 0, 0, 0.62, 0.22, 16);
   const ARM = 1.55;                  // 旋翼中心距機身中心
   for (const deg of [45, 135, 225, 315]) {
     const r = (deg * Math.PI) / 180;
@@ -109,3 +125,10 @@ export function droneMesh(): MeshData {
 
 /** mesh 的外接半徑（公尺，未縮放）——LOD 換手時用來對齊 2D 圖示視覺大小 */
 export const MESH_RADIUS_M = 1.55 + 0.62;
+
+/** LOD 係數（§2.4d）：0＝完全用 2D 圖示、1＝完全用 3D mesh，中間交叉淡出。
+ * 兩邊共用同一個函式，避免門檻各寫一份而漂移（換手就會「跳」或「兩個都淡」）。 */
+export const LOD_Z_LOW = 16, LOD_Z_HIGH = 17.5;
+export function lodFactor(zoom: number): number {
+  return Math.max(0, Math.min(1, (zoom - LOD_Z_LOW) / (LOD_Z_HIGH - LOD_Z_LOW)));
+}
