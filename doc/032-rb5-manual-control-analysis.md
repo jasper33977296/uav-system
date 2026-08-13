@@ -69,10 +69,47 @@
 | # | 候選 | 結論 | 等級 |
 |---|---|---|---|
 | 1 | `COM_RC_IN_MODE` | **主嫌**（見上） | 文件確認＋SITL 可驗 |
-| 2 | voxl-mavlink-server 轉發範圍 | **無法判定**——本地無 ModalAI 該服務的文件 | 需補文件 |
+| 2 | voxl-mavlink-server 的 RC 來源 mux | **升級為並列主嫌**（見下） | 文件確認＋需查機上版本 |
 | 3 | 我方 sysid 254 非 QGC 慣例 255 | **可排除**（PX4） | 文件確認 |
 | 4 | 5G 抖動觸發 `COM_RC_LOSS_T` | 有可能但**非主嫌** | 只能真機驗證 |
 | 5 | POSCTL 模式前提 | 與 backlog B-case 同源，**獨立問題** | SITL 可驗 |
+
+### 候選 2（2026-08-13 補充：文件到手後升級為並列主嫌）
+
+出處：`reference/rb5/modalai-voxl-mavlink-server.md`（v1.4.18）
+
+    - `rc_active`: **active RC source, muxing rc_channels and manual_control**
+    | en_elrs_rc_mux | false | (v1.4.18 and newer) RC-source mux for the rc_active
+                               pipe with ELRS failsafe awareness. |
+
+**這代表 RC 來源的仲裁不只發生在 PX4。** voxl-mavlink-server 自己有一條
+`rc_active` pipe，把 `rc_channels`（實體遙控器）與 `manual_control`（我方搖桿）
+**在機上先 mux 過一次**。若 voxl-px4 的 RC 輸入走這條 pipe，那麼：
+
+    我方 MANUAL_CONTROL → voxl-mavlink-server 的 rc_active mux → PX4 的 COM_RC_IN_MODE → 生效
+
+**兩層都可能把我方的輸入擋掉，而且兩層的行為由不同東西決定**（前者看
+voxl-mavlink-server 版本與 `en_elrs_rc_mux`，後者看 PX4 參數）。所以候選 1 與
+候選 2 **不是互斥的替代假設，是串聯的兩道閘**——查完一道不代表結案。
+
+`en_elrs_rc_mux` **v1.4.18 才有、預設 false**，所以**機上的 voxl-mavlink-server
+版本是必查項**：不同版本的 mux 行為可能不同。
+
+### ⚠ 三層逾時門檻互不相同（本次對照才浮現）
+
+把三份文件的數字並排，出現一個沒人提過但對 033 很重要的事實：
+
+| 層 | 參數 | 門檻 | 誰在判、判什麼 |
+|---|---|---|---|
+| PX4 | `COM_RC_LOSS_T` | **0.5s** | 飛控判「手動輸入沒了」 |
+| voxl-mavlink-server | `gcs_timeout_s` | **4.5s** | 機上 router 判「這個 GCS 斷了」 |
+| PX4 | `COM_DL_LOSS_T` | **10s** | 飛控判「資料鏈斷了」→ 觸發 `NAV_DLL_ACT` |
+
+**同一次 5G 中斷，三層會在 0.5s／4.5s／10s 三個時刻各自宣告不同的事**，而操作者
+畫面上通常只看得到其中一個。這也解釋了為什麼「任務停下來」與「搖桿沒反應」
+可能是**同一次中斷的不同階段**，而不是兩個獨立問題。
+
+**033 的心跳鏈分析要用這三個數字**，不能只用 PX4 那一層。
 
 ### 候選 3 可排除的理由（文件確認）
 
@@ -106,11 +143,14 @@ PX4 在空中拒絕進 POSCTL（`Switching to POSCTL is currently not available`
 
 ## 需要補抓的文件（本地沒有，無法判定）
 
-1. **ModalAI `voxl-mavlink-server` 文件**——它的訊息轉發規則／是否對非 QGC
-   端點過濾訊息類。候選 2 完全依賴這份。
-2. **ModalAI 對 `COM_RC_IN_MODE` 的出廠設定**（voxl-px4 的 param 預設檔）——
-   確認 RB5 到底是 3 還是別的值。
-3. PX4 官方 *Manual Control / Joystick* 說明頁（`docs.px4.io`）——本地只有
+1. ~~ModalAI `voxl-mavlink-server` 文件~~ **已補**（v1.4.18，2026-08-13 入庫）
+   ——但它明指轉發路徑細節在另一份 **Mavlink Routing feature guide**，那份仍缺。
+   「有沒有對非 QGC 端點過濾訊息類」要看那份。
+2. **機上實際的 voxl-mavlink-server 版本**——`en_elrs_rc_mux` v1.4.18 才有，
+   mux 行為隨版本不同。
+3. **RB5 實際的 `COM_RC_IN_MODE` 值**——使用者證實**要等機修好才查得到**，
+   不能假設出廠值。這使「執行期前提檢查」從建議**升為必要**。
+4. PX4 官方 *Manual Control / Joystick* 說明頁（`docs.px4.io`）——本地只有
    參數 metadata，沒有敘述性文件。
 
 ---
@@ -125,7 +165,8 @@ PX4 在空中拒絕進 POSCTL（`Switching to POSCTL is currently not available`
 | 2 | 若值為 **0** | — | **確定就是它**：改 1 或 2 |
 | 3 | 若值為 **3**，且遙控器有開 | — | **確定就是它**：RC 先到、我方被忽略。關掉遙控器重開機再試，或改 2 |
 | 4 | 若值為 **1 或 2** | 搖桿應該要能動 | 排除候選 1，往候選 2（轉發）查 |
-| 5 | 在地面送搖桿，用 `msg_registry` 看機端有沒有回 `MANUAL_CONTROL` 的效果（姿態設定點變化） | 有反應 | 訊息沒到機端 → 候選 2 |
+| 5 | **機上跑 `voxl-inspect-mavlink` 看 `mavlink_from_gcs` pipe**，同時我方送搖桿 | 看得到 MANUAL_CONTROL 進來 | **沒看到＝訊息根本沒到機上**（網路／路由／過濾），不必再查 PX4 那層 |
+| 5b | 若 `mavlink_from_gcs` 有、機仍不動，查 `rc_active` pipe 與 voxl-mavlink-server 版本 | — | mux 把我方擋掉 → 候選 2 |
 | 6 | 量 `MANUAL_CONTROL` 到達間隔（機端 log 或我方送出節奏對照） | p99 < 500ms | 超過 → 候選 4（`COM_RC_LOSS_T`） |
 
 ---
