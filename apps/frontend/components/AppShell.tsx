@@ -1,7 +1,9 @@
 "use client";
 import Link from "next/link";
+import { useEffect } from "react";
 import { usePathname } from "next/navigation";
 
+import { buildLabel } from "@/lib/buildInfo";
 import { useUavStore } from "@/lib/store";
 import { useTelemetry } from "@/lib/useTelemetry";
 
@@ -39,10 +41,17 @@ export default function AppShell({ children }: { children: React.ReactNode }) {
     : live?.video_mode === "on" ? "記錄中——遙測＋影像"
     : "記錄中（armed 且入庫）";
 
+  // 版本進 console：調查時最常拿得到的就是 console 截圖（§0.2f）
+  useEffect(() => {
+    console.info(`[uav-frontend] 版本 ${buildLabel}`);
+  }, []);
+
   return (
     <div className="shell">
       <nav className="nav">
-        <span className="brand">UAV 監控</span>
+        {/* §0.2f：版本已知時只住 tooltip（零版面成本）；未知／dirty 的
+            主動告示在機隊頁，不進飛行畫面 */}
+        <span className="brand" title={`UAV 監控 · ${buildLabel}`}>UAV 監控</span>
         {TABS.map((t) => (
           <Link
             key={t.href}

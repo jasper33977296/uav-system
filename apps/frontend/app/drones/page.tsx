@@ -4,6 +4,7 @@ import { useCallback, useEffect, useState } from "react";
 
 import ConfirmModal from "@/components/ConfirmModal";
 import { Battery, SignalBars } from "@/components/SimpleHud";
+import { buildNeedsNotice, buildNoticeText } from "@/lib/buildInfo";
 import { getJson } from "@/lib/fetchJson";
 import { parseJsonb } from "@/lib/jsonb";
 import { API } from "@/lib/signal";
@@ -132,6 +133,11 @@ export default function Drones() {
 
   return (
     <div className="page-pad">
+      {/* §0.2f：版本未知或 dirty 必須**非 hover 可見**——tooltip 是藏起來的，
+          用它宣告「我不知道我是誰」等於沒宣告。**也不能放進收合區**：
+          我第一版放在「＋ 註冊無人機」的 <details> 裡，元素在、內容量到是空的
+          （收合＝不可見），比 tooltip 更糟。正常態不顯示，也不進飛行畫面 */}
+      {buildNeedsNotice && <div className="build-notice">{buildNoticeText}</div>}
       {/* 註冊＝低頻教學操作 → 收摺疊、不記憶（IA 判準） */}
       <details className="card">
         <summary>＋ 註冊無人機</summary>

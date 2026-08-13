@@ -95,7 +95,13 @@ services:
   # 開發環境的 .env 以 COMPOSE_FILE 啟用之（setup.sh 自動設定）。
   uav-frontend:
     container_name: uav-frontend
-    build: ./apps/frontend
+    build:
+      context: ./apps/frontend
+      args:
+        # 版本標記（§0.2f）。建置前先取：
+        #   export BUILD_SHA="$(git rev-parse --short HEAD)$(git diff --quiet || echo -dirty)"
+        # 未設＝空＝UI 顯示「未知版本」（不留白）
+        BUILD_SHA: "${BUILD_SHA:-}"
     network_mode: host
     command: ["npm", "run", "start", "--", "-p", "${FRONTEND_PORT:-33000}", "-H", "0.0.0.0"]
     restart: unless-stopped

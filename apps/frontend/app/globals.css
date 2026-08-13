@@ -1109,3 +1109,11 @@ details.card summary { cursor: pointer; font-size: 14px; font-weight: 600; }
 /* §0.2e：軌跡為灰時說明成因（有量測但無 SINR 欄）。次要色——這是陳述不是
    警告，但必須存在：沒有它，上游改欄位名會冒充成合法的「沒量到訊號」 */
 .rp-nosinr { color: var(--muted); }
+
+/* §0.2f：版本未知／dirty 的主動告示。不是錯誤（系統仍正常），但必須看得見
+   ——它宣告的是「事後無法確認畫面對應哪一版程式」 */
+.build-notice {
+  border: 1px solid var(--hairline); border-left: 3px solid var(--muted);
+  border-radius: 6px; padding: 8px 10px; margin: 8px 0;
+  color: var(--muted); font-size: 12.5px;
+}

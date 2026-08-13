@@ -5,6 +5,11 @@ FROM node:24-bookworm
 WORKDIR /app
 COPY package.json package-lock.json ./
 RUN npm ci
+# 版本標記（ui-spec §0.2f）：**必須在 build 之前**——NEXT_PUBLIC_* 是在
+# 建置時被內聯進產物的，run 期才給的環境變數進不去前端 bundle。
+# 未給即為空，UI 會顯示「未知版本」而不是留白（不知道要說出來）。
+ARG BUILD_SHA=""
+ENV NEXT_PUBLIC_BUILD_SHA=$BUILD_SHA
 COPY . .
 RUN npm run build
 EXPOSE 33000
