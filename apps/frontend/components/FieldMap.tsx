@@ -160,6 +160,19 @@ export default function FieldMap() {
     map.addControl(new maplibregl.ScaleControl({ maxWidth: 120, unit: "metric" }), "bottom-right");
     mapRef.current = map;
     map.on("load", () => {
+      // ⚠ 順序（§2.4c）：這兩層必須在 overlay 之前建立——interleaved overlay
+      // 插在掛上當下的最上層，之後才 addLayer 的 maplibre 圖層會蓋住整個
+      // deck（軌跡、弱區輪廓、標籤都會被蓋）。原點要等資料才知道，故先建
+      // 空 source、拿到原點再 setData（同即時頁計畫疊圖的作法）
+      const EMPTY: GeoJSON.FeatureCollection = { type: "FeatureCollection", features: [] };
+      map.addSource("grid", { type: "geojson", data: EMPTY });
+      map.addLayer({ id: "grid", type: "line", source: "grid",
+        paint: { "line-color": "#262624", "line-width": 1 } });
+      map.addSource("home", { type: "geojson", data: EMPTY });
+      map.addLayer({ id: "home-ring", type: "circle", source: "home",
+        paint: { "circle-radius": 10, "circle-color": "transparent",
+                 "circle-stroke-width": 2, "circle-stroke-color": "#8f8b80" } });
+
       const overlay = new MapboxOverlay({ interleaved: true, layers: [] });
       map.addControl(overlay as unknown as maplibregl.IControl);
       overlayRef.current = overlay;
@@ -186,15 +199,12 @@ export default function FieldMap() {
     const map = mapRef.current;
     if (!map || !ready || !origin || anchoredRef.current) return;
     anchoredRef.current = true;
-    map.addSource("grid", { type: "geojson", data: groundGrid(origin.lat, origin.lon) });
-    map.addLayer({ id: "grid", type: "line", source: "grid",
-      paint: { "line-color": "#262624", "line-width": 1 } }, undefined);
-    map.addSource("home", { type: "geojson", data: {
+    (map.getSource("grid") as maplibregl.GeoJSONSource | undefined)
+      ?.setData(groundGrid(origin.lat, origin.lon));
+    (map.getSource("home") as maplibregl.GeoJSONSource | undefined)?.setData({
       type: "Feature", properties: {},
-      geometry: { type: "Point", coordinates: [origin.lon, origin.lat] } } });
-    map.addLayer({ id: "home-ring", type: "circle", source: "home",
-      paint: { "circle-radius": 10, "circle-color": "transparent",
-               "circle-stroke-width": 2, "circle-stroke-color": "#8f8b80" } });
+      geometry: { type: "Point", coordinates: [origin.lon, origin.lat] },
+    } as GeoJSON.Feature);
     if (!fittedRef.current) {
       fittedRef.current = true;
       map.jumpTo({ center: [origin.lon, origin.lat], zoom: 15.5, pitch: 55 });
