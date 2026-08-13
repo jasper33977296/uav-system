@@ -102,7 +102,8 @@ def _decode_args(comp: int, spec: list, blob: bytes) -> list:
     return out
 
 
-def describe(event_id: int, args_hex: str = "") -> dict | None:
+def describe(event_id: int, args_hex: str = "",
+             vehicle_fw: str | None = None) -> dict | None:
     """回 {'text', 'event_name', 'group', 'dict_fw'}；翻不出回 None。
 
     呼叫端**必須保留原本的 event_id**——這裡回 None 時事件不能消失。
@@ -136,4 +137,26 @@ def describe(event_id: int, args_hex: str = "") -> dict | None:
 
     text = _TAG.sub("", _PLACEHOLDER.sub(_sub, msg)).strip()
     return {"text": text, "event_name": ev.get("name"),
-            "group": ev.get("group"), "dict_fw": DICT_FW}
+            "group": ev.get("group"), "dict_fw": DICT_FW,
+            "dict_fw_match": fw_match(vehicle_fw)}
+
+
+def fw_match(vehicle_fw: str | None) -> str:
+    """字典版本 vs 機上韌體版本，**三態**。
+
+    `unknown` 不等於 `match`——這正是設計師指出的重點：無法確認相符就顯示翻譯，
+    等於默認它是對的。而**錯翻譯比沒翻譯危險**（沒翻譯只是不知道；錯翻譯是被
+    誤導，且讀的人不會懷疑）。所以 UI 對 `unknown` 也該有提示，不能當成 `match`。
+
+    目前恆為 `unknown`——**機上韌體版本我們拿不到**（實測：backend 收到的 24 種
+    訊息裡沒有 `AUTOPILOT_VERSION`，PX4 不主動送）。要拿到得靠
+    `MAV_CMD_REQUEST_MESSAGE`，而那是 `COMMAND_LONG`——**backend 的唯讀白名單
+    是「依訊息型別」擋的，放行 COMMAND_LONG 等於同時放行 arm 與切模式**，
+    不是加一個例外就好（見 scripts/test-readonly-boundary.py 的 FORBIDDEN）。
+
+    取得版本的路徑待定案（建議由 command 服務要、落 DB，backend 讀 DB——
+    不新增跨服務 HTTP 相依）。這個函式的形狀先定下來，屆時只補判斷。
+    """
+    if not vehicle_fw:
+        return "unknown"
+    return "match" if vehicle_fw == DICT_FW else "mismatch"

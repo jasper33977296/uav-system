@@ -485,7 +485,8 @@ class MavlinkRx:
             last["t"] = now
             detail = {"event_id": eid, "args": d["args_hex"], "count": last["count"],
                       **({"text": tr["text"], "event_name": tr["event_name"],
-                          "dict_fw": tr["dict_fw"]} if tr else {})}
+                          "dict_fw": tr["dict_fw"],
+                          "dict_fw_match": tr["dict_fw_match"]} if tr else {})}
             upd = await db.bump_event(last["id"], detail)
             if upd is not None:
                 await manager.broadcast({"type": "event", "fold": True, "event": {
@@ -496,7 +497,8 @@ class MavlinkRx:
         ev = await db.insert_event(st.drone_id, st.session_id, sev, "vehicle_event",
                                    {"event_id": eid, "args": d["args_hex"], "count": 1,
                                     **({"text": tr["text"], "event_name": tr["event_name"],
-                                        "dict_fw": tr["dict_fw"]} if tr else {})},
+                                        "dict_fw": tr["dict_fw"],
+                                        "dict_fw_match": tr["dict_fw_match"]} if tr else {})},
                                    source="vehicle")
         ev["drone"] = st.drone_name
         ent["evt_last"] = {"id": ev["id"], "event_id": eid, "count": 1, "t": now}
