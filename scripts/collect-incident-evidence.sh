@@ -182,6 +182,69 @@ cat > "$OUT/08-QUESTIONS-for-operator.txt" <<'TXT'
    （若沒連地面站，我方系統不在迴路上，這批地面站證據就與事故無關。）
 TXT
 
+# ── 9. Bundle 內容指紋（**驗執行中的產物，不是 checkout**）────────
+# 為什麼要有這一節：第 6 節的版本窗判定看的是 git HEAD，而**跑的東西未必等於
+# HEAD**——映像可能是舊的、node_modules volume 可能遮住新裝的套件、分頁可能
+# 載著更舊的 bundle。2026-08-13 本專案就踩過：映像重建「成功」，但容器實際用的
+# 是 volume 裡的舊 node_modules，新套件根本不在。
+#
+# 所以這一節直接對**執行中容器的 .next/static/chunks** 找字串與位移，
+# 與第 6 節互相對質：兩者不一致本身就是重要發現（部署失配）。
+FE_C=$(docker ps -a --format '{{.Names}}' 2>/dev/null | grep -m1 uav-frontend)
+FP="$OUT/09-bundle-fingerprint.txt"
+if [ -z "$FE_C" ]; then
+  note_missing "frontend 容器（無法做 bundle 指紋）"
+else
+  {
+    echo "== 執行中 bundle 的內容指紋 =="
+    echo "容器：$FE_C"
+    docker exec "$FE_C" sh -c 'ls -la .next/static/chunks 2>/dev/null | head -3' 2>&1
+    CHUNKS=$(docker exec "$FE_C" sh -c 'ls .next/static/chunks/*.js 2>/dev/null' 2>/dev/null)
+    if [ -z "$CHUNKS" ]; then
+      echo "  ⚠ 找不到 .next/static/chunks/*.js"
+      echo "     可能原因：容器跑 dev 模式（next dev 不產這個目錄）、或路徑不同。"
+      echo "     dev 模式下請改看 .next/server 與 .next/cache，或直接記錄容器 Cmd："
+      docker inspect "$FE_C" --format '     Cmd={{json .Config.Cmd}}' 2>/dev/null
+    fi
+
+    echo
+    echo "-- 標記字串命中（未命中會明列，不靜默跳過）--"
+    # 判定表：每行 "字串|這個字串代表什麼"
+    # ⚠ 本表待前端補齊十列判定；目前僅含 PM 指定的位移探針兩個標記。
+    while IFS='|' read -r marker meaning; do
+      [ -z "$marker" ] && continue
+      hits=$(docker exec "$FE_C" sh -c "grep -rl -- '$marker' .next/static/chunks 2>/dev/null | head -5" 2>/dev/null)
+      if [ -n "$hits" ]; then
+        echo "  ✔ 命中 '$marker' → $meaning"
+        echo "$hits" | sed 's/^/      /'
+      else
+        echo "  ✘ **未命中** '$marker' → $meaning"
+      fi
+    done <<'MARKERS'
+plan3d|計畫路徑圖層識別字（位移探針用）
+interleaved|deck.gl overlay 掛載模式（位移探針用）
+MARKERS
+
+    echo
+    echo "-- 位移探針：plan3d vs interleaved 的先後 --"
+    echo "   原理：兩者在 bundle 裡的 byte offset 先後反映原始碼的 addLayer 順序。"
+    echo "   計畫路徑若在 deck overlay **之後**才加，就會蓋住實測軌跡與機體圖示。"
+    docker exec "$FE_C" sh -c '
+      for f in .next/static/chunks/*.js; do
+        a=$(grep -b -o -m1 "plan3d" "$f" 2>/dev/null | head -1 | cut -d: -f1)
+        b=$(grep -b -o -m1 "interleaved" "$f" 2>/dev/null | head -1 | cut -d: -f1)
+        if [ -n "$a" ] && [ -n "$b" ]; then
+          if [ "$a" -lt "$b" ]; then verdict="plan3d 在前"; else verdict="interleaved 在前"; fi
+          echo "   $f  plan3d@$a  interleaved@$b  → $verdict"
+        fi
+      done' 2>/dev/null || echo "   （無法執行位移探針）"
+    echo
+    echo "⚠ 判定表尚未補齊：前端的十列判定表待併入。目前這一節提供的是"
+    echo "   原始命中與位移資料，結論由前端/設計師的判定表對照。"
+  } > "$FP" 2>&1
+  echo "  bundle 指紋 → $(basename "$FP")"
+fi
+
 # ── 完成 ──────────────────────────────────────────────────────────
 if [ -s "$MISS" ]; then
   echo; echo "以下項目未能收集（已記在 MISSING.txt）："; cat "$MISS"
