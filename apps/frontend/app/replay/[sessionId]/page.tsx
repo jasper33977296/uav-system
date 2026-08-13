@@ -22,9 +22,7 @@ import { useUavStore } from "@/lib/store";
 interface LinkRow {
   time: string; lat: number | null; lon: number | null; alt_rel: number | null;
   sinr: number | null; rtt_ms: number | null;
-  heading?: number | null;   // 由同回應的 telemetry 陣列補（link 本身不帶）
 }
-interface TelRow { time: string; heading: number | null }
 interface Ev {
   id: number; time: string; severity: string; type: string;
   detail: Record<string, unknown>;
@@ -129,29 +127,11 @@ export default function Replay() {
     fetch(`${API}/api/sessions/${sessionId}/track`)
       .then((r) => r.json())
       .then((d) => {
-        // heading 住 telemetry 陣列、訊號住 link 陣列（同一回應的兩個序列，
-        // 筆數與時間幾乎一致但非保證），以最近時間配對補上——機體圖示的
-        // 朝向是真實記錄的資料，不因為是回放就降級成無朝向
-        const tel: TelRow[] = (d.telemetry ?? []).filter(
-          (t: TelRow) => t.heading != null);
-        const telT = tel.map((t) => new Date(t.time).getTime());
-        const nearestHdg = (iso: string): number | null => {
-          if (!tel.length) return null;
-          const t = new Date(iso).getTime();
-          let lo = 0, hi = telT.length - 1;
-          while (lo < hi) {
-            const mid = (lo + hi) >> 1;
-            if (telT[mid] < t) lo = mid + 1; else hi = mid;
-          }
-          const cand = [lo, lo - 1].filter((i) => i >= 0 && i < tel.length);
-          const best = cand.reduce((a, b) =>
-            Math.abs(telT[a] - t) <= Math.abs(telT[b] - t) ? a : b);
-          // 差距過大＝那段沒有姿態記錄，寧可不畫朝向也不用鄰近時刻頂替
-          return Math.abs(telT[best] - t) <= 2000 ? tel[best].heading : null;
-        };
+        // 註：track 回應另有 telemetry 陣列（含 heading 等姿態欄）。
+        // §2.4c 移除圖示旋轉後前端沒有 heading 的消費者，故不再併入——
+        // 留著會是每列一次二分搜尋的白工，也會讓人以為朝向功能還在
         const link = (d.link ?? [])
-          .filter((r: LinkRow) => r.lat != null && r.lon != null)
-          .map((r: LinkRow) => ({ ...r, heading: nearestHdg(r.time) }));
+          .filter((r: LinkRow) => r.lat != null && r.lon != null);
         setRows(link);
         setIdx(link.length - 1);   // 預設停在終點：一眼看到整趟全貌
         setMeta(d.session ?? null);
@@ -292,22 +272,19 @@ export default function Replay() {
         trackLayer,
         ...(r && r.lat != null && r.lon != null ? [new IconLayer({
           id: "cursor-icon",
-          data: [{ pos: [r.lon, r.lat, r.alt_rel ?? 0] as [number, number, number],
-                   hdg: r.heading }],
+          data: [{ pos: [r.lon, r.lat, r.alt_rel ?? 0] as [number, number, number] }],
           getPosition: (d: { pos: [number, number, number] }) => d.pos,
           getIcon: () => ({
-            url: droneIconUrl("#3987e5", r.heading != null, true),
+            url: droneIconUrl("#3987e5", true),
             width: DRONE_ICON_SIZE, height: DRONE_ICON_SIZE,
             anchorX: DRONE_ICON_SIZE / 2, anchorY: DRONE_ICON_SIZE / 2, mask: false,
           }),
-          getAngle: (d: { hdg: number | null | undefined }) =>
-            (d.hdg == null ? 0 : -d.hdg),
           // 游標比即時頁的機體大一級（§2.4b 配套：與軌跡點視覺可分，
           // 不被誤讀為「軌跡上的一個點」）；同樣做俯角壓縮補償
           getSize: 52, sizeUnits: "pixels", billboard: false,
           sizeScale: Math.min(2.2, Math.pow(Math.max(0.2,
             Math.cos(((mapRef.current?.getPitch() ?? 55) * Math.PI) / 180)), -0.75)),
-          updateTriggers: { getIcon: `${r.heading}`, getPosition: idx },
+          updateTriggers: { getPosition: idx },
         })] : []),
       ] });
     };

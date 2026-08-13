@@ -195,7 +195,7 @@ export default function MissionReplay() {
         paint: { "line-width": ["interpolate", ["linear"], ["zoom"], 12, 1, 16, 2, 20, 3.5],
           "line-color": ["get", "dcolor"], "line-opacity": 0.7 } });
       const overlay = new MapboxOverlay({ interleaved: true, layers: [
-        routeLayer("ribbons", ribbonTrails(series, hiddenRef.current)),
+        ...routeLayer("ribbons", ribbonTrails(series, hiddenRef.current)),
       ] });
       map.addControl(overlay as unknown as maplibregl.IControl);
       overlayRef.current = overlay;
@@ -225,7 +225,7 @@ export default function MissionReplay() {
     if (!map || !map.getSource("proj")) return;
     (map.getSource("proj") as maplibregl.GeoJSONSource).setData(projData(series, hidden));
     overlayRef.current?.setProps({
-      layers: [routeLayer("ribbons", ribbonTrails(series, hidden))] });
+      layers: [...routeLayer("ribbons", ribbonTrails(series, hidden))] });
     map.triggerRepaint();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [hidden, series]);

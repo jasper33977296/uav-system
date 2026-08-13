@@ -227,8 +227,8 @@ export default function FieldMap() {
       zone: z,
     } as RouteRun & { zone: WeakZone })));
     overlayRef.current.setProps({ layers: [
-      pathsLayer("field-runs", runs, true),
-      pathsLayer("field-zones", zoneRuns, true),
+      ...pathsLayer("field-runs", runs, true),
+      ...pathsLayer("field-zones", zoneRuns, true),
       new TextLayer({
         id: "field-zone-labels",
         data: zones,

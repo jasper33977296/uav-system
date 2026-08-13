@@ -202,7 +202,7 @@ export default function CompareMap3D({
       }
       for (const r of rows) { allLats.push(r.lat); allLons.push(r.lon); }
     }
-    overlayRef.current?.setProps({ layers: [pathsLayer("cmp-runs", runs, true)] });
+    overlayRef.current?.setProps({ layers: [...pathsLayer("cmp-runs", runs, true)] });
 
     // 取景 bounds：樣本按 P1–P99 分位數裁掉 GPS 漂移離群點（長航次會有），
     // 計畫航點不裁（權威資料）。絲帶照常全量渲染，只有取景被裁

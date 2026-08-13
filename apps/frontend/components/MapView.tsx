@@ -234,7 +234,9 @@ export default function MapView() {
         paint: {
           "line-color": ["get", "dcolor"],
           // 縮放自適應：兩端有界、中間連續（同 pathsLayer 原則）
-          "line-width": ["interpolate", ["linear"], ["zoom"], 12, 1, 16, 2, 20, 3.5],
+          // §2.4c 加粗 1–3.5→2–5px：原本太細又被空中絲帶壓過，遠看等同
+          // 消失。判準是任何 zoom 下都要能一眼分辨空中絲帶與地面投影
+          "line-width": ["interpolate", ["linear"], ["zoom"], 12, 2, 16, 3.5, 20, 5],
           "line-opacity": 0.7,
         },
       });
@@ -352,28 +354,28 @@ export default function MapView() {
         // 寫入（無 setData 整源替換的閃爍），5Hz 直更不需節流。
         // 編隊預覽層一併掛上（非編隊時為空陣列，零成本）
         overlayRef.current?.setProps({ layers: [
-          routeLayer("route3d", s.trails),
-          pathsLayer("formation-preview", previewRef.current),
-          // §2.4b 機體圖示：2D 四旋翼俯視剪影、著識別色、隨 heading 旋轉。
-          // billboard:false＝貼地平面，傾斜視角下自然透視、且跟著地圖旋轉，
-          // 朝向語意才成立。heading 缺值→對稱造型且不旋轉（不假裝朝向）
+          ...routeLayer("route3d", s.trails),
+          ...pathsLayer("formation-preview", previewRef.current),
+          // 機體圖示：2D 四旋翼俯視剪影、著識別色、**對稱不旋轉**
+          // （§2.4c 使用者裁定：方向由軌跡承載）。billboard:false＝貼地平面，
+          // 傾斜視角下與軌跡同一透視。
+          // **圖示與標籤必須排在所有軌跡/投影/計畫路徑層之後**（§2.4c 硬規則）：
+          // deck 依陣列順序繪製，後者在上——找不到機在哪＝監控失效，
+          // 任何美觀考量都不得凌駕
           new IconLayer({
             id: "drone-icons",
             data: Object.entries(s.fleet)
               .filter(([, t]) => t.lat != null && t.lon != null)
               .map(([id, t]) => ({
-                id, hdg: t.heading,
+                id,
                 pos: [t.lon!, t.lat!, t.alt_rel ?? 0] as [number, number, number],
-                url: droneIconUrl(colorFor(id), t.heading != null),
+                url: droneIconUrl(colorFor(id)),
               })),
             getPosition: (d: { pos: [number, number, number] }) => d.pos,
             getIcon: (d: { url: string }) => ({
               url: d.url, width: DRONE_ICON_SIZE, height: DRONE_ICON_SIZE,
               anchorX: DRONE_ICON_SIZE / 2, anchorY: DRONE_ICON_SIZE / 2, mask: false,
             }),
-            // deck 角度為逆時針、heading 為順時針自北——取負值對齊
-            getAngle: (d: { hdg: number | null | undefined }) =>
-              (d.hdg == null ? 0 : -d.hdg),
             getSize: 44, sizeUnits: "pixels", billboard: false, pickable: true,
             // 俯角尺寸補償（§2.4b 裁定）：貼地圖示在傾斜視角下被透視壓縮
             // （短軸 ×cos(pitch)），放大以維持輪廓可辨。**不改 billboard**
@@ -421,8 +423,10 @@ export default function MapView() {
             getText: (d: { name: string }) => d.name,
             getColor: (d: { color: [number, number, number, number] }) => d.color,
             getSize: 13,
-            // 浮在球體上方不蓋機體；同位者往上疊
-            getPixelOffset: (d: { level: number }) => [0, -14 - d.level * 14],
+            // §2.4c：貼近圖示（6px）、水平置中；同位者仍往上錯開
+            getTextAnchor: "middle" as const,
+            getAlignmentBaseline: "bottom" as const,
+            getPixelOffset: (d: { level: number }) => [0, -6 - d.level * 13],
             outlineWidth: 2.5,
             outlineColor: [27, 26, 23, 255],   // 暖畫布底色描邊，任何背景可讀
             fontSettings: { sdf: true },
