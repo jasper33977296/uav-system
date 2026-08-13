@@ -274,12 +274,12 @@ export default function SidePanel() {
               {cls.label.split(" ")[0]}
             </span>
           )}
-          {link?.in_interference_zone && (
-            <span className="chip">
-              <span className="dot" style={{ background: "#d03b3b" }} />
-              干擾區內
-            </span>
-          )}
+          {/* 「干擾區內」標籤移除（使用者定案 2026-08-13：全站不做先驗
+              成因標注）。機只知道訊號變差、不知道原因——這個 chip 是拿
+              模擬器的場景設定當成對現場的事實斷言，真機上根本沒有這種
+              資訊。訊號本身的呈現（SINR 分級、走勢、熱區）全部保留，
+              那些是量測結果不是推測。後端 in_interference_zone 欄位仍在，
+              若日後研究需要對照，應標成「模擬設定」而非現場事實 */}
         </div>
         <Sparkline data={(effective && sinrHistories[effective]) || []} />
         {/* 次要數字一列；其餘收「詳細」摺疊（IA 定案：漸進揭露＋展開記憶） */}

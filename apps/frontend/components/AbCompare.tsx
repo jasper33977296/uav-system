@@ -150,6 +150,10 @@ export default function AbCompare() {
     const rp = res.chainage.filter((c) => c.a_rsrp != null && c.b_rsrp != null);
     const dR = rp.length ? median(rp.map((c) => c.b_rsrp! - c.a_rsrp!)) : null;
     const FLAT_R = 2, SIG_S = 1.5, TAIL = 3;   // 判定門檻（dB）：持平／顯著／尾部
+    // 語意中性（使用者定案 2026-08-13）：句子只描述**現象**（RSRP 與 SINR
+    // 的相對走勢），不宣告成因。機只知道訊號變差、不知道為什麼——
+    // 「是不是干擾」是研究者依現場條件判斷的事，系統把推測寫成事實就是
+    // 在替使用者下結論。
     // 局部變化分支（§6b 設計師裁定）：整段中位數持平但尾部顯著時，若只說
     // 「無顯著變化」會與同頁摘要表的 Δp5 互相打臉——判讀句的責任不是說出
     // 一個對的結論，是說出一個不與同頁其他證據衝突的結論
@@ -157,10 +161,10 @@ export default function AbCompare() {
       ? res.summary.b.p5 - res.summary.a.p5 : null;
     let txt: string;
     if (dR == null) txt = "無 RSRP 對照資料，無法判定變因";
-    else if (Math.abs(dR) < FLAT_R && dS < -SIG_S) txt = "RSRP 大致持平而 SINR 下降 → 干擾簽名";
-    else if (Math.abs(dR) < FLAT_R && dS > SIG_S) txt = "RSRP 大致持平而 SINR 上升 → 干擾減弱";
-    else if (dR < -FLAT_R && dS < -SIG_S) txt = "RSRP 同步下降 → 變因可能不是干擾（距離、遮蔽或發射端）";
-    else if (dR > FLAT_R && dS > SIG_S) txt = "RSRP 同步上升 → 變因可能不是干擾（距離、遮蔽或發射端）";
+    else if (Math.abs(dR) < FLAT_R && dS < -SIG_S) txt = "RSRP 大致持平而 SINR 下降 → 符合外部雜訊升高的特徵";
+    else if (Math.abs(dR) < FLAT_R && dS > SIG_S) txt = "RSRP 大致持平而 SINR 上升 → 符合外部雜訊下降的特徵";
+    else if (dR < -FLAT_R && dS < -SIG_S) txt = "RSRP 同步下降 → 變因在訊號強度側（距離、遮蔽或發射端）";
+    else if (dR > FLAT_R && dS > SIG_S) txt = "RSRP 同步上升 → 變因在訊號強度側（距離、遮蔽或發射端）";
     else if (dP5 != null && Math.abs(dP5) >= TAIL) {
       txt = `整段中位數持平，但最差 5% ${dP5 > 0 ? "改善" : "惡化"} `
         + `${Math.abs(dP5).toFixed(1)} dB → 變化集中在局部區段（見主圖差值帶）`;
