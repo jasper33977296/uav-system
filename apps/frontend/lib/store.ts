@@ -238,3 +238,17 @@ export const useUavStore = create<UavStore>((set) => ({
       return { events: [...s.events, ...es.filter((e) => !seen.has(e.id))].slice(0, 100) };
     }),
 }));
+
+/** 地圖初始中心：取第一台有座標的機。
+ *
+ * **不寫死任何地點**——蘇黎世那組常數是 PX4 SITL 的舊出生點，機隊搬到
+ * 台北後就成了「開頁第一眼在別的洲」（NLSC 境外無圖資，看起來像底圖壞掉）。
+ * 沒有任何座標時回 null：呼叫端用世界視野開場、拿到資料再 jumpTo——
+ * 與其指一個我們並不知道的地點，不如先不指。
+ */
+export function firstFleetPos(): [number, number] | null {
+  for (const t of Object.values(useUavStore.getState().fleet)) {
+    if (t.lat != null && t.lon != null) return [t.lon, t.lat];
+  }
+  return null;
+}

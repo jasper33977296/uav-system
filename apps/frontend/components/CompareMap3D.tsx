@@ -14,6 +14,7 @@ import "maplibre-gl/dist/maplibre-gl.css";
 import { useEffect, useRef, useState } from "react";
 
 import { pathsLayer, rgba, sinrRuns, type RouteRun } from "@/lib/deckRoute";
+import { firstFleetPos } from "@/lib/store";
 import { CANVAS, groundGrid, ribbon } from "@/lib/geo";
 import { LINK_CLASSES } from "@/lib/signal";
 
@@ -86,12 +87,14 @@ export default function CompareMap3D({
   useEffect(() => { selRef.current = sel; }, [sel]);
 
   useEffect(() => {
+    // 原點取航點；沒有航點時退回機隊實際座標，再沒有就世界視野
+    // （不寫死地點——SITL 舊出生點在機隊搬家後就是錯的）
     const origin: [number, number] = wps.length
-      ? [wps[0].lon, wps[0].lat] : [8.5456, 47.3977];
+      ? [wps[0].lon, wps[0].lat] : (firstFleetPos() ?? [0, 20]);
     const map = new maplibregl.Map({
       container: containerRef.current!,
       center: origin,
-      zoom: 15,
+      zoom: wps.length || firstFleetPos() ? 15 : 1.5,
       pitch: 55,
       maxPitch: 75,
       // 嵌在可捲動頁面裡的地圖必開（2026-08-11 取景懸案真兇）：滾輪捲頁

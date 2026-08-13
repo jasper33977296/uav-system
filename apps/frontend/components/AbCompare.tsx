@@ -9,6 +9,7 @@ import { compareAlongPath, deltaCells, type ChainPoint, type DeltaCell, type Sam
   from "@/lib/chainage";
 import { CANVAS, groundGrid } from "@/lib/geo";
 import { API, CLIENT_HEADERS } from "@/lib/signal";
+import { firstFleetPos } from "@/lib/store";
 
 /** 前後比較頁（ui-spec §6b，023——使用者核准 2026-08-12）。
  *
@@ -177,14 +178,19 @@ export default function AbCompare() {
   useEffect(() => {
     if (!boxRef.current || mapRef.current) return;
     const map = new maplibregl.Map({
-      container: boxRef.current, center: [8.5456, 47.3977], zoom: 16,
+      container: boxRef.current, zoom: firstFleetPos() ? 16 : 1.5,
+      // 初始中心取機隊；沒有遙測就世界視野——熱區資料到位後 fitBounds
+      center: firstFleetPos() ?? [0, 20],
       attributionControl: false, cooperativeGestures: true,
       style: { version: 8, sources: {}, layers: [
         { id: "canvas", type: "background", paint: { "background-color": CANVAS } }] },
     });
     mapRef.current = map;
     map.on("load", () => {
-      map.addSource("grid", { type: "geojson", data: groundGrid(47.3977, 8.5456) });
+      // 網格錨在資料原點：先建空 source，cells 算出後再填（原本錨死在
+      // SITL 舊出生點，機隊搬家後參考線會在別的洲）
+      map.addSource("grid", { type: "geojson",
+        data: { type: "FeatureCollection", features: [] } as GeoJSON.FeatureCollection });
       map.addLayer({ id: "grid", type: "line", source: "grid",
         paint: { "line-color": "#2b2a26", "line-width": 1 } });
       const ov = new MapboxOverlay({ interleaved: true, layers: [] });
@@ -218,8 +224,10 @@ export default function AbCompare() {
         updateTriggers: { getFillColor: cells.length, getPolygon: cells.length },
       }),
     ] });
-    // 首次有格時把視野帶到資料範圍
+    // 首次有格時把視野與網格帶到資料範圍
     if (cells.length && mapRef.current) {
+      (mapRef.current.getSource("grid") as maplibregl.GeoJSONSource | undefined)
+        ?.setData(groundGrid(cells[0].lat, cells[0].lon));
       const b = new maplibregl.LngLatBounds();
       for (const c of cells) b.extend([c.lon, c.lat]);
       mapRef.current.fitBounds(b, { padding: 40, animate: false, maxZoom: 18 });

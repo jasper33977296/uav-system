@@ -19,6 +19,7 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import { pathsLayer, sinrRuns, rgba, type RouteRun } from "@/lib/deckRoute";
 import { CANVAS, groundGrid } from "@/lib/geo";
 import { API, CLIENT_HEADERS, LINK_CLASSES } from "@/lib/signal";
+import { firstFleetPos } from "@/lib/store";
 import { aggregateCells, weakZones, type TrackRow, type WeakZone } from "@/lib/signalMap";
 
 interface SessRow {
@@ -142,8 +143,10 @@ export default function FieldMap() {
   useEffect(() => {
     const map = new maplibregl.Map({
       container: containerRef.current!,
-      center: [8.5456, 47.3977],
-      zoom: 15,
+      // 初始中心取機隊實際座標；沒有遙測時世界視野（不假裝知道在哪），
+      // 有資料後 jumpTo 到該場域原點（見錨定 effect）
+      center: firstFleetPos() ?? [0, 20],
+      zoom: firstFleetPos() ? 15 : 1.5,
       pitch: 55,
       maxPitch: 75,
       cooperativeGestures: true,

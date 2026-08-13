@@ -17,9 +17,8 @@ import { DRONE_ICON_SIZE, droneIconUrl } from "@/lib/droneIcon";
 import { basePreview, separatePreview, unifiedPreview, type Wp } from "@/lib/formation";
 import { CANVAS, groundGrid, ribbon, trailLineString } from "@/lib/geo";
 import { API, LINK_CLASSES } from "@/lib/signal";
-import { useUavStore } from "@/lib/store";
+import { firstFleetPos, useUavStore } from "@/lib/store";
 
-const HOME: [number, number] = [8.5456, 47.3977]; // PX4 SITL 預設起飛點
 
 // 刻意**不放底圖**：場域物件不存在於系統認知中，鏈路品質的空間分布由
 // 實測軌跡自己揭露；離線（場域實測常態）也完全可用。
@@ -177,8 +176,10 @@ export default function MapView() {
   useEffect(() => {
     const map = new maplibregl.Map({
       container: containerRef.current!,
-      center: HOME,
-      zoom: 15,
+      // 初始中心取機隊實際座標；沒有遙測時用世界視野（不假裝知道在哪），
+      // 收到第一筆座標即 jumpTo（見 centeredRef）
+      center: firstFleetPos() ?? [0, 20],
+      zoom: firstFleetPos() ? 15 : 1.5,
       pitch: 55,                 // 3D 傾斜視角（右鍵拖曳可調）
       maxPitch: 75,
       style: {
@@ -200,14 +201,17 @@ export default function MapView() {
       base.install(map);
 
       // 地面基準：網格 50m 一格 + 起飛點雙圈錨點
-      map.addSource("grid", { type: "geojson", data: groundGrid(HOME[1], HOME[0]) });
+      // 網格/起飛點錨在**實際**出生點：先建空 source，收到第一筆座標再填
+      // （原本錨死在 SITL 舊出生點，機隊搬家後整組參考線就在別的洲）
+      const EMPTY_FC: GeoJSON.FeatureCollection = { type: "FeatureCollection", features: [] };
+      map.addSource("grid", { type: "geojson", data: EMPTY_FC });
       map.addLayer({
         id: "grid", type: "line", source: "grid",
         paint: { "line-color": "#262624", "line-width": 1 },
       });
       map.addSource("home", {
         type: "geojson",
-        data: { type: "Feature", properties: {}, geometry: { type: "Point", coordinates: HOME } },
+        data: EMPTY_FC,
       });
       map.addLayer({
         id: "home-ring", type: "circle", source: "home",
@@ -351,6 +355,13 @@ export default function MapView() {
         if (!centeredRef.current) {
           centeredRef.current = true;
           map.jumpTo({ center: [t.lon, t.lat], zoom: 16 });
+          // 參考線同時錨定到這台機的位置（第一筆座標＝本次的現場）
+          (map.getSource("grid") as maplibregl.GeoJSONSource | undefined)
+            ?.setData(groundGrid(t.lat, t.lon));
+          (map.getSource("home") as maplibregl.GeoJSONSource | undefined)?.setData({
+            type: "Feature", properties: {},
+            geometry: { type: "Point", coordinates: [t.lon, t.lat] },
+          } as GeoJSON.Feature);
         }
 
         // 球體層自己每幀從 store 讀位置（triggerRepaint 驅動），不需在此餵資料
