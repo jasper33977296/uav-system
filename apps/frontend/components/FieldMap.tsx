@@ -16,6 +16,7 @@ import "maplibre-gl/dist/maplibre-gl.css";
 import { useRouter } from "next/navigation";
 import { useEffect, useMemo, useRef, useState } from "react";
 
+import CompareTabs from "@/components/CompareTabs";
 import { pathsLayer, sinrRuns, rgba, type RouteRun } from "@/lib/deckRoute";
 import { CANVAS, groundGrid } from "@/lib/geo";
 import { API, CLIENT_HEADERS, LINK_CLASSES } from "@/lib/signal";
@@ -299,6 +300,9 @@ export default function FieldMap() {
 
       {/* 浮動面板（任務控制同款語言：可收合） */}
       <div className="field-col">
+        {/* 檢視切換（§6b）：與前後比較頁共用導覽列同一顆 icon，
+            放在面板之外——面板收合時仍看得到入口 */}
+        <CompareTabs active="field" />
         <div className="cmd-panel field-panel">
           <div className="cmd-head" onClick={() => setPanelOpen((o) => !o)}>
             <span className="name">場域訊號</span>

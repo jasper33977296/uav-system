@@ -126,9 +126,14 @@ export function droneMesh(): MeshData {
 /** mesh 的外接半徑（公尺，未縮放）——LOD 換手時用來對齊 2D 圖示視覺大小 */
 export const MESH_RADIUS_M = 1.55 + 0.62;
 
-/** LOD 係數（§2.4d）：0＝完全用 2D 圖示、1＝完全用 3D mesh，中間交叉淡出。
- * 兩邊共用同一個函式，避免門檻各寫一份而漂移（換手就會「跳」或「兩個都淡」）。 */
-export const LOD_Z_LOW = 16, LOD_Z_HIGH = 17.5;
+/** LOD 係數（§2.4d）：0＝2D 圖示、1＝3D mesh。**硬切、不交叉淡化。**
+ *
+ * 原設計是門檻區間淡入淡出，但兩個**形狀不同**的本體在同一位置各以 50%
+ * 不透明度繪製，視覺上就是重影——使用者回報「有一個縮放區間 2D 跟 3D
+ * 會同時出現」。設計師裁定：**在「機在哪」這件事上重影比硬切更糟**
+ * （會讓人懷疑有兩台機或位置不準），換手瞬間的跳變可接受。
+ * 兩邊共用同一個函式，門檻只有一份不會漂移。 */
+export const LOD_Z_SWITCH = 16.75;
 export function lodFactor(zoom: number): number {
-  return Math.max(0, Math.min(1, (zoom - LOD_Z_LOW) / (LOD_Z_HIGH - LOD_Z_LOW)));
+  return zoom >= LOD_Z_SWITCH ? 1 : 0;
 }

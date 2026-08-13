@@ -7,6 +7,7 @@ import { useEffect, useMemo, useRef, useState } from "react";
 
 import { compareAlongPath, deltaCells, type ChainPoint, type DeltaCell, type Sample }
   from "@/lib/chainage";
+import CompareTabs from "@/components/CompareTabs";
 import { CANVAS, groundGrid } from "@/lib/geo";
 import { API, CLIENT_HEADERS } from "@/lib/signal";
 import { firstFleetPos } from "@/lib/store";
@@ -275,6 +276,7 @@ export default function AbCompare() {
   return (
     <div className="ab-page">
       <div className="ab-head">
+        <CompareTabs active="ab" />
         <span className="name">
           路徑：{aSess?.mission_id && aSess.mission_id === bSess?.mission_id
             ? aSess.mission_name ?? "（未命名航線）"

@@ -1075,3 +1075,15 @@ a:focus-visible, button:focus-visible, input:focus-visible, select:focus-visible
 }
 .legend-row:hover { color: var(--ink); }
 details.card summary { cursor: pointer; font-size: 14px; font-weight: 600; }
+
+/* 比較頁檢視切換（§6b）：場域訊號 ｜ 前後比較——共用導覽列同一顆 icon */
+.cmp-tabs {
+  align-self: flex-start; margin-bottom: 8px;
+  background: var(--surface); border: 1px solid var(--border);
+  border-radius: 8px; overflow: hidden; box-shadow: 0 2px 8px rgba(0,0,0,0.35);
+}
+.cmp-tabs button {
+  font-size: 12.5px; padding: 5px 12px; cursor: pointer;
+  background: none; border: none; color: var(--muted);
+}
+.cmp-tabs button.on { background: var(--surface-2); color: var(--ink); }
