@@ -259,11 +259,17 @@ export default function Replay() {
     return () => { map.remove(); mapRef.current = null; };
   }, [rows, plan]);
 
-  // 軌跡層：資料只在 rows 變時重建（scrub 不重建，避免每格都重算路徑）
-  const trackLayer = useMemo(() => routeLayer("track3d", { track: rows
+  // 軌跡資料只在 rows 變時重算（scrub 不重算）——但**只記住資料、不記住
+  // 圖層實例**。deck 的 `Layer._initialize` 有 `assert(!this.internalState)
+  // // finalized layer cannot be reused`：地圖重建時（本頁 map.remove() 依賴
+  // [rows, plan]，plan 比 rows 晚到就會重建一次）舊 deck 會 finalize 這些
+  // 實例，被 useMemo 記住的同一批實例再推進新 deck 就整層初始化失敗——
+  // **軌跡整條不見**。實測 6 次載入 2 次踩到（彩色像素 2469 → 1251），
+  // 是抓取順序的競態，不是必現，所以肉眼抽查會漏掉
+  const trackPts = useMemo(() => rows
     .filter((r) => r.lat != null && r.lon != null)
     .map((r) => ({ lat: r.lat!, lon: r.lon!,
-                   sinr: r.sinr ?? null, alt: r.alt_rel ?? null })) }), [rows]);
+                   sinr: r.sinr ?? null, alt: r.alt_rel ?? null })), [rows]);
 
   // scrub → 游標圖示（§2.4b：與即時頁同一套機體圖示、隨當時 heading 旋轉）
   const pushLayersRef = useRef<() => void>(() => {});
@@ -271,7 +277,9 @@ export default function Replay() {
     pushLayersRef.current = () => {
       const r = rows[idx];
       ovRef.current?.setProps({ layers: [
-        trackLayer,
+        // 每次推送都建新實例（deck 靠 id 比對做差異更新；data 參考不變時
+        // 不會重算屬性，所以成本只有物件配置）
+        ...routeLayer("track3d", { track: trackPts }),
         ...(r && r.lat != null && r.lon != null ? [new IconLayer({
           id: "cursor-icon",
           data: [{ pos: [r.lon, r.lat, r.alt_rel ?? 0] as [number, number, number] }],
@@ -291,7 +299,7 @@ export default function Replay() {
       ] });
     };
     pushLayersRef.current();
-  }, [idx, rows, trackLayer]);
+  }, [idx, rows, trackPts]);
 
   // 播放（ui-spec §5）：1Hz 樣本 → 每 1000/speed ms 前進一格；到底自停
   const [playing, setPlaying] = useState(false);
