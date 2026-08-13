@@ -47,6 +47,15 @@
 
 ## 2. 起服務＋自檢
 
+- [ ] **建置前端映像前先設 `BUILD_SHA`**（版本標記，§0.2f；漏設不會報錯，
+      只會讓 UI 與 `/api/version` 永遠顯示「未知版本」——部署後看到「未知版本」
+      告示就是這步漏了，回來重建）：
+      ```bash
+      export BUILD_SHA="$(git rev-parse --short HEAD)$(git diff --quiet || echo -dirty)"
+      docker compose build uav-frontend
+      ```
+      **為什麼必設**：2026-08-13 部署環境事故調查時，部署的是哪個 commit
+      無法從產物讀出，版本考古只能靠 bundle 指紋。這個標記就是那次的修法。
 - [ ] `docker compose up -d`（起 db／backend／command／frontend，**不含** sitl）
 - [ ] backend 健康：`curl http://localhost:38000/healthz`
       → 預期 `{"ok":true,"mavlink_connected":false,"link_source":"modem"}`（未接機時 `false` 屬正常）
@@ -258,6 +267,8 @@ ffmpeg -rtsp_transport tcp -i rtsp://<相機IP>:554/<路徑> \
 
 ## 8. 從舊版升級（既有資料庫）
 
+- [ ] **重建前端映像時同樣要先設 `BUILD_SHA`**（見 §2 第一項；升級最容易漏，
+      因為舊映像沒有這個標記、漏了畫面也「看起來正常」）
 - [ ] **先備份再啟動新版**：`docker exec uav-db pg_dump -U uav -d uav | gzip > backup.sql.gz`
       （backend 啟動時會自動跑 schema 遷移，冪等但不可逆）
 - [ ] 023 遷移會**移除 `missions` 的 `status`／`geometry`／`drone_id`** 三個從未使用的欄位、
