@@ -229,18 +229,52 @@ MARKERS
     echo "-- 位移探針：plan3d vs interleaved 的先後 --"
     echo "   原理：兩者在 bundle 裡的 byte offset 先後反映原始碼的 addLayer 順序。"
     echo "   計畫路徑若在 deck overlay **之後**才加，就會蓋住實測軌跡與機體圖示。"
+    echo
+    echo "   取樣紀律（UI/UX 2026-08-13 要求）："
+    echo "   - **每個 chunk 都要查，且結論必須一致**；不一致＝假設破裂，輸出「不確定」"
+    echo "   - **只含其中一個標記的 chunk 是「無效樣本」，不是「未修」**"
+    echo "     （少一個標記可能只是該 chunk 沒用到，不構成任何結論）"
+    echo
     docker exec "$FE_C" sh -c '
+      both=0; plan_first=0; deck_first=0; invalid=0
       for f in .next/static/chunks/*.js; do
         a=$(grep -b -o -m1 "plan3d" "$f" 2>/dev/null | head -1 | cut -d: -f1)
         b=$(grep -b -o -m1 "interleaved" "$f" 2>/dev/null | head -1 | cut -d: -f1)
         if [ -n "$a" ] && [ -n "$b" ]; then
-          if [ "$a" -lt "$b" ]; then verdict="plan3d 在前"; else verdict="interleaved 在前"; fi
-          echo "   $f  plan3d@$a  interleaved@$b  → $verdict"
+          both=$((both+1))
+          if [ "$a" -lt "$b" ]; then
+            plan_first=$((plan_first+1)); v="plan3d 在前（＝已修）"
+          else
+            deck_first=$((deck_first+1)); v="interleaved 在前（＝未修，會蓋住）"
+          fi
+          echo "   [有效樣本] $f  plan3d@$a  interleaved@$b  → $v"
+        elif [ -n "$a" ] || [ -n "$b" ]; then
+          invalid=$((invalid+1))
+          echo "   [無效樣本] $f  只含其中一個標記 —— **不構成任何結論**"
         fi
-      done' 2>/dev/null || echo "   （無法執行位移探針）"
+      done
+      echo
+      echo "   有效樣本 $both（plan3d 在前 $plan_first／interleaved 在前 $deck_first）、無效樣本 $invalid"
+      if [ "$both" -eq 0 ]; then
+        echo "   ⇒ **無有效樣本，位移探針無結論**（不得據此說「未修」）"
+      elif [ "$plan_first" -gt 0 ] && [ "$deck_first" -gt 0 ]; then
+        echo "   ⇒ ⚠ **各 chunk 結論不一致 → 不確定**。這代表產物不是單一版本的乾淨建置"
+        echo "        （dirty tree／混合建置／手改產物）——**停止用版本推論，改直接量行為**"
+      elif [ "$plan_first" -gt 0 ]; then
+        echo "   ⇒ 位移探針：**已修**（計畫路徑在 deck overlay 之前建立）"
+      else
+        echo "   ⇒ 位移探針：**未修——任務執行中會看不到機與實測軌跡**"
+      fi' 2>/dev/null || echo "   （無法執行位移探針）"
+
+    echo "⚠ 判定表尚未補齊：前端的十列判定表＋判讀邏輯待併入。"
     echo
-    echo "⚠ 判定表尚未補齊：前端的十列判定表待併入。目前這一節提供的是"
-    echo "   原始命中與位移資料，結論由前端/設計師的判定表對照。"
+    echo "   併入時必須一併帶進去的守門（UI/UX 2026-08-13）——**沒有它，"
+    echo "   夾區間演算法在前提破裂時仍會吐出一個看似合理的區間**："
+    echo "   1. 每列字串翻成時間約束（在→≥T出現；不在→<T出現），取交集"
+    echo "   2. **交集為空 → 輸出「不對應本 repo 任何單一 commit」，不得輸出區間**"
+    echo "      並停止套用版本表，改直接量行為（產物可能是 dirty tree／分支／手改）"
+    echo "   3. 指紋落在最早一列之前 → 輸出「**早於 T0**」，不得輸出成 T0"
+    echo "   4. **字串階梯與位移探針結論衝突 → 輸出「不確定」，不是多數決**"
   } > "$FP" 2>&1
   echo "  bundle 指紋 → $(basename "$FP")"
 fi
