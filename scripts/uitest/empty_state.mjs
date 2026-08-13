@@ -18,9 +18,23 @@
  * 且內建**反向驗證**——先證明斷言在資料到不了時真的會失敗，否則整套只是在
  * 對什麼都喊 pass。
  *
+ * **證據等級（設計師 2026-08-13 要求）——十一項全綠看起來等價，證據強度不**：
+ *   [實測] 有修前/修後對照：`malformed-row`（即時頁事件流：注入 3 筆其中 1 筆
+ *          壞，修前 0 列＋「尚無事件」→ 修後 3 列）。
+ *   [讀碼] 機制由讀碼確定、只有修後綠燈：`replay-events`、`drones-list`、
+ *          `missions-list`、`field-map`。這四處是**確定性拋出**（一列非法 JSON
+ *          → 整批進 catch），沒有時序也沒有機率，讀碼即可證明；補基準線要在共用
+ *          環境上瞬間部署壞版本（前端 --reload 即部署，使用者可能正在飛），
+ *          代價與收益不成比例。
+ *   判準：**修前基準線的價值取決於機制的不確定性**——症狀是「有 vs 沒有」且
+ *   「沒有」也可能是合法狀態時（如熱區競態）必須量修前，否則無法區分「修好了」
+ *   與「本來就沒東西」；確定性拋出則不需要。
+ *   **不標的話，日後有人會把「讀碼推論」當成「實測確認」。**
+ *
  * 用法：node scripts/uitest/empty_state.mjs [--url http://localhost:33000]
  */
 import { chromium } from "playwright-core";
+import { PNG } from "pngjs";
 
 const URL_BASE = (() => {
   const i = process.argv.indexOf("--url");
@@ -104,6 +118,51 @@ async function openWithBrokenSummary(browser, path) {
   return page;
 }
 
+
+// SINR 分級色（lib/signal.ts 的 LINK_CLASSES）與「無樣本」灰
+const CLS = { good: [12, 163, 12], warning: [250, 178, 25], serious: [224, 94, 14],
+  critical: [160, 24, 24], unknown: [143, 139, 128] };
+
+/** 依分級色數地圖上的像素。抗鋸齒會混色，用容差並只數強匹配。 */
+function classPixels(buf) {
+  const png = PNG.sync.read(buf);
+  const out = { good: 0, warning: 0, serious: 0, critical: 0, unknown: 0 };
+  for (let i = 0; i < png.data.length; i += 4) {
+    const [r, g, b] = [png.data[i], png.data[i + 1], png.data[i + 2]];
+    for (const [k, c] of Object.entries(CLS)) {
+      if (Math.abs(r - c[0]) < 26 && Math.abs(g - c[1]) < 26 && Math.abs(b - c[2]) < 26) {
+        out[k]++; break;
+      }
+    }
+  }
+  return out;
+}
+
+/** 回放頁注入一條軌跡；sinrOf 回 null＝該點無樣本，key 可改欄位名（反向驗證用）。 */
+async function openReplayTrack(browser, { sinrOf, key = "sinr" }) {
+  const page = await (await browser.newContext({
+    viewport: { width: 1200, height: 800 } })).newPage();
+  const t0 = Date.now() - 60000;
+  const link = Array.from({ length: 40 }, (_, i) => ({
+    t: new Date(t0 + i * 1000).toISOString(),
+    lat: 25.0553 + i * 4e-5, lon: 121.5067 + i * 1e-5, alt_rel: 5,
+    [key]: sinrOf(i), rtt_ms: 40 }));
+  await page.route("**/api/sessions/*/track*", (r) =>
+    r.fulfill({ json: { link, telemetry: link } }));
+  await page.route("**/api/sessions/*/video*", (r) => r.fulfill({ status: 404, json: {} }));
+  await page.route("**/api/events**", (r) => r.fulfill({ json: [] }));
+  await page.routeWebSocket(/\/ws\/telemetry/, () => {});
+  await page.goto(`${URL_BASE}/replay/test-session`, { waitUntil: "networkidle", timeout: 30000 });
+  await page.waitForTimeout(2500);
+  const px = classPixels(await page.screenshot({
+    clip: { x: 0, y: 90, width: 900, height: 500 } }));
+  await page.context().close();
+  return px;
+}
+
+// 四個分級各佔一段（值挑在各級中央，不踩邊界）
+const FOUR = (i) => [20, 9, 1, -8][Math.floor(i / 10)];
+
 const CASES = [
   {
     name: "rest-history｜REST 補歷史 3 筆 → 3 列有字、無空態",
@@ -128,7 +187,7 @@ const CASES = [
     },
   },
   {
-    name: "malformed-row｜一筆 detail 非法 JSON → 其餘仍在（回歸）",
+    name: "[實測] malformed-row｜一筆 detail 非法 JSON → 其餘仍在（回歸）",
     async run(b) {
       // 2026-08-13 實測過的真實失效：JSON.parse 在 map 裡拋出 → 整批 seed 被
       // catch 吞掉 → 3 筆全消失、畫面「尚無事件」。這是最危險的那種空態
@@ -189,7 +248,7 @@ const CASES = [
     },
   },
   {
-    name: "replay-events｜回放頁一列壞 → 其餘事件標記仍在（輪詢路徑）",
+    name: "[讀碼] replay-events｜回放頁一列壞 → 其餘事件標記仍在（輪詢路徑）",
     async run(b) {
       const page = await (await b.newContext({ viewport: { width: 1400, height: 900 } })).newPage();
       const t0 = Date.now() - 60000;
@@ -218,7 +277,7 @@ const CASES = [
     },
   },
   {
-    name: "drones-list｜一筆 summary 壞 → 架次清單不消失",
+    name: "[讀碼] drones-list｜一筆 summary 壞 → 架次清單不消失",
     async run(b) {
       const p = await openWithBrokenSummary(b, "/drones");
       const n = await p.locator("tbody tr").count();
@@ -230,7 +289,7 @@ const CASES = [
     },
   },
   {
-    name: "missions-list｜一筆 summary 壞 → 架次清單不消失",
+    name: "[讀碼] missions-list｜一筆 summary 壞 → 架次清單不消失",
     async run(b) {
       const p = await openWithBrokenSummary(b, "/missions");
       const n = await p.locator("tbody tr").count();
@@ -239,7 +298,7 @@ const CASES = [
     },
   },
   {
-    name: "field-map｜一筆 summary 壞 → 場域頁不整頁白（render 期解析）",
+    name: "[讀碼] field-map｜一筆 summary 壞 → 場域頁不整頁白（render 期解析）",
     async run(b) {
       const p = await openWithBrokenSummary(b, "/compare");
       const txt = (await p.locator("body").innerText()).replace(/\s+/g, " ").trim();
@@ -248,6 +307,28 @@ const CASES = [
       return txt.length > 20 && canvas > 0
         ? { pass: true, note: `頁面有內容、canvas ${canvas}` }
         : { pass: false, note: `文字長度=${txt.length} canvas=${canvas}（白畫面）` };
+    },
+  },
+  {
+    name: "[實測] graded-track｜四個分級都畫得出來（軌跡分級色）",
+    async run(b) {
+      const px = await openReplayTrack(b, { sinrOf: FOUR });
+      const missing = ["good", "warning", "serious", "critical"].filter((k) => px[k] < 30);
+      return missing.length === 0
+        ? { pass: true, note: `良好 ${px.good}／尚可 ${px.warning}／劣化 ${px.serious}／瀕斷 ${px.critical} px` }
+        : { pass: false, note: `缺分級：${missing.join("、")}（${JSON.stringify(px)}）` };
+    },
+  },
+  {
+    name: "[實測] no-sinr-gray｜整條無 SINR 樣本 → 灰線，且不冒充任何分級",
+    async run(b) {
+      const px = await openReplayTrack(b, { sinrOf: () => null });
+      const colored = px.good + px.warning + px.serious + px.critical;
+      // 灰線要真的畫出來（軌跡本身不能消失），且一格分級色都不准出現——
+      // 「沒量到訊號」不得被畫成任何一個分級（不造假）
+      return px.unknown > 30 && colored === 0
+        ? { pass: true, note: `灰線 ${px.unknown} px、分級色 0` }
+        : { pass: false, note: `灰=${px.unknown} 分級色=${colored}` };
     },
   },
 ];
@@ -263,6 +344,19 @@ async function discrimination(b) {
     : `後端 500 → 列=${r.rows}、畫面${r.empty ? "顯示「尚無事件」" : "無空態"}，斷言確實失敗` };
 }
 
+/** 第二個鑑別力自檢——這一項同時是本套的**主題實例**：
+ * 把注入資料的欄位名從 sinr 改成 snr（＝上游改欄位、我方沒跟上），畫面會變成
+ * **整條灰線**——與「這趟真的沒量到訊號」在畫面上完全同形。使用者只會以為
+ * 沒量到，不會懷疑對映壞了。所以分級色的斷言必須在這個情境下失敗；
+ * 若仍量到分級色，代表那些顏色不是來自注入資料，整套沒有鑑別力。 */
+async function discriminationGraded(b) {
+  const px = await openReplayTrack(b, { sinrOf: FOUR, key: "snr" });
+  const colored = px.good + px.warning + px.serious + px.critical;
+  return { pass: colored === 0, note: colored === 0
+    ? `欄位名 sinr→snr 時整條變灰（${px.unknown} px）、分級色 0，斷言確實失敗`
+    : `欄位名改掉仍量到 ${colored} 分級色＝顏色不是來自注入資料` };
+}
+
 const b = await chromium.launch({ executablePath: EXE,
   args: ["--use-gl=swiftshader", "--enable-unsafe-swiftshader"] }).catch((e) => {
     console.error(`skip：無法啟動瀏覽器（${e.message.split("\n")[0]}）`);
@@ -271,9 +365,11 @@ const b = await chromium.launch({ executablePath: EXE,
   });
 
 let failed = 0;
-const d = await discrimination(b);
-console.log(`${d.pass ? "✓" : "✗"} 鑑別力自檢｜${d.note}`);
-if (!d.pass) failed++;
+for (const [label, fn] of [["取得失敗", discrimination], ["欄位對映失敗", discriminationGraded]]) {
+  const d = await fn(b);
+  console.log(`${d.pass ? "✓" : "✗"} 鑑別力自檢（${label}）｜${d.note}`);
+  if (!d.pass) failed++;
+}
 for (const c of CASES) {
   let r;
   try { r = await c.run(b); } catch (e) { r = { pass: false, note: `例外：${e.message.slice(0, 90)}` }; }
