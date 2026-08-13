@@ -27,7 +27,20 @@ sed -i "/mavlink start -x -u \$udp_gcs_port_local/a mavlink stream -r 20 -s HIGH
 FLEET="$src/Tools/simulation/gazebo-classic/sitl_multiple_run.sh"
 sed -i 's#spawn_model ${vehicle_model} $(($n + 1))#spawn_model ${vehicle_model} $n#' "$FLEET"
 
-# 3. 顯示（gz model spawn 要 X）＋起機（從原位置跑，src_path 才對）
+# 3. **不起 gzclient**（Gazebo 的 GUI 檢視器）。兩個理由，第二個是血的教訓：
+#
+#    (a) headless 環境裡沒有人看得到它，純浪費——實測它吃 **2.5 顆核心**，
+#        累計 CPU 時間是真正在算物理的 gzserver 的 **20 倍**
+#        （gzclient 3d17h vs gzserver 4h24m，同一段執行期間）。
+#    (b) **它是 sitl_multiple_run.sh 的最後一行、也就是前景行程**——gzserver 與
+#        各 px4 都在背景（&），只有它撐著腳本不結束。所以「檢視器與模擬解耦、
+#        殺了也沒關係」是錯的：2026-08-12 實測 `kill gzclient` 直接讓整個機隊
+#        容器 Exited(143)，四台全掉線。
+#
+#    改法是不起它，並用 wait 等背景的 gzserver／px4——容器由它們撐著。
+sed -i 's/^gzclient$/wait/' "$FLEET"
+
+# 4. 顯示（gz model spawn 仍要 X，即使不開檢視器）＋起機（從原位置跑，src_path 才對）
 Xvfb :99 -screen 0 1600x1200x24 >/dev/null 2>&1 &
 export DISPLAY=:99
 cd "$src"

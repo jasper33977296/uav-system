@@ -92,6 +92,26 @@ WIP（今日教訓：WIP 殘留＝別人的靈異事件）。pivot 方向與實�
 4. **環境跑通後**：收 013-B 剩兩項時序（起飛 skew 實測、群組 RTL 高度錯開）→ 013 全案收官
    → swarm_sim 退役（011 close）。
 
+## ⚠️ 不要起 gzclient，也不要以為可以隨手殺掉它（2026-08-12 實測）
+
+`sim-fleet-run.sh` 會把 PX4 的 `sitl_multiple_run.sh` 最後一行 `gzclient` 換成
+`wait`。**兩個理由，第二個是踩出來的：**
+
+**(a) 它吃 2.5 顆核心，而且沒人看得到。** 實測同一段執行期間，gzclient 累計
+CPU 時間 **3 天 17 小時**，真正在算物理的 gzserver 只有 **4 小時 24 分**——
+檢視器吃掉物理引擎的 **20 倍**。headless 環境裡它畫的東西沒有任何人看。
+拿掉之後主機 load average 從 6.43 掉到 2.44（8 核）。
+
+**(b)「檢視器與模擬解耦，殺了也沒關係」是錯的。** 在 `sitl_multiple_run.sh` 裡，
+gzserver 與各 px4 都在背景（`&`），**只有 gzclient 是前景**——它就是撐著整個
+腳本不結束的那個行程。2026-08-12 直接 `kill gzclient` 的結果是容器
+**`Exited(143)`、四台全數掉線**，不是省下 CPU 而已。
+
+> **通則：在容器裡殺行程之前，先確認它是不是撐著 PID 1 的那個。**
+> `docker exec ps -eo pid,ppid,comm` 看得出來；前景行程死了，容器就跟著走。
+
+正確做法就是一開始不要起它（本 repo 已內建），而不是事後殺。
+
 ## Bring-up 注意
 
 - **disruptive**：會停現行單台 uav-sitl（backend/command 短暫失去 sysid 1）。無人在飛時做。
