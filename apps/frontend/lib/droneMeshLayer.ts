@@ -56,12 +56,21 @@ export function droneMeshLayers(
     getPosition: (d) => [d.lon!, d.lat!, d.alt_rel ?? 0],
     getColor: (d) => colorOf(d.id),
     sizeScale: scale,
+    // 高環境光、低漫射（約束 b：識別色必須維持可辨）：deck 預設光照會把
+    // 面色壓暗成深藍/深綠——實測俯視時識別色幾乎認不出來。環境光拉到
+    // 0.8 讓各面都保持接近原色，仍留一點漫射差異表達立體感
+    material: { ambient: 0.8, diffuse: 0.35, shininess: 16,
+      specularColor: [30, 30, 30] as [number, number, number] },
     opacity: t,                       // 與 2D 圖示互補淡出（呼叫端用 1-t）
     // 約束 (d)：mesh 有深度，與同在 3D 空間的軌跡絲帶會互相穿插——
     // depthCompare:"always"＝不做深度比較（luma.gl v9 的寫法，舊 depthTest
     // 已移除），配合排在軌跡之後，機體必定可見。
     // 「找不到機在哪＝監控失效」，任何美觀考量都不得凌駕
-    parameters: { depthCompare: "always" as const },
+    // depthWriteEnabled:false 同樣關鍵——只關比較不關寫入的話，mesh 仍會
+    // 寫進深度緩衝，**把之後才畫的文字標籤擋掉**（實測：傾斜視角下標籤
+    // 整個消失，俯視時因為標籤落在 mesh 投影範圍外才看得到）。
+    // 機體不得遮蔽標籤：標籤是唯一的識別依據（§0.1）
+    parameters: { depthCompare: "always" as const, depthWriteEnabled: false },
     updateTriggers: {
       getPosition: data.map((d) => d.id).join(","),
       getColor: data.map((d) => d.id).join(","),

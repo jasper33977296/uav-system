@@ -14,6 +14,8 @@ import VideoPlayer from "@/components/VideoPlayer";
 import { useBasemap } from "@/lib/basemap";
 import { pathsLayer, rgba, routeLayer, type RouteRun } from "@/lib/deckRoute";
 import { DRONE_ICON_SIZE, droneIconUrl } from "@/lib/droneIcon";
+import { lodFactor } from "@/lib/droneMesh";
+import { droneMeshLayers } from "@/lib/droneMeshLayer";
 import { basePreview, separatePreview, unifiedPreview, type Wp } from "@/lib/formation";
 import { CANVAS, groundGrid, ribbon, trailLineString } from "@/lib/geo";
 import { API, LINK_CLASSES } from "@/lib/signal";
@@ -39,6 +41,7 @@ export default function MapView() {
   useEffect(() => { refreshPlanRef.current(); }, [planReq]);
   const ribbonGateRef = useRef({ t: 0, n: -1 });   // 地面投影重建節流
   const pitchRef = useRef(55);   // 機體圖示的俯角尺寸補償用（見 IconLayer）
+  const zoomRef = useRef(15);    // §2.4d LOD 換手與標籤同位判定用
 
   // simple-first：專業面板抽屜；任務控制面板恆顯（自收合，ui-spec §2）
   const panelOpen = useUavStore((s) => s.panelOpen);
@@ -196,6 +199,11 @@ export default function MapView() {
     map.addControl(new maplibregl.AttributionControl({ compact: true }), "bottom-right");
     map.addControl(new maplibregl.ScaleControl({ maxWidth: 120, unit: "metric" }), "bottom-right");
     mapRef.current = map;
+    // 測試把手（**僅開發模式**）：§2.4d 驗收要求俯角×縮放的像素量測，
+    // headless 需精確設定視角；production build 不掛、不改產品行為
+    if (process.env.NODE_ENV !== "production") {
+      (window as unknown as { __map?: maplibregl.Map }).__map = map;
+    }
 
     map.on("load", async () => {
       base.install(map);
@@ -286,6 +294,13 @@ export default function MapView() {
       // 實際路徑：deck.gl PathLayer（route-render-tool-eval 定案，取代
       // fill-extrusion 絲帶）——interleaved 模式與 maplibre 同一 GL context，
       // 與 three.js 球體自訂層共存（interop 是選型條件 3，落地後實測）
+      // 視角追蹤：LOD 換手與標籤偏移都要當下的俯角/縮放（圖層在遙測
+      // 更新時重建，這裡只更新讀數）
+      pitchRef.current = map.getPitch();
+      zoomRef.current = map.getZoom();
+      map.on("pitch", () => { pitchRef.current = map.getPitch(); });
+      map.on("zoom", () => { zoomRef.current = map.getZoom(); });
+
       const overlay = new MapboxOverlay({ interleaved: true, layers: [] });
       map.addControl(overlay as unknown as maplibregl.IControl);
       overlayRef.current = overlay;
@@ -372,6 +387,12 @@ export default function MapView() {
         overlayRef.current?.setProps({ layers: [
           ...routeLayer("route3d", s.trails),
           ...pathsLayer("formation-preview", previewRef.current),
+          // §2.4d 3D 機體：近距真 mesh（有實體高度）、遠距交回 2D 圖示，
+          // 門檻區間交叉淡出；五條硬約束的實作見 lib/droneMeshLayer
+          ...droneMeshLayers(
+            Object.entries(s.fleet).map(([id, t]) => ({
+              id, lat: t.lat, lon: t.lon, alt_rel: t.alt_rel })),
+            zoomRef.current, (id) => rgba(colorFor(id))),
           // 機體圖示：2D 四旋翼俯視剪影、著識別色、**對稱不旋轉**
           // （§2.4c 使用者裁定：方向由軌跡承載）。billboard:false＝貼地平面，
           // 傾斜視角下與軌跡同一透視。
@@ -380,6 +401,8 @@ export default function MapView() {
           // 任何美觀考量都不得凌駕
           new IconLayer({
             id: "drone-icons",
+            // 與 3D mesh 互補淡出（共用 lodFactor，門檻只有一份不漂移）
+            opacity: 1 - lodFactor(zoomRef.current),
             data: Object.entries(s.fleet)
               .filter(([, t]) => t.lat != null && t.lon != null)
               .map(([id, t]) => ({
@@ -418,20 +441,28 @@ export default function MapView() {
           // 且球體連 hover 都沒有。文字對任意機數都成立。
           new TextLayer({
             id: "drone-labels",
-            // 同位堆疊：機隊停在同一起飛點時（實測三台相距 3–6 m）標籤會
-            // 疊成無法閱讀的一團——近距者依序往上錯開，各自仍帶機色
+            // 同位判定改**螢幕距離**：原本用固定 20m，但 20m 在高縮放下是
+            // 上百像素、根本不會疊，卻仍被堆疊而把標籤推遠。真正該問的是
+            // 「在畫面上會不會疊到」
             data: (() => {
-              const near = 20;   // m：視為「同一位置」的門檻
               const list = Object.entries(s.fleet)
                 .filter(([, t]) => t.lat != null && t.lon != null)
                 .sort(([a], [b]) => (a < b ? -1 : 1));   // 順序穩定不跳動
+              const mpp = (156543.03392 * Math.cos(((list[0]?.[1].lat ?? 25)
+                * Math.PI) / 180)) / Math.pow(2, zoomRef.current);
+              const NEAR_PX = 30;   // 兩標籤在畫面上會互相疊到的距離
               return list.map(([id, t], i) => ({
                 id, name: t.drone_name || id.slice(0, 6),
-                pos: [t.lon!, t.lat!, (t.alt_rel ?? 0) + 6] as [number, number, number],
+                // **與機體同一個 3D 位置**：原本寫 alt_rel + 6，那個 6 是
+                // **公尺**（球體時代遺留）——標籤浮在機體上方 6 公尺，高度差
+                // 在俯視投影為零、平視放到最大，正是使用者說的「俯視很近、
+                // 平視很遠」。垂直距離一律交給 getPixelOffset（螢幕像素）
+                pos: [t.lon!, t.lat!, t.alt_rel ?? 0] as [number, number, number],
                 color: rgba(colorFor(id)),
-                level: list.slice(0, i).filter(([, o]) =>
+                slot: list.slice(0, i).filter(([, o]) =>
                   Math.hypot((o.lat! - t.lat!) * 110574,
-                    (o.lon! - t.lon!) * 111320 * Math.cos(t.lat! * Math.PI / 180)) < near
+                    (o.lon! - t.lon!) * 111320 * Math.cos(t.lat! * Math.PI / 180))
+                    / mpp < NEAR_PX
                 ).length,
               }));
             })(),
@@ -439,15 +470,36 @@ export default function MapView() {
             getText: (d: { name: string }) => d.name,
             getColor: (d: { color: [number, number, number, number] }) => d.color,
             getSize: 13,
-            // §2.4c：貼近圖示（6px）、水平置中；同位者仍往上錯開
             getTextAnchor: "middle" as const,
-            getAlignmentBaseline: "bottom" as const,
-            getPixelOffset: (d: { level: number }) => [0, -6 - d.level * 13],
+            // 同位者上下交錯（偶數在上、奇數在下）：四機同位時原本最上面
+            // 那個離機體 45px（使用者說「太遠」的真身），交錯後減半
+            getAlignmentBaseline: (d: { slot: number }) =>
+              (d.slot % 2 === 0 ? "bottom" : "top") as "bottom" | "top",
+            getPixelOffset: (d: { slot: number }) => {
+              // 讓開**當下實際畫出來的本體**：遠距是 2D 圖示（貼地、螢幕
+              // 高度隨俯角壓縮），近距是 3D mesh（較高）——取兩者較大者，
+              // 各俯角的視覺縫才一致
+              const rad = (pitchRef.current * Math.PI) / 180;
+              const iconScale = Math.min(2.2, Math.pow(
+                Math.max(0.2, Math.cos(rad)), -0.75));
+              const iconHalf = Math.max(10, 22 * iconScale * Math.cos(rad));
+              const lod = lodFactor(zoomRef.current);
+              const meshHalf = 34 * (0.35 + 0.65 * Math.cos(rad)) * lod;
+              const rank = Math.floor(d.slot / 2);
+              const dist = Math.max(iconHalf, meshHalf) + 4 + rank * 12;
+              return [0, d.slot % 2 === 0 ? -dist : dist];
+            },
             outlineWidth: 2.5,
             outlineColor: [27, 26, 23, 255],   // 暖畫布底色描邊，任何背景可讀
             fontSettings: { sdf: true },
-            updateTriggers: { getPosition: fleetIds, getText: fleetIds,
-              getPixelOffset: fleetIds },
+            // ⚠ getPixelOffset 依賴**俯角與縮放**（外部狀態），不列進
+            // updateTriggers 的話 deck 會沿用第一次算出的值、改視角不重算
+            updateTriggers: {
+              getPosition: fleetIds, getText: fleetIds,
+              getAlignmentBaseline: fleetIds,
+              getPixelOffset: `${fleetIds}|${Math.round(pitchRef.current)}`
+                + `|${zoomRef.current.toFixed(1)}`,
+            },
           }),
         ] });
 
