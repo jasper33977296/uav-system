@@ -19,6 +19,7 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import CompareTabs from "@/components/CompareTabs";
 import { pathsLayer, sinrRuns, rgba, type RouteRun } from "@/lib/deckRoute";
 import { CANVAS, groundGrid } from "@/lib/geo";
+import { parseJsonb } from "@/lib/jsonb";
 import { API, CLIENT_HEADERS, LINK_CLASSES } from "@/lib/signal";
 import { firstFleetPos } from "@/lib/store";
 import { aggregateCells, weakZones, type TrackRow, type WeakZone } from "@/lib/signalMap";
@@ -36,11 +37,12 @@ interface SessRow {
 // min_samples 參數上線後改伺服器端篩，此為同義客端實作）
 const MIN_SAMPLES = 10;
 const LIST_LIMIT = 5000;
+// 這個在 render 期呼叫（不在 promise 鏈裡）——原本 JSON.parse 直接拋會讓
+// **整頁白畫面**。解析不出來當 0 樣本：該列因此落進畫面上已有的「skipped」
+// 計數，是看得見的排除，不是無聲消失（見 lib/jsonb.ts）
 const samplesOf = (s: SessRow): number => {
-  const sm = typeof s.summary === "string"
-    ? (JSON.parse(s.summary) as { samples_total?: number })
-    : s.summary;
-  return sm?.samples_total ?? 0;
+  const v = parseJsonb(s.summary);
+  return v.ok ? ((v.value as { samples_total?: number } | null)?.samples_total ?? 0) : 0;
 };
 
 const RANGES = [

@@ -12,6 +12,12 @@ export function evText(
   opts: { mixed?: boolean } = {},
 ): string {
   const d = e.detail as Record<string, number | string | boolean | undefined>;
+  // detail 解析失敗（lib/jsonb.ts）：顯示狀態句，**不顯示壞掉的原文**——
+  // 半截 JSON 放在內容欄位會看起來像內容，使用者會試圖從亂碼推測發生了
+  // 什麼。原文留在 detail.raw，modal 的鍵值表看得到。
+  // severity 不在這裡處理也不受影響：它是獨立欄位，**critical 事件即使
+  // detail 壞掉紅點照樣要紅**——讀不懂內容不等於事件變不嚴重
+  if (d.parse_failed === true) return "無法解讀的訊息";
   const sinr = typeof d.sinr === "number" ? `SINR ${d.sinr.toFixed(1)} dB` : "";
   switch (e.type) {
     // PX4 Events 協定（Phase A.2 0296db5）：metadata 文字解析落地前顯示

@@ -15,6 +15,7 @@ import { routeLayer } from "@/lib/deckRoute";
 import { useBasemap } from "@/lib/basemap";
 import { DRONE_ICON_SIZE, droneIconUrl } from "@/lib/droneIcon";
 import { evText } from "@/lib/evtext";
+import { eventDetail } from "@/lib/jsonb";
 import { CANVAS, groundGrid, pathArrows, ribbon, trailLineString } from "@/lib/geo";
 import { API, classifySinr } from "@/lib/signal";
 import { useUavStore } from "@/lib/store";
@@ -157,10 +158,11 @@ export default function Replay() {
     }, 5000);
     fetch(`${API}/api/events?session_id=${sessionId}`)
       .then((r) => r.json())
-      // REST 的 detail 是 JSONB 字串——解析成物件（modal 細節層要用）
+      // REST 的 detail 是 JSONB 字串——解析成物件（modal 細節層要用）。
+      // 逐列解析：一列壞掉不得吃掉整批（見 lib/jsonb.ts）。這裡是輪詢，
+      // 整批被吞掉的話會**永遠**顯示「尚無事件」，比即時頁更難察覺
       .then((rows) => setEvents(rows.map((e: any) => ({
-        ...e,
-        detail: typeof e.detail === "string" ? JSON.parse(e.detail) : e.detail ?? {},
+        ...e, detail: eventDetail(e.detail),
       }))))
       .catch(() => {});
     return () => clearInterval(poll);

@@ -118,7 +118,8 @@ export function EventsCard() {
                 background: e.severity === "critical" ? "#a01818"
                   : e.severity === "warning" ? "#fab219" : "#8f8b80" }} />
               <time>{evTime(e.time)}</time>
-              <span className="detail">{evText(e, { mixed })}</span>
+              <span className={`detail${e.detail?.parse_failed
+                ? " ev-unreadable" : ""}`}>{evText(e, { mixed })}</span>
               {/* mismatch 一律逐事件標（本來就有區辨力）；unknown 只在混合態
                   逐事件標，形狀與顏色都與 mismatch 分開（? 不是 ⚠、次要色
                   不是警告色）——未確認不是異常 */}

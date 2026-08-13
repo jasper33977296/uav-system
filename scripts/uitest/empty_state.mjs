@@ -43,13 +43,14 @@ async function openHud(browser, { rest = [], restStatus = 200, wsEvents = [] }) 
   await page.route("**/api/events**", (r) => (restStatus === 200
     ? r.fulfill({ json: rest })
     : r.fulfill({ status: restStatus, json: { detail: "boom" } })));
-  if (wsEvents.length) {
+  // **一律攔 WS**（即使不注入）：真後端正在跑，它推的即時事件會混進斷言——
+  // 實測注入 3 筆卻量到 5 筆。測試必須自己決定畫面上有什麼，否則量到的是
+  // 「我的注入＋當下環境」，換個時間就換個結果
+  await page.routeWebSocket(/\/ws\/telemetry/, (ws) => {
     // WS 路徑要單獨測：REST 補歷史會遮住它的失效（兩條路都能填同一個清單，
     // 只測合併結果的話，WS 壞掉時畫面照樣有內容）
-    await page.routeWebSocket(/\/ws\/telemetry/, (ws) => {
-      for (const e of wsEvents) ws.send(JSON.stringify({ type: "event", event: e }));
-    });
-  }
+    for (const e of wsEvents) ws.send(JSON.stringify({ type: "event", event: e }));
+  });
   await page.goto(`${URL_BASE}/`, { waitUntil: "networkidle", timeout: 30000 });
   const drawer = page.locator('button:has-text("▤")').first();
   if (await drawer.count()) await drawer.click();
@@ -65,6 +66,42 @@ async function readCard(page) {
       .map((t) => t.trim()).filter(Boolean),
     empty: await page.locator(".events .empty").count(),
   };
+}
+
+
+/** 架次清單頁共用：一筆 summary 是壞 JSON，其餘正常。 */
+const DRONE_ID = "11111111-2222-3333-4444-555555555555";
+const MISSION_ID = "99999999-8888-7777-6666-555555555555";
+
+async function openWithBrokenSummary(browser, path) {
+  const page = await (await browser.newContext({
+    viewport: { width: 1400, height: 900 } })).newPage();
+  // 機隊頁的架次表住在「該機」的展開區裡：注入的 drone_id 必須對得上畫面上
+  // 那台機，否則量到的是別台機的空表（受測物不是我以為的那個）
+  await page.route("**/api/drones**", (r) => (r.request().method() === "GET"
+    ? r.fulfill({ json: [{ id: DRONE_ID, name: "測試機", model: null,
+        serial_no: "t-1", is_simulated: true, connection_url: "udpin://0.0.0.0:1",
+        status: "idle", created_at: new Date().toISOString(), is_primary: true }] })
+    : r.continue()));
+  // 任務頁的架次表按 mission_id 過濾，同理必須掛在畫面上那條路徑底下
+  await page.route("**/api/missions**", (r) => (r.request().method() === "GET"
+    ? r.fulfill({ json: [{ id: MISSION_ID, name: "測試路徑", is_active: false,
+        waypoints: [], created_at: new Date().toISOString() }] })
+    : r.continue()));
+  const good = (id, n) => ({ id, drone_id: DRONE_ID, started_at: new Date().toISOString(),
+    ended_at: new Date().toISOString(), mission_id: MISSION_ID,
+    summary: JSON.stringify({ samples_total: n, avg_sinr: 10, min_sinr: 5, avg_rtt_ms: 40,
+      max_alt_rel: 12 }) });
+  await page.route("**/api/sessions**", (r) => (/\/track|\/video/.test(r.request().url())
+    ? r.fulfill({ json: { link: [] } })
+    : r.fulfill({ json: [good("s-1", 100), { ...good("s-2", 100), summary: "{壞掉的" },
+                        good("s-3", 100)] })));
+  await page.goto(`${URL_BASE}${path}`, { waitUntil: "networkidle", timeout: 30000 });
+  await page.waitForTimeout(1000);
+  // 兩頁的架次表都在收合區內，先展開才量得到（抽屜關著時 DOM 在但看不到）
+  const row = page.locator(".member, .mcard").first();
+  if (await row.count()) { await row.click(); await page.waitForTimeout(700); }
+  return page;
 }
 
 const CASES = [
@@ -131,6 +168,86 @@ const CASES = [
       return out.bad
         ? { pass: false, note: JSON.stringify(out) }
         : { pass: true, note: Object.entries(out).map(([k, v]) => `${k} ${v}`).join("、") };
+    },
+  },
+  {
+    name: "unreadable-row｜壞列顯示狀態句、severity 不降級、不加符號",
+    async run(b) {
+      const p = await openHud(b, { rest: [
+        { ...ev(1, "{壞掉的"), severity: "critical" }, ev(2, OK(2))] });
+      const txt = (await p.locator(".event .detail").allInnerTexts()).map((t) => t.trim());
+      const crit = await p.locator(".event.ev-crit").count();      // 紅列＝severity 保住
+      const muted = await p.locator(".event .detail.ev-unreadable").count();
+      const symbols = await p.locator(".event .ev-mismatch, .event .ev-unknown").count();
+      const rawLeak = txt.some((t) => t.includes("壞掉的"));
+      await p.context().close();
+      const ok = txt.includes("無法解讀的訊息") && crit === 1 && muted === 1
+        && symbols === 0 && !rawLeak;
+      return { pass: ok, note: ok
+        ? "狀態句＋次要色、critical 仍為紅列、無符號、原文不外洩"
+        : `文字=${JSON.stringify(txt)} 紅列=${crit} 次要色=${muted} 符號=${symbols} 原文外洩=${rawLeak}` };
+    },
+  },
+  {
+    name: "replay-events｜回放頁一列壞 → 其餘事件標記仍在（輪詢路徑）",
+    async run(b) {
+      const page = await (await b.newContext({ viewport: { width: 1400, height: 900 } })).newPage();
+      const t0 = Date.now() - 60000;
+      const link = Array.from({ length: 20 }, (_, i) => ({
+        t: new Date(t0 + i * 1000).toISOString(), lat: 25.0553 + i * 1e-5, lon: 121.5067,
+        alt_rel: i, sinr: 10 - i * 0.2, rtt_ms: 40 }));
+      await page.route("**/api/sessions/*/track*", (r) =>
+        r.fulfill({ json: { link, telemetry: link } }));
+      await page.route("**/api/sessions/*/video*", (r) => r.fulfill({ status: 404, json: {} }));
+      await page.route("**/api/events**", (r) => r.fulfill({ json: [
+        { ...ev(1, OK(1)), time: new Date(t0 + 5000).toISOString() },
+        { ...ev(2, "{壞掉的"), time: new Date(t0 + 10000).toISOString() },
+        { ...ev(3, OK(3)), time: new Date(t0 + 15000).toISOString() }] }));
+      await page.goto(`${URL_BASE}/replay/test-session`, { waitUntil: "networkidle", timeout: 30000 });
+      await page.waitForTimeout(1500);
+      // 事件標記住在「〓 圖表」抽屜裡：抽屜關著時 DOM 在但看不到，
+      // 先開抽屜才是量到真的（2026-08-13 踩過一次）
+      const sum = page.locator('summary:has-text("圖表")').first();
+      if (await sum.count() && !(await page.locator("details.replay-drawer[open]").count()))
+        await sum.click();
+      await page.waitForTimeout(600);
+      const n = await page.locator("details.replay-drawer polygon").count();
+      await page.context().close();
+      return n === 3 ? { pass: true, note: "3 個事件標記" }
+        : { pass: false, note: `事件標記=${n}（應為 3）` };
+    },
+  },
+  {
+    name: "drones-list｜一筆 summary 壞 → 架次清單不消失",
+    async run(b) {
+      const p = await openWithBrokenSummary(b, "/drones");
+      const n = await p.locator("tbody tr").count();
+      await p.context().close();
+      // 恰好 3：整批消失（0）與「壞列被靜默丟掉」（2）都要抓得到——
+      // 後者是同一種病的縮小版，一樣是無聲的資料損失
+      return n === 3 ? { pass: true, note: `${n} 列` }
+        : { pass: false, note: `列=${n}（3 筆架次應全在，壞的那筆數值顯示「—」）` };
+    },
+  },
+  {
+    name: "missions-list｜一筆 summary 壞 → 架次清單不消失",
+    async run(b) {
+      const p = await openWithBrokenSummary(b, "/missions");
+      const n = await p.locator("tbody tr").count();
+      await p.context().close();
+      return n === 3 ? { pass: true, note: `${n} 列` } : { pass: false, note: `列=${n}` };
+    },
+  },
+  {
+    name: "field-map｜一筆 summary 壞 → 場域頁不整頁白（render 期解析）",
+    async run(b) {
+      const p = await openWithBrokenSummary(b, "/compare");
+      const txt = (await p.locator("body").innerText()).replace(/\s+/g, " ").trim();
+      const canvas = await p.locator("canvas").count();
+      await p.context().close();
+      return txt.length > 20 && canvas > 0
+        ? { pass: true, note: `頁面有內容、canvas ${canvas}` }
+        : { pass: false, note: `文字長度=${txt.length} canvas=${canvas}（白畫面）` };
     },
   },
 ];

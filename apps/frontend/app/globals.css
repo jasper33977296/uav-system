@@ -1101,3 +1101,7 @@ details.card summary { cursor: pointer; font-size: 14px; font-weight: 600; }
   border-radius: 6px; padding: 6px 10px; font-size: 12.5px;
 }
 .evm-dictnote { color: var(--muted); font-size: 12px; padding: 0 2px; }
+
+/* detail 解析失敗：狀態句用次要文字色——那句話本身就是標記，**不加
+   ?／⚠ 符號**（那兩個記號已被字典版本旗標佔用，不同的缺口不得共用記號） */
+.ev-unreadable { color: var(--muted); }

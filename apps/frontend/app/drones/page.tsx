@@ -4,6 +4,7 @@ import { useCallback, useEffect, useState } from "react";
 
 import ConfirmModal from "@/components/ConfirmModal";
 import { Battery, SignalBars } from "@/components/SimpleHud";
+import { parseJsonb } from "@/lib/jsonb";
 import { API } from "@/lib/signal";
 import { useUavStore } from "@/lib/store";
 
@@ -79,11 +80,12 @@ export default function Drones() {
       .then((r) => r.json())
       .then((rows) =>
         setSessions(
-          rows.map((r: any) => ({
-            ...r,
-            // REST 的 JSONB 是字串（asyncpg 預設），統一 parse
-            summary: typeof r.summary === "string" ? JSON.parse(r.summary) : r.summary,
-          }))
+          // 逐列解析：一筆 summary 壞掉不得讓整份架次清單消失
+          // （見 lib/jsonb.ts）。壞掉那筆的數值欄位顯示「—」，列還在
+          rows.map((r: any) => {
+            const v = parseJsonb(r.summary);
+            return { ...r, summary: v.ok ? v.value : null };
+          })
         )
       )
       .catch(() => {});

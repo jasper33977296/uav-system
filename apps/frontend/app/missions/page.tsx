@@ -4,6 +4,7 @@ import { useCallback, useEffect, useRef, useState } from "react";
 
 import { colorFor } from "@/components/droneLayer";
 import MissionThumb3D from "@/components/MissionThumb3D";
+import { parseJsonb } from "@/lib/jsonb";
 import { API } from "@/lib/signal";
 
 interface Mission {
@@ -80,9 +81,11 @@ export default function Missions() {
     fetch(`${API}/api/missions`).then((r) => r.json()).then(setMissions).catch(() => {});
     fetch(`${API}/api/sessions?limit=200`)
       .then((r) => r.json())
-      .then((rows) => setSessions(rows.map((r: any) => ({
-        ...r, summary: typeof r.summary === "string" ? JSON.parse(r.summary) : r.summary,
-      }))))
+      // 逐列解析：一筆 summary 壞掉不得讓整份架次清單消失（見 lib/jsonb.ts）
+      .then((rows) => setSessions(rows.map((r: any) => {
+        const v = parseJsonb(r.summary);
+        return { ...r, summary: v.ok ? v.value : null };
+      })))
       .catch(() => {});
   }, []);
   useEffect(reload, [reload]);

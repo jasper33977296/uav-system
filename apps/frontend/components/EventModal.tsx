@@ -85,7 +85,8 @@ export default function EventModal({ ev, onClose, mixed = false }: {
       <div className="evm card" role="dialog" aria-modal="true"
         aria-label="事件詳情" onClick={(e) => e.stopPropagation()}>
         <div className="evm-head">
-          <span className="evm-title">{evText(ev as Parameters<typeof evText>[0], { mixed })}</span>
+          <span className={`evm-title${d.parse_failed ? " ev-unreadable" : ""}`}>
+            {evText(ev as Parameters<typeof evText>[0], { mixed })}</span>
           <span className="chip">
             <span className="dot" style={{ background: sev.color }} />{sev.label}
           </span>
