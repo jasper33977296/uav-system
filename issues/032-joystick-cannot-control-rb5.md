@@ -30,6 +30,34 @@
 在 SITL 重現「RB5 等效設定」下逐項排除；產出「真機到場後 10 分鐘可驗完」
 的現場檢查步驟（含每步預期結果），併入 deploy-checklist。
 
+## 進度（2026-08-13）
+
+**spec 對照分析完成**：`doc/032-rb5-manual-control-analysis.md`。
+
+**主嫌：`COM_RC_IN_MODE`**，但不是 issue 原本假設的「值為 0」——PX4 1.14.3 的
+**出廠預設是 3 =「RC or Joystick keep first」**（先到的來源勝出，另一個之後
+一律忽略）。而 RB5 的官方設定流程**要求綁定並校正實體 Spektrum 遙控器**、
+飛行模式與馬達切斷都掛在 RC 通道。遙控器若先上線，我方 MANUAL_CONTROL 就被
+靜默忽略——**與症狀完全吻合**（不回錯誤、不進日誌、就是不動）。
+
+**為什麼 SITL 驗過卻不能轉移**：本專案 SITL 的 `COM_RC_IN_MODE = 1`
+（Joystick only）且環境裡沒有實體 RC，所以我方指令必然是唯一來源、必然生效。
+030 的實飛驗證證明的是「我方送法對」，不是「這機制在有 RC 的機上會生效」。
+
+**候選 3（sysid 254）可排除**：MAVLink 規格的 MANUAL_CONTROL 沒有來源身分欄位，
+PX4 全部參數裡也沒有以 GCS sysid 為條件的手動控制閘門。「只信 SYSID_MYGCS」
+是 ArduPilot 行為（015 實測），套到 PX4 是跨廠牌誤植。
+
+**尚缺**：ModalAI `voxl-mavlink-server` 轉發規則文件、voxl-px4 的參數預設檔
+（候選 2 完全依賴這兩份）。
+
+**待做**：SITL 重現（把 `COM_RC_IN_MODE` 改 0 或 3 後跑 manual_stick 測項，
+確認搖桿失效）——需要飛一趟。
+
+**產品面建議已寫進分析文件**：把 `COM_RC_IN_MODE` 做成執行期前提檢查（同
+ArduPilot `SYSID_MYGCS` 的機制）。值為 3 時**不得顯示成可用**——那是我們事前
+查不出來的執行期事實，誠實的標記是 `unverified`。
+
 ## 解決方式
 
 （closed 時補）
