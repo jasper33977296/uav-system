@@ -64,6 +64,7 @@ services:
       # 共用驅動層也掛進來：不掛的話 --reload 看不到 libs/ 的改動，開發時會
       # 出現「改了沒反應」，而映像裡那份是舊的（issue 026 B2）
       - ./libs:/srv/libs:ro
+      - ./reference/px4-events:/srv/reference/px4-events:ro   # PX4 事件字典（014）
       - mavcap:/data/mavcap          # 原始層錄製（MAVLink tlog，滾動 30 天）
       - videorec:/rec:ro             # 影像（022）：掃描錄影目錄入庫；唯讀＝寫入是 uav-video 的職責
     environment:

@@ -26,6 +26,9 @@ doc
 issues
 progress
 reference
+# **例外**：PX4 事件字典是 backend 的執行期資料，不是研究素材——
+# 沒有它機上事件只能顯示 raw id（issue 014）。
+!reference/px4-events
 
 # 開發雜物
 **/__pycache__

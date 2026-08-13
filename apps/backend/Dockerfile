@@ -7,6 +7,8 @@ COPY apps/backend/requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
 # 共用驅動層。放在 app 之前：它變動頻率低，讓這層的快取活久一點。
 COPY libs ./libs
+# PX4 事件字典（執行期資料；版本綁定見該目錄 README）
+COPY reference/px4-events ./reference/px4-events
 COPY apps/backend/app ./app
 ENV PYTHONPATH=/srv/libs
 CMD ["uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "38000"]

@@ -28,7 +28,7 @@ import time
 
 from pymavlink import mavutil
 
-from . import db, dialect, msg_registry, video_rec
+from . import db, dialect, msg_registry, px4_events, video_rec
 from .capture import Recorder
 from .config import settings
 from .state import LiveState, fleet, live
@@ -476,11 +476,16 @@ class MavlinkRx:
             return
         now = time.monotonic()
         eid = d["event_id"]
+        # 人話翻譯（issue 014）：翻得出就補 text，**翻不出維持 raw、事件不丟**。
+        # 前端 EventModal 讀 text/message 雙名，落地即自動顯示。
+        tr = px4_events.describe(eid, d["args_hex"])
         last = ent.get("evt_last")
         if last and last["event_id"] == eid and now - last["t"] < STX_FOLD_S:
             last["count"] += 1
             last["t"] = now
-            detail = {"event_id": eid, "args": d["args_hex"], "count": last["count"]}
+            detail = {"event_id": eid, "args": d["args_hex"], "count": last["count"],
+                      **({"text": tr["text"], "event_name": tr["event_name"],
+                          "dict_fw": tr["dict_fw"]} if tr else {})}
             upd = await db.bump_event(last["id"], detail)
             if upd is not None:
                 await manager.broadcast({"type": "event", "fold": True, "event": {
@@ -489,7 +494,9 @@ class MavlinkRx:
                     "drone": st.drone_name}})
                 return
         ev = await db.insert_event(st.drone_id, st.session_id, sev, "vehicle_event",
-                                   {"event_id": eid, "args": d["args_hex"], "count": 1},
+                                   {"event_id": eid, "args": d["args_hex"], "count": 1,
+                                    **({"text": tr["text"], "event_name": tr["event_name"],
+                                        "dict_fw": tr["dict_fw"]} if tr else {})},
                                    source="vehicle")
         ev["drone"] = st.drone_name
         ent["evt_last"] = {"id": ev["id"], "event_id": eid, "count": 1, "t": now}
