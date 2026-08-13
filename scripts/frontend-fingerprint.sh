@@ -25,13 +25,19 @@
 #
 # 交集為空或判準衝突時，別再談版本——**改直接量行為**（後端回 5xx 時事件流
 # 顯示什麼、有啟用任務時機體圖示是否被計畫路徑蓋住）。那些不需要先知道版本。
-# ## 使用順序（§0.2f 上線後）
+# ## 使用順序（§0.2f 上線後）——三條，第 3 條最重要
 #
-# **先問端點，指紋法退為交叉驗證**：
-#     curl -s http://<host>:33000/api/version    # {"sha":…,"unknown":…,"dirty":…}
-# 端點有 sha ⇒ 版本直接確定，本腳本只用來**交叉驗證**（兩者衝突＝有人動過
-# 產物或端點，那本身就是發現）。端點回 unknown:true 或根本沒有這個路由
-# ⇒ 產物早於 §0.2f，只能用本腳本考古。
+#   1. **`/api/version` 有 sha ⇒ 直接採信**，指紋法退為交叉驗證。
+#   2. 端點不存在或回 `unknown:true` ⇒ 才走字串階梯＋位移探針（產物早於 §0.2f）。
+#   3. **兩者衝突 ⇒ 輸出「不確定」，不是選一個信。**
+#
+# 第 3 條不是保守，是因為兩者量的根本不是同一件事：**端點回的是建置時注入的
+# 值，指紋量的是產物的實際內容**。它們衝突代表**產物與建置資訊對不上**——
+# 例如 named volume 遮住映像裡的新碼（本專案 2026-08-13 踩過這型：容器的
+# node_modules 是 volume，映像重建根本沒生效）。那是重要發現，**不該被一個
+# 「以端點為準」的規則吃掉**。
+#
+# 帶 --endpoint 時本腳本會自動做這個比對，不留給人腦執行。
 set -uo pipefail
 
 # ── 標記表：字串｜首次出現的 commit｜時間（本 repo 提交時間，+0800）──────
@@ -54,12 +60,19 @@ MARKERS=(
 # 覆蓋缺陷（計畫路徑蓋住 deck 全層）的修正時間——位移探針的分界
 FIX_LAYER_ORDER="2026-08-13 13:08:47"
 
-SRC="${1:-}"
-[ -z "$SRC" ] && { echo "用法：$0 <chunks 目錄> | --container <名稱>"; exit 2; }
+SRC=""; ENDPOINT=""
+while [ $# -gt 0 ]; do
+  case "$1" in
+    --endpoint) ENDPOINT="${2:-}"; shift 2;;
+    --container) SRC="--container"; CONT="${2:-}"; shift 2;;
+    *) SRC="$1"; shift;;
+  esac
+done
+[ -z "$SRC" ] && { echo "用法：$0 <chunks 目錄>|--container <名稱> [--endpoint <url>]"; exit 2; }
 
 TMP=""
 if [ "$SRC" = "--container" ]; then
-  C="${2:-}"; [ -z "$C" ] && { echo "缺容器名"; exit 2; }
+  C="${CONT:-}"; [ -z "$C" ] && { echo "缺容器名"; exit 2; }
   TMP="$(mktemp -d)"
   # 唯讀複製，不進容器做任何修改
   docker cp "$C:/app/.next/static/chunks" "$TMP/" 2>/dev/null \
@@ -157,6 +170,40 @@ elif [ "$VERDICT_VER" != "none" ] && [ "$VERDICT_VER" != "older" ] && [ $((FIXED
   else
     [ "$FIXED" -gt 0 ] && echo "  覆蓋缺陷：**已修**（與字串區間一致）"
     [ "$UNFIXED" -gt 0 ] && echo "  覆蓋缺陷：**存在於此產物**——有啟用任務時，計畫路徑會蓋住實測軌跡、機體圖示與標籤（與字串區間一致）"
+  fi
+fi
+
+# ── 端點交叉檢查（§0.2f 使用順序第 3 條）────────────────────────────
+if [ -n "$ENDPOINT" ]; then
+  echo
+  echo "-- 端點交叉檢查（$ENDPOINT）--"
+  J="$(curl -sS --max-time 5 "$ENDPOINT" 2>/dev/null)"
+  if [ -z "$J" ]; then
+    echo "  端點無回應 → 只能用指紋結論（產物可能早於 §0.2f）"
+  else
+    echo "  回應：$J"
+    ESHA="$(printf '%s' "$J" | grep -o '"sha":"[^"]*"' | cut -d'"' -f4)"
+    if [ -z "$ESHA" ]; then
+      echo "  端點回 sha:null（未知版本）→ 指紋結論成立，無可比對"
+    elif ! git -C "$(dirname "$0")/.." rev-parse --verify "$ESHA^{commit}" >/dev/null 2>&1; then
+      echo "  ⚠ 端點宣稱的 commit「$ESHA」**不在本 repo**（或此處無 git）"
+      echo "     → 若在 repo 機器上跑仍如此，這本身是發現：產物來自別的分支或工作區"
+    else
+      ET="$(git -C "$(dirname "$0")/.." show -s --format='%cd' --date=format:'%Y-%m-%d %H:%M' "$ESHA")"
+      echo "  端點 sha $ESHA 的提交時間：$ET"
+      CONFLICT=0
+      [ -n "$LOWER" ] && [[ "$ET" < "$LOWER" ]] && CONFLICT=1
+      [ -n "$UPPER" ] && [[ "$ET" > "$UPPER" ]] && CONFLICT=1
+      [ "$VERDICT_VER" = "none" ] && CONFLICT=1
+      if [ "$CONFLICT" = 1 ]; then
+        echo "  ⚠ **端點與指紋衝突 → 結論是「不確定」**，不得選一個信。"
+        echo "     端點量的是建置時注入的值，指紋量的是產物實際內容——衝突代表"
+        echo "     **產物與建置資訊對不上**（如 volume 遮住映像裡的新碼）。"
+        echo "     這本身是重要發現，請直接記進證據，並改為逐項量行為。"
+      else
+        echo "  ✓ 端點與指紋一致 → 採信端點 sha $ESHA"
+      fi
+    fi
   fi
 fi
 
