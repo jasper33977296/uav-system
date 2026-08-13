@@ -66,6 +66,16 @@ def post(path: str, body=None, timeout=90, base=None):
         return False, str(e)[:300]
 
 
+def delete(path: str, base=None, timeout=30):
+    """刪除自己造的測試資料（共用環境紀律：只刪自己造的）。"""
+    req = urllib.request.Request((base or COMMAND) + path, method="DELETE")
+    try:
+        urllib.request.urlopen(req, timeout=timeout)
+        return True
+    except Exception:
+        return False
+
+
 def get(path: str, base=None, timeout=15):
     with urllib.request.urlopen((base or COMMAND) + path, timeout=timeout) as r:
         return json.loads(r.read())
