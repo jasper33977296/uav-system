@@ -319,7 +319,14 @@ class MavlinkRx:
         elif t == "PARAM_VALUE":
             # 兩個來源共用這條路徑：連線時我方請求的整批回應、以及**有人改參數時
             # PX4 主動廣播的單筆**。後者是快照保持忠實的關鍵（QGC 調完參數再飛）。
-            st.params[msg.param_id] = msg.param_value
+            # **整數參數要按 param_type 解碼**：MAVLink 把所有值塞進一個 float32
+            # 欄位，而 PX4 放的是整數的**位元組**不是數值。不解碼的話快照裡 13%
+            # 的值是非正規化浮點數垃圾（實測 851 個參數中的 112 個），而且長得
+            # 像合理數字、不會有任何錯誤——參數快照的存在理由正是「這一趟到底
+            # 是用什麼設定飛的」，存錯就是這個功能失效（issue 021 Phase 2）。
+            st.params[msg.param_id] = dialect.decode_param(
+                msg.param_value, getattr(msg, "param_type", None), msg.autopilot
+                if hasattr(msg, "autopilot") else st.autopilot_raw)
             st.param_total = msg.param_count
         elif t == "GLOBAL_POSITION_INT":
             st.lat = msg.lat / 1e7

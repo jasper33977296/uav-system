@@ -58,6 +58,9 @@ class UnknownDriver:
     def decode_verb(self, custom_mode: int) -> str | None:
         return None                 # 不知道它的模式表，就不假裝解得出語意
 
+    def decode_param(self, value: float, param_type=None):
+        return value                # 不知道它的慣例，原樣留著
+
     def encode_mode(self, mode: str):
         raise KeyError(f"未知自駕儀，無法編碼模式 {mode!r}")
 

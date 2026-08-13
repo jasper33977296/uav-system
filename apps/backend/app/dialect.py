@@ -44,6 +44,11 @@ def mode_verb(custom_mode: int, autopilot_raw=None) -> str | None:
     return get_driver(autopilot_raw).decode_verb(custom_mode)
 
 
+def decode_param(value, param_type=None, autopilot_raw=None):
+    """PARAM_VALUE 的值 → 真正的參數值（廠牌慣例不同，見驅動）。"""
+    return get_driver(autopilot_raw).decode_param(value, param_type)
+
+
 def needs_stream_request(autopilot_raw) -> bool:
     return bool(get_driver(autopilot_raw).on_connect())
 

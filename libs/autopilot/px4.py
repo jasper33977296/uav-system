@@ -4,6 +4,8 @@
 與 `apps/command/app/capabilities.py` **原樣提取**的 PX4 分支——B2 是搬遷，不是
 改寫。任何行為變更都算回歸。
 """
+import struct
+
 from .driver import Limit
 
 NAME = "px4"
@@ -24,6 +26,9 @@ _MAIN = {1: "MANUAL", 2: "ALTCTL", 3: "POSCTL", 5: "ACRO",
 _AUTO = {1: "READY", 2: "TAKEOFF", 3: "HOLD", 4: "MISSION",
          5: "RETURN_TO_LAUNCH", 6: "LAND", 8: "FOLLOW_ME", 9: "PRECLAND"}
 
+#: MAV_PARAM_TYPE 的整數型別（1..8）；9=REAL32、10=REAL64 是真浮點。
+_INT_PARAM_TYPES = frozenset(range(1, 9))
+
 CAP_KEYS = ["arm", "takeoff", "land", "rtl", "hold",
             "mission_upload", "mission_start", "mission_fly", "manual"]
 
@@ -42,6 +47,26 @@ class Px4Driver:
 
     #: PX4 不需要任何訊息層改名——它發的就是我們的標準形。
     MESSAGE_ADJUSTMENTS = ()
+
+
+    # ── 參數值解碼 ──────────────────────────────────────────────────
+    def decode_param(self, value: float, param_type=None):
+        """PX4 把整數參數的**位元組原樣放進 float32 欄位**（不是數值轉型）。
+
+        所以收到的 float 要**按 param_type 重新解讀位元**才拿得到真值。不做的話
+        存下來的是非正規化浮點數——`BAT_N_CELLS` 的 3 會變成 4.2e-45，
+        `CAL_ACC0_ID` 的 1310988 會變成 1.8e-39。
+
+        **危險之處在於它長得像一個合理的數字**：不會拋例外、不會有紅字，只是
+        參數快照裡 13% 的值（實測 851 個參數中的 112 個）默默是垃圾——而那份
+        快照的存在理由正是「這一趟到底是用什麼設定飛的」（issue 021 Phase 2）。
+
+        2026-08-13 查 PX4 為什麼不讓進 POSCTL 時順帶發現：`COM_RC_IN_MODE`
+        顯示 1.4e-45，那不是任何合理的參數值，而是整數 1 的位元被當成浮點數。
+        """
+        if param_type in _INT_PARAM_TYPES:
+            return struct.unpack("<i", struct.pack("<f", value))[0]
+        return value
 
     # ── 訊息層 ──────────────────────────────────────────────────────
     def adjust_incoming(self, msg):

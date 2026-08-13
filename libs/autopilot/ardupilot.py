@@ -61,6 +61,23 @@ class ArduPilotDriver:
                  "bit 32768 EKF_GPS_GLITCHING 為 ArduPilot 專有，無對應"),
     )
 
+
+    # ── 參數值解碼 ──────────────────────────────────────────────────
+    def decode_param(self, value: float, param_type=None):
+        """ArduPilot 的慣例是**把數值本身寫進 float32**（不是位元重解讀）——
+        與 PX4 相反。
+
+        ⚠️ **這一條尚未實測驗證**（2026-08-13）。PX4 那邊是實測確認的（參數快照
+        裡出現非正規化浮點數）；ArduPilot 這邊採用的是其文件慣例，但我們自己
+        還沒抓一份 ArduPilot 的參數快照來對帳。**在對帳之前，不要把這裡的
+        「原樣回傳」當成已驗證的事實**——它只是目前最合理的預設。
+
+        驗法：抓一份 ArduPilot 快照，看整數型參數（例如 `SYSID_THISMAV` 應為
+        10、`FRAME_CLASS`）是不是合理的整數值；若出現非正規化浮點數就要改成
+        與 PX4 相同的位元重解讀。
+        """
+        return value
+
     # ── 訊息層：只改名，不解讀 ──────────────────────────────────────
     def adjust_incoming(self, msg):
         """把 ArduPilot 專有的訊息名正規化成標準形。
