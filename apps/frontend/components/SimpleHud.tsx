@@ -81,9 +81,16 @@ export function EventsCard() {
     src === "all" || (src === "vehicle" ? e.source === "vehicle" : e.source !== "vehicle"));
   const evTime = (t: string) =>
     new Date(t).toLocaleTimeString("zh-TW", { hour12: false });
+  // 014 字典版本旗標（§2.7 c）：unknown **面板層標一次**——現階段恆真，
+  // 逐事件標是零區辨力的純噪音；用次要文字色而非警告色，因為那是我方的
+  // 能力缺口（還沒做版本比對），不是機上異常
+  const dictUnknown = shown.some((e) => e.detail?.dict_fw_match === "unknown");
   return (
     <div className="card card-grow">
       <h3>事件
+        {dictUnknown && (
+          <span className="ev-dictnote">未能確認字典版本與機上韌體相符</span>
+        )}
         <span className="ev-filter">
           {([["all", "全部"], ["vehicle", "機上訊息"], ["system", "系統"]] as const)
             .map(([k, label]) => (
@@ -106,6 +113,10 @@ export function EventsCard() {
                   : e.severity === "warning" ? "#fab219" : "#8f8b80" }} />
               <time>{evTime(e.time)}</time>
               <span className="detail">{evText(e, { mixed })}</span>
+              {/* mismatch 才逐事件標：那是真的有區辨力（這筆翻譯可能不準） */}
+              {e.detail?.dict_fw_match === "mismatch" && (
+                <span className="ev-mismatch" title="版本不符，翻譯可能不準">⚠</span>
+              )}
               {/* key 帶 count：fold 遞增即重掛徽章 → CSS 動畫閃現一次 */}
               {count > 1 && (
                 <span className="ev-count" key={`${e.id}:${count}`}>×{count}</span>

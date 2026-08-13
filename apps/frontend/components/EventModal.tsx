@@ -102,6 +102,16 @@ export default function EventModal({ ev, onClose, mixed = false }: {
         {decoded && ev.type === "vehicle_event" && (
           <pre className="evm-text">{decoded}</pre>
         )}
+        {/* 版本旗標（§2.7 c）：mismatch 在 modal 給完整句子——列上只有 ⚠，
+            細節層才說明為什麼；unknown 不在此重複（面板層已標一次） */}
+        {d.dict_fw_match === "mismatch" && (
+          <div className="evm-mismatch">
+            ⚠ 版本不符，翻譯可能不準
+            {typeof d.dict_fw === "string" && (
+              <span className="imu-unit">（字典 {d.dict_fw}）</span>
+            )}
+          </div>
+        )}
         {kvRows.length > 0 && (
           <div className="evm-kv">
             {kvRows.map(([k, v]) => (

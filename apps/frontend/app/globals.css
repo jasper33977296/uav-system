@@ -1087,3 +1087,15 @@ details.card summary { cursor: pointer; font-size: 14px; font-weight: 600; }
   background: none; border: none; color: var(--muted);
 }
 .cmp-tabs button.on { background: var(--surface-2); color: var(--ink); }
+
+/* 014 字典版本旗標（§2.7 c）：unknown 面板層一次、次要色（能力缺口非異常）；
+   mismatch 逐事件、warn 色（這筆翻譯可能真的不準） */
+.ev-dictnote {
+  font-size: 11px; color: var(--muted); font-weight: 400;
+  text-transform: none; letter-spacing: 0; margin-left: 8px;
+}
+.ev-mismatch { flex: none; color: var(--status-warn); font-size: 12px; }
+.evm-mismatch {
+  color: var(--status-warn); background: var(--status-warn-bg);
+  border-radius: 6px; padding: 6px 10px; font-size: 12.5px;
+}
