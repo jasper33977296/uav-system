@@ -156,8 +156,9 @@ async function openReplayTrack(browser, { sinrOf, key = "sinr" }) {
   await page.waitForTimeout(2500);
   const px = classPixels(await page.screenshot({
     clip: { x: 0, y: 90, width: 900, height: 500 } }));
+  const text = (await page.locator("body").innerText()).replace(/\s+/g, " ");
   await page.context().close();
-  return px;
+  return { ...px, text };
 }
 
 // 四個分級各佔一段（值挑在各級中央，不踩邊界）
@@ -331,6 +332,49 @@ const CASES = [
         : { pass: false, note: `灰=${px.unknown} 分級色=${colored}` };
     },
   },
+  {
+    name: "[實測] nosinr-statement｜有量測但無 SINR 欄 → 說出「有 N 筆量測，但沒有 SINR 值」",
+    async run(b) {
+      // §0.2e：灰線有兩個成因（沒量測／有量測但沒欄位），畫面同形。
+      // 一句陳述把「上游改欄位名」從無聲失效變成看得見的事實
+      const r = await openReplayTrack(b, { sinrOf: () => null });
+      const ok = /有 40 筆量測，但沒有 SINR 值/.test(r.text);
+      return { pass: ok, note: ok ? "陳述出現且筆數正確（40）"
+        : `未出現陳述：${r.text.slice(0, 120)}` };
+    },
+  },
+  {
+    name: "[實測] nosinr-silent｜有 SINR 值時不得出現該陳述（正常狀態不說話）",
+    async run(b) {
+      const r = await openReplayTrack(b, { sinrOf: FOUR });
+      const quiet = !/沒有 SINR 值/.test(r.text);
+      return { pass: quiet, note: quiet ? "正常狀態不說話" : "正常狀態誤報" };
+    },
+  },
+  {
+    name: "[實測] empty-vs-loading｜無樣本／載入中／載入失敗三者要分開說",
+    async run(b) {
+      const mk = async (fulfill) => {
+        const page = await (await b.newContext({ viewport: { width: 1200, height: 800 } })).newPage();
+        await page.route("**/api/sessions/*/track*", fulfill);
+        await page.route("**/api/sessions/*/video*", (r) => r.fulfill({ status: 404, json: {} }));
+        await page.route("**/api/events**", (r) => r.fulfill({ json: [] }));
+        await page.routeWebSocket(/\/ws\/telemetry/, () => {});
+        await page.goto(`${URL_BASE}/replay/test-session`, { waitUntil: "networkidle", timeout: 30000 });
+        await page.waitForTimeout(1500);
+        const t = (await page.locator("body").innerText()).replace(/\s+/g, " ");
+        await page.context().close();
+        return t;
+      };
+      const empty = await mk((r) => r.fulfill({ json: { link: [], telemetry: [] } }));
+      const err = await mk((r) => r.fulfill({ status: 500, json: { detail: "boom" } }));
+      // 取得失敗說成「這趟沒有訊號量測」＝把我方的失敗說成對方沒資料
+      const ok = /這趟沒有訊號量測/.test(empty) && !/這趟沒有訊號量測/.test(err)
+        && /軌跡載入失敗/.test(err);
+      return { pass: ok, note: ok ? "無樣本→「這趟沒有訊號量測」；500→「軌跡載入失敗」"
+        : `空態正確=${/這趟沒有訊號量測/.test(empty)} 錯誤頁誤宣告=${/這趟沒有訊號量測/.test(err)}` };
+    },
+  },
 ];
 
 /** 反向驗證：資料存在但拿不到（後端 500）時，rest-history 的斷言必須失敗。
@@ -352,9 +396,14 @@ async function discrimination(b) {
 async function discriminationGraded(b) {
   const px = await openReplayTrack(b, { sinrOf: FOUR, key: "snr" });
   const colored = px.good + px.warning + px.serious + px.critical;
-  return { pass: colored === 0, note: colored === 0
-    ? `欄位名 sinr→snr 時整條變灰（${px.unknown} px）、分級色 0，斷言確實失敗`
-    : `欄位名改掉仍量到 ${colored} 分級色＝顏色不是來自注入資料` };
+  // §0.2e 上線後，這個情境**不再是無聲的**：畫面會說「有 40 筆量測，但沒有
+  // SINR 值」——欄位對映壞掉終於與「真的沒量到」在畫面上分得開
+  const stated = /有 40 筆量測，但沒有 SINR 值/.test(px.text);
+  return { pass: colored === 0 && stated, note: colored !== 0
+    ? `欄位名改掉仍量到 ${colored} 分級色＝顏色不是來自注入資料`
+    : stated
+      ? `欄位名 sinr→snr：分級色 0、整條灰（${px.unknown} px），但畫面說得出「有 40 筆量測，但沒有 SINR 值」`
+      : "分級色 0 但畫面沒說出成因＝失效仍在冒充「沒量到訊號」" };
 }
 
 const b = await chromium.launch({ executablePath: EXE,

@@ -118,6 +118,11 @@ export default function Replay() {
   const [events, setEvents] = useState<Ev[]>([]);
   const [openEv, setOpenEv] = useState<Ev | null>(null);   // 事件詳情 modal（§2.7）
   const [idx, setIdx] = useState(0);
+  // 「還在載入」與「載入完成但沒有樣本」是兩件事——原本共用一句「載入軌跡中…
+  // （若架次無樣本則無可回放）」，把兩種狀態塞進同一句括號裡，等於**兩個都
+  // 沒真的宣告**：載入卡住時看起來像沒樣本、沒樣本時看起來像還在載（§0.2e）
+  const [loaded, setLoaded] = useState(false);
+  const [loadErr, setLoadErr] = useState(false);
   const mapRef = useRef<maplibregl.Map | null>(null);
   const containerRef = useRef<HTMLDivElement>(null);
   const ovRef = useRef<MapboxOverlay | null>(null);
@@ -126,7 +131,10 @@ export default function Replay() {
 
   useEffect(() => {
     fetch(`${API}/api/sessions/${sessionId}/track`)
-      .then((r) => r.json())
+      // **必須看 r.ok**：fetch 不會因 HTTP 4xx/5xx 而 reject，而錯誤回應的
+      // body（`{"detail": ...}`）是合法 JSON——`d.link ?? []` 於是得到空陣列，
+      // 畫面把**我方的取得失敗說成「這趟沒有訊號量測」**。測試抓到的正是這個
+      .then((r) => { if (!r.ok) throw new Error(`HTTP ${r.status}`); return r.json(); })
       .then((d) => {
         // 註：track 回應另有 telemetry 陣列（含 heading 等姿態欄）。
         // §2.4c 移除圖示旋轉後前端沒有 heading 的消費者，故不再併入——
@@ -134,6 +142,7 @@ export default function Replay() {
         const link = (d.link ?? [])
           .filter((r: LinkRow) => r.lat != null && r.lon != null);
         setRows(link);
+        setLoaded(true);
         setIdx(link.length - 1);   // 預設停在終點：一眼看到整趟全貌
         setMeta(d.session ?? null);
         // 航線關聯了任務 → 抓航點疊預計路徑（預計 vs 實際比對）
@@ -143,7 +152,10 @@ export default function Replay() {
             .then((m) => m && setPlan(m.waypoints.filter((w: any) => w.lat && w.lon)))
             .catch(() => {});
       })
-      .catch(() => {});
+      // 取得失敗**不得**顯示「這趟沒有訊號量測」——那是把我方的失敗說成
+      // 對方沒資料，正是 §0.2e 要防的冒充。三態各自有話：載入中／載入失敗／
+      // 真的沒有樣本
+      .catch(() => setLoadErr(true));
     // §5.4 影片中繼資料：video_status 五態全後端算（UI 不做日期運算）
     fetch(`${API}/api/sessions/${sessionId}/video`)
       .then((r) => (r.ok ? r.json() : null))
@@ -334,6 +346,16 @@ export default function Replay() {
 
   const cur = rows[idx];
 
+  // §0.2e：中性呈現必須答得出「是沒有這筆資料，還是這筆資料裡沒有這個欄位？」
+  // 灰色軌跡有兩個成因——沒有量測、或有量測但沒有 SINR 欄位——**畫面上完全
+  // 同形**（實測：把欄位名 sinr 改成 snr，灰線像素數與真的沒量到一模一樣）。
+  // 於是「上游改欄位名」可以無聲活過整個實驗：使用者只會記下「這趟沒訊號
+  // 資料」繼續研究，**沒有人會去追問一個合法又常見的狀態**。
+  // 一個布林運算就把看不見的失效換成看得見的陳述
+  const sinrN = rows.filter((r) => r.sinr != null).length;
+  const sinrNote = rows.length === 0 ? null      // 尚未載入/無軌跡另有既有處理
+    : sinrN === 0 ? `有 ${rows.length} 筆量測，但沒有 SINR 值` : null;
+
   return (
     <div className="replay">
       {/* 極簡 header（ui-spec §5）：返回＋日期＋任務名，無樣本數 */}
@@ -348,10 +370,15 @@ export default function Replay() {
           {/* opt-out 留痕（§5.4）：未錄影＝正常態，弱字不宣告 */}
           {video?.video_status === "off" && "　本趟未錄影"}
         </span>
+        {sinrNote && <span className="meta rp-nosinr">{sinrNote}</span>}
       </div>
 
       <div className="replay-map" ref={containerRef}>
-        {!rows.length && <div className="empty" style={{ padding: 20 }}>載入軌跡中…（若架次無樣本則無可回放）</div>}
+        {!rows.length && (
+          <div className="empty" style={{ padding: 20 }}>
+            {loadErr ? "軌跡載入失敗"
+              : loaded ? "這趟沒有訊號量測" : "載入軌跡中…"}</div>
+        )}
         {/* 回放頁沒有圖例卡，底圖切換獨立浮在左下（同即時頁位置與三態） */}
         {rows.length > 0 && (
           <div className="legend replay-legend">
