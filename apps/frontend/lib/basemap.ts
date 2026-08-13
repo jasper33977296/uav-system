@@ -43,10 +43,16 @@ export function useBasemap() {
     });
     map.addLayer({ id: "basemap", type: "raster", source: "nlsc",
       layout: { visibility: "none" } }, beforeId);
-    // 暗化：分級色必須在最亮地物（水泥/屋頂）上仍可辨
+    // 暗化：分級色必須在最亮地物（水泥/屋頂）上仍可辨。
+    // 80% 為 CVD 重驗定案值（設計師 2026-08-12，取樣 NLSC 台北 z17 實影像）：
+    // 50% 時最亮地物上四色**全部 <3:1**（良好 1.49／尚可 2.73／劣化 1.38／
+    // 瀕斷 1.59）——影像亮處會把整套分級色吃掉；80% 後只剩瀕斷 #a01818
+    // 未過（1.39），但它在無底圖畫布上本來就是 1.79、早有既有 relief
+    // （事件流卡片／側欄分級標籤／圖表事件標記），未新增失效模式。
+    // **調暗化濃度而非改色盤**——色盤動了要重驗全站。
     map.addLayer({ id: "basemap-dim", type: "background",
       layout: { visibility: "none" },
-      paint: { "background-color": CANVAS, "background-opacity": 0.5 } }, beforeId);
+      paint: { "background-color": CANVAS, "background-opacity": 0.8 } }, beforeId);
     map.on("error", (e) => {
       if ((e as unknown as { sourceId?: string }).sourceId === "nlsc") setOffline(true);
     });
