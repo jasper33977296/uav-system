@@ -386,6 +386,43 @@ WS 與 arming 無關、前端一開著就一直連著。
 - 使用者/機隊實測進行中時，backend 改動挑安靜窗口（`GET :38001/healthz`
   三台持續 disarmed）＋部署前複驗，並知會協作者會有一次短重啟。
 
+### 開發注意事項：加前端相依要重裝 volume，**重建映像沒有用**
+
+開發模式的前端由 `docker-compose.dev.yml` 覆寫，關鍵是它掛了一個 **named
+volume 在 `/app/node_modules`**，而啟動指令是：
+
+```
+[ -x node_modules/.bin/next ] || npm ci; exec npm run dev ...
+```
+
+三件事疊起來造成一個很難看出的坑：
+
+1. **volume 遮住映像**——`docker compose build` 把新套件裝進映像了，但執行時
+   `/app/node_modules` 是 volume 的內容，映像那份根本沒被用到；
+2. **`npm ci` 只在 `next` 不存在時才跑**——它存在，所以永遠不跑；
+3. 連 bind mount 進去的主機 `node_modules`（可能已經有新套件）**也一併被遮住**。
+
+於是「重建映像」這個直覺動作會**成功但無效**：建置沒有錯誤、容器正常起來、
+頁面 200，只有那個新套件不存在。
+
+實際踩過（2026-08-13，§2.4d 3D 機模）：前端把 `@deck.gl/mesh-layers` 寫進
+`package.json`，後端重建映像後宣告完成——實況是容器內 `find -name mesh-layers`
+零結果。**是另一個 session 的容器內抽查攔下來的。**
+
+正確做法（dev 模式）：
+
+```bash
+# volume 是 root 所有、容器以 uid 1000 跑 → 要 -u 0 才裝得動
+docker exec -u 0 uav-frontend sh -c 'cd /app && npm ci'
+docker restart uav-frontend
+# **驗容器內實況**，不是看 package.json：
+docker exec uav-frontend node -e 'require.resolve("@deck.gl/mesh-layers")'
+```
+
+> 這是本節第三條「看起來成功、實際沒生效」的坑（另兩條見上下文）。三條的共同
+> 形狀都是**同一件事**：改的東西與跑的東西之間隔了一層（reload／compose／
+> volume），而那一層不會告訴你它擋住了什麼。**驗收一律以容器內實況為準。**
+
 ### 開發注意事項：改 `docker-compose.yml` 一定要 recreate 才生效
 
 `--reload` 只重跑 **Python 程式碼**，它看不到 compose 的改動。**新增掛載
