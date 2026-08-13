@@ -21,6 +21,7 @@ backend 這條原本設計成 forward-only（讀寫分離），但那讓**真機
 """
 import os
 import select
+import time
 import socket
 
 from pymavlink import mavutil
@@ -42,6 +43,7 @@ s_cmd.bind(("0.0.0.0", 0))
 parser = M.MAVLink(None)
 parser.robust_parsing = True
 sysid_addr = {}     # sysid → 該實例來源位址（指令回程；從遙測學）
+_warn_t = {}        # 轉發失敗告警節流（per 目的地）
 print(f"mav-fanout(listen)：艦隊→:{IN_PORT} ⇒ backend {BACKEND[1]}(fwd-only)／command {COMMAND[1]}",
       flush=True)
 
@@ -77,11 +79,29 @@ while True:
                 sysid = data[5] if data[0] == 0xFD else data[3]
                 if sysid and sysid != ROUTER_SYSID:
                     sysid_addr[sysid] = src           # 該實例 GCS 來源位址（回指令用）
-            try:
-                s_be.sendto(data, BACKEND)             # forward-only
-                s_cmd.sendto(data, COMMAND)
-            except OSError:
-                pass
+            # **兩條腿各自 try**：合用一個 try 的話，前面那條丟例外會讓後面
+            # 那條整包跳過——一條腿的暫時性錯誤會靜默餓死另一條。
+            #
+            # 而且**失敗要看得見**。2026-08-13 事故：backend 容器 recreate 之後，
+            # 這裡對 backend 的轉發停止生效（command 那條照常），前端看到「連得上
+            # 但 0 筆資料」，查了一輪才定位到 fanout。原本的 `except OSError: pass`
+            # 讓它完全無聲——UDP 送到當時沒人聽的埠會回 ICMP port unreachable，
+            # 而未連線的 UDP socket 上這個錯誤是延後回報的，正是「本地看起來
+            # 沒事、下一次呼叫才炸」那一類。
+            #
+            # ⚠️ **確切觸發機制未完全查明**（重起 fanout 即恢復，現場已消失）。
+            # 這裡修的是**結構**：一條腿壞掉不得拖累另一條、且不得無聲。
+            for sock, dest, who in ((s_be, BACKEND, "backend"),
+                                    (s_cmd, COMMAND, "command")):
+                try:
+                    sock.sendto(data, dest)
+                except OSError as e:
+                    now = time.monotonic()
+                    if now - _warn_t.get(who, 0.0) > 10.0:
+                        _warn_t[who] = now
+                        print(f"mav-fanout：轉發給 {who}{dest} 失敗（{e}）"
+                              "——該端可能重啟中；本訊息每 10 秒最多一則",
+                              flush=True)
         else:
             # command／backend 回來的訊息 → 依 target_system 路由回艦隊
             _route_to_fleet(data)
