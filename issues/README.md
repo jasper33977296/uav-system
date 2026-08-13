@@ -59,6 +59,7 @@
 | [028](028-primary-drone-assumption-in-takeoff.md) | 起飛序列讀「主機」高度：非主機判斷全錯，反向會把地面機切進 AUTO.MISSION ✔實飛驗證 | high | **closed** | `apps/command/app/main.py` |
 | [029](029-mission-frame-default-breaks-rtl.md) | 含 RTL 的任務一律上不去：無座標項 frame 預設錯（附 PX4 實測值域表）✔實測 | high | **closed** | `build_items`／`plan_check` |
 | [030](030-manual-failsafe-wrong-mode-ardupilot.md) | 搖桿失聯自動懸停在 ArduPilot 切錯模式（承諾 Hold 實送 GUIDED）；附搖桿實飛驗證 ✔實飛 | high | **closed** | `mav.py:_tick_manual` |
+| [031](031-arm-guard-auto-mode.md) | arm 防護：自動模式＋機上有任務時裸 arm＝立即自主起飛（SITL 實際發生）| high | open | `apps/command` |
 
 「✔實測確認」= 2026-08-03 首次實飛（SITL 起飛 → 進干擾區 → RTL）取得的實際資料佐證，
 不只是讀碼推論。詳見 [progress/log/2026-08-03.md](../progress/log/2026-08-03.md)。
