@@ -89,11 +89,55 @@ def pick(autopilot: str) -> tuple[int, dict]:
     """挑一台該廠牌、**未解鎖**的機。找不到就 Skip。
 
     只挑 disarmed 的：一致性測試會下模式指令，不能打斷別人正在飛的架次。
+
+    可用環境變數 `CONF_SYSID` 指定機號——飛行測項需要一台**預檢過得了**的機，
+    而預檢狀態不在 command 的快照裡（那是 backend 的 readiness）。與其讓測試
+    去猜，不如讓跑的人指定；猜錯的代價是把「這台機飛不起來」誤記成「驅動壞了」。
     """
+    want = os.environ.get("CONF_SYSID")
     for sysid, d in sorted(fleet().items(), key=lambda kv: int(kv[0])):
-        if d.get("autopilot") == autopilot and d.get("armed") is False:
-            return int(sysid), d
-    raise Skip(f"沒有未解鎖的 {autopilot} 機可測")
+        if d.get("autopilot") != autopilot or d.get("armed") is not False:
+            continue
+        if want and str(sysid) != str(want):
+            continue
+        return int(sysid), d
+    raise Skip(f"沒有未解鎖的 {autopilot} 機可測"
+               + (f"（指定了 CONF_SYSID={want}）" if want else ""))
+
+
+#: 機端自己拒絕的訊號。**這些不是方言錯誤**——見 assert_dialect()。
+_PRECONDITION_HINTS = ("解鎖被拒", "TEMPORARILY_REJECTED", "DENIED",
+                       "Preflight", "預檢", "未連線")
+
+#: **能力 gating 擋下**的訊號。這是一個結構性的雞生蛋問題：
+#: 動詞是 unverified → API 拒發 → 測試跑不了 → 永遠拿不到證據 → 永遠 unverified。
+#: 記成 fail 是錯的（那宣稱「驗過而且壞了」）；它的真相是「還沒驗、而且**照現行
+#: gating 也驗不了**」。這需要一個決定，不是測試能自行繞過的——**繞過 gating
+#: 去測，等於測一條產品上不存在的路徑**。
+_GATING_HINTS = ("目前不可用（unverified", "目前不可用（unsupported", '"capability"')
+
+
+def assert_dialect(ok: bool, r, what: str):
+    """把「機端因自身狀態拒絕」與「我們的方言錯」分開。
+
+    **這是整套測試的核心區分**（見模組說明的表）：機端電池不健康而拒絕解鎖，
+    反映的是那一台機的狀態，不是我們會不會講它的方言。記成 fail 等於**誣賴驅動**
+    ——而在能力值改由測試推導之後，那會讓一個好好的動詞被鎖住。
+
+    所以：機端拒絕 → Skip（沒有證據，能力維持 unverified，但不是失敗）。
+    """
+    if ok:
+        return
+    text = r if isinstance(r, str) else json.dumps(r, ensure_ascii=False)
+    if any(h in text for h in _GATING_HINTS):
+        raise Skip(
+            f"{what}：**被能力 gating 擋下**（該動詞目前是 unverified）。"
+            "\n    這是雞生蛋：沒有證據→鎖住→測不了→拿不到證據。"
+            "\n    **不繞過 gating**（繞過等於測一條產品上不存在的路徑），"
+            "需要決定如何 bootstrap。")
+    if any(h in text for h in _PRECONDITION_HINTS):
+        raise Skip(f"{what}：機端以自身狀態拒絕（非方言問題）——{text[:160]}")
+    raise AssertionError(f"{what}：{text[:220]}")
 
 
 def mode_of(sysid: int) -> str | None:
@@ -162,6 +206,18 @@ def record(verb: str, autopilot: str, status: str, evidence: str,
             data = json.loads(path.read_text(encoding="utf-8"))
         except Exception:
             data = {}
+    prev = data.get(verb) or {}
+    if status == "skip" and prev.get("status") == "pass":
+        # **skip 不得抹掉既有的 pass**：skip 的語意是「這次沒取得新證據」，
+        # 不是「舊證據作廢」。抹掉的話，換一台預檢沒過的機跑一次，就會把
+        # 別台實測得到的證據弄丟——然後能力值莫名其妙掉下來。
+        prev.setdefault("skips", []).append(
+            {"at": time.strftime("%Y-%m-%dT%H:%M:%S"), "why": evidence})
+        prev["skips"] = prev["skips"][-3:]
+        data[verb] = prev
+        path.write_text(json.dumps(data, ensure_ascii=False, indent=1, sort_keys=True),
+                        encoding="utf-8")
+        return prev
     entry = {
         "status": status,                       # pass / fail / skip
         "evidence": evidence,                   # 人看得懂的證據，不是 True/False

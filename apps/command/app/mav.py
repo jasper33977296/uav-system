@@ -125,6 +125,7 @@ class MavRouter(threading.Thread):
                 # （2026-08-12：單機 mission_fly 讀主機高度，錯了多久沒人知道）。
                 "alt_rel": d.get("alt_rel"),
                 "alt_msl": d.get("alt_msl"),
+                "lat": d.get("lat"), "lon": d.get("lon"),
                 "capabilities": cap,                   # 伺服器端 gating 唯一真相
                 "capability_reasons": reasons,
             }
@@ -273,6 +274,10 @@ class MavRouter(threading.Thread):
                     # 成功卻回報 -0.04m，那是停在地面的主機）。已改為與這裡同源。
                     d["alt_rel"] = msg.relative_alt / 1000.0
                     d["alt_msl"] = msg.alt / 1000.0
+                    # 經緯度：一致性測試量「搖桿有沒有真的讓機動」的唯一證據
+                    # （MANUAL_CONTROL 無 ACK，位移是唯一可觀察的結果）。
+                    d["lat"] = msg.lat / 1e7
+                    d["lon"] = msg.lon / 1e7
                 elif msg.get_type() == "PARAM_VALUE":
                     if msg.param_id in ("SYSID_MYGCS", "MAV_GCS_SYSID"):
                         d["sysid_mygcs"] = int(msg.param_value)
