@@ -19,12 +19,46 @@
 # 比一頁要人臨場判斷的清單可靠。
 set -uo pipefail
 
-OUT="${1:-incident-$(date +%Y%m%d-%H%M%S)}"
+# ── 來源宣告（UI/UX 2026-08-13 要求）─────────────────────────────
+# **為什麼這是必要的而不是禮貌**：在開發機上跑這支腳本，位移探針必然輸出
+# 「已修」——因為開發機的 HEAD 含修正。那行字**長得跟一份能洗清待查缺陷的
+# 結論一模一樣**。一份自測輸出若混進證據目錄，日後讀的人會把「腳本能跑」
+# 讀成「事故環境沒這個問題」。
+#
+# 所以每份輸出第一行都標來源，**且主機用途不得留空**：未宣告就明寫未宣告。
+SELFTEST=0
+for a in "$@"; do [ "$a" = "--selftest" ] && SELFTEST=1; done
+ARGS=(); for a in "$@"; do [ "$a" != "--selftest" ] && ARGS+=("$a"); done
+if [ "$SELFTEST" = "1" ]; then
+  OUT="${ARGS[0]:-selftest-$(date +%Y%m%d-%H%M%S)}"
+else
+  OUT="${ARGS[0]:-incident-$(date +%Y%m%d-%H%M%S)}"
+fi
 mkdir -p "$OUT" || { echo "無法建立輸出目錄 $OUT"; exit 1; }
 MISS="$OUT/MISSING.txt"; : > "$MISS"
 note_missing() { echo "- $*" >> "$MISS"; echo "  ⚠ 收不到：$*"; }
 
+_FE=$(docker ps -a --format '{{.Names}}' 2>/dev/null | grep -m1 uav-frontend)
+_CMD=$(docker inspect "$_FE" --format '{{json .Config.Cmd}}' 2>/dev/null)
+case "$_CMD" in
+  *"next dev"*|*"run dev"*) _MODE="next dev（開發模式）";;
+  *"next start"*|*"run start"*) _MODE="production build";;
+  *) _MODE="不可得";;
+esac
+_HEAD=$(git rev-parse --short HEAD 2>/dev/null || echo "不可得（非 git 工作目錄）")
+if [ "$SELFTEST" = "1" ]; then
+  PROV="[來源] 主機=$(hostname)  用途=**自測，非事故環境**  模式=$_MODE  git HEAD=$_HEAD"
+  PROV2="⚠ 本目錄是腳本自測輸出，**不得當成事故證據**。其中任何「已修/正常」的結論"
+  PROV3="   反映的是本機狀態，與事故環境無關。"
+else
+  PROV="[來源] 主機=$(hostname)  用途=事故環境（**未宣告為自測**）  模式=$_MODE  git HEAD=$_HEAD"
+  PROV2="若這其實是開發機自測，請改用 --selftest 重跑——否則本目錄會被當成事故現場證據。"
+  PROV3=""
+fi
+stamp() { { echo "$PROV"; echo "$PROV2"; [ -n "$PROV3" ] && echo "$PROV3"; echo "----"; cat "$1"; } > "$1.tmp" && mv "$1.tmp" "$1"; }
+
 echo "事故證據收集 → $OUT"
+echo "$PROV"
 echo "（唯讀：本腳本不會改動任何服務或資料）"
 
 # ── 0. 時間基準（**最容易搞錯的一項**）────────────────────────────
@@ -182,102 +216,44 @@ cat > "$OUT/08-QUESTIONS-for-operator.txt" <<'TXT'
    （若沒連地面站，我方系統不在迴路上，這批地面站證據就與事故無關。）
 TXT
 
-# ── 9. Bundle 內容指紋（**驗執行中的產物，不是 checkout**）────────
-# 為什麼要有這一節：第 6 節的版本窗判定看的是 git HEAD，而**跑的東西未必等於
-# HEAD**——映像可能是舊的、node_modules volume 可能遮住新裝的套件、分頁可能
-# 載著更舊的 bundle。2026-08-13 本專案就踩過：映像重建「成功」，但容器實際用的
-# 是 volume 裡的舊 node_modules，新套件根本不在。
+# ── 9. 前端產物指紋（呼叫前端交付的專用腳本）──────────────────
+# **不自己編判定邏輯**：判定表與判讀規則是前端／設計師的東西，我這裡再寫一份
+# 就會變成第二個權威來源，然後兩份漂移（本專案今天已經因為「兩份表」吃過虧）。
+# 本節只負責讓它在部署主機上跑得起來、把輸出收進證據目錄。
 #
-# 所以這一節直接對**執行中容器的 .next/static/chunks** 找字串與位移，
-# 與第 6 節互相對質：兩者不一致本身就是重要發現（部署失配）。
-FE_C=$(docker ps -a --format '{{.Names}}' 2>/dev/null | grep -m1 uav-frontend)
-FP="$OUT/09-bundle-fingerprint.txt"
-if [ -z "$FE_C" ]; then
-  note_missing "frontend 容器（無法做 bundle 指紋）"
-else
+# 為什麼要有這一節：第 6 節的版本窗判定看 git HEAD，而**跑的東西未必等於
+# HEAD**——映像可能是舊的、node_modules volume 可能遮住新裝的套件。
+# 2026-08-13 本專案正好踩過：映像重建「成功」，容器實際用的卻是 volume 裡的
+# 舊 node_modules。所以要**直接驗執行中的產物**，並與第 6 節互相對質；
+# **兩者不一致本身就是重要發現**（部署失配）。
+FP_SH="$(dirname "$0")/frontend-fingerprint.sh"
+if [ -x "$FP_SH" ]; then
+  "$FP_SH" --container uav-frontend > "$OUT/09-frontend-fingerprint.txt" 2>&1 \
+    || note_missing "前端產物指紋（容器不存在或非部署形映像）"
   {
-    echo "== 執行中 bundle 的內容指紋 =="
-    echo "容器：$FE_C"
-    docker exec "$FE_C" sh -c 'ls -la .next/static/chunks 2>/dev/null | head -3' 2>&1
-    CHUNKS=$(docker exec "$FE_C" sh -c 'ls .next/static/chunks/*.js 2>/dev/null' 2>/dev/null)
-    if [ -z "$CHUNKS" ]; then
-      echo "  ⚠ 找不到 .next/static/chunks/*.js"
-      echo "     可能原因：容器跑 dev 模式（next dev 不產這個目錄）、或路徑不同。"
-      echo "     dev 模式下請改看 .next/server 與 .next/cache，或直接記錄容器 Cmd："
-      docker inspect "$FE_C" --format '     Cmd={{json .Config.Cmd}}' 2>/dev/null
-    fi
-
     echo
-    echo "-- 標記字串命中（未命中會明列，不靜默跳過）--"
-    # 判定表：每行 "字串|這個字串代表什麼"
-    # ⚠ 本表待前端補齊十列判定；目前僅含 PM 指定的位移探針兩個標記。
-    while IFS='|' read -r marker meaning; do
-      [ -z "$marker" ] && continue
-      hits=$(docker exec "$FE_C" sh -c "grep -rl -- '$marker' .next/static/chunks 2>/dev/null | head -5" 2>/dev/null)
-      if [ -n "$hits" ]; then
-        echo "  ✔ 命中 '$marker' → $meaning"
-        echo "$hits" | sed 's/^/      /'
-      else
-        echo "  ✘ **未命中** '$marker' → $meaning"
-      fi
-    done <<'MARKERS'
-plan3d|計畫路徑圖層識別字（位移探針用）
-interleaved|deck.gl overlay 掛載模式（位移探針用）
-MARKERS
-
-    echo
-    echo "-- 位移探針：plan3d vs interleaved 的先後 --"
-    echo "   原理：兩者在 bundle 裡的 byte offset 先後反映原始碼的 addLayer 順序。"
-    echo "   計畫路徑若在 deck overlay **之後**才加，就會蓋住實測軌跡與機體圖示。"
-    echo
-    echo "   取樣紀律（UI/UX 2026-08-13 要求）："
-    echo "   - **每個 chunk 都要查，且結論必須一致**；不一致＝假設破裂，輸出「不確定」"
-    echo "   - **只含其中一個標記的 chunk 是「無效樣本」，不是「未修」**"
-    echo "     （少一個標記可能只是該 chunk 沒用到，不構成任何結論）"
-    echo
-    docker exec "$FE_C" sh -c '
-      both=0; plan_first=0; deck_first=0; invalid=0
-      for f in .next/static/chunks/*.js; do
-        a=$(grep -b -o -m1 "plan3d" "$f" 2>/dev/null | head -1 | cut -d: -f1)
-        b=$(grep -b -o -m1 "interleaved" "$f" 2>/dev/null | head -1 | cut -d: -f1)
-        if [ -n "$a" ] && [ -n "$b" ]; then
-          both=$((both+1))
-          if [ "$a" -lt "$b" ]; then
-            plan_first=$((plan_first+1)); v="plan3d 在前（＝已修）"
-          else
-            deck_first=$((deck_first+1)); v="interleaved 在前（＝未修，會蓋住）"
-          fi
-          echo "   [有效樣本] $f  plan3d@$a  interleaved@$b  → $v"
-        elif [ -n "$a" ] || [ -n "$b" ]; then
-          invalid=$((invalid+1))
-          echo "   [無效樣本] $f  只含其中一個標記 —— **不構成任何結論**"
-        fi
-      done
-      echo
-      echo "   有效樣本 $both（plan3d 在前 $plan_first／interleaved 在前 $deck_first）、無效樣本 $invalid"
-      if [ "$both" -eq 0 ]; then
-        echo "   ⇒ **無有效樣本，位移探針無結論**（不得據此說「未修」）"
-      elif [ "$plan_first" -gt 0 ] && [ "$deck_first" -gt 0 ]; then
-        echo "   ⇒ ⚠ **各 chunk 結論不一致 → 不確定**。這代表產物不是單一版本的乾淨建置"
-        echo "        （dirty tree／混合建置／手改產物）——**停止用版本推論，改直接量行為**"
-      elif [ "$plan_first" -gt 0 ]; then
-        echo "   ⇒ 位移探針：**已修**（計畫路徑在 deck overlay 之前建立）"
-      else
-        echo "   ⇒ 位移探針：**未修——任務執行中會看不到機與實測軌跡**"
-      fi' 2>/dev/null || echo "   （無法執行位移探針）"
-
-    echo "⚠ 判定表尚未補齊：前端的十列判定表＋判讀邏輯待併入。"
-    echo
-    echo "   併入時必須一併帶進去的守門（UI/UX 2026-08-13）——**沒有它，"
-    echo "   夾區間演算法在前提破裂時仍會吐出一個看似合理的區間**："
-    echo "   1. 每列字串翻成時間約束（在→≥T出現；不在→<T出現），取交集"
-    echo "   2. **交集為空 → 輸出「不對應本 repo 任何單一 commit」，不得輸出區間**"
-    echo "      並停止套用版本表，改直接量行為（產物可能是 dirty tree／分支／手改）"
-    echo "   3. 指紋落在最早一列之前 → 輸出「**早於 T0**」，不得輸出成 T0"
-    echo "   4. **字串階梯與位移探針結論衝突 → 輸出「不確定」，不是多數決**"
-  } > "$FP" 2>&1
-  echo "  bundle 指紋 → $(basename "$FP")"
+    echo "== 判讀注意（前端交付時特別註明）=="
+    echo "1. **位移探針只判即時頁**——刻意縮小到「操作者任務中看不看得到機」，"
+    echo "   不是遺漏。含 plan3d 但非即時頁的 chunk 會被略過並標明。"
+    echo "2. **「無效樣本」不等於「未修」**——只含單一字串的 chunk 一律報無效，"
+    echo "   因為少一個標記可能只是該 chunk 沒用到，不構成任何結論。"
+    echo "3. **不要跨機比對樣本數**：dev 與 production build 的 chunk 切分不同，"
+    echo "   命中的檔案不只數量不同、集合也不同。一致性只能在同一份產物內要求。"
+    echo "4. 三條守門由該腳本自己實作（交集為空不報區間／早於 T0 不報成 T0／"
+    echo "   判準衝突報「不確定」不用多數決），並做過鑑別力測試"
+    echo "   （人造兩版混合 chunk → 正確拒絕給版本）。"
+  } >> "$OUT/09-frontend-fingerprint.txt" 2>/dev/null
+  echo "  前端產物指紋 → 09-frontend-fingerprint.txt"
+else
+  note_missing "frontend-fingerprint.sh（不在 scripts/ 或無執行權限）"
 fi
+
+# ── 10. 來源標頭：**每一份輸出的第一行都要說明它從哪裡收的** ──────
+# 「收不到要明列」的反面同樣成立：**收到的東西要標明從哪收的，否則它會被
+# 當成從『該查的地方』收的**（UI/UX 2026-08-13）。
+for f in "$OUT"/*.txt; do
+  [ -f "$f" ] && [ "$(basename "$f")" != "MISSING.txt" ] && stamp "$f"
+done
 
 # ── 完成 ──────────────────────────────────────────────────────────
 if [ -s "$MISS" ]; then
@@ -285,6 +261,7 @@ if [ -s "$MISS" ]; then
 else
   echo "（無遺漏項目）" > "$MISS"
 fi
+stamp "$MISS"      # 最後才蓋，免得標頭混進上面那份「未能收集」清單
 echo
 echo "完成。打包：  tar czf ${OUT}.tar.gz $OUT"
 echo "⚠ 內含完整 DB dump 與日誌，可能含座標等敏感資訊——傳遞前確認接收方。"
