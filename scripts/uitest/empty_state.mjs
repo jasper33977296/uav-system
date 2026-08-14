@@ -430,6 +430,37 @@ const CASES = [
         : `空:${empty.slice(0, 60)} ／ 500:${down.slice(0, 60)}` };
     },
   },
+  {
+    name: "[實測] build-notice｜版本未知的告示必須**看得見**，且不進飛行畫面",
+    async run(b) {
+      // §0.2f。這一項守的是「空值繞過」的第三種形態：內容在、也渲染了，
+      // 但放在使用者不會展開的地方——我第一版就把它放進機隊頁的
+      // <details> 裡，`allInnerTexts()` 量到 `[""]`，與「文字沒渲染」同形。
+      // 所以這裡斷言的是 **isVisible()**，不是元素存在
+      const page = await (await b.newContext({ viewport: { width: 1400, height: 900 } })).newPage();
+      await page.route("**/api/drones**", (r) => r.fulfill({ json: [] }));
+      await page.route("**/api/sessions**", (r) => r.fulfill({ json: [] }));
+      await page.routeWebSocket(/\/ws\/telemetry/, () => {});
+      const ver = await (await fetch(`${URL_BASE}/api/version`)).json().catch(() => null);
+      await page.goto(`${URL_BASE}/drones`, { waitUntil: "networkidle", timeout: 30000 });
+      await page.waitForTimeout(900);
+      const n = page.locator(".build-notice").first();
+      const shown = (await n.count()) ? await n.isVisible() : false;
+      const txt = (await n.count()) ? (await n.innerText()).trim() : "";
+      await page.goto(`${URL_BASE}/`, { waitUntil: "networkidle", timeout: 30000 });
+      await page.waitForTimeout(600);
+      const onFlight = await page.locator(".build-notice").count();
+      await page.context().close();
+      // 版本已知時不該有告示；未知/dirty 時必須可見且有字
+      const needs = !ver || ver.unknown || ver.dirty;
+      const ok = needs ? (shown && txt.length > 0 && onFlight === 0)
+                       : (!shown && onFlight === 0);
+      return { pass: ok, note: needs
+        ? (ok ? `未知版本：機隊頁可見「${txt.slice(0, 24)}…」、飛行畫面 0`
+              : `可見=${shown} 文字長度=${txt.length} 飛行畫面=${onFlight}`)
+        : `版本已知（${ver.sha}）：不顯示告示` };
+    },
+  },
 ];
 
 /** 反向驗證：資料存在但拿不到（後端 500）時，rest-history 的斷言必須失敗。
