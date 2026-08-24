@@ -186,7 +186,7 @@ def main():
                 fails.append(f"{eq.src_type}→{eq.dst_type} 沒說明範圍外為何不成立")
 
     # ── 10. 送出模式時不得直接索引廠牌表（安全鏈方言洩漏的防再犯）──────
-    #    2026-08-12 實測抓到：`_tick_manual` 的失聯自動懸停寫死
+    #    2026-08-12 實測抓到：失聯自動懸停（已隨 035 移除）當時寫死
     #    `PX4_MODES["hold"]`＝(4,3)，而 ArduPilot 的 param2 直接是模式號——
     #    4 是 **GUIDED** 不是 LOITER(5)。**ArduPilot 機在操作者失聯時會被切進
     #    GUIDED，而不是程式承諾的 Hold**。B0/B1/B2 都沒抓到，因為它直接讀模組層

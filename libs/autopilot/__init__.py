@@ -21,7 +21,7 @@ _NAMES = {Px4Driver.autopilot_raw: Px4Driver.name,
           ArduPilotDriver.autopilot_raw: ArduPilotDriver.name}
 
 CAP_KEYS = ["arm", "takeoff", "land", "rtl", "hold",
-            "mission_upload", "mission_start", "mission_fly", "manual"]
+            "mission_upload", "mission_start", "mission_fly"]
 
 
 def autopilot_name(raw) -> str:
@@ -69,9 +69,6 @@ class UnknownDriver:
 
     def takeoff_plan(self, alt, ground_amsl):
         raise KeyError("未知自駕儀，無起飛序列")
-
-    def manual_prepare(self):
-        return None
 
     def mission_line(self, items):
         return items

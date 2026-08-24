@@ -316,48 +316,6 @@ async def _do_takeoff(sysid: int, alt: float) -> dict:
     return res.get("steps", res)
 
 
-class ManualIn(BaseModel):
-    x: float = 0.0    # pitch：前+ 後−（-1..1）
-    y: float = 0.0    # roll：右+ 左−
-    z: float = 0.0    # throttle：上+ 下−（0＝定高懸停）
-    r: float = 0.0    # yaw rate：右+ 左−
-
-
-@app.post("/api/command/{sysid}/manual/start")
-async def manual_start(sysid: int):
-    """啟用虛擬搖桿：切 POSCTL（位置模式）——鬆手即懸停不墜落。
-    連續操縱的安全鏈在 mav._tick_manual：deadman＋失聯自動 Hold。
-    RC 實體遙控在 PX4 端永遠優先（COM_RC_OVERRIDE），可隨時接管。
-
-    順序關鍵（PX4 雞生蛋）：POSCTL 需要「已存在的手動控制串流」才會
-    engage——先送中位 MANUAL_CONTROL 建立串流，再切模式。"""
-    _require_capability(sysid, "manual")   # POSCTL＋deadman 降級是 PX4 方言
-    router.set_manual(sysid, 0.0, 0.0, 0.0, 0.0)   # 起手中位＝懸停；先開串流
-    await asyncio.sleep(0.5)                        # 讓幾筆 MANUAL_CONTROL 先出去
-    return await _run(sysid, "manual_start", mav.job_set_mode, "position")
-
-
-@app.post("/api/command/{sysid}/manual", status_code=204)
-async def manual_setpoint(sysid: int, body: ManualIn):
-    """搖桿設定點（前端 ~10Hz 串流；deadman 靠持續更新維持）。
-    高頻端點：直接寫入、不 ACK、不留痕（留痕會灌爆 command_log）。"""
-    if not settings.enable_commands:
-        raise HTTPException(403, "指令能力未啟用")
-    for v in (body.x, body.y, body.z, body.r):
-        if not -1.0 <= v <= 1.0:
-            raise HTTPException(422, "搖桿值須在 -1..1")
-    router.set_manual(sysid, body.x, body.y, body.z, body.r)
-
-
-@app.post("/api/command/{sysid}/manual/stop")
-async def manual_stop(sysid: int):
-    """收桿：結束手動並切 Hold（自主懸停）。"""
-    _require_enabled()
-    router.stop_manual(sysid)
-    res = await _run(sysid, "manual_stop", mav.job_set_mode, "hold")
-    return res
-
-
 class UploadIn(BaseModel):
     mission_id: str
 

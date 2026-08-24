@@ -142,9 +142,6 @@ class AutopilotDriver(Protocol):
         參數連 ACK 都不回，指令靜默丟棄）。
         """
 
-    def manual_prepare(self) -> str | None:
-        """進手動控制前要先切到哪個模式；None＝不需要（差異 4）。"""
-
     def mission_line(self, items: list[dict]) -> list[dict]:
         """任務項的線序慣例（差異 5）。
 
@@ -188,7 +185,7 @@ class AutopilotDriver(Protocol):
 
         **值來自一致性測試結果＋執行期前提檢查的交集**（B3），不是人工寫死的
         字典：`ok` 當且僅當「驅動通過該動詞的一致性測試」**且**「這台機的執行期
-        前提滿足」（例：ArduPilot 的手動控制要 `SYSID_MYGCS` 指向我方）。
+        前提滿足」（例：某動詞需要機端參數設對）。
 
         把兩者混為一談會得到兩種錯誤——用測試結果宣告一台沒設好的機可用，或
         用單機設定否定驅動本身的正確性。

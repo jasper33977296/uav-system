@@ -160,7 +160,6 @@ export default function SimpleHud() {
   const wsConnected = useUavStore((s) => s.wsConnected);
   const events = useUavStore((s) => s.events);
   const setPanelOpen = useUavStore((s) => s.setPanelOpen);
-  const deadman = useUavStore((s) => s.deadman);
   // 起飛被拒通知來自任務控制面板（主按鈕已併回面板首行，ui-spec §2）
   const takeoffDeniedAt = useUavStore((s) => s.takeoffDeniedAt);
 
@@ -205,8 +204,6 @@ export default function SimpleHud() {
       ? { key: "ws", t: "與系統失去連線——畫面可能不是最新", sev: "err" as const }
     : droneLost
       ? { key: "lost", t: "無人機失聯——顯示的是最後已知位置", sev: "err" as const }
-    : deadman
-      ? { key: "deadman", t: "操控中斷——無人機已自動懸停", sev: "err" as const }
     : fsActive
       ? { key: `fs:${fsEvent!.id}`, t: "無人機進入緊急狀態——正在自動處置", sev: "err" as const }
     : clsKey === "critical"

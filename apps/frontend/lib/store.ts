@@ -99,9 +99,6 @@ interface UavStore {
   // simple-first：專業數值面板是抽屜（預設關、點訊號格/▤ 開）
   panelOpen: boolean;
   setPanelOpen: (v: boolean) => void;
-  // deadman 已觸發（ManualControl 判定、HUD 異常句顯示）：danger 常駐至解除
-  deadman: boolean;
-  setDeadman: (v: boolean) => void;
   // 起飛被拒（CommandPanel 判定 → HUD toast「點這裡看原因」）
   takeoffDeniedAt: number;
   noticeTakeoffDenied: () => void;
@@ -166,8 +163,6 @@ export const useUavStore = create<UavStore>((set) => ({
   sinrHistories: {},
   panelOpen: false,
   setPanelOpen: (v) => set({ panelOpen: v }),
-  deadman: false,
-  setDeadman: (v) => set({ deadman: v }),
   takeoffDeniedAt: 0,
   noticeTakeoffDenied: () => set({ takeoffDeniedAt: Date.now() }),
   cmdOpenReq: 0,

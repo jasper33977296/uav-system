@@ -31,7 +31,7 @@ _COPTER = {0: "STABILIZE", 1: "ACRO", 2: "ALT_HOLD", 3: "AUTO", 4: "GUIDED",
            20: "GUIDED_NOGPS", 21: "SMART_RTL", 27: "AUTO_RTL"}
 
 CAP_KEYS = ["arm", "takeoff", "land", "rtl", "hold",
-            "mission_upload", "mission_start", "mission_fly", "manual"]
+            "mission_upload", "mission_start", "mission_fly"]
 
 #: 015 實測：**ArduPilot 預設幾乎不送遙測**——只收得到 HEARTBEAT／PARAM_VALUE／
 #: STATUSTEXT／TIMESYNC 四種。送一次 REQUEST_DATA_STREAM 後變 32 種。
@@ -135,9 +135,6 @@ class ArduPilotDriver:
         return {"needs_guided": self.takeoff_needs_guided, "param7": alt,
                 "blank": 0.0, "alt_semantics": "relative"}
 
-    def manual_prepare(self) -> str | None:
-        return "position"            # POSHOLD
-
     def mission_line(self, items: list[dict]) -> list[dict]:
         """ArduPilot 把 **home 當 seq 0**，實際航點從 seq 1 起算。"""
         if not items:
@@ -188,19 +185,4 @@ class ArduPilotDriver:
         # 以下**維持 unverified**（沒驗過就不開）：
         #   mission_start/mission_fly：AUTO 任務執行整段尚未驗
         #
-        # manual：ArduPilot 只接受 SYSID_MYGCS 指定來源的 MANUAL_CONTROL，
-        # 不符就靜默丟棄（無 ACK、事後偵測不到）。**連上時讀回該參數**，用具體
-        # 事實決定開不開，並在 reason 給出現值與該改成什麼
-        # （ui-spec §0.2c 條款 6：前提可事前查證時，就不要讓使用者用失敗去發現它）。
-        mygcs = (ctx or {}).get("sysid_mygcs")
-        if mygcs is None:
-            reasons["manual"] = ("尚未讀到機端 SYSID_MYGCS（剛連上或參數讀取中）"
-                                 "——搖桿需該值等於 254")
-        elif int(mygcs) == GCS_SYSID:
-            caps["manual"] = "ok"
-            reasons.pop("manual", None)
-        else:
-            reasons["manual"] = (
-                f"機端 SYSID_MYGCS={int(mygcs)}，需改為 {GCS_SYSID} 才會接受本系統的"
-                "搖桿指令（不改的話指令會被靜默丟棄、沒有任何錯誤訊息）")
         return caps, reasons
