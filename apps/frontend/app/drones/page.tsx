@@ -53,7 +53,6 @@ export default function Drones() {
   const [dronesErr, setDronesErr] = useState(false);
   const [sessions, setSessions] = useState<Session[]>([]);
   const [name, setName] = useState("");
-  const [url, setUrl] = useState("");
   const [err, setErr] = useState<string | null>(null);
   const live = useUavStore((s) => s.live);
   const fleet = useUavStore((s) => s.fleet);
@@ -108,13 +107,13 @@ export default function Drones() {
     const res = await fetch(`${API}/api/drones`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ name: name.trim(), connection_url: url.trim() || null }),
+      body: JSON.stringify({ name: name.trim() }),
     });
     if (!res.ok) {
       setErr((await res.json()).detail ?? `註冊失敗（${res.status}）`);
       return;
     }
-    setName(""); setUrl("");
+    setName("");
     reload();
   }
 
@@ -152,11 +151,11 @@ export default function Drones() {
             value={name}
             onChange={(e) => setName(e.target.value)}
           />
-          <input
-            placeholder="連線位址（選填，如 udpin://0.0.0.0:14540）"
-            value={url}
-            onChange={(e) => setUrl(e.target.value)}
-          />
+          {/* 連線位址輸入已移除（issues/036）：單埠多機設計下那是**地面站自己的
+              收聽埠**、每台機都一樣，填了也沒有任何讀取端。留著它等於在教使用者
+              一個錯的心智模型——「每台機有自己的連線位址」。
+              飛控型號同理不必填：它由 HEARTBEAT 自動偵測（連上才知道，
+              註冊當下本來就不知道，不假裝知道）。 */}
           <button disabled={!name.trim()} onClick={register}>註冊</button>
         </div>
         {err && <div className="form-err">{err}</div>}
@@ -194,7 +193,6 @@ export default function Drones() {
                 （刪除/匯出安全流程照舊） */}
             {open[d.id] && (<>
             <div className="drone-actions">
-              <span className="meta">{d.connection_url ?? ""}</span>
               <span className="spacer" />
               <button className="btn-plain btn-sm"
                 onClick={async () => {

@@ -272,6 +272,7 @@ class MavlinkRx:
         ent["seen"] = time.monotonic()
         st = ent["state"]
         st.connected = True
+        st.ever_connected = True
         msg_registry.record(st, msg)     # 014-B：每則訊息進該機登錄表（型別分派前）
 
         if t == "HEARTBEAT":
@@ -329,8 +330,17 @@ class MavlinkRx:
                 if hasattr(msg, "autopilot") else st.autopilot_raw)
             st.param_total = msg.param_count
         elif t == "GLOBAL_POSITION_INT":
-            st.lat = msg.lat / 1e7
-            st.lon = msg.lon / 1e7
+            # **0,0 是自駕儀的「不知道」哨兵，不是幾內亞灣外海。**
+            # GLOBAL_POSITION_INT 在沒有位置估計時送 lat=lon=0；照寫會把
+            # `lat: float | None` 這個誠實的型別（None＝不知道）覆蓋成一個
+            # 看起來有效的假座標，地圖的 `!= null` 過濾器擋不住 0。
+            # 判準用哨兵值而不是 gps_fix：位置來源不一定是 GPS（室內光流、
+            # 動捕都可能），拿「GPS 沒定位」去否定位置會誤殺那些來源。
+            # **只擋經緯度**：氣壓高度與羅盤航向不需要位置估計就成立，
+            # 一起跳過會讓沒有 GPS 的機連高度都讀不到（室內測試就是這種狀態）。
+            if not (msg.lat == 0 and msg.lon == 0):
+                st.lat = msg.lat / 1e7
+                st.lon = msg.lon / 1e7
             st.alt_msl = msg.alt / 1000.0
             st.alt_rel = msg.relative_alt / 1000.0
             if msg.hdg != 65535:

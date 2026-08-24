@@ -26,7 +26,12 @@ class LiveState:
     drone_id: str | None = None
     drone_name: str | None = None    # 事件流等 UI 顯示用（多機時必須能分辨）
     session_id: str | None = None
-    connected: bool = False          # MAVLink 連線狀態
+    connected: bool = False          # MAVLink 連線狀態（近期有訊息）
+    #: 這台機**曾經**產生過遙測嗎。用來分辨兩種完全不同的「沒有資料」：
+    #: 斷線（有最後已知位置，值得顯示）vs 從未連上（什麼都沒有，不該佔畫面）。
+    #: 主機在啟動時就會被放進 fleet（見 main.py），所以「在 fleet 裡」不等於
+    #: 「連過」——沒有這個旗標就分不出來。
+    ever_connected: bool = False
 
     # 飛行遙測
     lat: float | None = None
@@ -156,7 +161,7 @@ class LiveState:
             "drone_id": self.drone_id,
             "drone_name": self.drone_name,
             "session_id": self.session_id,
-            "connected": self.connected,
+            "connected": self.connected, "ever_connected": self.ever_connected,
             "lat": self.lat, "lon": self.lon,
             "alt_msl": self.alt_msl, "alt_rel": self.alt_rel,
             "heading": self.heading,
