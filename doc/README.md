@@ -13,6 +13,7 @@
 | [architecture.md](architecture.md) | 系統架構總覽：研究目標、三服務分工（backend/command/frontend）、資料流 |
 | [data-schema.md](data-schema.md) | 資料庫設計：靜態註冊/架次/時序量測/事件四類，DDL 在 db/init/ |
 | [deployment.md](deployment.md) | 真機部署完整手冊（RB5＋地面站全設定），SITL 開發環境見附錄 |
+| [drone-registration.md](drone-registration.md) | **無人機註冊流程**：接一台新機的完整步驟、換機／退役、名字對不上的排查、以及系統靠什麼認出哪台是哪台 |
 | [frontend.md](frontend.md) | 前端設計：四頁結構、map-centric、圖層誠實原則、視覺平滑邊界 |
 | [onboard-telemetry.md](onboard-telemetry.md) | 機上 5G 量測回傳：companion 上的 node 如何送資料回地面站 |
 | [qgc-integration.md](qgc-integration.md) | QGC 分工與連線拓撲（QGC＝板凳工具＋緊急備援） |
