@@ -22,6 +22,7 @@ import uuid
 import asyncpg
 from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import JSONResponse
 from pydantic import BaseModel
 
 # 每請求的 client 來源（X-Client header）——留痕歸因用（issue 013-B：驗收 rig 帶
@@ -183,8 +184,24 @@ async def _capture_client(request, call_next):
 
 @app.get("/healthz")
 async def healthz():
-    return {"ok": True, "enabled": settings.enable_commands,
-            "gcs_sysid": mav.GCS_SYSID, "drones": router.snapshot()}
+    """服務與各機連線狀態。**`ok` 講的是「還能不能指揮飛機」**，不是
+    「HTTP 層還活著」——issue 034：2026-08-11 router 執行緒被網路瞬斷殺死後，
+    心跳停發、指令全逾時，而這裡照回 `{"ok": true}`，於是沒有任何人與腳本
+    看得出異常，拖了近一小時才發現。失效不得冒充合法狀態（ui-spec §0.2e）。
+    """
+    alive = router is not None and router.alive()
+    body = {"ok": alive, "router_alive": alive,
+            "enabled": settings.enable_commands, "gcs_sysid": mav.GCS_SYSID,
+            "drones": router.snapshot() if router is not None else {}}
+    if not alive:
+        # 連狀態碼都要說實話：只看狀態碼的檢查（curl -f／docker healthcheck／
+        # 外部監看）不會去讀 body，回 200 就是對它們謊報健康。
+        body["detail"] = (
+            "MAVLink router 迴圈未在運轉（執行緒死亡，或卡住超過 "
+            f"{mav.STALL_S:.0f} 秒）：GCS 心跳已停發、指令不會送達飛機。"
+            "查 command 服務日誌後重啟服務。")
+        return JSONResponse(body, status_code=503)
+    return body
 
 
 #: 「解鎖後機體會自己動」的模式動詞。在這些模式下裸 arm ＝ 立即自主飛行。

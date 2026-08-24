@@ -32,6 +32,10 @@ log = logging.getLogger("command.mav")
 M = mavutil.mavlink
 GCS_SYSID = 254
 MYGCS_REREAD_S = 30.0   # SYSID_MYGCS 重讀間隔（見 _recv：使用者改了要看得到）
+#: 活性門檻：主迴圈超過這麼久沒跑過一圈＝卡住（見 MavRouter.alive）。
+#: 正常節奏是 run() 每圈 ≤0.2s、指令對話期間 _wait() 每圈 ≤0.2s，
+#: 兩條路徑都會呼叫 _tick()，所以 5s 對「正常但忙碌」有極大餘裕。
+STALL_S = 5.0
 
 # MAV_TYPE → 粗略載具類別（選配，前端徽章分 ArduCopter/ArduPlane 用）
 _VEHICLE_TYPES = {2: "quadrotor", 13: "hexarotor", 14: "octorotor",
@@ -100,6 +104,9 @@ class MavRouter(threading.Thread):
         self.manual: dict[int, dict] = {}
         self._manual_tx = 0.0
         self._send_warn_t = 0.0             # sendto 失敗告警節流（見 _sendto）
+        # 迴圈活性時戳（見 alive()／STALL_S）。初值設為現在而非 0：執行緒
+        # start() 之前就被健康檢查問到時，不該回報成「卡住」。
+        self._alive_t = time.monotonic()
 
     # ── API 層入口（任意執行緒呼叫；在 executor 裡跑，不阻塞事件迴圈）──
     def submit(self, fn, *args, timeout: float = 30.0):
@@ -155,6 +162,19 @@ class MavRouter(threading.Thread):
             except Exception:                 # _tick/_recv 的網路例外等——吞掉續跑
                 log.exception("router 迴圈例外（網路瞬斷等），吞掉續跑")
 
+    def alive(self) -> bool:
+        """迴圈還在轉嗎——`/healthz` 用這個判斷服務是不是殭屍（issue 034）。
+
+        兩件事都要問，因為它們是**不同的死法**：
+
+        - `is_alive()`：執行緒還在嗎。run() 的 catch-all 之後純例外殺不死它，
+          但 BaseException（MemoryError／SystemExit）仍會。
+        - `_alive_t`：迴圈還在轉嗎。執行緒活著卻卡在某個不會回來的呼叫上
+          （socket 進不明狀態、job 內無限等待），對飛機的效果與死掉相同：
+          心跳停發、指令不動。只問 `is_alive()` 會漏掉這一種。
+        """
+        return self.is_alive() and (time.monotonic() - self._alive_t) < STALL_S
+
     def set_manual(self, sysid: int, x: float, y: float, z: float, r: float):
         """更新手動設定點（-1..1；z: 0=定高、+上−下）。API 執行緒高頻呼叫。"""
         m = self.manual.setdefault(sysid, {})
@@ -169,6 +189,10 @@ class MavRouter(threading.Thread):
 
     def _tick(self):
         now = time.monotonic()
+        # 活性時戳。蓋在 _tick 而不是 run()：指令對話期間 run() 停在 _wait()
+        # 裡數十秒，但 _wait() 每圈都呼叫 _tick()（心跳不能斷），所以這裡才是
+        # 「迴圈真的有在轉」的唯一共同點。
+        self._alive_t = now
         if self.heartbeat and now - self._hb_t >= 1.0:
             self._hb_t = now
             for sysid in list(self.drones):
