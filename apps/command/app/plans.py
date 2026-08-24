@@ -82,6 +82,11 @@ def parse(path: Path) -> dict:
         "nav_count": len(nav),
         "home": mission.get("plannedHomePosition"),   # [lat, lon, alt_msl]
         "cruise_speed": mission.get("cruiseSpeed"),
+        # 037：`.plan` 自報的目標機種（MAV_AUTOPILOT／MAV_TYPE，與 HEARTBEAT
+        # 同源）。外部觸發（POST /api/start）走的是這條路徑，不能只有 UI 匯入
+        # 那條看得到機種——否則自動化流程會是唯一沒有警示的入口。
+        "firmware_type": mission.get("firmwareType"),
+        "vehicle_type": mission.get("vehicleType"),
         "hover_speed": mission.get("hoverSpeed"),
         "skipped": skipped,
     }

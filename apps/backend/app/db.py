@@ -37,6 +37,13 @@ async def migrate() -> None:
     # issue 020：每機「當前飛的任務」——command 上傳任務時設，create_session
     # 據此綁 session.mission_id（任務↔架次因果鏈，非一次性補丁）
     await pool.execute("ALTER TABLE drones ADD COLUMN IF NOT EXISTS current_mission_id UUID")
+    # 037：.plan 自報的目標機種。QGC 的 firmwareType/vehicleType 用的是
+    # MAV_AUTOPILOT／MAV_TYPE 這兩個 enum，**與 HEARTBEAT 同源**，所以可以
+    # 直接跟機端偵測到的值比對。NULL＝這份任務沒說（手繪、舊資料、從機上讀回）
+    await pool.execute(
+        "ALTER TABLE missions ADD COLUMN IF NOT EXISTS firmware_type INT")
+    await pool.execute(
+        "ALTER TABLE missions ADD COLUMN IF NOT EXISTS vehicle_type INT")
     # current_mission_id → missions 的參照完整性（ON DELETE SET NULL）：少了它，
     # 刪任務會讓 current_mission_id 變懸空指標，之後 create_session 綁 mission_id
     # 就撞 flight_sessions_mission_id_fkey → 解鎖建 session 每次拋錯 → 該機 armed
