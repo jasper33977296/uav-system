@@ -64,6 +64,7 @@
 | [033](033-emergency-availability-design.md) | 意外狀況下的可用性保障：分層防線設計（機上 failsafe 核定／緊急通道／手動接管／deploy guard／心跳解耦）| high | open | 跨服務＋部署流程 |
 | [034](034-healthz-hides-zombie-router.md) | `/healthz` 不反映 router 死活：殭屍服務照回 ok（心跳停發近一小時無人察覺）| high | in-progress | `apps/command/app/main.py:184` |
 | [035](035-remove-manual-control.md) | 移除虛擬搖桿：系統範圍收斂為航路管理＋飛行安全，連續操縱交給實體遙控器（含 026 待決點 1 定案）| medium | in-progress | `apps/command`／`libs/autopilot`／`apps/frontend` |
+| [036](036-live-page-display-honesty.md) | 即時頁把「沒有資料」畫成「有資料」：斷線／從未連上／無定位三者同形，0,0 哨兵被當成座標畫在幾內亞灣 | medium | in-progress | `mavlink_rx.py`／`main.py`／`MapView.tsx` |
 
 「✔實測確認」= 2026-08-03 首次實飛（SITL 起飛 → 進干擾區 → RTL）取得的實際資料佐證，
 不只是讀碼推論。詳見 [progress/log/2026-08-03.md](../progress/log/2026-08-03.md)。

@@ -1,5 +1,5 @@
 "use client";
-import { IconLayer, TextLayer } from "@deck.gl/layers";
+import { IconLayer, ScatterplotLayer, TextLayer } from "@deck.gl/layers";
 import { MapboxOverlay } from "@deck.gl/mapbox";
 import maplibregl from "maplibre-gl";
 import "maplibre-gl/dist/maplibre-gl.css";
@@ -359,18 +359,21 @@ export default function MapView() {
   }, []);
 
   // 即時更新：懸浮機體 + 航向投影 + 絲帶
-  useEffect(
-    () =>
-      useUavStore.subscribe((s) => {
+  useEffect(() => {
+    const paint = (s: ReturnType<typeof useUavStore.getState>) => {
+      {
         const map = mapRef.current;
         const t = s.live;
-        if (!map || !t || t.lat == null || t.lon == null) return;
+        if (!map) return;
 
         // 舊的主機方向標（三角 marker）自 §2.4b 起移除：機體圖示本身已
         // 帶朝向，兩個朝向指示同時出現＝同一資訊兩個住所，且它只畫主機、
         // 與多機圖示不一致（heading 缺值時還會固定指北——假朝向）
 
-        if (!centeredRef.current) {
+        // **位置守衛只包這一段。** 原本它擋在整個 callback 開頭，於是主機沒有
+        // 定位時（GPS 未鎖、剛連上、或室內）連別台機的軌跡與圖示都一起停更——
+        // 一台機的缺值癱瘓整張地圖。置中確實需要座標，圖層更新不需要。
+        if (t && t.lat != null && t.lon != null && !centeredRef.current) {
           centeredRef.current = true;
           map.jumpTo({ center: [t.lon, t.lat], zoom: 16 });
           // 參考線同時錨定到這台機的位置（第一筆座標＝本次的現場）
@@ -387,6 +390,15 @@ export default function MapView() {
         // 空中航跡：deck.gl PathLayer——attribute 更新是同幀 GPU buffer
         // 寫入（無 setData 整源替換的閃爍），5Hz 直更不需節流。
         // 編隊預覽層一併掛上（非編隊時為空陣列，零成本）
+        // 斷線閃爍的相位。用 Date.now() 而不是累加計數：即使重繪節奏不穩
+        // （store 更新與本地時鐘交錯觸發），閃爍節奏仍由真實時間決定，
+        // 不會忽快忽慢。
+        const blink = 0.5 + 0.5 * Math.sin(Date.now() / 260);
+        // 透明度隨相位起伏但**不歸零**：閃到全透明會有半個週期完全看不出
+        // 異常，而「看不出異常」正是這個標示要防的事
+        const lostColor: [number, number, number, number] =
+          [255, 69, 58, Math.round(110 + 145 * blink)];
+
         overlayRef.current?.setProps({ layers: [
           ...routeLayer("route3d", s.trails),
           ...pathsLayer("formation-preview", previewRef.current),
@@ -396,6 +408,31 @@ export default function MapView() {
             Object.entries(s.fleet).map(([id, t]) => ({
               id, lat: t.lat, lon: t.lon, alt_rel: t.alt_rel })),
             zoomRef.current, (id) => rgba(colorFor(id))),
+          // 斷線標記（使用者定案 2026-08-24）：紅色外框閃爍。
+          // **排在機體圖示之前**＝畫在它下面，不遮蔽本體——找得到機在哪
+          // 永遠優先於任何標示（§2.4c 硬規則的同一條理由）。
+          // 只標「曾連上但現在斷線」的機：從未連上的根本不會進 fleet
+          // （後端廣播已擋，見 issues/036）。
+          new ScatterplotLayer({
+            id: "drone-lost-ring",
+            data: Object.entries(s.fleet)
+              .filter(([, t]) => t.connected === false
+                && t.lat != null && t.lon != null)
+              .map(([id, t]) => ({
+                id,
+                pos: [t.lon!, t.lat!, t.alt_rel ?? 0] as [number, number, number],
+              })),
+            getPosition: (d: { pos: [number, number, number] }) => d.pos,
+            stroked: true, filled: false,
+            radiusUnits: "pixels" as const, lineWidthUnits: "pixels" as const,
+            getRadius: 30 + 12 * blink,
+            getLineWidth: 2 + 2 * blink,
+            getLineColor: lostColor,
+            updateTriggers: {
+              getRadius: blink, getLineWidth: blink, getLineColor: blink,
+              getPosition: fleetIds,
+            },
+          }),
           // 機體圖示：2D 四旋翼俯視剪影、著識別色、**對稱不旋轉**
           // （§2.4c 使用者裁定：方向由軌跡承載）。billboard:false＝貼地平面，
           // 傾斜視角下與軌跡同一透視。
@@ -522,10 +559,20 @@ export default function MapView() {
             .map(([id, tr]) => trailLineString(tr, { dcolor: colorFor(id) }))
             .filter((f): f is GeoJSON.Feature => f !== null),
         });
+      }
+    };
 
-      }),
-    []
-  );
+    const unsub = useUavStore.subscribe(paint);
+    // **斷線閃爍必須由本地時鐘驅動。** 機一斷線，遙測就停了＝store 不再變動
+    // ＝畫面不會重繪，於是「已經斷線」這件事會因為斷線本身而顯示不出來。
+    // 這是 ui-spec §0.2g 那條通則的又一個實例：**故障的偵測不得依賴故障的
+    // 那條路徑**。只在真的有機斷線時才跑，沒有斷線機時零成本。
+    const timer = setInterval(() => {
+      const s = useUavStore.getState();
+      if (Object.values(s.fleet).some((t) => t.connected === false)) paint(s);
+    }, 120);
+    return () => { unsub(); clearInterval(timer); };
+  }, []);
 
   return (
     <div className="map-wrap">

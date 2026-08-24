@@ -97,6 +97,14 @@ async def _broadcast_loop() -> None:
                 # primary 旗標：多機廣播中標記「MAVLink 主機」，前端側欄鎖定它
                 # （否則僚機的訊息先到會被誤認成主機）
                 for st in list(fleet.values()):
+                    # **從未產生過遙測的機不廣播**——沒有遙測可以報。
+                    # 主機在啟動時就進 fleet（見 lifespan），所以這裡不擋的話，
+                    # 一台從來沒連上的機會從後端啟動那一刻起就佔著即時頁，
+                    # 而且長得跟有資料的機一樣（issues/036）。
+                    # 注意**不是擋 `connected`**：斷線但曾連上的機要繼續送
+                    # 最後已知位置（使用者定案），前端以紅框閃爍標示斷線。
+                    if not st.ever_connected:
+                        continue
                     await manager.broadcast({"type": "telemetry",
                                              "primary": st is live,
                                              **st.telemetry_dict()})
