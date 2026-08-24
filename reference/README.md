@@ -32,6 +32,24 @@
 | `mavlink-requesting-data.rst` | 資料流請求（REQUEST_DATA_STREAM vs SET_MESSAGE_INTERVAL） | 同上 |
 | `copter-mode.h` | **Copter 模式號權威表**（STABILIZE=0…AUTO=3、GUIDED=4、LOITER=5、RTL=6、LAND=9、POSHOLD=16…） | ArduPilot/ardupilot `ArduCopter/mode.h` |
 
+## fibocom-fm160/ — 機上 5G 模組的 AT 指令（訊號採樣的依據）
+
+抓取日期：2026-08-24。機上模組是 **Fibocom FM160-JK**，
+**不是** `LinkSample` schema 註解假設的 Quectel RM500Q-GL——
+`AT+QENG="servingcell"` 在它上面直接回 `ERROR`。
+
+| 檔案 | 內容 | 來源 |
+|---|---|---|
+| `README.md` | **`AT+GTCCINFO?` NR 欄位對照表**（含進位判定的推導與交叉驗證）、CESQ 尾三碼順序、3GPP 換算公式 | 本專案整理 |
+| `Fibocom_FM350_AT_Commands_User_Manual_V2.10.pdf` | 原始手冊（§11.1.15 定義 GTCCINFO）。FM160 手冊未公開流通，用同家族 FM350 並以實測交叉驗證 | minipc.de 鏡像 |
+| `GTCCINFO-excerpt.txt` | §11.1.15 節錄（UMTS/LTE/NR/EN-DC 四種格式） | 上述 PDF |
+| `CESQ-excerpt.txt` | CESQ 相關段落節錄 | 上述 PDF |
+
+⚠️ **對照表錯了會靜默污染研究資料**：`pci` 與 `ss_sinr` 的數值域重疊，
+填錯不會報錯，只會讓「干擾發生時哪個細胞在服務」的分析得到看似合理的錯誤答案。
+所以未確認的欄位一律留 `None`，原始回應整包存進 `LinkSample.raw` 供日後重算。
+同 `px4-events/` 的「版本對不上就 fallback 到 raw id」原則。
+
 ## px4/ — PX4 私有慣例（現有實作的依據，留作對照）
 
 | 檔案 | 內容 | 來源 |
