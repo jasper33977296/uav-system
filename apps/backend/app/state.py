@@ -62,6 +62,17 @@ class LiveState:
     ekf_ok: bool | None = None
     landed_state: str | None = None       # on_ground / in_air / takeoff / landing
     autopilot_raw: int | None = None      # MAV_AUTOPILOT_*（方言分表；issue 015）
+    # ── 板子身分（038）：AUTOPILOT_VERSION 帶的硬體識別 ──────────────
+    #: 飛控板的唯一 ID（`uid2`，十六進位字串）。**這是目前唯一機器可驗證的
+    #: 身分**——sysid 只是機上一個可以隨時改的參數，換板子、重刷韌體、
+    #: 兩台都用預設 1 號，系統都分不出來（issues/038）。
+    #: ⚠ 它認的是**飛控板**不是機架：板子拆到別台飛機上，這個 ID 跟著板子走。
+    #: 機架序號只能由人維護。
+    board_uid: str | None = None
+    board_version: int | None = None
+    board_vendor_id: int | None = None
+    board_product_id: int | None = None
+    flight_sw_version: str | None = None  # 已解碼的人話版本，如 "4.7.0 (official)"
     vehicle_type_raw: int | None = None   # MAV_TYPE_*
     sysid: int | None = None              # 該機當前 MAVLink sysid（前端選中機↔指令對象）
     # IMU 面板（即時頁抽屜；ui-spec §2.6）：ATTITUDE 角速率＋HIGHRES_IMU 加速度/陀螺/
@@ -152,6 +163,10 @@ class LiveState:
             "ready": ready,
             "not_ready_reasons": reasons,
             "autopilot": autopilot_name(self.autopilot_raw),  # px4/ardupilot/unknown
+            # 038：板子身分。**不是每台機都有**——要主動請求 AUTOPILOT_VERSION
+            # 才拿得到，還沒問到時是 None（誠實的「不知道」）
+            "board_uid": self.board_uid,
+            "flight_sw_version": self.flight_sw_version,
             "mav_sysid": self.sysid,          # 前端：選中機（drone_id）→ 指令對象（sysid）
             "mav_state": self.mav_state,
             "landed_state": self.landed_state,

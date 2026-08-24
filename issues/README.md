@@ -66,6 +66,7 @@
 | [035](035-remove-manual-control.md) | 移除虛擬搖桿：系統範圍收斂為航路管理＋飛行安全，連續操縱交給實體遙控器（含 026 待決點 1 定案）| medium | in-progress | `apps/command`／`libs/autopilot`／`apps/frontend` |
 | [036](036-live-page-display-honesty.md) | 即時頁把「沒有資料」畫成「有資料」：斷線／從未連上／無定位三者同形，0,0 哨兵被當成座標畫在幾內亞灣 | medium | in-progress | `mavlink_rx.py`／`main.py`／`MapView.tsx` |
 | [037](037-plan-autopilot-mismatch.md) | `.plan` 自報的 firmwareType／vehicleType 被完全忽略：PX4 寫的航線靜默上到 ArduPilot 機，事後查不出原因 | **high** | in-progress | 匯入／入庫／上傳三處 |
+| [038](038-board-identity.md) | 系統不知道哪台是哪台：sysid 是唯一的身分鏈，而 serial_no 只是名稱複製品。本階段請求並記錄飛控板 UID | medium | in-progress | `mavlink_rx.py`＋uav-agent |
 
 「✔實測確認」= 2026-08-03 首次實飛（SITL 起飛 → 進干擾區 → RTL）取得的實際資料佐證，
 不只是讀碼推論。詳見 [progress/log/2026-08-03.md](../progress/log/2026-08-03.md)。

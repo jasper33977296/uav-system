@@ -44,6 +44,9 @@ async def migrate() -> None:
         "ALTER TABLE missions ADD COLUMN IF NOT EXISTS firmware_type INT")
     await pool.execute(
         "ALTER TABLE missions ADD COLUMN IF NOT EXISTS vehicle_type INT")
+    # 038：飛控板的唯一 ID（AUTOPILOT_VERSION.uid2）。**目前唯一機器可驗證的
+    # 身分**——sysid 只是機上可改的參數。NULL＝還沒問到（不是「沒有」）
+    await pool.execute("ALTER TABLE drones ADD COLUMN IF NOT EXISTS board_uid TEXT")
     # current_mission_id → missions 的參照完整性（ON DELETE SET NULL）：少了它，
     # 刪任務會讓 current_mission_id 變懸空指標，之後 create_session 綁 mission_id
     # 就撞 flight_sessions_mission_id_fkey → 解鎖建 session 每次拋錯 → 該機 armed
@@ -181,6 +184,19 @@ async def migrate() -> None:
     # drone_id 的唯一用途（刪機時清 NULL）已同批從 api.py 移除。
     for col in ("status", "geometry", "drone_id"):
         await pool.execute(f"ALTER TABLE missions DROP COLUMN IF EXISTS {col}")
+
+
+async def set_board_uid(drone_id: str | None, uid: str) -> None:
+    """記下這筆記錄目前對應的飛控板。
+
+    **這一步只記錄，不比對、不擋。** 之後要做的「UID 變了就示警」（＝這筆記錄
+    現在指的是別塊板子）需要先有一段時間的真實資料，確認 uid2 在同一塊板子上
+    跨重開機/韌體升級是穩定的——沒驗證過就先加告警，只會製造假警報。
+    """
+    if not drone_id:
+        return
+    await pool.execute(
+        "UPDATE drones SET board_uid = $2 WHERE id = $1::uuid", drone_id, uid)
 
 
 async def drone_for_sysid(sysid: int) -> tuple[str, str]:
