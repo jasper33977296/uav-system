@@ -30,7 +30,7 @@ _AUTO = {1: "READY", 2: "TAKEOFF", 3: "HOLD", 4: "MISSION",
 _INT_PARAM_TYPES = frozenset(range(1, 9))
 
 CAP_KEYS = ["arm", "takeoff", "land", "rtl", "hold",
-            "mission_upload", "mission_start", "mission_fly", "manual"]
+            "mission_upload", "mission_start", "mission_fly"]
 
 
 class Px4Driver:
@@ -117,9 +117,6 @@ class Px4Driver:
         return {"needs_guided": self.takeoff_needs_guided,
                 "param7": ground_amsl + alt,
                 "blank": float("nan"), "alt_semantics": "amsl"}
-
-    def manual_prepare(self) -> str | None:
-        return "position"            # POSCTL
 
     def mission_line(self, items: list[dict]) -> list[dict]:
         return items                 # PX4 不把 home 當 seq 0

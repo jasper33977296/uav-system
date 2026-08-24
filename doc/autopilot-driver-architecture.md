@@ -222,13 +222,13 @@ MCP 對研究 agent 暴露的是**任務層動詞**（如 `submit_mission(N 台)
 | 1 | 設定模式編碼 | `command/mav.py` `dialect()` | `Driver.set_mode()` | B1 |
 | 2 | 模式解讀 | `backend/mavlink_rx.py` `_mode_name` | `Driver.decode_mode()` | B2 |
 | 3 | 起飛序列 | `command/mav.py` `job_takeoff` | `Driver.takeoff()` | B1 |
-| 4 | 手動前置模式 | `command/main.py` manual | `Driver.manual_prepare()` | B1 |
+| 4 | ~~手動前置模式~~ | — | **已隨搖桿移除（issues/035）** | — |
 | 5 | 任務上傳慣例 | `command/mav.py` `job_upload_mission` | `Driver.upload_mission()` | B1 |
 | 6 | 遙測串流初始化 | `backend/mavlink_rx.py` `_maintain_streams` | `Driver.on_connect()`／`keepalive()` | B2 |
 | 7 | 可飛判斷來源 | `backend/state.py` `readiness()` | `Driver.readiness()` | B2 |
 | 8 | EKF 健康訊息名 | `backend/mavlink_rx.py` | `Driver.adjust_incoming()`（**§5.3 後修正**：進 dispatch 前正規化，不是解碼時分支） | B2 |
 | 9 | 空白參數慣例（NaN） | `command/mav.py` `job_takeoff` | `Driver` 內部常數 | B1 |
-| 10 | 搖桿來源前提 | `command/capabilities.py` | **執行期前提檢查**（不是驅動靜態表） | B3 |
+| 10 | ~~搖桿來源前提~~ | — | **已隨搖桿移除（issues/035）** | — |
 
 第 10 項刻意不進驅動的靜態能力表——它是**逐台的執行期事實**（這台機的參數值），
 與「這個驅動會不會講方言」是不同的東西（見 §3）。

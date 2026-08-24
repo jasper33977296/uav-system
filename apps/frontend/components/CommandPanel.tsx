@@ -10,7 +10,6 @@
 import { useEffect, useRef, useState } from "react";
 
 import { colorFor } from "@/components/droneLayer";
-import ManualControl from "@/components/ManualControl";
 import { modeLabel } from "@/lib/modeVerb";
 import { API, CLIENT_HEADERS, COMMAND_API } from "@/lib/signal";
 import { useUavStore } from "@/lib/store";
@@ -20,12 +19,11 @@ import { useUavStore } from "@/lib/store";
  * capabilities 是 command 服務端 gating 的同一真相——UI 與實際放行永不背離。 */
 type CapState = "ok" | "unverified" | "unsupported";
 const CAP_KEYS = ["arm", "takeoff", "land", "rtl", "hold",
-  "mission_upload", "mission_start", "mission_fly", "manual"] as const;
+  "mission_upload", "mission_start", "mission_fly"] as const;
 type CapKey = (typeof CAP_KEYS)[number];
 const CAP_LABELS: Record<CapKey, string> = {
   arm: "解鎖", takeoff: "起飛", land: "降落", rtl: "RTL", hold: "Hold",
   mission_upload: "上傳", mission_start: "啟動任務", mission_fly: "起飛→任務",
-  manual: "手動",
 };
 const AP_LABELS: Record<string, string> = { px4: "PX4", ardupilot: "ArduPilot" };
 
@@ -800,10 +798,6 @@ export default function CommandPanel() {
           </div>
           {capHints(["arm", "takeoff", "rtl", "hold", "land"])}
 
-          {/* 手動：虛擬搖桿（串流/deadman 邏輯在 ManualControl 內自理） */}
-          <div className="cmd-sec">手動</div>
-          <ManualControl sid={sid}
-            lockedReason={caps && capState("manual") !== "ok" ? capReason("manual") : null} />
           </>)}
           </>)}
 

@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """一致性測試：切模式（issue 026 B3）。
 
-覆蓋能力鍵 `hold`／`rtl`／`land`（`position` 另計入 `manual`，見 `_caps.py`）。
+覆蓋能力鍵 `hold`／`rtl`／`land`（`position` 已隨虛擬搖桿移除，見 issues/035）。
 
 **只看機端實際停在哪個模式，不看 ACK。** 015 的驗收紀律就是這條：ArduPilot 對
 不支援的模式號**照樣回 ACCEPTED**，只有讀回 HEARTBEAT 才知道有沒有真的切過去。

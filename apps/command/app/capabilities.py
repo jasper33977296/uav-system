@@ -14,7 +14,7 @@
 """
 from autopilot import CAP_KEYS, autopilot_name, get_driver  # noqa: F401
 
-GCS_SYSID = 254            # 與 mav.GCS_SYSID 一致（ArduPilot 的 SYSID_MYGCS 要等於它）
+GCS_SYSID = 254            # 與 mav.GCS_SYSID 一致
 
 _RAW_BY_NAME = {"px4": 12, "ardupilot": 3}
 
@@ -37,8 +37,8 @@ ENDPOINT_CAP = {
     "arm": "arm", "disarm": "arm",
     "takeoff": "takeoff", "land": "land", "rtl": "rtl", "hold": "hold",
     "mission_upload": "mission_upload", "mission_start": "mission_start",
-    "mission_fly": "mission_fly", "manual": "manual",
+    "mission_fly": "mission_fly",
     # set_mode/{mode} 的 mode → 能力鍵
     "mode:rtl": "rtl", "mode:hold": "hold", "mode:land": "land",
-    "mode:mission": "mission_start", "mode:position": "manual",
+    "mode:mission": "mission_start",
 }

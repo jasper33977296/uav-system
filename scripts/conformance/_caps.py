@@ -5,9 +5,11 @@
 
 ## 為什麼一個鍵可以要求多個測項
 
-`manual` 是實例：它同時承諾兩件事——**搖桿真的能操縱**，以及**失聯時真的會自動
-懸停**。後者是安全鏈（issue 030：修復前 ArduPilot 會切進 GUIDED 而不是 Hold）。
-只驗前者就宣告 ok，等於承諾了一個沒驗過的安全行為。
+一個動詞常常同時承諾**功能**與**安全行為**，兩者都要有證據才能宣告 ok。
+歷史實例是已移除的 `manual`（issues/035）：它同時承諾「搖桿真的能操縱」與
+「失聯時真的會自動懸停」，而後者正是 issue 030 出過事的安全鏈——修復前
+ArduPilot 會切進 GUIDED 而不是 Hold。**只驗功能就宣告 ok，等於承諾了一個
+沒驗過的安全行為**；這條原則不隨該功能移除而失效。
 
 ## 為什麼「沒有對應測項」不等於「不可用」
 
@@ -23,8 +25,6 @@ CAP_TESTS = {
     "rtl":            ("mode_set",),
     "land":           ("mode_set",),
     "mission_upload": ("mission_upload",),
-    # manual 要兩條：能操縱 ＋ 失聯會自動懸停（見模組說明）
-    "manual":         ("manual_stick", "manual_failsafe"),
     # arm 與 takeoff 由同一條起飛序列測項覆蓋（解鎖是它的必經步驟）
     "arm":            ("takeoff",),
     "takeoff":        ("takeoff",),
@@ -35,14 +35,14 @@ CAP_TESTS = {
 
 #: 尚未實作的測項——列出來是為了**讓缺口有名字**。
 #: 沒有這份清單的話，「某鍵拿不到 ok」看起來會像 bug 而不是待辦。
-NOT_IMPLEMENTED = ("manual_stick", "takeoff", "mission_fly")
+NOT_IMPLEMENTED = ("takeoff", "mission_fly")
 
 
 def derive(autopilot: str, results: dict) -> tuple[dict, dict]:
     """由測試結果推導能力值。回傳 (caps, reasons)——**不含執行期前提**。
 
-    執行期前提（例如 ArduPilot 的 `SYSID_MYGCS`）由驅動另外套用；兩者是不同的
-    東西，混在一起會得到「用測試結果宣告一台沒設好的機可用」這種錯誤。
+    執行期前提（機端參數是否設對之類）由驅動另外套用；兩者是不同的東西，
+    混在一起會得到「用測試結果宣告一台沒設好的機可用」這種錯誤。
     """
     caps, reasons = {}, {}
     for key, tests in CAP_TESTS.items():

@@ -3,6 +3,9 @@
 - 嚴重度：**high**（位於安全鏈）
 - 狀態：**closed**（2026-08-12 修復並實飛驗證）
 - 位置：`apps/command/app/mav.py` `_tick_manual()`
+  **（2026-08-24：該函式已隨虛擬搖桿移除，見 [035](035-remove-manual-control.md)。
+  本案的教訓仍然有效且更廣——安全鏈裡任何直接讀模組層模式表、沒有經過
+  `dialect()` 的地方，都會重演同一個方言洩漏。）**
 - 發現：ArduPilot 搖桿實飛驗證途中，模式無故從 POSHOLD 跳回 GUIDED
 
 ## 症狀

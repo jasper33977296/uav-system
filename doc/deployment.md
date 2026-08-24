@@ -354,9 +354,12 @@ build；開發加 `docker-compose.dev.yml` 覆寫＝bind mount + 熱重載。
 2026-08-12 以 ArduCopter SITL 實測（見 [issues/015](../issues/015-multi-autopilot-support.md)）。
 接 ArduPilot 機時**必須**先處理下面三件，否則會遇到「看起來連上了但不對勁」：
 
-1. **機端 `SYSID_MYGCS` 要設成 254**（我方 GCS 的 sysid）。ArduPilot 預設只信
-   255 來源的 `MANUAL_CONTROL`／RC override——不改的話**搖桿完全沒反應而且沒有
-   任何錯誤訊息**（靜默丟棄）。新版韌體該參數改名為 `MAV_GCS_SYSID`。
+1. ~~**機端 `SYSID_MYGCS` 要設成 254**~~ ——**2026-08-24 起不再需要**：
+   該參數只管 `MANUAL_CONTROL`／RC override 的來源檢查，而虛擬搖桿已移除
+   （[issues/035](../issues/035-remove-manual-control.md)）。arm、切模式、
+   任務上傳走的 `COMMAND_LONG` **不受這個參數限制**。
+   （若日後又需要從地面送連續操縱，記得它的失敗模式是**靜默丟棄、沒有任何
+   錯誤訊息**；新版韌體該參數改名為 `MAV_GCS_SYSID`。）
 2. **遙測要靠我方主動要求**：ArduPilot 預設幾乎不送（只有心跳等 4 種訊息）。
    backend 會在註冊後送 `REQUEST_DATA_STREAM` 並每 30 秒補送——**這是預期行為，
    不是多餘流量**；沒有它整台機是瞎的。

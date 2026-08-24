@@ -60,9 +60,10 @@
 | [029](029-mission-frame-default-breaks-rtl.md) | 含 RTL 的任務一律上不去：無座標項 frame 預設錯（附 PX4 實測值域表）✔實測 | high | **closed** | `build_items`／`plan_check` |
 | [030](030-manual-failsafe-wrong-mode-ardupilot.md) | 搖桿失聯自動懸停在 ArduPilot 切錯模式（承諾 Hold 實送 GUIDED）；附搖桿實飛驗證 ✔實飛 | high | **closed** | `mav.py:_tick_manual` |
 | [031](031-arm-guard-auto-mode.md) | arm 防護：自動模式＋機上有任務時裸 arm＝立即自主起飛（SITL 實際發生）| high | open | `apps/command` |
-| [032](032-joystick-cannot-control-rb5.md) | 搖桿無法真正控制 RB5：對照 spec 找根因（候選：COM_RC_IN_MODE／轉發過濾／GCS 身分／流逾時）| high | open | `apps/command`＋`reference/` |
+| [032](032-joystick-cannot-control-rb5.md) | 搖桿無法真正控制 RB5 → **隨功能移除而結案（035），根因未確認**；排查過程對「靜默丟棄」類故障仍可參考 | high | **closed** | `apps/command`＋`reference/` |
 | [033](033-emergency-availability-design.md) | 意外狀況下的可用性保障：分層防線設計（機上 failsafe 核定／緊急通道／手動接管／deploy guard／心跳解耦）| high | open | 跨服務＋部署流程 |
 | [034](034-healthz-hides-zombie-router.md) | `/healthz` 不反映 router 死活：殭屍服務照回 ok（心跳停發近一小時無人察覺）| high | in-progress | `apps/command/app/main.py:184` |
+| [035](035-remove-manual-control.md) | 移除虛擬搖桿：系統範圍收斂為航路管理＋飛行安全，連續操縱交給實體遙控器（含 026 待決點 1 定案）| medium | in-progress | `apps/command`／`libs/autopilot`／`apps/frontend` |
 
 「✔實測確認」= 2026-08-03 首次實飛（SITL 起飛 → 進干擾區 → RTL）取得的實際資料佐證，
 不只是讀碼推論。詳見 [progress/log/2026-08-03.md](../progress/log/2026-08-03.md)。
