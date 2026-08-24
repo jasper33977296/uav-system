@@ -11,6 +11,24 @@ import { API } from "@/lib/signal";
 interface Mission {
   id: string; name: string; source: string | null;
   created_at: string; is_active: boolean; waypoint_count: number;
+  // 037：這份任務是照哪一家自駕儀的語意寫的。null＝檔案沒說（手繪／舊資料）
+  firmware_type: number | null; vehicle_type: number | null;
+}
+
+/** MAV_AUTOPILOT／MAV_TYPE → 人話。**認不得的值原樣顯示 id**，不寫「未知」——
+ * 「未知」會讓「檔案沒說」與「說了但我們沒收錄這個型號」看起來一樣
+ * （ui-spec §0.2e 的同一條原則）。 */
+const AP_NAMES: Record<number, string> = { 0: "通用", 3: "ArduPilot", 12: "PX4" };
+const VT_NAMES: Record<number, string> = {
+  1: "定翼", 2: "四旋翼", 10: "地面載具", 12: "潛航器", 13: "六旋翼", 14: "八旋翼",
+};
+function planTarget(m: Mission): string | null {
+  if (m.firmware_type == null && m.vehicle_type == null) return null;
+  const ap = m.firmware_type == null ? null
+    : (AP_NAMES[m.firmware_type] ?? `firmware ${m.firmware_type}`);
+  const vt = m.vehicle_type == null ? null
+    : (VT_NAMES[m.vehicle_type] ?? `type ${m.vehicle_type}`);
+  return [ap, vt].filter(Boolean).join(" · ");
 }
 interface PlanCheck {
   ok: boolean; problems: string[]; warnings: string[];
@@ -32,7 +50,14 @@ interface PlanWp {
   command: number; frame: number | null;
   p1: number | null; p2: number | null; p3: number | null; p4: number | null;
 }
-function parsePlan(text: string): PlanWp[] {
+/** `.plan` 自報的目標機種。QGC 用的是 MAV_AUTOPILOT／MAV_TYPE 這兩個 enum，
+ * **與機端 HEARTBEAT 同源**，所以存下來就能在上傳前比對（issues/037）。 */
+interface ParsedPlan {
+  wps: PlanWp[];
+  firmware_type: number | null;
+  vehicle_type: number | null;
+}
+function parsePlan(text: string): ParsedPlan {
   const j = JSON.parse(text);
   if (j?.fileType !== "Plan") throw new Error("not a plan");
   const items = j?.mission?.items ?? [];
@@ -50,7 +75,11 @@ function parsePlan(text: string): PlanWp[] {
       p1: p1 ?? null, p2: p2 ?? null, p3: p3 ?? null, p4: p4 ?? null,
     });
   }
-  return out;
+  return {
+    wps: out,
+    firmware_type: j?.mission?.firmwareType ?? null,
+    vehicle_type: j?.mission?.vehicleType ?? null,
+  };
 }
 
 export default function Missions() {
@@ -117,12 +146,13 @@ export default function Missions() {
 
   async function uploadPlan(f: File) {
     setErr(null); setReport(null);
-    let wps;
+    let parsed;
     try {
-      wps = parsePlan(await f.text());
+      parsed = parsePlan(await f.text());
     } catch {
       setErr("不是有效的 QGC .plan 檔"); return;
     }
+    const wps = parsed.wps;
     const navCount = wps.filter((w) => NAV_CMDS.has(w.command) && w.lat && w.lon).length;
     if (navCount < 2) { setErr("檔案內找不到足夠的導航航點"); return; }
     setBusy(true);
@@ -130,7 +160,12 @@ export default function Missions() {
       const res = await fetch(`${API}/api/missions`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ name: f.name.replace(/\.plan$/i, ""), source: "plan-file", waypoints: wps }),
+        body: JSON.stringify({
+          name: f.name.replace(/\.plan$/i, ""), source: "plan-file", waypoints: wps,
+          // 機種一起送：航點的 frame 與 params 是照哪一家的語意寫的，
+          // 只有這兩個欄位說得出來（issues/037）
+          firmware_type: parsed.firmware_type, vehicle_type: parsed.vehicle_type,
+        }),
       });
       const body = await res.json();
       if (!res.ok) setErr(body.detail ?? `失敗（${res.status}）`);
@@ -176,6 +211,13 @@ export default function Missions() {
               <div className="mcard-foot">
                 <span className="mcard-name">{m.name}</span>
                 {m.is_active && <span className="chip on-chip">顯示中</span>}
+                {/* 目標機種：選檔當下就看得到這份航線是給誰寫的。
+                    檔案沒說時不顯示 chip——**空白代表「沒說」，不是「通用」**。 */}
+                {planTarget(m) && (
+                  <span className="chip" title="這份航線宣告的目標機種（來自 .plan）">
+                    {planTarget(m)}
+                  </span>
+                )}
                 <span className="spacer" />
                 <button className="btn-plain btn-sm" title="更多"
                   onClick={(e) => {

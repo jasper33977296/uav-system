@@ -483,15 +483,24 @@ class MissionIn(BaseModel):
     name: str
     source: str = "plan-file"        # plan-file / vehicle
     waypoints: list[WaypointIn] = Field(min_length=2, max_length=500)
+    # 037：`.plan` 自報的目標機種（QGC 的 mission.firmwareType/vehicleType，
+    # 值域就是 MAV_AUTOPILOT／MAV_TYPE）。**存下來是為了上傳前能比對**——
+    # 航點的 frame 與 params 是照哪一家的語意寫的，只有這兩個欄位說得出來。
+    # 不填＝這份任務沒說（手繪、舊資料、從機上讀回）。
+    firmware_type: int | None = None
+    vehicle_type: int | None = None
 
 
-async def _store_mission(name: str, source: str, wps: list[dict]) -> str:
+async def _store_mission(name: str, source: str, wps: list[dict],
+                         firmware_type: int | None = None,
+                         vehicle_type: int | None = None) -> str:
     async with db.pool.acquire() as con:
         async with con.transaction():
             row = await con.fetchrow(
-                "INSERT INTO missions (name, created_by, kind) "
-                "VALUES ($1, $2, $3) RETURNING id",
-                name, source, "from-vehicle" if source == "vehicle" else "imported")
+                "INSERT INTO missions (name, created_by, kind, firmware_type, "
+                "vehicle_type) VALUES ($1, $2, $3, $4, $5) RETURNING id",
+                name, source, "from-vehicle" if source == "vehicle" else "imported",
+                firmware_type, vehicle_type)
             await con.executemany(
                 """INSERT INTO waypoints (mission_id, seq, lat, lon, alt, action, params)
                    VALUES ($1, $2, $3, $4, $5, $6, $7)""",
@@ -510,6 +519,7 @@ async def list_missions():
     # materialized 任務、不是任務庫草稿，會污染一般任務清單 UI（issue 013-B 前端回報）。
     rows = await db.pool.fetch("""
         SELECT m.id, m.name, m.created_by AS source, m.created_at, m.is_active,
+               m.firmware_type, m.vehicle_type,
                count(w.seq) AS waypoint_count
         FROM missions m LEFT JOIN waypoints w ON w.mission_id = m.id
         WHERE m.kind IS DISTINCT FROM 'generated'
@@ -543,7 +553,8 @@ async def save_mission(m: MissionIn):
     """存入任務庫並附上幾何預檢報告。**不因預檢失敗而拒存**——任務庫
     可放草稿；真正的擋門在 command 服務上傳到機那一步。"""
     wps = [w.model_dump() for w in m.waypoints]
-    mid = await _store_mission(m.name, m.source, wps)
+    mid = await _store_mission(m.name, m.source, wps,
+                               m.firmware_type, m.vehicle_type)
     return {"id": mid, "check": plan_check.check_waypoints(
         wps, settings.geofence_radius_m, settings.geofence_alt_m,
         settings.geofence_margin)}
@@ -561,8 +572,11 @@ async def import_mission_from_vehicle(name: str | None = None):
                "command": w["command"], "frame": w.get("frame"),
                "p1": w.get("p1"), "p2": w.get("p2"), "p3": w.get("p3"), "p4": w.get("p4")}
               for w in wps]
+    # 從機上讀回來的任務，機種就是**這台機**——不必猜也不該留空。
+    # 這裡填的是實際偵測到的值，跟 .plan 自報的是同一組 enum。
     mid = await _store_mission(
-        name or f"機上任務 {datetime.now().strftime('%m/%d %H:%M')}", "vehicle", stored)
+        name or f"機上任務 {datetime.now().strftime('%m/%d %H:%M')}", "vehicle", stored,
+        live.autopilot_raw, live.vehicle_type_raw)
     return {"id": mid, "waypoint_count": len(wps),
             "check": plan_check.check_waypoints(
                 stored, settings.geofence_radius_m, settings.geofence_alt_m,

@@ -380,6 +380,41 @@ async def mission_fly(sysid: int, body: FlyIn):
     return {"ok": True, "steps": steps}
 
 
+#: MAV_AUTOPILOT／MAV_TYPE → 人話。**認不得的值原樣顯示 id**，不寫「未知」——
+#: 那會讓「沒宣告」與「宣告了但我們沒收錄」看起來一樣。
+_AP_NAMES = {0: "通用", 3: "ArduPilot", 12: "PX4"}
+_VT_NAMES = {1: "定翼", 2: "四旋翼", 10: "地面載具", 12: "潛航器",
+             13: "六旋翼", 14: "八旋翼"}
+
+
+def _target_mismatch(mission_fw, mission_vt, sysid) -> list[str]:
+    """任務自報的機種 vs 這台機實際偵測到的。回傳警告句（可能為空）。
+
+    **為什麼這件事非查不可**：`build_items()` 刻意保留 `.plan` 的顯式
+    `frame` 與 `params`（MAVLink 保真度，不覆寫使用者的值）——這是對的，
+    但它的後果是**照 A 家語意寫出來的值會原封送給 B 家的機**。
+    ArduPilot 與 PX4 在 frame 預設、home 是否佔 seq 0、空白參數慣例
+    （NaN vs 0）上都不同（見 issues/026 的差異點表）。
+
+    **示警不擋**（使用者定案 2026-08-24）：多數航點跨家其實飛得動，硬擋會逼
+    人去改檔案繞過，反而更糟。但必須**在上傳前就講**，而不是讓他用失敗去發現
+    （ui-spec §0.2c 條款 6）。
+    """
+    out = []
+    ap = router.autopilot_of(sysid) if router else None
+    vt = (router.drones.get(sysid) or {}).get("type") if router else None
+    if mission_fw is not None and ap is not None and int(mission_fw) != int(ap):
+        out.append(
+            f"這份航線宣告是給 {_AP_NAMES.get(int(mission_fw), f'firmware {mission_fw}')} "
+            f"寫的，這台機是 {_AP_NAMES.get(int(ap), f'firmware {ap}')}"
+            "——航點的 frame 與參數語意可能不同（見 issues/037）")
+    if mission_vt is not None and vt is not None and int(mission_vt) != int(vt):
+        out.append(
+            f"這份航線宣告的機型是 {_VT_NAMES.get(int(mission_vt), f'type {mission_vt}')}，"
+            f"這台機是 {_VT_NAMES.get(int(vt), f'type {vt}')}")
+    return out
+
+
 @app.post("/api/command/{sysid}/mission/upload")
 async def mission_upload(sysid: int, body: UploadIn):
     _require_enabled(); _require_capability(sysid, "mission_upload")
@@ -388,6 +423,9 @@ async def mission_upload(sysid: int, body: UploadIn):
         "WHERE mission_id = $1 ORDER BY seq", body.mission_id)
     if not rows:
         raise HTTPException(404, "任務不存在或沒有航點")
+    meta = await pool.fetchrow(
+        "SELECT firmware_type, vehicle_type FROM missions WHERE id = $1",
+        body.mission_id)
     wps = []
     for r in rows:
         w = dict(r)
@@ -400,6 +438,15 @@ async def mission_upload(sysid: int, body: UploadIn):
     report = plan_check.check_waypoints(
         wps, settings.geofence_radius_m, settings.geofence_alt_m,
         settings.geofence_margin)
+    # 機種不符：併進**既有的 warnings**而不是自成一個欄位——前端已經會顯示
+    # 這份報告，多開一個欄位就多一個可能沒人接的顯示點（issues/037）。
+    # 併進 warnings 不影響 `ok`，所以不會意外觸發 GEOFENCE_ENFORCE 的擋門。
+    mismatch = _target_mismatch(
+        meta["firmware_type"] if meta else None,
+        meta["vehicle_type"] if meta else None, sysid)
+    if mismatch:
+        report["warnings"] = list(report.get("warnings") or []) + mismatch
+        log.warning("任務機種與機體不符（照常上傳）：%s", "；".join(mismatch))
     if not report["ok"] and settings.geofence_enforce:
         await _audit(sysid, "mission_upload", {"mission_id": body.mission_id},
                      "rejected_precheck", "；".join(report["problems"]))
@@ -538,7 +585,8 @@ def _same_waypoints(old: list, wps: list[dict]) -> bool:
     return True
 
 
-async def _store_plan(name: str, wps: list[dict]) -> str:
+async def _store_plan(name: str, wps: list[dict],
+                      firmware_type=None, vehicle_type=None) -> str:
     """.plan 航線入庫回 mission_id；內容相同就重用（外部反覆觸發不洗版任務庫）。"""
     rows = await pool.fetch(
         "SELECT id FROM missions WHERE name = $1 AND created_by = 'plan-file' "
@@ -552,9 +600,10 @@ async def _store_plan(name: str, wps: list[dict]) -> str:
     async with pool.acquire() as con:
         async with con.transaction():
             row = await con.fetchrow(
-                "INSERT INTO missions (name, created_by, kind) "
-                "VALUES ($1, 'plan-file', 'imported') RETURNING id",
-                name)
+                "INSERT INTO missions (name, created_by, kind, firmware_type, "
+                "vehicle_type) VALUES ($1, 'plan-file', 'imported', $2, $3) "
+                "RETURNING id",
+                name, firmware_type, vehicle_type)
             await con.executemany(
                 "INSERT INTO waypoints (mission_id, seq, lat, lon, alt, action, params) "
                 "VALUES ($1, $2, $3, $4, $5, $6, $7)",
@@ -636,7 +685,9 @@ async def start(body: StartIn):
         except plans.PlanError as e:
             await _audit(None, "start", {"plan": body.plan}, "failed", str(e))
             raise HTTPException(404, {"step": "plan", "msg": str(e)})
-        mission_id = await _store_plan(path.stem, parsed["waypoints"])
+        mission_id = await _store_plan(path.stem, parsed["waypoints"],
+                                       parsed.get("firmware_type"),
+                                       parsed.get("vehicle_type"))
         name, src, skipped = path.name, "file", parsed["skipped"]
     sysid = _resolve_sysid(body.sysid)
     # 委派現版正確流程（capability gate＋到高度 gating＋逐台 audit＋X-Client 都自動繼承）
