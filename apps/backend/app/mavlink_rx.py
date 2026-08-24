@@ -329,6 +329,32 @@ class MavlinkRx:
                 msg.param_value, getattr(msg, "param_type", None), msg.autopilot
                 if hasattr(msg, "autopilot") else st.autopilot_raw)
             st.param_total = msg.param_count
+        elif t == "AUTOPILOT_VERSION":
+            # 038：板子身分。**只收不請求**——請求要送 COMMAND_LONG，那是個
+            # 通用信封（同一型別可以裝 arm），把它加進 SEND_WHITELIST 等於在
+            # 本模組的 read-only 邊界上開洞。請求由機上代理發出（026 定案：
+            # 代理才是下達者），回應廣播回來，這裡照收即可。
+            uid2 = bytes(getattr(msg, "uid2", b"") or b"")
+            # 尾端補位的 0 去掉再存：長度隨板子而異，留著會讓同一塊板子在
+            # 不同韌體上算出不同字串
+            uid2 = uid2.rstrip(b"\x00")
+            st.board_uid = uid2.hex() if uid2 else (
+                f"{msg.uid:016x}" if getattr(msg, "uid", 0) else None)
+            st.board_version = getattr(msg, "board_version", None)
+            st.board_vendor_id = getattr(msg, "vendor_id", None)
+            st.board_product_id = getattr(msg, "product_id", None)
+            v = getattr(msg, "flight_sw_version", 0) or 0
+            if v:
+                # MAVLink 編碼：major<<24 | minor<<16 | patch<<8 | type
+                kind = {255: "official", 128: "rc", 64: "beta",
+                        192: "dev"}.get(v & 0xFF)
+                st.flight_sw_version = (
+                    f"{(v >> 24) & 0xFF}.{(v >> 16) & 0xFF}.{(v >> 8) & 0xFF}"
+                    + (f" ({kind})" if kind else f" (type {v & 0xFF})"))
+            if st.board_uid:
+                log.info("sysid %d 板子身分：uid=%s 韌體=%s",
+                         sysid, st.board_uid, st.flight_sw_version)
+                await db.set_board_uid(st.drone_id, st.board_uid)
         elif t == "GLOBAL_POSITION_INT":
             # **0,0 是自駕儀的「不知道」哨兵，不是幾內亞灣外海。**
             # GLOBAL_POSITION_INT 在沒有位置估計時送 lat=lon=0；照寫會把
