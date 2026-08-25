@@ -235,6 +235,13 @@ async def ws_agent(ws: WebSocket):
                                         "reason": "第一則必須是 hello"})
                     continue
                 agent_link.on_state(link, msg)
+                # **每則 state 回一個輕量 ack**（協定 §2 的靜默逾時那一半）。
+                # 不是為了確認內容，是為了讓機端知道**這條連線還通**：5G 路由掉
+                # 的時候 TCP 的 send() 只是塞進 kernel buffer 就回傳成功，機端
+                # 會一路「送」幾十秒才發現對面早就收不到（2026-08-25 實測：
+                # 代理 sent 從 59 數到 79，地面站 30 秒一則都沒收到）。
+                # 30 bytes / 秒，換機端幾秒內就能重連。
+                await ws.send_json({"type": "ack", "of": "state"})
                 await manager.broadcast({"type": "agent_state",
                                          **link.as_dict()})
             else:

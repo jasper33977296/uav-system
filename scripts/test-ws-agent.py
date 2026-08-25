@@ -11,8 +11,45 @@ import json, threading, time, websocket
 
 WS = "ws://localhost:38000/ws/agent"
 TELEM = "ws://localhost:38000/ws/telemetry"
-UID = "2a0020001151333139383538"      # 已註冊的那塊板子
+# **用專屬的測試板子 UID，不借真機那一塊**（2026-08-25 教訓）：真代理連著的
+# 時候，它 1Hz 推的 state 會蓋掉測試剛寫進去的值，斷言就開始隨機失敗——
+# 而那不是程式錯，是測試自己選錯了共用資源。測完刪掉。
+UID = "wstest-board-0000"
 def env(**kw): return json.dumps(dict(v=1, ts="2026-08-25T07:00:00.000Z", **kw))
+
+
+def recv_until(c, want, timeout=5.0):
+    """讀到指定型別為止。**不能只讀一則**：地面站現在對每則 state 都回 ack
+    （靜默逾時機制），只讀一則會拿到 ack 而不是要驗的那則。"""
+    c.settimeout(timeout)
+    end = time.time() + timeout
+    while time.time() < end:
+        m = json.loads(c.recv())
+        if m.get("type") == want:
+            return m
+    raise AssertionError(f"等不到 type={want}")
+
+
+def setup_drone():
+    """建一筆測試機（測完刪）。要有 drone_id 才驗得到「hello 認出是哪台機」。"""
+    import subprocess
+    subprocess.run(["docker", "compose", "exec", "-T", "uav-db", "psql",
+                    "-U", "uav", "-d", "uav", "-c",
+                    "INSERT INTO drones (name, serial_no, is_simulated, status, "
+                    f"board_uid) VALUES ('__wstest','__wstest',true,'idle','{UID}') "
+                    "ON CONFLICT (serial_no) DO NOTHING;"],
+                   capture_output=True)
+
+
+def teardown_drone():
+    import subprocess
+    subprocess.run(["docker", "compose", "exec", "-T", "uav-db", "psql",
+                    "-U", "uav", "-d", "uav", "-c",
+                    "DELETE FROM drones WHERE serial_no = '__wstest';"],
+                   capture_output=True)
+
+
+setup_drone()
 
 seen, stop = [], threading.Event()
 def watch():
@@ -49,7 +86,7 @@ check("沒 hello 先送 state 被擋", r.get("type") == "error" and "hello" in r
 c.send(env(type="hello", board_uid=UID, agent_version="0.3.0",
            autopilot="ardupilot", fw="4.7.0 (official)",
            inputs=["telemetry"], protocol=[1]))
-r = json.loads(c.recv())
+r = recv_until(c, "ack")
 check("hello 收到 ack 並認出是哪台機",
       r.get("type") == "ack" and r.get("drone_id"), f"drone_id={r.get('drone_id')}")
 check("ack 說明本站目前收哪些型別", r.get("accepts") == ["state"], str(r.get("accepts")))
@@ -60,14 +97,15 @@ c.send(env(type="state", state="FLYING_MISSION", sysid=1,
            derived={"armed": True, "landed": "in_air", "mode": "AUTO",
                     "alt_rel": 41.2, "battery_pct": 76, "gs_link_ok": True}))
 time.sleep(1.5)
-mirrored = [m for m in seen if m.get("state") == "FLYING_MISSION"]
+mirrored = [m for m in seen if m.get("state") == "FLYING_MISSION"
+            and m.get("board_uid") == UID]
 check("state 鏡像到前端通道", mirrored,
       json.dumps(mirrored[-1], ensure_ascii=False)[:150] if mirrored else "沒收到")
 check("鏡像帶著 fresh=true", mirrored and mirrored[-1].get("fresh") is True)
 
 # ── 5. 未實作的型別要明說 ───────────────────────────────────
 c.send(env(type="intent", intent_id="x", action="pause"))
-r = json.loads(c.recv())
+r = recv_until(c, "error")
 check("intent 明說未實作（不靜靜丟掉）",
       r.get("type") == "error" and "尚未實作" in r.get("reason", ""), r.get("reason"))
 
@@ -82,12 +120,14 @@ check("整頁載入就有值（/api/drones 帶 agent）",
 # ── 7. 斷線＝失聯，但保留最後已知狀態 ────────────────────────
 seen.clear()
 c.close(); time.sleep(1.5)
-last = seen[-1] if seen else None
+mine = [m for m in seen if m.get("board_uid") == UID]
+last = mine[-1] if mine else None
 check("斷線推播 connected=false", last and last.get("connected") is False)
 check("斷線後仍保留最後已知狀態（不清成空白）",
       last and last.get("state") == "FLYING_MISSION" and last.get("fresh") is False,
       f"state={last.get('state') if last else None} fresh={last.get('fresh') if last else None}")
 
 stop.set(); th.join(timeout=3)
+teardown_drone()
 print("\n" + ("全部通過" if ok else "**有未通過項目**"))
 raise SystemExit(0 if ok else 1)
