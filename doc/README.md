@@ -13,6 +13,7 @@
 | [architecture.md](architecture.md) | 系統架構總覽：研究目標、三服務分工（backend/command/frontend）、資料流 |
 | [data-schema.md](data-schema.md) | 資料庫設計：靜態註冊/架次/時序量測/事件四類，DDL 在 db/init/ |
 | [deployment.md](deployment.md) | 真機部署完整手冊（RB5＋地面站全設定），SITL 開發環境見附錄 |
+| [real-aircraft-verification.md](real-aircraft-verification.md) | **實體驗證清單**：哪些能力只有 SITL 證據、不驗會怎樣、怎麼驗 |
 | [drone-registration.md](drone-registration.md) | **無人機註冊流程**：接一台新機的完整步驟、換機／退役、名字對不上的排查、以及系統靠什麼認出哪台是哪台 |
 | [autonomous-flight-state-machine.md](autonomous-flight-state-machine.md) | **全自動飛行狀態機**：狀態判定式、允許/禁止的轉移、每條守門對應的實際危害 |
 | [agent-intent-protocol.md](agent-intent-protocol.md) | **地面站 ↔ 機上代理的意圖協定**：單一權威狀態機在代理、三種訊息、失聯處置規則 |
