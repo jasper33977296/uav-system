@@ -241,8 +241,29 @@ class MavlinkRx:
             ent = self.sysids[sysid] = {"drone_id": drone_id, "state": st,
                                         "addr": addr, "seen": time.monotonic()}
             self.by_drone[drone_id] = sysid
+            # 回填上次記錄的板子身分：**它是板子的穩定屬性，不該因為 backend
+            # 重啟就從畫面上消失**（請求 AUTOPILOT_VERSION 的是 command 服務，
+            # 它不會因為我們重啟而重問）。機端之後回報新值時會覆蓋。
+            st.board_uid, st.flight_sw_version = \
+                await db.load_board_identity(drone_id)
+            claimed = st is live
             log.info("sysid %d → %s（%s）", sysid, name,
-                     "既有主機" if st is live else "自動註冊")
+                     "既有主機" if claimed else "自動註冊")
+            # **認領要看得見。** 2026-08-24 實際發生：一筆早已停用的舊機記錄
+            # 仍是主機且 mav_sysid 空著，新接上的機一開機就被認領進那筆記錄，
+            # /api/live 顯示的是別台機的名字——而整個過程只有一行 log.info。
+            # 記成事件，讓它出現在事件流與畫面上（issues/038）。
+            try:
+                ev = await db.insert_event(
+                    drone_id, None, "info", "sysid_claimed",
+                    {"sysid": sysid, "drone": name,
+                     "how": "既有主機認領" if claimed else "自動建檔",
+                     "note": "這台機的遙測從此記在這筆記錄名下——"
+                             "名字不對就是認領到錯的記錄了"})
+                ev["drone"] = name
+                await manager.broadcast({"type": "event", "event": ev})
+            except Exception:
+                log.exception("sysid 認領事件寫入失敗（不影響資料路徑）")
             # 021 Phase 2：連線即抓一次參數表（唯讀）。之後改參數時 PX4 會主動
             # 廣播 PARAM_VALUE，由下面的處理分支自動更新，不必重抓。
             try:
@@ -361,7 +382,8 @@ class MavlinkRx:
             if st.board_uid:
                 log.info("sysid %d 板子身分：uid=%s 韌體=%s",
                          sysid, st.board_uid, st.flight_sw_version)
-                await db.set_board_uid(st.drone_id, st.board_uid)
+                await db.set_board_uid(st.drone_id, st.board_uid,
+                                       st.flight_sw_version)
         elif t == "GLOBAL_POSITION_INT":
             # **0,0 是自駕儀的「不知道」哨兵，不是幾內亞灣外海。**
             # GLOBAL_POSITION_INT 在沒有位置估計時送 lat=lon=0；照寫會把

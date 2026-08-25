@@ -6,8 +6,13 @@ from uuid import UUID
 from fastapi import APIRouter, HTTPException, Response
 from pydantic import BaseModel, Field, field_validator
 
+import logging
+
 from . import db, groups, mavlink_rx, plan_check
 from .config import settings
+from .ws import manager
+
+log = logging.getLogger("app.api")
 from .jsonsafe import dumps as jdumps
 from .link_events import transition as link_transition
 from .state import live
@@ -30,8 +35,13 @@ async def list_drones():
         # 038：韌體版本與板子 UID 也是 runtime 值（非 DB 欄位）。
         # 一致性測試靠它把「對哪一版驗過」寫進證據——沒有版本的證據，
         # 等於宣稱「驗過」卻說不出驗的是什麼。
-        d["flight_sw_version"] = st.flight_sw_version if st else None
-        d["board_uid"] = st.board_uid if st else None
+        # runtime 優先、**DB 值墊底**：這兩項是板子的穩定屬性，機此刻沒連線
+        # 不代表我們不知道它是誰。原本無條件覆寫，會把已持久化的身分在離線時
+        # 抹成 null——前端就會宣告「無板子 UID」，那是假話
+        if st and st.flight_sw_version:
+            d["flight_sw_version"] = st.flight_sw_version
+        if st and st.board_uid:
+            d["board_uid"] = st.board_uid
         out.append(d)
     return out
 
@@ -40,6 +50,11 @@ class DroneIn(BaseModel):
     name: str
     connection_url: str | None = None
     note: str | None = None
+    # ── 人工維護的身分（038 兩層模型的下半）────────────────────
+    # 機器可驗證的那層（sysid／board_uid／韌體版本）由機體自報，**不在此填**：
+    # 人填只會製造第二個事實來源。這兩欄是機器問不到的東西。
+    airframe_serial: str | None = None    # 機架序號（貼在機身上的那個）
+    model: str | None = None              # 型號，如 "X500 v2"
 
 
 @router.post("/drones")
@@ -47,12 +62,15 @@ async def register_drone(d: DroneIn):
     """註冊一台無人機（真機階段用；模擬機由 backend 啟動時自動註冊）。"""
     row = await db.pool.fetchrow(
         """
-        INSERT INTO drones (name, serial_no, is_simulated, connection_url, status)
-        VALUES ($1, $1, false, $2, 'idle')
+        INSERT INTO drones (name, serial_no, is_simulated, connection_url, status,
+                            airframe_serial, model)
+        VALUES ($1, $1, false, $2, 'idle', $3, $4)
         ON CONFLICT (serial_no) DO NOTHING
         RETURNING *
         """,
         d.name, d.connection_url,
+        (d.airframe_serial or "").strip() or None,
+        (d.model or "").strip() or None,
     )
     if row is None:
         raise HTTPException(409, f"名稱 {d.name} 已存在")
@@ -62,6 +80,52 @@ async def register_drone(d: DroneIn):
 class DronePatch(BaseModel):
     name: str | None = None
     video_url: str | None = None      # 空字串＝清除
+    airframe_serial: str | None = None   # 空字串＝清除
+    model: str | None = None             # 空字串＝清除
+
+
+class AgentHello(BaseModel):
+    """機上代理上線時自報。**註冊是收到它的副作用**（issues/038、協定 §4.1）。
+
+    只收**機器問得到**的東西。機架序號與型號不在這裡——代理知道的是板子，
+    不是機架，那兩項只能由人維護。
+    """
+    board_uid: str                       # 飛控板 UID＝這是哪一架飛機
+    agent_uid: str | None = None         # 樹莓派序號＝這是哪一台伴飛電腦
+    autopilot: str | None = None
+    fw: str | None = None                # 已解碼的韌體版本
+    vehicle_type: int | None = None      # MAV_TYPE
+    agent_version: str | None = None
+
+
+@router.post("/agent/hello")
+async def agent_hello(h: AgentHello):
+    """代理上線：確保這塊飛控板有一筆機體記錄，沒有就自動建。
+
+    **這取代了人工註冊。** 代理知道的（板子 UID、廠牌、韌體、機型）全部是
+    機器問得到的，讓人打字只會打錯；而人該維護的（機架序號、型號、名稱）
+    代理問不到。前端因此只需要**編輯**，不需要註冊表單。
+
+    冪等：同一塊板子重複上線只會更新，不會長出第二筆。
+    """
+    uid = (h.board_uid or "").strip()
+    if not uid:
+        raise HTTPException(422, "board_uid 不可為空——沒有它就沒有穩定的身分")
+    drone_id, name, created = await db.ensure_drone_by_board(
+        uid, autopilot=h.autopilot, fw=h.fw, agent_uid=h.agent_uid,
+        vehicle_type=h.vehicle_type)
+    if created:
+        # **新機出現不該是靜默的。** 自動化省掉的是打字，不是知情。
+        ev = await db.insert_event(
+            drone_id, None, "info", "drone_registered",
+            {"drone": name, "board_uid": uid, "agent_uid": h.agent_uid,
+             "autopilot": h.autopilot, "fw": h.fw,
+             "note": "代理自報上線、系統自動建檔——請到無人機頁改名並補機架序號"})
+        ev["drone"] = name
+        await manager.broadcast({"type": "event", "event": ev})
+        log.info("代理自動註冊：%s（board_uid=%s agent_uid=%s）",
+                 name, uid, h.agent_uid)
+    return {"drone_id": drone_id, "name": name, "created": created}
 
 
 @router.patch("/drones/{drone_id}")
@@ -76,8 +140,11 @@ async def patch_drone(drone_id: str, body: DronePatch):
         if not name:
             raise HTTPException(422, "名稱不可為空")
         fields["name"] = name
-    if "video_url" in fields:
-        fields["video_url"] = (fields["video_url"] or "").strip() or None
+    for k in ("video_url", "airframe_serial", "model"):
+        if k in fields:
+            # 空字串＝清除（存 NULL）。**不要存空字串**——那會讓「沒填」與
+            # 「填了又刪掉」在資料上長得不一樣，但意思相同。
+            fields[k] = (fields[k] or "").strip() or None
     sets = ", ".join(f"{k} = ${i + 2}" for i, k in enumerate(fields))
     r = await db.pool.execute(
         f"UPDATE drones SET {sets} WHERE id = $1", drone_id, *fields.values())

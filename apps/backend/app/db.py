@@ -47,6 +47,21 @@ async def migrate() -> None:
     # 038：飛控板的唯一 ID（AUTOPILOT_VERSION.uid2）。**目前唯一機器可驗證的
     # 身分**——sysid 只是機上可改的參數。NULL＝還沒問到（不是「沒有」）
     await pool.execute("ALTER TABLE drones ADD COLUMN IF NOT EXISTS board_uid TEXT")
+    # 039/038 兩層身分的**人工維護那層**：機架序號與型號。
+    # **不動 serial_no**——它現在扛著自動註冊的冪等性（四處 ON CONFLICT），
+    # 改它的語意風險不對稱：那條路徑出錯會讓每次心跳都新增一筆機。
+    await pool.execute(
+        "ALTER TABLE drones ADD COLUMN IF NOT EXISTS airframe_serial TEXT")
+    # 韌體版本也要持久化：它與 board_uid 一樣是**板子的穩定屬性**，
+    # 而 LiveState 是記憶體——backend 一重啟就失憶，而 command 服務的
+    # 「已問過」旗標還在、不會再問一次，於是畫面上永遠是空的（038 的實作缺口）
+    await pool.execute(
+        "ALTER TABLE drones ADD COLUMN IF NOT EXISTS flight_sw_version TEXT")
+    # 伴飛電腦（樹莓派）的序號。**與 board_uid 回答不同的問題**：
+    # board_uid＝這是哪一架飛機，agent_uid＝這是哪一台伴飛電腦。
+    # 5G 模組、Wi-Fi 卡、代理版本屬於後者；混成一個欄位，換件時就說不清是哪邊變了。
+    await pool.execute(
+        "ALTER TABLE drones ADD COLUMN IF NOT EXISTS agent_uid TEXT")
     # current_mission_id → missions 的參照完整性（ON DELETE SET NULL）：少了它，
     # 刪任務會讓 current_mission_id 變懸空指標，之後 create_session 綁 mission_id
     # 就撞 flight_sessions_mission_id_fkey → 解鎖建 session 每次拋錯 → 該機 armed
@@ -186,7 +201,60 @@ async def migrate() -> None:
         await pool.execute(f"ALTER TABLE missions DROP COLUMN IF EXISTS {col}")
 
 
-async def set_board_uid(drone_id: str | None, uid: str) -> None:
+async def ensure_drone_by_board(board_uid: str, *, autopilot: str | None = None,
+                                fw: str | None = None,
+                                agent_uid: str | None = None,
+                                vehicle_type: int | None = None) -> tuple[str, str, bool]:
+    """以**飛控板 UID** 確保有一筆機體記錄。回傳 (drone_id, name, 是否新建)。
+
+    **為什麼鍵是 board_uid 而不是 sysid**：sysid 是機上一個可以隨時改的參數。
+    2026-08-24 實際發生過——一筆早已停用的舊記錄佔著 sysid 1，新接上的機一開機
+    就被認領進去，`/api/live` 顯示的是別台機的名字。板子 UID 是燒在硬體上的，
+    改參數、換機架、重刷韌體都不會變。
+
+    **它認的是飛控板，不是機架**：板子拆到另一台飛機上，記錄跟著板子走，
+    而人填的機架序號會變成錯的。這一點自動化解決不了（issues/038）。
+
+    `agent_uid`（樹莓派序號）另外記：機上有些東西屬於伴飛電腦而不屬於飛機
+    （5G 模組、Wi-Fi 卡、代理版本），出問題時要分得出是哪一邊。
+    """
+    row = await pool.fetchrow(
+        "SELECT id::text AS id, name FROM drones WHERE board_uid = $1", board_uid)
+    created = False
+    if row is None:
+        name = f"uav-{board_uid[-6:]}"      # 之後由人改名
+        row = await pool.fetchrow(
+            """INSERT INTO drones (name, serial_no, is_simulated, status, board_uid)
+               VALUES ($1, $1, $2, 'idle', $3)
+               ON CONFLICT (serial_no) DO UPDATE SET board_uid = EXCLUDED.board_uid
+               RETURNING id::text AS id, name""",
+            name, settings.link_source == "simulated", board_uid)
+        created = True
+    await pool.execute(
+        """UPDATE drones SET flight_sw_version = COALESCE($2, flight_sw_version),
+                             agent_uid         = COALESCE($3, agent_uid)
+           WHERE id = $1::uuid""",
+        row["id"], fw, agent_uid)
+    return row["id"], row["name"], created
+
+
+async def load_board_identity(drone_id: str | None) -> tuple[str | None, str | None]:
+    """從 DB 取回這台機上次記錄的板子身分（uid, 韌體版本）。
+
+    **給 backend 重啟後回填 LiveState 用。** 沒有這一步的話：值在 DB 裡、
+    畫面上卻是空的，而且不會自己好——請求 AUTOPILOT_VERSION 的是 command
+    服務，它的「已問過」旗標不隨 backend 重啟而清除。
+    """
+    if not drone_id:
+        return None, None
+    row = await pool.fetchrow(
+        "SELECT board_uid, flight_sw_version FROM drones WHERE id = $1::uuid",
+        drone_id)
+    return (row["board_uid"], row["flight_sw_version"]) if row else (None, None)
+
+
+async def set_board_uid(drone_id: str | None, uid: str,
+                        fw: str | None = None) -> None:
     """記下這筆記錄目前對應的飛控板。
 
     **這一步只記錄，不比對、不擋。** 之後要做的「UID 變了就示警」（＝這筆記錄
@@ -196,7 +264,9 @@ async def set_board_uid(drone_id: str | None, uid: str) -> None:
     if not drone_id:
         return
     await pool.execute(
-        "UPDATE drones SET board_uid = $2 WHERE id = $1::uuid", drone_id, uid)
+        "UPDATE drones SET board_uid = $2, "
+        "flight_sw_version = COALESCE($3, flight_sw_version) WHERE id = $1::uuid",
+        drone_id, uid, fw)
 
 
 async def drone_for_sysid(sysid: int) -> tuple[str, str]:

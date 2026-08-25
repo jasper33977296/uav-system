@@ -13,6 +13,9 @@ import { useUavStore } from "@/lib/store";
 interface Drone {
   id: string; name: string; is_simulated: boolean; is_primary: boolean;
   connection_url: string | null; status: string | null;
+  mav_sysid: number | null;
+  board_uid?: string | null; flight_sw_version?: string | null;
+  airframe_serial?: string | null; model?: string | null;
   video_url: string | null;
   autopilot?: string | null;    // "px4"/"ardupilot"/"unknown"；null＝從未見 MAVLink 心跳
 }
@@ -52,7 +55,6 @@ export default function Drones() {
   const [dronesLoaded, setDronesLoaded] = useState(false);
   const [dronesErr, setDronesErr] = useState(false);
   const [sessions, setSessions] = useState<Session[]>([]);
-  const [name, setName] = useState("");
   const [err, setErr] = useState<string | null>(null);
   const live = useUavStore((s) => s.live);
   const fleet = useUavStore((s) => s.fleet);
@@ -102,22 +104,28 @@ export default function Drones() {
   }, []);
   useEffect(reload, [reload]);
 
-  async function register() {
+  // 撞號偵測（issues/038）：sysid 是機上可改的參數，兩台機設成同號時
+  // 遙測會互相覆蓋。這件事後端不會擋（擋了反而讓機連不上），只能標出來
+  const dupSysid = new Set(
+    drones
+      .map((d) => d.mav_sysid)
+      .filter((v, i, a) => v != null && a.indexOf(v) !== i) as number[]
+  );
+
+  const [toDelete, setToDelete] = useState<Drone | null>(null);
+
+  // 人維護欄位的共用編輯（改名／機架序號／型號走同一條 PATCH）
+  async function patch(d: Drone, body: Record<string, string>, what: string) {
     setErr(null);
-    const res = await fetch(`${API}/api/drones`, {
-      method: "POST",
+    const res = await fetch(`${API}/api/drones/${d.id}`, {
+      method: "PATCH",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ name: name.trim() }),
+      body: JSON.stringify(body),
     });
-    if (!res.ok) {
-      setErr((await res.json()).detail ?? `註冊失敗（${res.status}）`);
-      return;
-    }
-    setName("");
+    if (!res.ok) setErr((await res.json()).detail ?? `${what}失敗`);
     reload();
   }
 
-  const [toDelete, setToDelete] = useState<Drone | null>(null);
 
   async function remove(d: Drone) {
     setToDelete(null);
@@ -137,27 +145,22 @@ export default function Drones() {
           我第一版放在「＋ 註冊無人機」的 <details> 裡，元素在、內容量到是空的
           （收合＝不可見），比 tooltip 更糟。正常態不顯示，也不進飛行畫面 */}
       {buildNeedsNotice && <div className="build-notice">{buildNoticeText}</div>}
-      {/* 註冊＝低頻教學操作 → 收摺疊、不記憶（IA 判準） */}
+      {/* **註冊表單已移除**（issues/038）：機上代理一上線就自報身分，系統以
+          飛控板 UID 為鍵自動建檔。代理知道的（板子 UID、廠牌、韌體、機型）
+          全是機器問得到的，讓人打字只會打錯；人該維護的（名稱、機架序號、
+          型號）代理問不到——所以這頁只做**編輯**。 */}
       <details className="card">
-        <summary>＋ 註冊無人機</summary>
+        <summary>機是怎麼出現在這裡的？</summary>
         <p className="hint-line" style={{ marginTop: 8 }}>
-          機的身分由系統端管理：註冊 → 「設為主機」後，MAVLink（14540）收到的
-          遙測就記在這台名下；也可直接對現有的機「改名」。
-          多機同時接入待 ingest 多實例化（issues/011）。
+          機上代理連上後會自報**飛控板 UID**，系統據此自動建檔（名稱預設
+          <code> uav-&lt;UID 後 6 碼&gt;</code>），新機出現會在事件流留一筆。
+          <br />
+          身分鍵是**飛控板**不是 sysid——sysid 是機上可以隨時改的參數。
+          板子拆到另一台機架上，記錄會跟著板子走，此時要自己更新機架序號。
+          <br />
+          沒有代理的機（他人的 QGC 直連、SITL）仍會依 sysid 自動建檔，
+          那種記錄沒有板子 UID，身分較弱。
         </p>
-        <div className="form-row" style={{ marginTop: 8 }}>
-          <input
-            placeholder="名稱（如 rb5-uav-1）"
-            value={name}
-            onChange={(e) => setName(e.target.value)}
-          />
-          {/* 連線位址輸入已移除（issues/036）：單埠多機設計下那是**地面站自己的
-              收聽埠**、每台機都一樣，填了也沒有任何讀取端。留著它等於在教使用者
-              一個錯的心智模型——「每台機有自己的連線位址」。
-              飛控型號同理不必填：它由 HEARTBEAT 自動偵測（連上才知道，
-              註冊當下本來就不知道，不假裝知道）。 */}
-          <button disabled={!name.trim()} onClick={register}>註冊</button>
-        </div>
         {err && <div className="form-err">{err}</div>}
       </details>
 
@@ -184,6 +187,15 @@ export default function Drones() {
                   <span className="dot" style={{ background: "#d03b3b" }} />飛行中
                 </span>
               )}
+              {/* 撞號放在**收合列**（issues/038）：兩筆記錄綁同一個 sysid 時遙測
+                  會互相覆蓋，那是「這頁顯示的數字有假」的層級，不能只在展開後
+                  才說——會展開的人通常已經在查了，需要提醒的是還沒起疑的人 */}
+              {dupSysid.has(d.mav_sysid ?? -1) && (
+                <span className="chip" style={{ background: "#d03b3b", color: "#fff" }}
+                  title="有兩筆以上的記錄綁到同一個 sysid——遙測會混料，先刪掉或改掉其中一筆">
+                  ⚠ sysid {d.mav_sysid} 撞號
+                </span>
+              )}
               <span className="spacer" />
               <span className="meta">{mine.length} 次</span>
               <span className="meta">{open[d.id] ? "▾" : "▸"}</span>
@@ -195,17 +207,28 @@ export default function Drones() {
             <div className="drone-actions">
               <span className="spacer" />
               <button className="btn-plain btn-sm"
-                onClick={async () => {
+                onClick={() => {
                   const name = window.prompt("新名稱", d.name);
                   if (!name || name === d.name) return;
-                  const res = await fetch(`${API}/api/drones/${d.id}`, {
-                    method: "PATCH",
-                    headers: { "Content-Type": "application/json" },
-                    body: JSON.stringify({ name }),
-                  });
-                  if (!res.ok) setErr((await res.json()).detail ?? "改名失敗");
-                  reload();
+                  patch(d, { name }, "改名");
                 }}>改名</button>{" "}
+              {/* 機架序號／型號＝**代理問不到**的東西（issues/038）：板子 UID 是
+                  飛控板的身分，換機架時板子會帶著記錄走，此時只有人知道它現在
+                  裝在哪台機上。留空是誠實的「未填」，不預設值 */}
+              <button className="btn-plain btn-sm"
+                title="機身上的序號，用來對應實體機架（板子換機時要更新）"
+                onClick={() => {
+                  const v = window.prompt("機架序號（留空清除）", d.airframe_serial ?? "");
+                  if (v === null) return;
+                  patch(d, { airframe_serial: v.trim() }, "更新機架序號");
+                }}>機架序號</button>{" "}
+              <button className="btn-plain btn-sm"
+                title="機架型號，如 X500 V2、S500。代理讀得到的是飛控機型（四旋翼／固定翼），不是這個"
+                onClick={() => {
+                  const v = window.prompt("型號（留空清除）", d.model ?? "");
+                  if (v === null) return;
+                  patch(d, { model: v.trim() }, "更新型號");
+                }}>型號</button>{" "}
               <button className="btn-plain btn-sm"
                 title={"即時影像串流位址（地圖點擊機體開啟）。瀏覽器不支援 RTSP：" +
                   "機上跑 MediaMTX 轉 WHEP，填 http://<機IP>:8889/<路徑>/whep；" +
@@ -248,6 +271,20 @@ export default function Drones() {
               {apChip(d.autopilot) && <span className="chip">{apChip(d.autopilot)}</span>}
               {d.is_primary && <span className="chip">主機</span>}
               {d.is_simulated && <span className="chip">模擬</span>}
+            </div>
+            {/* **兩層身分**（issues/038）：上一行是機器每次連線都會覆核的事實，
+                下一行是人打的字。視覺上分開，因為可信度不同。 */}
+            <div className="hint-line" style={{ marginTop: 6 }}>
+              {d.mav_sysid != null ? `sysid ${d.mav_sysid}` : "尚未收到心跳"}
+              {d.flight_sw_version ? ` · 韌體 ${d.flight_sw_version}` : ""}
+              {d.board_uid
+                ? ` · 板子 ${d.board_uid.slice(-8)}`
+                : " · 無板子 UID（身分較弱）"}
+            </div>
+            <div className="hint-line" style={{ marginTop: 2 }}>
+              {(d.airframe_serial || d.model)
+                ? `機架 ${d.airframe_serial || "未填"} · ${d.model || "型號未填"}`
+                : "機架序號與型號未填——代理問不到，只能人維護"}
             </div>
             {mine[0] && (
               <div className="hint-line" style={{ marginTop: 6 }}>
