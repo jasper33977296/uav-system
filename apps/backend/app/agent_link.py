@@ -61,6 +61,9 @@ class AgentLink:
             "since": p.get("ts"),
             "mission_seq": p.get("mission_seq"),
             "mission_total": p.get("mission_total"),
+            # 序列進行中的話，鏡像也要看得到——「這台機正在跑一段改航線序列」
+            # 是操作員該知道的事，藏在機上等於沒說（協定 §4.2）
+            "intent_id": p.get("intent_id"), "seq_step": p.get("seq_step"),
             "derived": p.get("derived"),
         }
 

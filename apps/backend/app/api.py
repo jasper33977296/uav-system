@@ -134,6 +134,10 @@ async def agent_hello(h: AgentHello):
 
 
 class GuardIn(BaseModel):
+    #: params 裡帶 dry_run:true ＝**只問判決不動飛機**。加這個是因為要驗證
+    #: 守門「放行」那幾格，本來一定得真的下指令——2026-08-25 就對一台停在
+    #: 地上的真機送出了 RTL／LAND／LOITER，只為了確認守門會放行。
+    #: **驗證不該需要動到飛機。**
     """指令服務執行飛行操作前，先問機上守門（協定 §5.2、丙案分工）。"""
     #: 協定訊息型別：intent（問守門／要提案）／decision（人的確認）／
     #: progress（序列逐步回報）。**分開而不是塞進 action**：它們是不同的事，
@@ -200,6 +204,7 @@ async def agent_intent(body: GuardIn):
     kind = ev.get("event")
     verdict = {"guard_refused": "refused", "cleared": "cleared",
                "proposal": "cleared", "sent": "done", "noted": "done",
+               "would_execute": "would_execute",
                "cancelled": "cancelled", "failed": "failed"}.get(kind, kind)
     return {"verdict": verdict, "intent_id": iid, "event": ev,
             "reason": ev.get("reason"), "state": ev.get("state")}
