@@ -948,8 +948,16 @@ a:focus-visible, button:focus-visible, input:focus-visible, select:focus-visible
 .mthumb { width: 100%; aspect-ratio: 1 / 1; background: var(--page); border-radius: 8px; display: block; }
 .mcard-foot { display: flex; align-items: center; gap: 6px; margin-top: 8px; min-width: 0; }
 .mcard-name {
-  font-size: 13px; font-weight: 600;
+  font-size: 13px; font-weight: 600; min-width: 0;
   overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+/* 膠囊列：名字那一列擠不下（卡片 ~195px），膠囊另起一行並允許換行。
+   認不得的型號會印成「firmware 99 · type 200」這種長字串，所以膠囊本身
+   也要能截斷——寧可截尾，不要把卡片撐破 */
+.mcard-chips { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 6px; }
+.mcard-chips .chip {
+  max-width: 100%; overflow: hidden; text-overflow: ellipsis;
+  white-space: nowrap; display: block;
 }
 .on-chip { color: var(--accent); border-color: var(--accent); flex: none; }
 .mcard-foot .spacer { flex: 1; }

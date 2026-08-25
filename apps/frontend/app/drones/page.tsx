@@ -145,24 +145,12 @@ export default function Drones() {
           我第一版放在「＋ 註冊無人機」的 <details> 裡，元素在、內容量到是空的
           （收合＝不可見），比 tooltip 更糟。正常態不顯示，也不進飛行畫面 */}
       {buildNeedsNotice && <div className="build-notice">{buildNoticeText}</div>}
-      {/* **註冊表單已移除**（issues/038）：機上代理一上線就自報身分，系統以
-          飛控板 UID 為鍵自動建檔。代理知道的（板子 UID、廠牌、韌體、機型）
-          全是機器問得到的，讓人打字只會打錯；人該維護的（名稱、機架序號、
-          型號）代理問不到——所以這頁只做**編輯**。 */}
-      <details className="card">
-        <summary>機是怎麼出現在這裡的？</summary>
-        <p className="hint-line" style={{ marginTop: 8 }}>
-          機上代理連上後會自報**飛控板 UID**，系統據此自動建檔（名稱預設
-          <code> uav-&lt;UID 後 6 碼&gt;</code>），新機出現會在事件流留一筆。
-          <br />
-          身分鍵是**飛控板**不是 sysid——sysid 是機上可以隨時改的參數。
-          板子拆到另一台機架上，記錄會跟著板子走，此時要自己更新機架序號。
-          <br />
-          沒有代理的機（他人的 QGC 直連、SITL）仍會依 sysid 自動建檔，
-          那種記錄沒有板子 UID，身分較弱。
-        </p>
-        {err && <div className="form-err">{err}</div>}
-      </details>
+      {/* 註冊表單已移除（issues/038）：代理一上線就自報身分，機器問得到的東西
+          不勞人打字。原本這裡有一段「機是怎麼出現在這裡的」說明，也拿掉了——
+          它解釋的是**系統怎麼運作**，不是使用者此刻要做的決定；常駐在清單頂端
+          等於每次來都再讀一次已經知道的事。機制寫在 doc/drone-registration.md。
+          錯誤訊息留下來：它不是說明，是這一頁剛剛發生的事。 */}
+      {err && <div className="form-err">{err}</div>}
 
       {drones.map((d) => {
         const mine = sessions.filter((s) => s.drone_id === d.id);

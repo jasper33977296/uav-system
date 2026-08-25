@@ -208,16 +208,12 @@ export default function Missions() {
               onClick={() => setOpenId(openId === m.id ? null : m.id)}>
               <MissionThumb3D wps={thumbs[m.id]}
                 onTap={() => setOpenId(openId === m.id ? null : m.id)} />
+              {/* **膠囊自己一行**：卡片只有 ~195px 寬，膠囊跟名字擠同一列時
+                  名字被壓到 68px（實測：完整 159px），使用者看到的是半截檔名
+                  ——而檔名正是他用來認這份航線的東西。膠囊縮不得（縮了就讀不
+                  出是給哪家飛控的），所以讓出整列的只能是版面，不是內容。 */}
               <div className="mcard-foot">
                 <span className="mcard-name">{m.name}</span>
-                {m.is_active && <span className="chip on-chip">顯示中</span>}
-                {/* 目標機種：選檔當下就看得到這份航線是給誰寫的。
-                    檔案沒說時不顯示 chip——**空白代表「沒說」，不是「通用」**。 */}
-                {planTarget(m) && (
-                  <span className="chip" title="這份航線宣告的目標機種（來自 .plan）">
-                    {planTarget(m)}
-                  </span>
-                )}
                 <span className="spacer" />
                 <button className="btn-plain btn-sm" title="更多"
                   onClick={(e) => {
@@ -226,6 +222,18 @@ export default function Missions() {
                     setDeleting(null);
                   }}>⋯</button>
               </div>
+              {(m.is_active || planTarget(m)) && (
+                <div className="mcard-chips">
+                  {m.is_active && <span className="chip on-chip">顯示中</span>}
+                  {/* 目標機種：選檔當下就看得到這份航線是給誰寫的。
+                      檔案沒說時不顯示 chip——**空白代表「沒說」，不是「通用」**。 */}
+                  {planTarget(m) && (
+                    <span className="chip" title="這份航線宣告的目標機種（來自 .plan）">
+                      {planTarget(m)}
+                    </span>
+                  )}
+                </div>
+              )}
               {menuId === m.id && (
                 <div className="mcard-menu" onClick={(e) => e.stopPropagation()}>
                   {/* 手動顯示切換（降級保留——常規路徑是任務開始自動浮現） */}
