@@ -16,6 +16,7 @@ import contextvars
 import json
 import logging
 import math
+import urllib.parse
 import urllib.request
 import uuid
 
@@ -30,6 +31,7 @@ from pydantic import BaseModel
 # 不必改每個端點簽名就取得；背景序列（execute 起的 task）沿用觸發請求的 client。
 _client_var: contextvars.ContextVar = contextvars.ContextVar("client", default=None)
 
+from . import capabilities as caps
 from . import group_exec, mav, plan_check, plans
 from .config import settings
 
@@ -146,6 +148,13 @@ async def _run(sysid: int, action: str, fn, *args, params=None):
 
 async def lifespan(app):
     global router, pool, executor
+    # **兩處各寫一份 GCS sysid 就是會漂移**，而漂移的症狀是能力判定拿著一個
+    # 過期的數字去比對機端參數，然後把一台其實可以指揮的機標成「不行」——
+    # 或反過來。開機就比對，不同就不要啟動
+    if mav.GCS_SYSID != caps.GCS_SYSID:
+        raise RuntimeError(
+            f"GCS sysid 兩處不一致：mav.py={mav.GCS_SYSID}、"
+            f"capabilities.py={caps.GCS_SYSID}——改一個就要改另一個")
     pool = await asyncpg.create_pool(settings.database_url, min_size=1, max_size=3)
     await pool.execute("""CREATE TABLE IF NOT EXISTS command_log (
         id BIGSERIAL PRIMARY KEY, time TIMESTAMPTZ NOT NULL DEFAULT now(),
@@ -278,7 +287,13 @@ async def set_mode(sysid: int, mode: str, skip_guard: bool = False):
 async def mission_start(sysid: int):
     _require_enabled(); _require_capability(sysid, "mission_start")
     await _ask_guard(sysid, "mission_start")
-    return await _run(sysid, "mission_start", mav.job_command, 300, [0.0])
+    res = await _run(sysid, "mission_start", mav.job_command, 300, [0.0])
+    # 啟動的是**機上現有**的任務，所以要查這台機現在綁的是哪一份
+    mid = await pool.fetchval(
+        "SELECT current_mission_id::text FROM drones WHERE mav_sysid = $1", sysid)
+    if mid:
+        await _show_on_live(sysid, mid, "任務已啟動")
+    return res
 
 
 async def _live() -> dict:
@@ -383,6 +398,10 @@ async def mission_fly(sysid: int, body: FlyIn):
 
     steps["mission"] = await _run(sysid, "mode:mission", mav.job_set_mode, "mission")
     await _audit(sysid, "mission_fly", body.model_dump(), "accepted", json.dumps(steps))
+    mid = body.mission_id or await pool.fetchval(
+        "SELECT current_mission_id::text FROM drones WHERE mav_sysid = $1", sysid)
+    if mid:
+        await _show_on_live(sysid, mid, "起飛→任務")
     return {"ok": True, "steps": steps}
 
 
@@ -542,6 +561,33 @@ async def _ask_guard(sysid: int, action: str, intent_id: str | None = None,
         "code": "guard_refused", "state": res.get("state")})
 
 
+async def _show_on_live(sysid: int, mission_id: str, why: str) -> None:
+    """把這份航線推到即時畫面上，並在事件流留一筆。
+
+    **為什麼上傳完就要顯示**：上傳的那一刻起，機上的航線就是這一份了——
+    而即時頁上畫的如果還是別份（或什麼都沒有），畫面與飛機的事實就對不上。
+    改航線確認後同理，而且那一次更重要：使用者剛剛才決定要換成這一條。
+
+    失敗不擋指令：顯示是輔助，上傳已經成功的事不該因為畫面沒更新而回報失敗。
+    """
+    loop = asyncio.get_running_loop()
+
+    def _post():
+        q = urllib.parse.urlencode({"why": why, "sysid": sysid})
+        req = urllib.request.Request(
+            f"{settings.backend_api}/api/missions/{mission_id}/show?{q}",
+            data=b"", method="POST",
+            headers={"Content-Type": "application/json"})
+        try:
+            urllib.request.urlopen(req, timeout=4).read()
+        except Exception as e:
+            log.warning("即時畫面更新失敗：%s", e)
+    try:
+        await loop.run_in_executor(None, _post)
+    except Exception:
+        log.warning("即時畫面更新失敗（不影響指令）", exc_info=True)
+
+
 async def _drone_id_of(sysid: int) -> str | None:
     row = await pool.fetchrow(
         "SELECT id::text AS id FROM drones WHERE mav_sysid = $1", sysid)
@@ -699,6 +745,8 @@ async def change_route_exec(sysid: int, body: ChangeRouteIn):
 
     await _audit(sysid, "change_route", body.model_dump(), "ok",
                  f"續飛第 {fresh['resume_wp']['index']} 點")
+    await _show_on_live(sysid, body.mission_id,
+                        f"改航線完成，從第 {fresh['resume_wp']['index']} 點續飛")
     return {"ok": True, "steps": steps, "proposal": fresh}
 
 
@@ -759,6 +807,9 @@ async def mission_upload(sysid: int, body: UploadIn):
     # sysid→drone 靠 drones.mav_sysid（backend 心跳時寫入）。
     await pool.execute("UPDATE drones SET current_mission_id = $1 WHERE mav_sysid = $2",
                        body.mission_id, sysid)
+    # **上傳成功 → 即時畫面就該畫這一份**：從這一刻起機上的航線就是它，
+    # 畫面上還畫別份（或什麼都不畫）就是與飛機的事實對不上
+    await _show_on_live(sysid, body.mission_id, "已上傳到機上")
     return {**res, "check": report}
 
 

@@ -30,7 +30,17 @@ from . import capabilities as caps
 
 log = logging.getLogger("command.mav")
 M = mavutil.mavlink
-GCS_SYSID = 254
+#: 我方 GCS 的 sysid。**2026-08-25 由 254 改為 255**（使用者裁定）：
+#: ArduPilot 只信 `SYSID_MYGCS` 指定來源的部分指令，而機端那個參數是 255
+#: （出廠預設，也是 QGC 慣用值）。原本的做法是叫使用者去把機端改成 254——
+#: **要一台實體飛機為了配合地面站改參數，方向是反的**：改我方一個常數，
+#: 比每次換機都要記得改飛控參數可靠。
+#:
+#: 代價：與 QGC 撞號。同一條鏈路上同時掛 QGC 與本系統時，飛控分不出誰是誰
+#: （見 doc/gcs-replacement.md）。板凳期要兩者並存的話，改 QGC 那一側
+#: （QGC 設定裡可改 MAVLink System ID），不要改回這裡——改回來就會退回
+#: 「指令被靜默丟棄、沒有任何錯誤訊息」那個狀態。
+GCS_SYSID = 255
 MYGCS_REREAD_S = 30.0   # SYSID_MYGCS 重讀間隔（見 _recv：使用者改了要看得到）
 #: 活性門檻：主迴圈超過這麼久沒跑過一圈＝卡住（見 MavRouter.alive）。
 #: 正常節奏是 run() 每圈 ≤0.2s、指令對話期間 _wait() 每圈 ≤0.2s，

@@ -750,6 +750,42 @@ async def activate_mission(mission_id: str, active: bool = True):
     return {"ok": True}
 
 
+@router.post("/missions/{mission_id}/show")
+async def show_mission(mission_id: str, why: str = "", sysid: int | None = None):
+    """**這份航線就是機上現在的那份 → 畫到即時頁上，並留一筆事件。**
+
+    與 `/activate` 的差別是**語意**，不是行為：`activate` 是人手動切換要看哪
+    一份（低頻、不必留痕）；這個是系統在說「機上的航線剛剛變成這一份」。
+    後者一定要留痕——上傳與改航線都是會改變飛機行為的操作，事後查案時
+    「畫面上那時候畫的是哪一條」是關鍵事實。
+
+    由指令服務在上傳成功／改航線完成後呼叫。
+    """
+    row = await db.pool.fetchrow("SELECT name FROM missions WHERE id = $1",
+                                 mission_id)
+    if row is None:
+        raise HTTPException(404, "無此路徑")
+    async with db.pool.acquire() as con:
+        async with con.transaction():
+            await con.execute("UPDATE missions SET is_active = false WHERE is_active")
+            await con.execute("UPDATE missions SET is_active = true WHERE id = $1",
+                              mission_id)
+    drone_id = None
+    if sysid is not None:
+        r = await db.pool.fetchrow(
+            "SELECT id::text AS id FROM drones WHERE mav_sysid = $1", sysid)
+        drone_id = r["id"] if r else None
+    try:
+        ev = await db.insert_event(
+            drone_id, None, "info", "mission_shown",
+            {"mission_id": mission_id, "mission": row["name"], "why": why})
+        ev["drone"] = None
+        await manager.broadcast({"type": "event", "event": ev})
+    except Exception:
+        log.exception("航線顯示事件寫入失敗（不影響顯示本身）")
+    return {"ok": True, "mission": row["name"]}
+
+
 @router.delete("/missions/{mission_id}")
 async def delete_mission(mission_id: str):
     r = await db.pool.execute("DELETE FROM missions WHERE id = $1", mission_id)

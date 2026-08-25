@@ -14,7 +14,10 @@
 """
 from autopilot import CAP_KEYS, autopilot_name, get_driver  # noqa: F401
 
-GCS_SYSID = 254            # 與 mav.GCS_SYSID 一致
+GCS_SYSID = 255            # 與 mav.GCS_SYSID 一致（2026-08-25 由 254 改）
+#: **兩處各寫一份數字就是會漂移**，所以這裡加一個開機自檢：值不同時
+#: 直接拒絕啟動，而不是讓能力判定拿著一個過期的數字去比對
+
 
 _RAW_BY_NAME = {"px4": 12, "ardupilot": 3}
 

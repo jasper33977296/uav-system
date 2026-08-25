@@ -53,7 +53,31 @@ interface Health {
   enabled: boolean;
   drones: Record<string, DroneHealth>;
 }
-interface Mission { id: string; name: string }
+interface Mission {
+  id: string; name: string;
+  firmware_type?: number | null; vehicle_type?: number | null;
+}
+
+/** MAV_AUTOPILOT／MAV_TYPE → 人話。與 app/missions/page.tsx 同一組對照。
+ * **認不得的值原樣顯示 id**，不寫「未知」——那會讓「檔案沒說」與「說了但
+ * 我們沒收錄這個型號」看起來一樣。 */
+const AP_NAMES: Record<number, string> = { 0: "通用", 3: "ArduPilot", 12: "PX4" };
+const VT_NAMES: Record<number, string> = {
+  1: "定翼", 2: "四旋翼", 10: "地面載具", 12: "潛航器", 13: "六旋翼", 14: "八旋翼",
+};
+
+/** 下拉選單裡的目標機種。**選的當下就要看得到這份航線是給誰寫的**——
+ * 等上傳完才在卡片上顯示已經太晚：那時候航線已經在機上了。
+ * 沒宣告時明講「未宣告」而不留白（issues/037 二修的同一條理由：留白會被
+ * 讀成「還沒載入」）。 */
+function missionLabel(m: Mission): string {
+  const ap = m.firmware_type == null ? null
+    : (AP_NAMES[m.firmware_type] ?? `firmware ${m.firmware_type}`);
+  const vt = m.vehicle_type == null ? null
+    : (VT_NAMES[m.vehicle_type] ?? `type ${m.vehicle_type}`);
+  const t = [ap, vt].filter(Boolean).join(" · ");
+  return `${m.name}（${t || "未宣告目標機種"}）`;
+}
 
 export default function CommandPanel() {
   const [health, setHealth] = useState<Health | "off" | null>(null);
@@ -463,17 +487,10 @@ export default function CommandPanel() {
           ok: true,
           text: `${action} ✓${body.verified ? "（回讀比對通過）" : ""}`,
         });
-        // §4 v3：任務開始成功 → 自動顯示於即時頁（手動切換退位到 /missions
-        // 的 ⋯ 選單）；activate 後通知地圖即刻重刷疊圖
-        if (path === "/mission/fly" || path === "/mission/start") {
-          const mid = (payload?.mission_id as string | undefined) ?? (missionId || undefined);
-          if (mid) {
-            fetch(`${API}/api/missions/${mid}/activate?active=true`,
-              { method: "POST", headers: CLIENT_HEADERS })
-              .then(() => useUavStore.getState().requestPlanRefresh())
-              .catch(() => {});
-          }
-        }
+        // 顯示到即時頁的事**已經搬到後端**（指令服務在上傳／啟動／改航線成功
+        // 後呼叫 /missions/{id}/show，前端由 mission_shown 事件觸發重畫）。
+        // 原因：上傳的呼叫端不只有這個畫面——驗收 rig、MCP、curl 都會上傳，
+        // 綁在按鈕上等於只有自己按的那次會更新，別人上傳時畫面就與飛機對不上。
       }
     } catch (e) {
       setResult({ ok: false, text: `連線失敗：${e}` });
@@ -676,7 +693,8 @@ export default function CommandPanel() {
                     onChange={(e) => useUavStore.getState()
                       .setFormationCfg({ base: e.target.value })}>
                     <option value="">選擇任務⋯</option>
-                    {missions.map((m) => <option key={m.id} value={m.id}>{m.name}</option>)}
+                    {missions.map((m) =>
+                      <option key={m.id} value={m.id}>{missionLabel(m)}</option>)}
                   </select>
                   <label className="cmd-alt">層距
                     <input type="number" min={2} max={20} step={1} value={cfg.spacing}
@@ -692,7 +710,8 @@ export default function CommandPanel() {
                       onChange={(e) => useUavStore.getState()
                         .setFormationCfg({ assign: { ...cfg.assign, [id]: e.target.value } })}>
                       <option value="">選擇任務⋯</option>
-                      {missions.map((m) => <option key={m.id} value={m.id}>{m.name}</option>)}
+                      {missions.map((m) =>
+                      <option key={m.id} value={m.id}>{missionLabel(m)}</option>)}
                     </select>
                   </div>
                 ))
@@ -825,7 +844,8 @@ export default function CommandPanel() {
           <div className="cmd-row">
             <select value={missionId} onChange={(e) => setMissionId(e.target.value)}>
               <option value="">選擇任務⋯</option>
-              {missions.map((m) => <option key={m.id} value={m.id}>{m.name}</option>)}
+              {missions.map((m) =>
+                      <option key={m.id} value={m.id}>{missionLabel(m)}</option>)}
             </select>
             {btn("上傳", "上傳", "/mission/upload",
                  { disabled: !missionId, body: { mission_id: missionId },

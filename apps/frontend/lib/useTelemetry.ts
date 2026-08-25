@@ -39,7 +39,15 @@ export function useTelemetry() {
         try { msg = JSON.parse(e.data); } catch { return; }
         if (msg.type === "telemetry") setLive(msg);
         // fold:true＝同句 STATUSTEXT 重複的就地更新（不新增列，7127218 契約）
-        else if (msg.type === "event") pushEvent(msg.event, msg.fold === true);
+        else if (msg.type === "event") {
+          pushEvent(msg.event, msg.fold === true);
+          // **航線換了就重畫**：上傳／改航線完成時後端會發這則事件。
+          // 由事件觸發而不是由按鈕觸發，是因為上傳的呼叫端不只有這個畫面
+          // （驗收 rig、MCP、curl 都會上傳）——綁在按鈕上等於只有自己按的
+          // 那次會更新，別人上傳時畫面就與飛機的事實對不上
+          if (msg.event?.type === "mission_shown")
+            useUavStore.getState().requestPlanRefresh();
+        }
         // 機上資料 §2.8：訊息登錄表 1–2Hz（014 Phase B，暫定契約形）
         // 意圖協定 §4.2 的狀態鏡像（代理 → 地面站，1Hz 保活＋變化即送）
         else if (msg.type === "agent_state") setAgent(msg);

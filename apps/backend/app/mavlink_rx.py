@@ -36,7 +36,9 @@ from .ws import manager
 
 log = logging.getLogger(__name__)
 M = mavutil.mavlink
-GCS_SYSID = 254
+#: 與 command 服務同一個值（見 apps/command/app/mav.py 的說明）。
+#: 這裡只用來**排除自己送出去的封包**，不參與指令
+GCS_SYSID = 255
 STREAM_REQ_S = 30.0          # ArduPilot 串流請求補送間隔（見 _maintain_streams）
 STREAM_HZ = 4                # 請求的串流率（夠前端 5Hz 顯示，不灌爆 5G）
 ADDR_WARN_COOLDOWN = 30.0    # 同 sysid 撞號告警去抖（秒）：避免告警風暴

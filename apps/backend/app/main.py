@@ -219,9 +219,16 @@ async def ws_agent(ws: WebSocket):
                 row = await db.pool.fetchrow(
                     "SELECT id::text AS id, name FROM drones WHERE board_uid = $1",
                     uid)
-                link = agent_link.on_hello(
+                link, stale = agent_link.on_hello(
                     msg, row["id"] if row else None,
                     row["name"] if row else None)
+                if stale is not None and stale is not ws:
+                    # 一台機一個代理：舊連線讓位。**先關掉再接手**，否則
+                    # 兩條連線都以為自己是那台機的通道
+                    try:
+                        await stale.close(code=1000)
+                    except Exception:
+                        pass
                 link.ws = ws          # 送 intent 走這條
                 await ws.send_json({"type": "ack", "of": "hello",
                                     "drone_id": link.drone_id,

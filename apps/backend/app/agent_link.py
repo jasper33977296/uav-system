@@ -86,9 +86,29 @@ def envelope_error(msg: dict) -> str | None:
     return None
 
 
-def on_hello(msg: dict, drone_id: str | None, drone_name: str | None) -> AgentLink:
+def on_hello(msg: dict, drone_id: str | None,
+             drone_name: str | None) -> tuple[AgentLink, object | None]:
+    """一台機一個代理（協定 §7.4 定案 2026-08-25）。
+
+    回傳 (link, 要關掉的舊連線)。**同一塊板子第二條連線進來時，新的贏**：
+    最常見的情況是半開的 TCP——舊連線其實已經死了，只是還沒 FIN。讓舊的贏
+    會讓真正活著的代理永遠連不上。
+
+    但**舊的如果還新鮮就要大聲說**：那代表真的有兩個代理指向同一台機，
+    而那是設定錯誤（例如一台 Pi 被複製過去、board_uid 跟著複製）。兩個代理
+    各自守門、各自算提案，飛機會收到互相矛盾的指令。
+    """
     uid = msg.get("board_uid")
-    link = links.get(uid) or AgentLink(board_uid=uid)
+    old = links.get(uid)
+    stale_ws = None
+    if old is not None and old.connected and old.ws is not None:
+        stale_ws = old.ws
+        if old.fresh():
+            log.warning("⚠ board_uid %s 出現第二條意圖通道，而舊的還在推狀態"
+                        "——**一台機只該有一個代理**。舊的會被關掉；"
+                        "如果兩台機真的都在跑，其中一台的 board_uid 是複製來的",
+                        uid)
+    link = old or AgentLink(board_uid=uid)
     link.drone_id = drone_id
     link.drone_name = drone_name
     link.agent_version = msg.get("agent_version")
@@ -98,7 +118,7 @@ def on_hello(msg: dict, drone_id: str | None, drone_name: str | None) -> AgentLi
     link.executes = list(msg.get("executes") or [])
     link.vets = list(msg.get("vets") or [])
     links[uid] = link
-    return link
+    return link, stale_ws
 
 
 def on_state(link: AgentLink, msg: dict) -> None:
