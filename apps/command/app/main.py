@@ -493,7 +493,8 @@ _INTENT_OF = {
 }
 
 
-async def _ask_guard(sysid: int, action: str, intent_id: str | None = None):
+async def _ask_guard(sysid: int, action: str, intent_id: str | None = None,
+                     params: dict | None = None):
     """執行前先問機上守門（協定 §5.2、丙案分工）。
 
     **為什麼問在這裡而不是前端**：守門只在前端問的話它就不是守門——前端可以
@@ -510,7 +511,7 @@ async def _ask_guard(sysid: int, action: str, intent_id: str | None = None):
         return None                       # 這個動作不在守門範圍（如 arm/upload）
     uid = (router.drones.get(sysid) or {}).get("board_uid") if router else None
     body = json.dumps({"action": intent, "intent_id": intent_id,
-                       "board_uid": uid,
+                       "board_uid": uid, "params": params,
                        "drone_id": await _drone_id_of(sysid)}).encode()
     loop = asyncio.get_running_loop()
 
@@ -593,11 +594,27 @@ async def change_route_proposal(sysid: int, body: ChangeRouteIn):
     """
     _require_enabled()
     wps, name = await _load_wps(body.mission_id)
-    p = change_route.build_proposal(
-        wps=wps, cur=_cur_of(sysid), hold_alt=body.hold_alt,
-        mission_name=name, mission_id=body.mission_id,
-        cur_seq=(router.drones.get(sysid) or {}).get("mission_seq")
-        if router else None)
+    # **先問機上**：提案的權威在代理（狀態機文件 §0.1）——它讀飛控是微秒級，
+    # 而我們手上的位置經 5G 回來已經過期。10 m/s 巡航下一次鏈路抖動就是數十
+    # 公尺誤差，而「離當前位置最近的航點」正是對位置最敏感的判斷
+    res = await _ask_guard(sysid, "change_route", params={
+        "wps": [{k: w[k] for k in ("seq", "lat", "lon", "alt", "action",
+                                   "command") if k in w} for w in wps],
+        "hold_alt": body.hold_alt, "mission_name": name,
+        "mission_id": body.mission_id})
+    p = None
+    if res and (res.get("event") or {}).get("proposal"):
+        p = res["event"]["proposal"]
+        p["source"] = "agent"
+    if p is None:
+        # 沒有代理（他人的 QGC、SITL）→ 本地算。**標明來源**：同一個畫面
+        # 背後可能是兩種資料新鮮度，看的人有權知道是哪一種
+        p = change_route.build_proposal(
+            wps=wps, cur=_cur_of(sysid), hold_alt=body.hold_alt,
+            mission_name=name, mission_id=body.mission_id,
+            cur_seq=(router.drones.get(sysid) or {}).get("mission_seq")
+            if router else None)
+        p["source"] = "ground"
     p["airborne"] = _inflight_upload_block(sysid) is not None
     if not p["airborne"]:
         p["warnings"] = list(p["warnings"]) + [
@@ -616,24 +633,34 @@ async def change_route_exec(sysid: int, body: ChangeRouteIn):
     並回新的提案要人重看——不照著過期的提案做。
     """
     _require_enabled()
-    await _ask_guard(sysid, "change_route")
     wps, name = await _load_wps(body.mission_id)
-    fresh = change_route.build_proposal(
-        wps=wps, cur=_cur_of(sysid), hold_alt=body.hold_alt,
-        mission_name=name, mission_id=body.mission_id)
+    # 守門與過期檢查一起做：**帶著人看過的那份提案**去問機上，由它用最新的
+    # 位置重算並比對。過期檢查問的是「機體從你確認到現在飄了多少」，
+    # 那是位置問題，該在位置最新的那一端判
+    res = await _ask_guard(sysid, "change_route", params={
+        "wps": [{k: w[k] for k in ("seq", "lat", "lon", "alt", "action",
+                                   "command") if k in w} for w in wps],
+        "hold_alt": body.hold_alt, "mission_name": name,
+        "mission_id": body.mission_id, "prior": body.proposal})
+    fresh = ((res or {}).get("event") or {}).get("proposal")
+    if fresh:
+        fresh["source"] = "agent"
+    else:
+        fresh = change_route.build_proposal(
+            wps=wps, cur=_cur_of(sysid), hold_alt=body.hold_alt,
+            mission_name=name, mission_id=body.mission_id)
+        fresh["source"] = "ground"
+        if body.proposal:
+            drift = change_route.drift_reason(body.proposal, fresh)
+            if drift:
+                await _audit(sysid, "change_route", body.model_dump(),
+                             "rejected_drift", drift)
+                raise HTTPException(409, {
+                    "msg": f"提案已經過期：{drift}。請重看新的提案再決定",
+                    "code": "proposal_drift", "proposal": fresh})
     if not fresh["ok"]:
         raise HTTPException(409, {"msg": "現在算不出可執行的提案",
                                   "proposal": fresh})
-    if body.proposal:
-        drift = change_route.drift_reason(body.proposal, fresh)
-        if drift:
-            # **不照過期的提案做。** 人確認的是那一份提案，不是「授權之後
-            # 隨便怎麼飛」。回新的提案要人重看，而不是自作主張用新的執行
-            await _audit(sysid, "change_route", body.model_dump(),
-                         "rejected_drift", drift)
-            raise HTTPException(409, {
-                "msg": f"提案已經過期：{drift}。請重看新的提案再決定",
-                "code": "proposal_drift", "proposal": fresh})
     steps: dict = {}
 
     async def step(key, coro, note):

@@ -190,7 +190,8 @@ async def agent_intent(body: GuardIn):
         return {"verdict": "unknown", "intent_id": iid, "reason": str(e)}
     kind = ev.get("event")
     verdict = {"guard_refused": "refused", "cleared": "cleared",
-               "sent": "done", "failed": "failed"}.get(kind, kind)
+               "proposal": "cleared", "sent": "done",
+               "failed": "failed"}.get(kind, kind)
     return {"verdict": verdict, "intent_id": iid, "event": ev,
             "reason": ev.get("reason"), "state": ev.get("state")}
 
