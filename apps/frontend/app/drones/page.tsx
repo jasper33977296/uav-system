@@ -8,7 +8,7 @@ import { buildNeedsNotice, buildNoticeText } from "@/lib/buildInfo";
 import { getJson } from "@/lib/fetchJson";
 import { parseJsonb } from "@/lib/jsonb";
 import { API } from "@/lib/signal";
-import { useUavStore } from "@/lib/store";
+import { AgentState, useUavStore } from "@/lib/store";
 
 interface Drone {
   id: string; name: string; is_simulated: boolean; is_primary: boolean;
@@ -18,7 +18,17 @@ interface Drone {
   airframe_serial?: string | null; model?: string | null;
   video_url: string | null;
   autopilot?: string | null;    // "px4"/"ardupilot"/"unknown"；null＝從未見 MAVLink 心跳
+  agent?: AgentState | null;    // 意圖通道現況（/api/drones 帶，之後由 WS 更新）
 }
+
+/** 意圖協定的狀態 → 人話。**認不得的原樣顯示**——代理版本比地面站新時，
+ * 硬翻成「未知」會讓「協定長出了新狀態」看起來像「壞了」。 */
+const STATE_TEXT: Record<string, string> = {
+  DISCONNECTED: "飛控無心跳", NOT_READY: "地面未就緒", READY: "地面待命",
+  ARMED_GROUND: "已解鎖・在地上", TAKING_OFF: "爬升中",
+  FLYING_MISSION: "執行任務中", HOLDING: "空中暫停", RETURNING: "返航中",
+  LANDING: "降落中", PILOT_CONTROL: "飛手接管", EMERGENCY: "飛控 failsafe",
+};
 
 // 機型標示（issue 015 機隊盤點）：欄位缺席＝舊後端，不顯示
 function apChip(ap: string | null | undefined): string | null {
@@ -58,6 +68,7 @@ export default function Drones() {
   const [err, setErr] = useState<string | null>(null);
   const live = useUavStore((s) => s.live);
   const fleet = useUavStore((s) => s.fleet);
+  const agents = useUavStore((s) => s.agents);
 
   // 卡片摺疊（compare-drones-restyle §2）：收合＝一機一行的機隊全貌，
   // 展開＝架次工作區。工作區判準 → per 機 localStorage 記憶；
@@ -175,6 +186,25 @@ export default function Drones() {
                   <span className="dot" style={{ background: "#d03b3b" }} />飛行中
                 </span>
               )}
+              {/* 代理狀態（意圖協定 §4.2 鏡像）。**權威在機上**，這裡只轉述。
+                  三種情況必須長得不一樣，否則畫面會替代理宣告它沒說過的事：
+                  有代理且新鮮＝報狀態／有代理但不新鮮＝報「最後看到」／
+                  沒有代理＝什麼都不說（不是「離線」，是這台機沒有代理）。 */}
+              {(() => {
+                const ag = agents[d.id] ?? d.agent;
+                if (!ag?.state) return null;
+                const txt = STATE_TEXT[ag.state] ?? ag.state;
+                return ag.fresh ? (
+                  <span className="chip" title={`機上代理回報（代理 ${ag.agent_version ?? "版本未知"}）`}>
+                    {txt}
+                  </span>
+                ) : (
+                  <span className="chip" style={{ opacity: 0.55 }}
+                    title="意圖通道斷了。這是**最後看到**的狀態，不是現在的狀態">
+                    最後：{txt}
+                  </span>
+                );
+              })()}
               {/* 撞號放在**收合列**（issues/038）：兩筆記錄綁同一個 sysid 時遙測
                   會互相覆蓋，那是「這頁顯示的數字有假」的層級，不能只在展開後
                   才說——會展開的人通常已經在查了，需要提醒的是還沒起疑的人 */}
@@ -268,11 +298,17 @@ export default function Drones() {
               {d.board_uid
                 ? ` · 板子 ${d.board_uid.slice(-8)}`
                 : " · 無板子 UID（身分較弱）"}
+              {(() => {
+                const ag = agents[d.id] ?? d.agent;
+                if (!ag) return " · 無機上代理";
+                return ` · 代理 ${ag.agent_version ?? "版本未知"}` +
+                  (ag.connected ? "" : "（意圖通道斷線）");
+              })()}
             </div>
             <div className="hint-line" style={{ marginTop: 2 }}>
               {(d.airframe_serial || d.model)
                 ? `機架 ${d.airframe_serial || "未填"} · ${d.model || "型號未填"}`
-                : "機架序號與型號未填——代理問不到，只能人維護"}
+                : "機架序號與型號未填"}
             </div>
             {mine[0] && (
               <div className="hint-line" style={{ marginTop: 6 }}>

@@ -5,7 +5,7 @@ from contextlib import asynccontextmanager
 from fastapi import FastAPI, WebSocket, WebSocketDisconnect
 from fastapi.middleware.cors import CORSMiddleware
 
-from . import db, mavlink_rx, msg_registry, video_rec
+from . import agent_link, db, mavlink_rx, msg_registry, video_rec
 from .api import router
 from .config import settings
 from .link_events import transition as link_transition
@@ -182,6 +182,76 @@ async def ws_telemetry(ws: WebSocket):
             await ws.receive_text()  # 目前不處理 client 訊息，僅維持連線
     except WebSocketDisconnect:
         manager.disconnect(ws)
+
+
+@app.websocket("/ws/agent")
+async def ws_agent(ws: WebSocket):
+    """機上代理的意圖通道（doc/agent-intent-protocol.md §2）。
+
+    **本版只收 `hello` 與 `state`，不下任何指令。** 地面站是鏡像＋意圖來源，
+    而意圖（intent／proposal／decision）還沒實作——收到就明說未支援，
+    不靜靜丟掉：機上如果以為送出去了，畫面卻是空的，那比報錯更難查。
+
+    第一則必須是 `hello`。理由不是形式主義：沒有 `board_uid` 就不知道這條
+    連線是哪一台機的，之後的 `state` 只能記成無主資料。
+    """
+    await ws.accept()
+    link = None
+    try:
+        while True:
+            try:
+                msg = await ws.receive_json()
+            except ValueError:
+                await ws.send_json({"type": "error", "reason": "非法 JSON"})
+                continue
+            err = agent_link.envelope_error(msg)
+            if err:
+                await ws.send_json({"type": "error", "reason": err})
+                log.warning("/ws/agent 拒絕訊息：%s", err)
+                continue
+            t = msg.get("type")
+            if t == "hello":
+                uid = (msg.get("board_uid") or "").strip()
+                if not uid:
+                    await ws.send_json({"type": "error",
+                                        "reason": "hello 缺 board_uid"})
+                    continue
+                row = await db.pool.fetchrow(
+                    "SELECT id::text AS id, name FROM drones WHERE board_uid = $1",
+                    uid)
+                link = agent_link.on_hello(
+                    msg, row["id"] if row else None,
+                    row["name"] if row else None)
+                await ws.send_json({"type": "ack", "of": "hello",
+                                    "drone_id": link.drone_id,
+                                    "accepts": ["state"]})
+                log.info("意圖通道連上：%s（board_uid=%s，代理 %s）",
+                         link.drone_name or "未註冊", uid, link.agent_version)
+                await manager.broadcast({"type": "agent_state",
+                                         **link.as_dict()})
+            elif t == "state":
+                if link is None:
+                    await ws.send_json({"type": "error",
+                                        "reason": "第一則必須是 hello"})
+                    continue
+                agent_link.on_state(link, msg)
+                await manager.broadcast({"type": "agent_state",
+                                         **link.as_dict()})
+            else:
+                # 明說未支援。**這是協定往下長的接點**：哪天 intent 實作了，
+                # 舊版代理送過來也會得到一句看得懂的話，而不是石沉大海
+                await ws.send_json({"type": "error",
+                                    "reason": f"型別 {t} 尚未實作（本版只做到 state）"})
+    except WebSocketDisconnect:
+        pass
+    except Exception:
+        log.exception("/ws/agent 例外")
+    finally:
+        if link is not None:
+            agent_link.on_disconnect(link)
+            log.warning("意圖通道斷線：%s（最後狀態 %s）",
+                        link.drone_name or link.board_uid, link.state)
+            await manager.broadcast({"type": "agent_state", **link.as_dict()})
 
 
 @app.get("/healthz")

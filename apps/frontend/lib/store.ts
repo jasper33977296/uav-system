@@ -24,6 +24,21 @@ export interface ImuData {
   clipping_0?: number | null; clipping_1?: number | null; clipping_2?: number | null;
 }
 
+/** 意圖協定 §4.2 的鏡像（doc/agent-intent-protocol.md）。
+ * **權威在機上代理，這裡只是鏡像**——不修正、不補值。`fresh=false` 代表
+ * 「這是最後看到的狀態，現在不知道」，與「沒有代理」是兩件事。 */
+export interface AgentState {
+  board_uid: string; drone_id: string | null;
+  agent_version: string | null;
+  inputs: string[];
+  connected: boolean;      // 意圖通道還在嗎
+  fresh: boolean;          // 5 秒內有推過 state 嗎（代理 1Hz 保活）
+  state: string | null;    // FLYING_MISSION / HOLDING / PILOT_CONTROL…
+  since: string | null;
+  mission_seq?: number | null; mission_total?: number | null;
+  derived?: Record<string, unknown> | null;
+}
+
 export interface Telemetry {
   drone_id: string; drone_name?: string | null;
   primary?: boolean;                 // MAVLink 主機的廣播帶此旗標
@@ -94,6 +109,10 @@ interface UavStore {
   selectedId: string | null;                 // 側欄顯示哪台；null＝跟隨主機
   wsConnected: boolean;
   registry: Record<string, DroneRegistry>;   // 機上資料 §2.8，鍵為 drone_id
+  // 意圖協定的狀態鏡像，鍵為 drone_id（沒註冊的代理沒有 drone_id，不入表——
+  // 那種連線在後端 log 看得到，但它不對應畫面上任何一台機）
+  agents: Record<string, AgentState>;
+  setAgent: (a: AgentState) => void;
   events: UavEvent[];
   sinrHistories: Record<string, number[]>;   // 每機 sparkline，各 120 筆
   // simple-first：專業數值面板是抽屜（預設關、點訊號格/▤ 開）
@@ -159,6 +178,9 @@ export const useUavStore = create<UavStore>((set) => ({
   trails: {},
   wsConnected: false,
   registry: {},
+  agents: {},
+  setAgent: (a) =>
+    set((s) => (a.drone_id ? { agents: { ...s.agents, [a.drone_id]: a } } : s)),
   events: [],
   sinrHistories: {},
   panelOpen: false,

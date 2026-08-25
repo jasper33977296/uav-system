@@ -8,7 +8,7 @@ from pydantic import BaseModel, Field, field_validator
 
 import logging
 
-from . import db, groups, mavlink_rx, plan_check
+from . import agent_link, db, groups, mavlink_rx, plan_check
 from .config import settings
 from .ws import manager
 
@@ -42,6 +42,11 @@ async def list_drones():
             d["flight_sw_version"] = st.flight_sw_version
         if st and st.board_uid:
             d["board_uid"] = st.board_uid
+        # 意圖通道現況（協定 §4.2 的鏡像）。**整頁載入時就要有值**——
+        # 只靠 WS 推播的話，剛打開頁面到下一拍之間是空白，而空白會被讀成
+        # 「沒有代理」，那與「代理在、只是還沒推」是兩件事
+        al = agent_link.links.get(d.get("board_uid"))
+        d["agent"] = al.as_dict() if al else None
         out.append(d)
     return out
 
