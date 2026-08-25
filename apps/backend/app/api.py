@@ -170,6 +170,13 @@ async def agent_intent(body: GuardIn):
     # 這個欄位，也不會回 event——不先問清楚就送過去，只會等到逾時，然後
     # 「不知道＝不行」把所有飛行操作擋死。**能力宣告要用問的，不要用試的。**
     if body.action not in (link.vets or []):
+        # **分辨「代理不守這個」與「根本沒有這個意圖」**：前者是版本差異、
+        # 該放行讓本地檢查接手；後者是呼叫端寫錯，放行等於把一個打錯的字
+        # 當成合法操作放過去
+        known = set().union(*(l.vets or [] for l in agent_link.links.values())) \
+            if agent_link.links else set()
+        if known and body.action not in known:
+            raise HTTPException(422, f"不認得的意圖 {body.action}")
         return {"verdict": "no_agent",
                 "reason": f"機上代理（{link.agent_version}）沒有宣告守 "
                           f"{body.action}，守門這一層不存在"}

@@ -323,6 +323,14 @@ export default function CommandPanel() {
       .then((ms: Mission[]) => setMissions(ms)).catch(() => {});
   }, []);
 
+  // ── 飛行中改航線（狀態機文件 §6.3）──────────────────────────
+  // 兩段式：先取提案（**不動飛機**）給人看，人確認後才執行三步序列。
+  // **hook 必須放在下面那兩個早退之前**：放在後面的話，health 還是 null 的
+  // 那幾次 render 不會呼叫到它，等 health 一到 hook 數量就變了
+  // → React #310「Rendered more hooks than during the previous render」，
+  // 整個即時頁白畫面。2026-08-25 實際炸過一次
+  const [proposal, setProposal] = useState<any>(null);
+
   if (health === null) return null;
   if (health === "off") return null;           // 服務未部署/未連線：不佔版面
 
@@ -365,11 +373,6 @@ export default function CommandPanel() {
           <div className="hint-line" key={k}>· {CAP_LABELS[k]}：{capReason(k)}</div>
         ))
       : null;
-
-  // ── 飛行中改航線（狀態機文件 §6.3）──────────────────────────
-  // 兩段式：先取提案（**不動飛機**）給人看，人確認後才執行三步序列。
-  // 送出時把人看過的那份提案帶回去，後端據以判斷這段時間機體有沒有飄掉
-  const [proposal, setProposal] = useState<any>(null);
 
   async function proposeChangeRoute() {
     setBusy("改航線"); setResult(null);
