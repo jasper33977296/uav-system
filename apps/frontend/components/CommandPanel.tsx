@@ -394,9 +394,14 @@ export default function CommandPanel() {
         const d = body.detail;
         const noteList = d?.autopilot_notes ?? d?.px4_notes;
         const notes = noteList?.length ? `｜自駕儀：${noteList.join("；")}` : "";
+        // **被擋下時一定要說得出合法做法**（狀態機文件 §3-A2）：空中上傳被擋
+        // 是對的，但只說「不行」會逼人去找繞道，而繞道正是這道門要防的事
+        const how = d?.how_to?.length
+          ? `｜合法做法：${d.how_to.map((t: string, i: number) => `${i + 1}. ${t}`).join(" → ")}`
+          : "";
         const text = typeof d === "string" ? d
           : d?.problems?.length ? `${d.msg ?? "被拒"}：${d.problems.join("；")}`
-          : d?.msg ? `${d.msg}${d.hint ? `——${d.hint}` : ""}${notes}`
+          : d?.msg ? `${d.msg}${d.hint ? `——${d.hint}` : ""}${notes}${how}`
           : JSON.stringify(d ?? `失敗（HTTP ${res.status}）`);
         setResult({ ok: false, text });
       } else {

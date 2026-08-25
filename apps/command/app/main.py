@@ -387,6 +387,52 @@ _VT_NAMES = {1: "定翼", 2: "四旋翼", 10: "地面載具", 12: "潛航器",
              13: "六旋翼", 14: "八旋翼"}
 
 
+def _inflight_upload_block(sysid) -> str | None:
+    """空中上傳任務的守門。回傳擋下的理由，可以上傳就回 None。
+
+    **這是狀態機文件 §3-A 列為最高優先的危害，而且不是假想**：2026-08-25 兩家
+    SITL 實測——飛行中上傳新任務，**兩家都不會把 `MISSION_CURRENT` 歸零**，
+    而是把舊任務的索引原封沿用到新任務上（PX4 seq 2→2、ArduPilot seq 3→4）。
+    舊任務的第 N 點與新任務的第 N 點毫無關係，所以飛機會立刻轉向一個純粹由
+    「上一份任務碰巧進行到第幾點」決定的位置。那不是次佳解，是未定義行為。
+
+    **上傳在地面是存檔，在空中是立即生效的航線變更。** 同一個動作、兩種語意，
+    而畫面上長得一模一樣——這正是它危險的地方。
+
+    擋下之後**不是死路**：空中改航線的合法路徑是三步（§3-A2），每步都要讀回
+    機端狀態確認：
+      1. `POST /api/command/{sysid}/mode/hold` —— 確認真的進了 hold
+      2. 此時上傳（機體在懸停，上傳不會造成移動）
+      3. `POST /api/command/{sysid}/mode/mission` ＋ 續飛到指定航點
+
+    **刻意不提供 force 參數**：留一個繞道就等於沒擋——趕時間的人一定會用它，
+    而趕時間正是最需要這道門的時候。
+
+    只擋「正在飛任務」這一格：
+    * 未 armed → 放行（地面存檔，本來就該允許）
+    * armed 但還在地上 → 放行（上傳不會讓它動）
+    * armed、在空中、模式是 mission → **擋下**
+    * armed、在空中、其他模式（hold／飛手手飛）→ 放行。hold 正是 A2 的第二步；
+      飛手手飛時機體不吃任務，上傳不會改變它的航線
+    """
+    d = (router.drones.get(sysid) or {}) if router else {}
+    if not d.get("armed"):
+        return None
+    alt = d.get("alt_rel")
+    if alt is not None and alt < 1.0:
+        return None                     # 還在地上
+    cm = d.get("custom_mode")
+    if cm is None:
+        return None                     # 不知道模式就不擋——擋一個不確定的狀態
+    drv = mav.dialect(router, sysid)["driver"]
+    if drv.decode_verb(cm) != "mission":
+        return None
+    return ("這台機正在空中執行任務，上傳會**立即改變它現在飛的航線**"
+            "（機端不會重設任務索引，會直接轉向新航線的對應點）。"
+            "空中改航線請走三步：先切 hold 並確認進入、再上傳、再切回 mission 並"
+            "指定續飛航點。")
+
+
 def _target_mismatch(mission_fw, mission_vt, sysid) -> list[str]:
     """任務自報的機種 vs 這台機實際偵測到的。回傳警告句（可能為空）。
 
@@ -465,6 +511,18 @@ async def mission_upload(sysid: int, body: UploadIn):
     if mismatch:
         report["warnings"] = list(report.get("warnings") or []) + mismatch
         log.warning("任務機種與機體不符（照常上傳）：%s", "；".join(mismatch))
+    # **空中守門排在幾何預檢之前**：幾何預檢問的是「這份航線本身合不合理」，
+    # 空中守門問的是「現在做這件事會不會讓飛機立刻轉向」。後者與航線內容無關，
+    # 一份完美的航線在空中上傳一樣危險
+    blocked = _inflight_upload_block(sysid)
+    if blocked:
+        await _audit(sysid, "mission_upload", {"mission_id": body.mission_id},
+                     "rejected_inflight", blocked)
+        log.warning("擋下空中上傳（sysid %d）：%s", sysid, blocked)
+        raise HTTPException(409, {"msg": blocked, "code": "inflight_upload",
+                                  "how_to": ["切 hold 並確認進入",
+                                             "上傳新航線",
+                                             "切回 mission 並指定續飛航點"]})
     if not report["ok"] and settings.geofence_enforce:
         await _audit(sysid, "mission_upload", {"mission_id": body.mission_id},
                      "rejected_precheck", "；".join(report["problems"]))
