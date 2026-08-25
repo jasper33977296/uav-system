@@ -329,6 +329,13 @@ class MavlinkRx:
                 msg.param_value, getattr(msg, "param_type", None), msg.autopilot
                 if hasattr(msg, "autopilot") else st.autopilot_raw)
             st.param_total = msg.param_count
+        elif t == "MISSION_CURRENT":
+            # 機端正在飛第幾項。**系統原本完全沒有解這則訊息**——收得到但沒人看，
+            # 於是「飛機正在飛第幾個航點」這件事在系統裡不存在（issues/039 需要它）。
+            # 忠實記錄機端的 seq，**不在這裡換算成我方索引**：ArduPilot 的 home
+            # 佔 seq 0，換算是驅動層的職責，在 ingest 就換會讓原始事實消失。
+            st.mission_seq = msg.seq
+            st.mission_total = getattr(msg, "total", None)
         elif t == "AUTOPILOT_VERSION":
             # 038：板子身分。**只收不請求**——請求要送 COMMAND_LONG，那是個
             # 通用信封（同一型別可以裝 arm），把它加進 SEND_WHITELIST 等於在

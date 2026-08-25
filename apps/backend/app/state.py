@@ -61,6 +61,11 @@ class LiveState:
     sensors_unhealthy: list = field(default_factory=list)
     ekf_ok: bool | None = None
     landed_state: str | None = None       # on_ground / in_air / takeoff / landing
+    #: 機端正在飛第幾個任務項（MISSION_CURRENT.seq）。**這是機端的 seq，不是
+    #: 我方航點索引**——ArduPilot 把 home 當 seq 0，兩者相差 1（issues/026 差異 5）。
+    #: 換算是驅動層的事，這裡只忠實記錄機端說的數字。
+    mission_seq: int | None = None
+    mission_total: int | None = None       # 機端任務總項數（新韌體才有）
     autopilot_raw: int | None = None      # MAV_AUTOPILOT_*（方言分表；issue 015）
     # ── 板子身分（038）：AUTOPILOT_VERSION 帶的硬體識別 ──────────────
     #: 飛控板的唯一 ID（`uid2`，十六進位字串）。**這是目前唯一機器可驗證的
@@ -165,6 +170,8 @@ class LiveState:
             "autopilot": autopilot_name(self.autopilot_raw),  # px4/ardupilot/unknown
             # 038：板子身分。**不是每台機都有**——要主動請求 AUTOPILOT_VERSION
             # 才拿得到，還沒問到時是 None（誠實的「不知道」）
+            "mission_seq": self.mission_seq,
+            "mission_total": self.mission_total,
             "board_uid": self.board_uid,
             "flight_sw_version": self.flight_sw_version,
             "mav_sysid": self.sysid,          # 前端：選中機（drone_id）→ 指令對象（sysid）

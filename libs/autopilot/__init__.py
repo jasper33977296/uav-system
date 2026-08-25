@@ -70,6 +70,9 @@ class UnknownDriver:
     def takeoff_plan(self, alt, ground_amsl):
         raise KeyError("未知自駕儀，無起飛序列")
 
+    def wire_seq(self, index):
+        return index
+
     def mission_line(self, items):
         return items
 

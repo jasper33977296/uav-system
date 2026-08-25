@@ -118,6 +118,9 @@ class Px4Driver:
                 "param7": ground_amsl + alt,
                 "blank": float("nan"), "alt_semantics": "amsl"}
 
+    def wire_seq(self, index: int) -> int:
+        return index              # PX4 不補 home，索引即 seq
+
     def mission_line(self, items: list[dict]) -> list[dict]:
         return items                 # PX4 不把 home 當 seq 0
 

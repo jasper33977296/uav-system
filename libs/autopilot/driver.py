@@ -142,6 +142,17 @@ class AutopilotDriver(Protocol):
         參數連 ACK 都不回，指令靜默丟棄）。
         """
 
+    def wire_seq(self, index: int) -> int:
+        """我方航點索引 → **機端的 mission seq**（差異 5 的另一面）。
+
+        `mission_line()` 管的是「上傳時要不要補 home」，這裡管的是「**指定第
+        幾項**時要送哪個數字」。兩者是同一個差異的一體兩面，但呼叫端不同：
+        前者在上傳，後者在 `DO_SET_MISSION_CURRENT`。
+
+        **少了這層換算，在 ArduPilot 上會差一個航點，而且不會有任何錯誤訊息**
+        ——飛機安靜地飛到隔壁那點去。
+        """
+
     def mission_line(self, items: list[dict]) -> list[dict]:
         """任務項的線序慣例（差異 5）。
 

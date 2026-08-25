@@ -135,6 +135,9 @@ class ArduPilotDriver:
         return {"needs_guided": self.takeoff_needs_guided, "param7": alt,
                 "blank": 0.0, "alt_semantics": "relative"}
 
+    def wire_seq(self, index: int) -> int:
+        return index + 1          # home 佔 seq 0（2026-08-25 SITL 實測：執行任務時 seq 從 1 起）
+
     def mission_line(self, items: list[dict]) -> list[dict]:
         """ArduPilot 把 **home 當 seq 0**，實際航點從 seq 1 起算。"""
         if not items:

@@ -62,6 +62,7 @@ def dialect(r: "MavRouter", sysid: int) -> dict:
         "autopilot": _autopilot.autopilot_name(raw),
         "driver": drv,
         "home_at_seq0": drv.home_at_seq0,
+        "wire_seq": drv.wire_seq,
         "takeoff_alt_is_relative": drv.takeoff_alt_is_relative,
         "takeoff_needs_guided": drv.takeoff_needs_guided,
         "mode_num": drv.encode_mode,
@@ -347,6 +348,48 @@ def job_command(r: MavRouter, sysid: int, command: int, params: list,
             return res
     raise CommandError(f"指令 {command} 無 ACK（重試 {retries} 次）"
                        f"｜autopilot_notes={r.texts_since(sysid, t0)}")
+
+
+def job_mission_goto(r: MavRouter, sysid: int, index: int) -> dict:
+    """指定機端從**我方航點索引 index** 續飛（MISSION_SET_CURRENT）。
+
+    **為什麼這個動作是必要的而不是加分項**（2026-08-25 SITL 實測，兩家一致）：
+    飛行中上傳新任務後，機端**不會把 MISSION_CURRENT 歸零**，而是把舊任務的
+    索引原封沿用到新任務上。舊任務的第 2 點與新任務的第 2 點毫無關係——
+    不主動指定的話，飛機會飛到一個純粹由「上一份任務進行到第幾點」決定的
+    位置。那不是次佳解，是**未定義行為**。
+
+    索引換算走驅動（`wire_seq`）：ArduPilot 的 home 佔 seq 0，我方索引 N 在
+    機端是 N+1。**少了這層換算會差一個航點，而且沒有任何錯誤訊息。**
+    """
+    d = dialect(r, sysid)
+    seq = d["wire_seq"](index)
+
+    # **用 MISSION_SET_CURRENT（訊息 41）而不是 DO_SET_MISSION_CURRENT（指令 224）。**
+    # 2026-08-25 實測：PX4 1.14.3 與 ArduPilot 4.0.3 對指令 224 都回
+    # MAV_RESULT_UNSUPPORTED。224 是後來才加進 MAVLink 的指令形式，而 41 是
+    # 任務協定的原生做法（QGC 一直用它）。
+    #
+    # 代價：**41 沒有 ACK**。所以驗證只能看效果——讀回 MISSION_CURRENT 確認
+    # 機端真的跳過去了。這反而符合本專案的既有紀律（以機端實際狀態為準，
+    # 不看我方送了什麼）。
+    r._sendto(sysid, lambda m: m.mission_set_current_encode(sysid, 1, seq))
+
+    deadline = time.monotonic() + 3.0
+    got = None
+    while time.monotonic() < deadline:
+        msg = r._wait(sysid, ("MISSION_CURRENT",), timeout=0.5)
+        if msg is not None:
+            got = msg.seq
+            if got == seq:
+                break
+    ok = got == seq
+    if not ok:
+        raise CommandError(
+            f"送出 MISSION_SET_CURRENT(seq={seq}) 後，機端仍在 seq={got}"
+            f"（3 秒內未跳轉）——**41 無 ACK，只能以機端狀態為準**")
+    return {"ok": True, "index": index, "wire_seq": seq, "mission_seq": got, "autopilot": d["autopilot"],
+            "verified_by": "MISSION_CURRENT 讀回"}
 
 
 def job_set_mode(r: MavRouter, sysid: int, mode: str,

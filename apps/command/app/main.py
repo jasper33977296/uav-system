@@ -415,6 +415,24 @@ def _target_mismatch(mission_fw, mission_vt, sysid) -> list[str]:
     return out
 
 
+class GotoIn(BaseModel):
+    index: int          # **我方航點索引（0 起）**，不是機端 seq——換算走驅動
+
+
+@app.post("/api/command/{sysid}/mission/goto")
+async def mission_goto(sysid: int, body: GotoIn):
+    """從指定的航點續飛（issues/039 的「續飛」）。
+
+    參數是**我方索引**而不是機端 seq：機端 seq 的慣例因廠牌而異
+    （ArduPilot 的 home 佔 0），讓呼叫端算＝把方言洩漏到每一個呼叫點。
+    """
+    _require_enabled(); _require_capability(sysid, "mission_start")
+    if body.index < 0:
+        raise HTTPException(422, "index 不得為負")
+    return await _run(sysid, "mission_goto", mav.job_mission_goto, body.index,
+                      params={"index": body.index})
+
+
 @app.post("/api/command/{sysid}/mission/upload")
 async def mission_upload(sysid: int, body: UploadIn):
     _require_enabled(); _require_capability(sysid, "mission_upload")
