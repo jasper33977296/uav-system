@@ -30,7 +30,7 @@ from pydantic import BaseModel
 # 不必改每個端點簽名就取得；背景序列（execute 起的 task）沿用觸發請求的 client。
 _client_var: contextvars.ContextVar = contextvars.ContextVar("client", default=None)
 
-from . import change_route, group_exec, mav, plan_check, plans
+from . import group_exec, mav, plan_check, plans
 from .config import settings
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(name)s %(message)s")
@@ -602,19 +602,17 @@ async def change_route_proposal(sysid: int, body: ChangeRouteIn):
                                    "command") if k in w} for w in wps],
         "hold_alt": body.hold_alt, "mission_name": name,
         "mission_id": body.mission_id})
-    p = None
-    if res and (res.get("event") or {}).get("proposal"):
-        p = res["event"]["proposal"]
-        p["source"] = "agent"
+    p = (res.get("event") or {}).get("proposal") if res else None
     if p is None:
-        # 沒有代理（他人的 QGC、SITL）→ 本地算。**標明來源**：同一個畫面
-        # 背後可能是兩種資料新鮮度，看的人有權知道是哪一種
-        p = change_route.build_proposal(
-            wps=wps, cur=_cur_of(sysid), hold_alt=body.hold_alt,
-            mission_name=name, mission_id=body.mission_id,
-            cur_seq=(router.drones.get(sysid) or {}).get("mission_seq")
-            if router else None)
-        p["source"] = "ground"
+        # **只有機上算，沒有備援**（使用者裁定 2026-08-25）。地面站再寫一份
+        # 就是第二個事實來源，而它的症狀特別陰險：同一台機，有代理時飛去
+        # A 點、代理掉線時飛去 B 點，沒有錯誤訊息，只有事後看軌跡覺得怪。
+        # 沒有代理就老實說做不了——**不能算的時候說不能算，不要拿次一等的
+        # 資料算一個看起來很正常的答案**
+        raise HTTPException(409, {
+            "msg": "飛行中改航線的提案只由機上代理算（它的位置是第一手的）。"
+                   f"這台機現在問不到：{(res or {}).get('reason') or '意圖通道未連線'}",
+            "code": "no_agent"})
     p["airborne"] = _inflight_upload_block(sysid) is not None
     if not p["airborne"]:
         p["warnings"] = list(p["warnings"]) + [
@@ -643,21 +641,11 @@ async def change_route_exec(sysid: int, body: ChangeRouteIn):
         "hold_alt": body.hold_alt, "mission_name": name,
         "mission_id": body.mission_id, "prior": body.proposal})
     fresh = ((res or {}).get("event") or {}).get("proposal")
-    if fresh:
-        fresh["source"] = "agent"
-    else:
-        fresh = change_route.build_proposal(
-            wps=wps, cur=_cur_of(sysid), hold_alt=body.hold_alt,
-            mission_name=name, mission_id=body.mission_id)
-        fresh["source"] = "ground"
-        if body.proposal:
-            drift = change_route.drift_reason(body.proposal, fresh)
-            if drift:
-                await _audit(sysid, "change_route", body.model_dump(),
-                             "rejected_drift", drift)
-                raise HTTPException(409, {
-                    "msg": f"提案已經過期：{drift}。請重看新的提案再決定",
-                    "code": "proposal_drift", "proposal": fresh})
+    if fresh is None:
+        raise HTTPException(409, {
+            "msg": "飛行中改航線的提案只由機上代理算（它的位置是第一手的）。"
+                   f"這台機現在問不到：{(res or {}).get('reason') or '意圖通道未連線'}",
+            "code": "no_agent"})
     if not fresh["ok"]:
         raise HTTPException(409, {"msg": "現在算不出可執行的提案",
                                   "proposal": fresh})

@@ -45,4 +45,20 @@ paths:
   # 真機：每台一條 path，名稱用 uav-<sysid>，由 backend 依 mav_sysid 對應。
   # 生產時 source 指向機上 MediaMTX；開發時由測試來源 publish 進來（source: publisher）。
   # 用 all_others 讓測試來源不必預先宣告即可推流。
+
+  # sysid 1＝ai-model-rb5（10.141.2.145）。**拉流而非等推流**：這台是 ModalAI
+  # RB5，機上跑的是 voxl-streamer（GStreamer RTSP server，:8900/live，H264 Main
+  # 4.1），出廠行為是「等客戶端來拉」——QGC 就是這樣接的。設計文件假設的
+  # 「機上 MediaMTX 主動推到地面站」在這台機上不成立（同 issues/016 的平台層
+  # 落差：出廠不會主動打我方端點），所以這裡由地面站主動去拉。
+  #
+  # sourceOnDemand: yes＝沒人看就不拉。voxl-streamer 對多客戶端支援有限，
+  # 常駐拉流會全程與 QGC 搶同一條流；改成有人看才拉，把衝突縮到最小。
+  # 錄影需求（架次期間必須有流）由 backend 依 armed 開錄時觸發，屆時仍會拉起。
+  uav-1:
+    source: rtsp://10.141.2.145:8900/live
+    rtspTransport: tcp           # RTP over TCP：跨 5G 少掉 UDP 打洞與丟包重組問題
+    sourceOnDemand: yes
+    sourceOnDemandCloseAfter: 10s
+
   all_others:
