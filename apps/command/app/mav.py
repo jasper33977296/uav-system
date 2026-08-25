@@ -250,8 +250,18 @@ class MavRouter(threading.Thread):
                     d["alt_msl"] = msg.alt / 1000.0
                     # 經緯度：一致性測試量「搖桿有沒有真的讓機動」的唯一證據
                     # （MANUAL_CONTROL 無 ACK，位移是唯一可觀察的結果）。
-                    d["lat"] = msg.lat / 1e7
-                    d["lon"] = msg.lon / 1e7
+                    # **0,0 是自駕儀的「不知道」哨兵，不是幾內亞灣外海。**
+                    # 沒有 GPS 定位時 GLOBAL_POSITION_INT 會送 0/0；照收的話
+                    # 改航線提案會從一個一萬公里外的位置去算「最近的航點」，
+                    # 而且算得出一個看起來很正常的數字。backend 早就有這條
+                    # 規則（mavlink_rx.py），指令服務漏了
+                    if msg.lat or msg.lon:
+                        d["lat"] = msg.lat / 1e7
+                        d["lon"] = msg.lon / 1e7
+                    # 航向：改航線提案要能說「續飛航點在你後方 N 度，機體會先
+                    # 掉頭」。沒有它那句警告就永遠不會出現——**而不是不會發生**
+                    if msg.hdg != 65535:          # 65535＝不知道
+                        d["heading"] = msg.hdg / 100.0
                 elif msg.get_type() == "PARAM_VALUE":
                     if msg.param_id in ("SYSID_MYGCS", "MAV_GCS_SYSID"):
                         d["sysid_mygcs"] = int(msg.param_value)

@@ -30,7 +30,7 @@ from pydantic import BaseModel
 # 不必改每個端點簽名就取得；背景序列（execute 起的 task）沿用觸發請求的 client。
 _client_var: contextvars.ContextVar = contextvars.ContextVar("client", default=None)
 
-from . import group_exec, mav, plan_check, plans
+from . import change_route, group_exec, mav, plan_check, plans
 from .config import settings
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(name)s %(message)s")
@@ -477,6 +477,122 @@ async def mission_goto(sysid: int, body: GotoIn):
         raise HTTPException(422, "index 不得為負")
     return await _run(sysid, "mission_goto", mav.job_mission_goto, body.index,
                       params={"index": body.index})
+
+
+async def _load_wps(mission_id: str) -> tuple[list[dict], str]:
+    rows = await pool.fetch(
+        "SELECT seq, lat, lon, alt, action, params FROM waypoints "
+        "WHERE mission_id = $1 ORDER BY seq", mission_id)
+    if not rows:
+        raise HTTPException(404, "任務不存在或沒有航點")
+    name = await pool.fetchval("SELECT name FROM missions WHERE id = $1",
+                               mission_id) or mission_id
+    wps = []
+    for r in rows:
+        w = dict(r)
+        p = w.get("params")
+        p = json.loads(p) if isinstance(p, str) else (p or {})
+        w["command"] = p.get("command")
+        wps.append(w)
+    return wps, name
+
+
+def _cur_of(sysid: int) -> dict:
+    d = (router.drones.get(sysid) or {}) if router else {}
+    return {"lat": d.get("lat"), "lon": d.get("lon"),
+            "alt_rel": d.get("alt_rel"), "heading": d.get("heading"),
+            "armed": d.get("armed")}
+
+
+class ChangeRouteIn(BaseModel):
+    mission_id: str
+    hold_alt: float | None = None      # 不給＝暫停後維持當前高度
+    # 執行時把**人看到的那份提案**送回來，用來比對這段時間機體有沒有飄掉
+    # （協定 §5.1）。省略＝不做漂移檢查，只有非互動的呼叫端該這樣用
+    proposal: dict | None = None
+
+
+@app.post("/api/command/{sysid}/mission/change-route/proposal")
+async def change_route_proposal(sysid: int, body: ChangeRouteIn):
+    """**飛行中改航線的第一步：提案。這個端點不動飛機。**
+
+    回傳「會怎麼調整」——狀態機文件 §6.3 要求確認畫面不得只問「確定嗎？」，
+    因為那種確認框沒有資訊，人只會照按。所以這裡算得出：續飛到哪一點、
+    離現在多遠、往哪個方向、會不會先爬升或下降、以及這是可中止的三步序列。
+
+    **在地上不需要走這條路**：地面上傳是存檔，直接用 mission/upload。
+    確認要保持稀有才有意義——每次上傳都跳確認框，會訓練人閉著眼睛按，
+    然後空中那次也照按（§6.3 明文禁止把它做成 upload 的預設行為）。
+    """
+    _require_enabled()
+    wps, name = await _load_wps(body.mission_id)
+    p = change_route.build_proposal(
+        wps=wps, cur=_cur_of(sysid), hold_alt=body.hold_alt,
+        mission_name=name, mission_id=body.mission_id,
+        cur_seq=(router.drones.get(sysid) or {}).get("mission_seq")
+        if router else None)
+    p["airborne"] = _inflight_upload_block(sysid) is not None
+    if not p["airborne"]:
+        p["warnings"] = list(p["warnings"]) + [
+            "這台機現在不在飛任務——地面上傳直接用 mission/upload 即可，"
+            "不需要走三步序列"]
+    return p
+
+
+@app.post("/api/command/{sysid}/mission/change-route")
+async def change_route_exec(sysid: int, body: ChangeRouteIn):
+    """**第二步：執行三步序列。** 每一步都讀回機端確認，任何一步沒過就停在
+    安全狀態（懸停），不會繼續往一個沒人確認過的方向飛。
+
+    **執行當下重算提案**（協定 §5.1）：人確認的是**那一份**提案，而飛機在
+    人看提案的那段時間裡一直在動。續飛航點換了、或距離變化超過門檻，就中止
+    並回新的提案要人重看——不照著過期的提案做。
+    """
+    _require_enabled()
+    wps, name = await _load_wps(body.mission_id)
+    fresh = change_route.build_proposal(
+        wps=wps, cur=_cur_of(sysid), hold_alt=body.hold_alt,
+        mission_name=name, mission_id=body.mission_id)
+    if not fresh["ok"]:
+        raise HTTPException(409, {"msg": "現在算不出可執行的提案",
+                                  "proposal": fresh})
+    if body.proposal:
+        drift = change_route.drift_reason(body.proposal, fresh)
+        if drift:
+            # **不照過期的提案做。** 人確認的是那一份提案，不是「授權之後
+            # 隨便怎麼飛」。回新的提案要人重看，而不是自作主張用新的執行
+            await _audit(sysid, "change_route", body.model_dump(),
+                         "rejected_drift", drift)
+            raise HTTPException(409, {
+                "msg": f"提案已經過期：{drift}。請重看新的提案再決定",
+                "code": "proposal_drift", "proposal": fresh})
+    steps: dict = {}
+
+    async def step(key, coro, note):
+        try:
+            steps[key] = await coro
+        except HTTPException as e:
+            steps[key] = {"ok": False, "detail": e.detail}
+            await _audit(sysid, "change_route", body.model_dump(),
+                         "failed", f"{note}：{e.detail}")
+            raise HTTPException(409, {
+                "msg": f"改航線序列在「{note}」這一步停下，機體停在安全狀態",
+                "steps": steps, "proposal": fresh})
+
+    # 1. 暫停 —— job_set_mode 內含讀回確認（mode_engaged），不是只看 ACK
+    await step("hold", set_mode(sysid, "hold"), "切 hold 懸停")
+    # 2. 上傳 —— 機體已在 hold，守門會放行（只擋 mission 模式）
+    await step("upload", mission_upload(sysid, UploadIn(mission_id=body.mission_id)),
+               "上傳新航線")
+    # 3. 續飛 —— 先指定航點再切 mission。**順序不能反**：先切 mission 的話
+    #    機體會用舊索引開始飛，而那個索引在新航線上毫無意義
+    await step("goto", mission_goto(sysid, GotoIn(index=fresh["resume_wp"]["index"])),
+               "指定續飛航點")
+    await step("resume", set_mode(sysid, "mission"), "切回 mission")
+
+    await _audit(sysid, "change_route", body.model_dump(), "ok",
+                 f"續飛第 {fresh['resume_wp']['index']} 點")
+    return {"ok": True, "steps": steps, "proposal": fresh}
 
 
 @app.post("/api/command/{sysid}/mission/upload")

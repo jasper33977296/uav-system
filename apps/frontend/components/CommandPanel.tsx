@@ -366,6 +366,54 @@ export default function CommandPanel() {
         ))
       : null;
 
+  // ── 飛行中改航線（狀態機文件 §6.3）──────────────────────────
+  // 兩段式：先取提案（**不動飛機**）給人看，人確認後才執行三步序列。
+  // 送出時把人看過的那份提案帶回去，後端據以判斷這段時間機體有沒有飄掉
+  const [proposal, setProposal] = useState<any>(null);
+
+  async function proposeChangeRoute() {
+    setBusy("改航線"); setResult(null);
+    try {
+      const res = await fetch(
+        `${COMMAND_API}/api/command/${sid}/mission/change-route/proposal`,
+        { method: "POST",
+          headers: { "Content-Type": "application/json", ...CLIENT_HEADERS },
+          body: JSON.stringify({ mission_id: missionId, hold_alt: alt }) });
+      const p = await res.json();
+      if (!res.ok) { setResult({ ok: false, text: p?.detail?.msg ?? "取不到提案" }); }
+      else setProposal(p);
+    } catch (e) {
+      setResult({ ok: false, text: `連線失敗：${e}` });
+    }
+    setBusy(null);
+  }
+
+  async function runChangeRoute() {
+    const p = proposal;
+    setProposal(null); setBusy("改航線"); setResult(null);
+    try {
+      const res = await fetch(
+        `${COMMAND_API}/api/command/${sid}/mission/change-route`,
+        { method: "POST",
+          headers: { "Content-Type": "application/json", ...CLIENT_HEADERS },
+          body: JSON.stringify({ mission_id: missionId, hold_alt: alt,
+                                 proposal: p }) });
+      const b = await res.json();
+      if (!res.ok) {
+        const d = b.detail ?? {};
+        // 提案過期＝機體在人看提案時移動了。**不自作主張用新的執行**，
+        // 把新提案再攤一次給人看（協定 §5.1）
+        if (d.code === "proposal_drift" && d.proposal) setProposal(d.proposal);
+        setResult({ ok: false, text: d.msg ?? "改航線失敗" });
+      } else {
+        setResult({ ok: true, text: "改航線完成（三步都讀回確認）" });
+      }
+    } catch (e) {
+      setResult({ ok: false, text: `連線失敗：${e}` });
+    }
+    setBusy(null);
+  }
+
   async function exec(action: string, path: string, needsConfirm = false,
                       payload?: Record<string, unknown>) {
     if (needsConfirm && confirm !== action) {
@@ -776,6 +824,19 @@ export default function CommandPanel() {
             {btn("上傳", "上傳", "/mission/upload",
                  { disabled: !missionId, body: { mission_id: missionId },
                    cap: "mission_upload", accent: true })}
+            {/* **飛行中改航線只在空中出現**（狀態機文件 §6.3）：地面上傳是
+                存檔，不需要三步序列；而確認框要保持稀有才有意義——每次上傳
+                都跳確認，會訓練人閉著眼睛按，然後空中那次也照按 */}
+            {/* 「在空中」用與返航鈕同一個判準（landed_state 或高度），
+                不要另立一套——兩套判準會在邊界上互相矛盾 */}
+            {(live?.landed_state === "in_air" || (live?.alt_rel ?? 0) > 2) && (
+              <button className="btn-plain btn-sm"
+                disabled={!missionId || busy !== null}
+                title="機在空中時改航線：先看系統打算怎麼調整，確認後才執行"
+                onClick={() => proposeChangeRoute()}>
+                {busy === "改航線" ? "⋯" : "改航線⋯"}
+              </button>
+            )}
           </div>
           {/* 起飛→任務：實戰教訓——地面直接啟動任務會失敗，須先到高度。
               一鍵序列：解鎖→起飛→等高度到達→切 MISSION */}
@@ -809,6 +870,62 @@ export default function CommandPanel() {
           {result && (
             <div className={`cmd-result ${result.ok ? "ok" : "err"}`}>{result.text}</div>
           )}
+        </div>
+      )}
+
+      {/* **確認畫面不得只問「確定嗎？」**（狀態機文件 §6.3）——那種確認框沒有
+          資訊，人只會照按。這裡逐項對應規格要求顯示的東西：現在在哪、續飛到
+          哪一點、多遠、往哪個方向、會不會先爬升下降、以及這是可中止的三步。 */}
+      {proposal && (
+        <div className="modal-backdrop" onClick={() => setProposal(null)}>
+          <div className="modal confirm-modal" onClick={(e) => e.stopPropagation()}>
+            <div className="modal-head">
+              <span className="name">飛行中改航線：系統打算這樣調整</span>
+            </div>
+            <div className="modal-text">
+              <div className="hint-line">
+                目前 {proposal.current?.lat != null
+                  ? `${proposal.current.lat.toFixed(5)}, ${proposal.current.lon.toFixed(5)}`
+                  : "位置未知"}
+                {proposal.current?.alt_rel != null && ` · 高度 ${proposal.current.alt_rel.toFixed(1)} m`}
+                {proposal.current?.mission_seq != null && ` · 正在飛第 ${proposal.current.mission_seq} 點`}
+              </div>
+              <div style={{ marginTop: 10, fontWeight: 600 }}>
+                新航線「{proposal.mission_name}」
+              </div>
+              {proposal.resume_wp ? (
+                <div className="hint-line" style={{ marginTop: 4 }}>
+                  續飛航點：**第 {proposal.resume_wp.index} 點**
+                  （{proposal.resume_wp.distance_m} m、方位 {proposal.resume_wp.bearing_deg}°
+                  {proposal.resume_wp.alt_delta_m != null
+                    && `、高度 ${proposal.resume_wp.alt_delta_m > 0 ? "+" : ""}${proposal.resume_wp.alt_delta_m} m`}）
+                </div>
+              ) : (
+                <div className="form-err" style={{ marginTop: 4 }}>算不出續飛航點</div>
+              )}
+              <div className="hint-line" style={{ marginTop: 4 }}>
+                暫停懸停高度 {proposal.hold?.alt ?? "維持當前"} m
+                {proposal.hold?.alt_delta_m != null
+                  && `（${proposal.hold.alt_delta_m > 0 ? "先爬升" : proposal.hold.alt_delta_m < 0 ? "先下降" : "不變"} ${Math.abs(proposal.hold.alt_delta_m)} m）`}
+              </div>
+              <ol style={{ marginTop: 10, paddingLeft: 20 }}>
+                {(proposal.steps ?? []).map((t: string, i: number) =>
+                  <li key={i} className="hint-line">{t}</li>)}
+              </ol>
+              <div className="hint-line" style={{ marginTop: 6 }}>
+                每一步都會讀回機端確認；任何一步沒過就**停在懸停**，不會繼續飛。
+              </div>
+              {(proposal.warnings ?? []).map((w: string, i: number) =>
+                <div key={i} className="form-err" style={{ marginTop: 6 }}>⚠ {w}</div>)}
+              {(proposal.blockers ?? []).map((w: string, i: number) =>
+                <div key={i} className="form-err" style={{ marginTop: 6 }}>✕ {w}</div>)}
+            </div>
+            <div className="modal-actions">
+              <button className="btn-plain" onClick={() => setProposal(null)}>取消</button>
+              <button className="btn-danger" disabled={!proposal.ok}
+                onClick={runChangeRoute}>執行三步序列</button>
+            </div>
+          </div>
         </div>
       )}
     </div>

@@ -22,13 +22,24 @@ const AP_NAMES: Record<number, string> = { 0: "通用", 3: "ArduPilot", 12: "PX4
 const VT_NAMES: Record<number, string> = {
   1: "定翼", 2: "四旋翼", 10: "地面載具", 12: "潛航器", 13: "六旋翼", 14: "八旋翼",
 };
-function planTarget(m: Mission): string | null {
-  if (m.firmware_type == null && m.vehicle_type == null) return null;
+/** 目標機種膠囊。**「檔案沒宣告」要說出口，不能留白**（issues/037 二修）。
+ *
+ * 第一版的判斷是「沒宣告就不顯示 chip，空白代表沒說」——那是錯的：空白同時也
+ * 是「還沒載入」「這版前端不支援這個欄位」「渲染掛了」的樣子。使用者要拿這個
+ * 資訊決定「這份航線能不能給這台機飛」，而**沒宣告與宣告了我沒看懂，處置不同**：
+ * 前者要人自己確認，後者是我方的顯示問題。分不出來就等於沒講。
+ *
+ * 這與 §0.2e「不知道≠不行」不衝突——那條說的是不要把「不知道」畫成「不行」，
+ * 不是叫我們不要講「不知道」。 */
+function planTarget(m: Mission): { text: string; declared: boolean } {
   const ap = m.firmware_type == null ? null
     : (AP_NAMES[m.firmware_type] ?? `firmware ${m.firmware_type}`);
   const vt = m.vehicle_type == null ? null
     : (VT_NAMES[m.vehicle_type] ?? `type ${m.vehicle_type}`);
-  return [ap, vt].filter(Boolean).join(" · ");
+  const parts = [ap, vt].filter(Boolean);
+  return parts.length
+    ? { text: parts.join(" · "), declared: true }
+    : { text: "未宣告目標機種", declared: false };
 }
 interface PlanCheck {
   ok: boolean; problems: string[]; warnings: string[];
@@ -222,18 +233,25 @@ export default function Missions() {
                     setDeleting(null);
                   }}>⋯</button>
               </div>
-              {(m.is_active || planTarget(m)) && (
-                <div className="mcard-chips">
-                  {m.is_active && <span className="chip on-chip">顯示中</span>}
+              <div className="mcard-chips">
+                {m.is_active && <span className="chip on-chip">顯示中</span>}
                   {/* 目標機種：選檔當下就看得到這份航線是給誰寫的。
-                      檔案沒說時不顯示 chip——**空白代表「沒說」，不是「通用」**。 */}
-                  {planTarget(m) && (
-                    <span className="chip" title="這份航線宣告的目標機種（來自 .plan）">
-                      {planTarget(m)}
-                    </span>
-                  )}
-                </div>
-              )}
+                      沒宣告時**照樣顯示一顆弱化的膠囊**說「未宣告」——留白會被
+                      讀成「還沒載入」或「這版沒這功能」（issues/037 二修） */}
+                  {(() => {
+                    const t = planTarget(m);
+                    return (
+                      <span className="chip"
+                        style={t.declared ? undefined : { opacity: 0.5 }}
+                        title={t.declared
+                          ? "這份航線宣告的目標機種（來自 .plan）"
+                          : "這份 .plan 沒有寫 firmwareType／vehicleType——"
+                            + "系統無法替你確認它適不適合這台機，請自己確認"}>
+                        {t.text}
+                      </span>
+                    );
+                  })()}
+              </div>
               {menuId === m.id && (
                 <div className="mcard-menu" onClick={(e) => e.stopPropagation()}>
                   {/* 手動顯示切換（降級保留——常規路徑是任務開始自動浮現） */}
