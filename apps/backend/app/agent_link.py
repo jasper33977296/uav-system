@@ -33,11 +33,15 @@ class AgentLink:
     drone_name: str | None = None
     agent_version: str | None = None
     inputs: list[str] = field(default_factory=list)
+    executes: list[str] = field(default_factory=list)   # 代理自己執行的意圖
+    vets: list[str] = field(default_factory=list)       # 代理守門的意圖
     connected: bool = False
     connected_at: float | None = None
     last_state_at: float | None = None
     state: str | None = None
     payload: dict | None = None          # 最後一則 state 的完整內容
+    ws: object = None                    # 送 intent 用的連線（斷線時清掉）
+    waiters: dict = field(default_factory=dict)   # intent_id → asyncio.Future
 
     def fresh(self) -> bool:
         return (self.connected and self.last_state_at is not None
@@ -51,6 +55,7 @@ class AgentLink:
             "agent_version": self.agent_version,
             "inputs": self.inputs,
             "connected": self.connected,
+            "executes": self.executes, "vets": self.vets,
             "fresh": self.fresh(),
             "state": self.state,
             "since": p.get("ts"),
@@ -87,6 +92,8 @@ def on_hello(msg: dict, drone_id: str | None, drone_name: str | None) -> AgentLi
     link.inputs = list(msg.get("inputs") or [])
     link.connected = True
     link.connected_at = time.monotonic()
+    link.executes = list(msg.get("executes") or [])
+    link.vets = list(msg.get("vets") or [])
     links[uid] = link
     return link
 
@@ -97,6 +104,40 @@ def on_state(link: AgentLink, msg: dict) -> None:
     link.last_state_at = time.monotonic()
 
 
+def on_event(link: AgentLink, msg: dict) -> None:
+    """代理回的 event。有人在等這個 intent_id 就叫醒他。"""
+    fut = link.waiters.pop(msg.get("intent_id"), None)
+    if fut is not None and not fut.done():
+        fut.set_result(msg)
+
+
 def on_disconnect(link: AgentLink) -> None:
     link.connected = False
+    link.ws = None
+    # 等在半路的請求要叫醒，不然它們會一直等到逾時才知道對面走了
+    for fut in list(link.waiters.values()):
+        if not fut.done():
+            fut.set_exception(ConnectionError("意圖通道在等待期間斷線"))
+    link.waiters.clear()
     # state 保留：最後已知狀態是有用的資訊，清空等於宣告「不知道」
+
+
+async def send_intent(link: AgentLink, action: str, params: dict | None,
+                      intent_id: str, timeout: float = 4.0) -> dict:
+    """送一則 intent 給代理並等它的 event。
+
+    **逾時不等於放行。** 等不到回覆就是不知道守門怎麼說，而「不知道」在飛安
+    路徑上要當成「不行」——呼叫端據此擋下操作，並說出是逾時而不是被拒。
+    """
+    import asyncio
+    if not link.connected or link.ws is None:
+        raise ConnectionError("意圖通道未連線")
+    fut = asyncio.get_running_loop().create_future()
+    link.waiters[intent_id] = fut
+    try:
+        await link.ws.send_json({
+            "v": PROTOCOL_V, "type": "intent", "intent_id": intent_id,
+            "action": action, "params": params or {}})
+        return await asyncio.wait_for(fut, timeout)
+    finally:
+        link.waiters.pop(intent_id, None)

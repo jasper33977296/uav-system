@@ -133,6 +133,61 @@ async def agent_hello(h: AgentHello):
     return {"drone_id": drone_id, "name": name, "created": created}
 
 
+class GuardIn(BaseModel):
+    """指令服務執行飛行操作前，先問機上守門（協定 §5.2、丙案分工）。"""
+    action: str
+    drone_id: str | None = None
+    board_uid: str | None = None
+    intent_id: str | None = None
+    params: dict | None = None
+
+
+@router.post("/agent/intent")
+async def agent_intent(body: GuardIn):
+    """把意圖送給機上代理：守門在那邊，執行看動作分工。
+
+    **這個端點由指令服務呼叫，不是由前端。** 守門如果只在前端問，那它就不是
+    守門——前端可以不問、也可能有別的呼叫端（驗收 rig、MCP、curl）。
+    要擋得住，就得擋在真的會動到飛機的那條路上。
+
+    **沒有代理不等於不能飛**：這台機可能根本沒裝代理（他人的 QGC、SITL）。
+    那種情況回 `no_agent`，由呼叫端沿用自己原本的檢查——守門是額外一層，
+    不是唯一一層。但**代理在、卻問不到**（逾時、斷線）要當成拒絕：
+    那是「不知道守門怎麼說」，而不知道在飛安路徑上就是不行。
+    """
+    import uuid as _uuid
+    from . import agent_link
+    link = None
+    if body.board_uid:
+        link = agent_link.links.get(body.board_uid)
+    elif body.drone_id:
+        link = next((l for l in agent_link.links.values()
+                     if l.drone_id == body.drone_id), None)
+    if link is None or not link.connected:
+        return {"verdict": "no_agent",
+                "reason": "這台機沒有連線中的機上代理，守門這一層不存在"}
+    # **版本協商**：代理在 hello 裡宣告它守哪些意圖（`vets`）。舊版代理沒有
+    # 這個欄位，也不會回 event——不先問清楚就送過去，只會等到逾時，然後
+    # 「不知道＝不行」把所有飛行操作擋死。**能力宣告要用問的，不要用試的。**
+    if body.action not in (link.vets or []):
+        return {"verdict": "no_agent",
+                "reason": f"機上代理（{link.agent_version}）沒有宣告守 "
+                          f"{body.action}，守門這一層不存在"}
+    iid = body.intent_id or str(_uuid.uuid4())
+    try:
+        ev = await agent_link.send_intent(link, body.action, body.params, iid)
+    except TimeoutError:
+        return {"verdict": "unknown", "intent_id": iid,
+                "reason": "代理沒有在時限內回覆守門判決——**不知道不等於可以**"}
+    except ConnectionError as e:
+        return {"verdict": "unknown", "intent_id": iid, "reason": str(e)}
+    kind = ev.get("event")
+    verdict = {"guard_refused": "refused", "cleared": "cleared",
+               "sent": "done", "failed": "failed"}.get(kind, kind)
+    return {"verdict": verdict, "intent_id": iid, "event": ev,
+            "reason": ev.get("reason"), "state": ev.get("state")}
+
+
 @router.patch("/drones/{drone_id}")
 async def patch_drone(drone_id: str, body: DronePatch):
     """改名／設定影像串流位址（系統端管理機的身分與屬性，不走環境變數）。

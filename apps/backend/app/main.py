@@ -222,6 +222,7 @@ async def ws_agent(ws: WebSocket):
                 link = agent_link.on_hello(
                     msg, row["id"] if row else None,
                     row["name"] if row else None)
+                link.ws = ws          # 送 intent 走這條
                 await ws.send_json({"type": "ack", "of": "hello",
                                     "drone_id": link.drone_id,
                                     "accepts": ["state"]})
@@ -244,11 +245,31 @@ async def ws_agent(ws: WebSocket):
                 await ws.send_json({"type": "ack", "of": "state"})
                 await manager.broadcast({"type": "agent_state",
                                          **link.as_dict()})
+            elif t == "event":
+                if link is None:
+                    await ws.send_json({"type": "error",
+                                        "reason": "第一則必須是 hello"})
+                    continue
+                agent_link.on_event(link, msg)
+                # **守門的判決要進事件流。** 被擋下卻只有呼叫端看得到，
+                # 等於「系統拒絕過一次飛行操作」這件事沒有留下痕跡
+                try:
+                    ev = await db.insert_event(
+                        link.drone_id, None,
+                        "warn" if msg.get("event") == "guard_refused" else "info",
+                        f"intent_{msg.get('event')}",
+                        {"action": msg.get("action"), "state": msg.get("state"),
+                         "reason": msg.get("reason"),
+                         "executor": msg.get("executor")})
+                    ev["drone"] = link.drone_name
+                    await manager.broadcast({"type": "event", "event": ev})
+                except Exception:
+                    log.exception("意圖事件寫入失敗（不影響指令路徑）")
             else:
-                # 明說未支援。**這是協定往下長的接點**：哪天 intent 實作了，
+                # 明說未支援。**這是協定往下長的接點**：哪天新型別實作了，
                 # 舊版代理送過來也會得到一句看得懂的話，而不是石沉大海
                 await ws.send_json({"type": "error",
-                                    "reason": f"型別 {t} 尚未實作（本版只做到 state）"})
+                                    "reason": f"型別 {t} 尚未實作"})
     except WebSocketDisconnect:
         pass
     except Exception:
