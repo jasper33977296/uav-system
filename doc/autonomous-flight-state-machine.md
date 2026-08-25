@@ -257,11 +257,14 @@ backend/command 重啟、映像重建、`--reload` 類操作。**目前只靠人
 [`agent-intent-protocol.md`](agent-intent-protocol.md) §6。
 
 * `FLYING_MISSION` → **跑完任務再 RTL**
-* `HOLDING`／改航線序列中／`TAKING_OFF`／`ARMED_GROUND` → **立刻 RTL**
+* `HOLDING`／改航線序列中／`TAKING_OFF` → **立刻 RTL**
+* `ARMED_GROUND` → 只告警（實作時改掉的一格，理由見協定 §6）
 * `RETURNING`／`LANDING` → 不介入；`PILOT_CONTROL` → **永不介入**
-* 上限：剩餘任務時間過長、或電量低於門檻 → 一律立刻 RTL
+* 上限：單飛時間 > 120s（暫定）、或電量 < 40%（暫定）→ 一律立刻 RTL
 
-**代理目前的實作是 A（30 秒一律 RTL）**，需改為 C。改之前它仍是安全的預設。
+**2026-08-25 已實作於代理**（`_loss_state`／`_loss_verdict`），16 格判定表
+測試通過（`tools/link-loss-table.py`，含反向驗證）。兩個上限值仍是暫定，
+待實機續航測試定案。
 
 ### 原始的三選項與代價（保留備查）
 
@@ -291,7 +294,9 @@ backend/command 重啟、映像重建、`--reload` 類操作。**目前只靠人
    `MAV_CMD_DO_SET_MISSION_CURRENT` 是否兩家都吃。
 2. ~~狀態機放哪裡~~ → §6.1 定案（兩邊都放、同步意圖、失聯以代理為準）。
 3. ~~飛行中改航線要不要確認~~ → §6.3 定案（要，且必須說明會怎麼調整）。
-4. **失聯時跑完任務 vs 30 秒 RTL** —— 見 §7，**未裁定，代理維持現行行為**。
+4. ~~失聯時跑完任務 vs 30 秒 RTL~~ → §7 裁定選項 C，2026-08-25 已實作。
+   **剩下的是兩個門檻值**（`LINK_LOSS_MAX_SOLO_S`／`LINK_LOSS_MIN_BATT_PCT`），
+   要由實機續航測試定案。
 5. **意圖同步的傳輸方式**：走現有的 MAVLink 通道（自訂訊息／STATUSTEXT）還是
    另開一條 HTTP？前者受 57600 頻寬限制，後者在 5G 斷線時本來就不通——
    而那正是最需要它已經同步好的時刻。傾向：**意圖在每次變更時立即推送並要求
