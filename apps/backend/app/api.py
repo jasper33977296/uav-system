@@ -135,6 +135,10 @@ async def agent_hello(h: AgentHello):
 
 class GuardIn(BaseModel):
     """指令服務執行飛行操作前，先問機上守門（協定 §5.2、丙案分工）。"""
+    #: 協定訊息型別：intent（問守門／要提案）／decision（人的確認）／
+    #: progress（序列逐步回報）。**分開而不是塞進 action**：它們是不同的事，
+    #: 混在一個欄位裡，冪等鍵就會把 decision 之後的 progress 當成重送吞掉
+    kind: str = "intent"
     action: str
     drone_id: str | None = None
     board_uid: str | None = None
@@ -169,7 +173,11 @@ async def agent_intent(body: GuardIn):
     # **版本協商**：代理在 hello 裡宣告它守哪些意圖（`vets`）。舊版代理沒有
     # 這個欄位，也不會回 event——不先問清楚就送過去，只會等到逾時，然後
     # 「不知道＝不行」把所有飛行操作擋死。**能力宣告要用問的，不要用試的。**
-    if body.action not in (link.vets or []):
+    if body.kind not in ("intent", "decision", "progress"):
+        raise HTTPException(422, f"不認得的協定型別 {body.kind}")
+    # decision／progress 是**已經開始的那件事的後續**，守門在 intent 那一關
+    # 已經問過了；這裡只檢查 intent
+    if body.kind == "intent" and body.action not in (link.vets or []):
         # **分辨「代理不守這個」與「根本沒有這個意圖」**：前者是版本差異、
         # 該放行讓本地檢查接手；後者是呼叫端寫錯，放行等於把一個打錯的字
         # 當成合法操作放過去
@@ -182,7 +190,8 @@ async def agent_intent(body: GuardIn):
                           f"{body.action}，守門這一層不存在"}
     iid = body.intent_id or str(_uuid.uuid4())
     try:
-        ev = await agent_link.send_intent(link, body.action, body.params, iid)
+        ev = await agent_link.send_intent(link, body.action, body.params, iid,
+                                          kind=body.kind)
     except TimeoutError:
         return {"verdict": "unknown", "intent_id": iid,
                 "reason": "代理沒有在時限內回覆守門判決——**不知道不等於可以**"}
@@ -190,8 +199,8 @@ async def agent_intent(body: GuardIn):
         return {"verdict": "unknown", "intent_id": iid, "reason": str(e)}
     kind = ev.get("event")
     verdict = {"guard_refused": "refused", "cleared": "cleared",
-               "proposal": "cleared", "sent": "done",
-               "failed": "failed"}.get(kind, kind)
+               "proposal": "cleared", "sent": "done", "noted": "done",
+               "cancelled": "cancelled", "failed": "failed"}.get(kind, kind)
     return {"verdict": verdict, "intent_id": iid, "event": ev,
             "reason": ev.get("reason"), "state": ev.get("state")}
 

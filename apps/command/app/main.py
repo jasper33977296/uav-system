@@ -494,7 +494,7 @@ _INTENT_OF = {
 
 
 async def _ask_guard(sysid: int, action: str, intent_id: str | None = None,
-                     params: dict | None = None):
+                     params: dict | None = None, kind: str = "intent"):
     """執行前先問機上守門（協定 §5.2、丙案分工）。
 
     **為什麼問在這裡而不是前端**：守門只在前端問的話它就不是守門——前端可以
@@ -510,7 +510,8 @@ async def _ask_guard(sysid: int, action: str, intent_id: str | None = None,
     if intent is None:
         return None                       # 這個動作不在守門範圍（如 arm/upload）
     uid = (router.drones.get(sysid) or {}).get("board_uid") if router else None
-    body = json.dumps({"action": intent, "intent_id": intent_id,
+    body = json.dumps({"kind": kind, "action": intent,
+                       "intent_id": intent_id,
                        "board_uid": uid, "params": params,
                        "drone_id": await _drone_id_of(sysid)}).encode()
     loop = asyncio.get_running_loop()
@@ -578,6 +579,8 @@ class ChangeRouteIn(BaseModel):
     # 執行時把**人看到的那份提案**送回來，用來比對這段時間機體有沒有飄掉
     # （協定 §5.1）。省略＝不做漂移檢查，只有非互動的呼叫端該這樣用
     proposal: dict | None = None
+    #: 提案的 id。**確認的是那一份**，所以執行時要指名是哪一份
+    intent_id: str | None = None
 
 
 @app.post("/api/command/{sysid}/mission/change-route/proposal")
@@ -613,6 +616,7 @@ async def change_route_proposal(sysid: int, body: ChangeRouteIn):
             "msg": "飛行中改航線的提案只由機上代理算（它的位置是第一手的）。"
                    f"這台機現在問不到：{(res or {}).get('reason') or '意圖通道未連線'}",
             "code": "no_agent"})
+    p["intent_id"] = res.get("intent_id")     # 確認時要用同一個 id
     p["airborne"] = _inflight_upload_block(sysid) is not None
     if not p["airborne"]:
         p["warnings"] = list(p["warnings"]) + [
@@ -631,36 +635,55 @@ async def change_route_exec(sysid: int, body: ChangeRouteIn):
     並回新的提案要人重看——不照著過期的提案做。
     """
     _require_enabled()
-    wps, name = await _load_wps(body.mission_id)
-    # 守門與過期檢查一起做：**帶著人看過的那份提案**去問機上，由它用最新的
-    # 位置重算並比對。過期檢查問的是「機體從你確認到現在飄了多少」，
-    # 那是位置問題，該在位置最新的那一端判
-    res = await _ask_guard(sysid, "change_route", params={
-        "wps": [{k: w[k] for k in ("seq", "lat", "lon", "alt", "action",
-                                   "command") if k in w} for w in wps],
-        "hold_alt": body.hold_alt, "mission_name": name,
-        "mission_id": body.mission_id, "prior": body.proposal})
-    fresh = ((res or {}).get("event") or {}).get("proposal")
-    if fresh is None:
+    if not body.intent_id:
+        raise HTTPException(422, "缺 intent_id——請先取得提案，確認的是**那一份**")
+    # **送 decision，不是把提案送回去**（協定 §4.5）：提案留在機上，
+    # 所以沒有「送回來的那份跟人看到的不一樣」的空間。代理收到確認後自己
+    # 重算並比對過期，守門也在那一刻再過一次（狀態可能在人看提案時變了）
+    res = await _ask_guard(sysid, "change_route", intent_id=body.intent_id,
+                           kind="decision", params={"approved": True})
+    if res is None or res.get("verdict") == "no_agent":
         raise HTTPException(409, {
-            "msg": "飛行中改航線的提案只由機上代理算（它的位置是第一手的）。"
+            "msg": "飛行中改航線只能由機上代理確認（它的位置是第一手的）。"
                    f"這台機現在問不到：{(res or {}).get('reason') or '意圖通道未連線'}",
             "code": "no_agent"})
-    if not fresh["ok"]:
-        raise HTTPException(409, {"msg": "現在算不出可執行的提案",
-                                  "proposal": fresh})
+    ev = res.get("event") or {}
+    if ev.get("event") != "cleared":
+        await _audit(sysid, "change_route", body.model_dump(),
+                     "rejected_decision", res.get("reason") or "")
+        raise HTTPException(409, {
+            "msg": res.get("reason") or "機上不同意執行",
+            "code": ev.get("event") or "refused",
+            "proposal": ev.get("proposal")})
+    fresh = ev.get("proposal")
+    wps, name = await _load_wps(body.mission_id)
     steps: dict = {}
 
-    async def step(key, coro, note):
+    async def note(step, ok_, detail=""):
+        """把每一步回報給機上（協定 §4.6）。**不是為了記帳**——代理要知道
+        序列跑到哪一步，因為 §7 規定序列進行中失聯要立刻 RTL。"""
+        try:
+            await _ask_guard(sysid, "change_route", intent_id=body.intent_id,
+                             kind="progress",
+                             params={"step": step, "ok": ok_,
+                                     "detail": str(detail)[:200]})
+        except HTTPException:
+            raise
+        except Exception:
+            log.warning("序列回報失敗（不影響序列本身）", exc_info=True)
+
+    async def step(key, coro, label):
         try:
             steps[key] = await coro
         except HTTPException as e:
             steps[key] = {"ok": False, "detail": e.detail}
+            await note(key, False, e.detail)
             await _audit(sysid, "change_route", body.model_dump(),
-                         "failed", f"{note}：{e.detail}")
+                         "failed", f"{label}：{e.detail}")
             raise HTTPException(409, {
-                "msg": f"改航線序列在「{note}」這一步停下，機體停在安全狀態",
+                "msg": f"改航線序列在「{label}」這一步停下，機體停在安全狀態",
                 "steps": steps, "proposal": fresh})
+        await note(key, True)
 
     # 1. 暫停 —— job_set_mode 內含讀回確認（mode_engaged），不是只看 ACK
     await step("hold", set_mode(sysid, "hold", skip_guard=True), "切 hold 懸停")

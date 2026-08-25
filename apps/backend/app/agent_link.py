@@ -123,7 +123,8 @@ def on_disconnect(link: AgentLink) -> None:
 
 
 async def send_intent(link: AgentLink, action: str, params: dict | None,
-                      intent_id: str, timeout: float = 4.0) -> dict:
+                      intent_id: str, timeout: float = 4.0,
+                      kind: str = "intent") -> dict:
     """送一則 intent 給代理並等它的 event。
 
     **逾時不等於放行。** 等不到回覆就是不知道守門怎麼說，而「不知道」在飛安
@@ -135,9 +136,13 @@ async def send_intent(link: AgentLink, action: str, params: dict | None,
     fut = asyncio.get_running_loop().create_future()
     link.waiters[intent_id] = fut
     try:
-        await link.ws.send_json({
-            "v": PROTOCOL_V, "type": "intent", "intent_id": intent_id,
-            "action": action, "params": params or {}})
+        msg = {"v": PROTOCOL_V, "type": kind, "intent_id": intent_id,
+               "action": action}
+        # decision／progress 的欄位在協定裡是平的（approved／step／ok），
+        # 不包在 params 底下——照協定的形狀送，不要自己多包一層
+        msg.update(params or {}) if kind != "intent" else msg.update(
+            {"params": params or {}})
+        await link.ws.send_json(msg)
         return await asyncio.wait_for(fut, timeout)
     finally:
         link.waiters.pop(intent_id, None)

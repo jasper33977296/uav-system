@@ -264,7 +264,9 @@ backend/command 重啟、映像重建、`--reload` 類操作。**目前只靠人
 [`agent-intent-protocol.md`](agent-intent-protocol.md) §6。
 
 * `FLYING_MISSION` → **跑完任務再 RTL**
-* `HOLDING`／改航線序列中／`TAKING_OFF` → **立刻 RTL**
+* `HOLDING`／`TAKING_OFF` → **立刻 RTL**
+* **改航線序列進行中 → 立刻 RTL（不論當下是哪個狀態）**：飛機停在一個沒有人
+  確認過的中間狀態，而接下來每一步都需要地面站
 * `ARMED_GROUND` → 只告警（實作時改掉的一格，理由見協定 §6）
 * `RETURNING`／`LANDING` → 不介入；`PILOT_CONTROL` → **永不介入**
 * 上限：單飛時間 > 120s（暫定）、或電量 < 40%（暫定）→ 一律立刻 RTL

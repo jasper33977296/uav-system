@@ -399,8 +399,11 @@ export default function CommandPanel() {
         `${COMMAND_API}/api/command/${sid}/mission/change-route`,
         { method: "POST",
           headers: { "Content-Type": "application/json", ...CLIENT_HEADERS },
+          // **送 intent_id，不是把提案送回去**（協定 §4.5）：提案留在機上，
+          // 所以沒有「送回去的那份跟人看到的不一樣」的空間。代理收到確認後
+          // 自己重算比對過期，守門也在那一刻再過一次
           body: JSON.stringify({ mission_id: missionId, hold_alt: alt,
-                                 proposal: p }) });
+                                 intent_id: p?.intent_id }) });
       const b = await res.json();
       if (!res.ok) {
         const d = b.detail ?? {};
