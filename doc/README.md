@@ -14,6 +14,7 @@
 | [data-schema.md](data-schema.md) | 資料庫設計：靜態註冊/架次/時序量測/事件四類，DDL 在 db/init/ |
 | [deployment.md](deployment.md) | 真機部署完整手冊（RB5＋地面站全設定），SITL 開發環境見附錄 |
 | [drone-registration.md](drone-registration.md) | **無人機註冊流程**：接一台新機的完整步驟、換機／退役、名字對不上的排查、以及系統靠什麼認出哪台是哪台 |
+| [autonomous-flight-state-machine.md](autonomous-flight-state-machine.md) | **全自動飛行狀態機**：狀態判定式、允許/禁止的轉移、每條守門對應的實際危害 |
 | [frontend.md](frontend.md) | 前端設計：四頁結構、map-centric、圖層誠實原則、視覺平滑邊界 |
 | [onboard-telemetry.md](onboard-telemetry.md) | 機上 5G 量測回傳：companion 上的 node 如何送資料回地面站 |
 | [qgc-integration.md](qgc-integration.md) | QGC 分工與連線拓撲（QGC＝板凳工具＋緊急備援） |

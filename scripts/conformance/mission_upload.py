@@ -24,18 +24,19 @@ import sys
 
 sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent))
 
-from _harness import BACKEND, _driver, delete, pick, post, run  # noqa: E402
+from _harness import (BACKEND, _driver, delete, local_wps,  # noqa: E402
+                      pick, post, run)
 
 #: 三個航點＋一個 RTL 結尾。RTL 是刻意的（見模組說明第 2 點）。
-_BASE = [(47.39780, 8.54560, 15.0), (47.39800, 8.54580, 15.0), (47.39810, 8.54560, 15.0)]
 
 
 def check(autopilot: str) -> str:
     sysid, info = pick(autopilot)
     drv = _driver(info.get("autopilot_raw"))
 
-    wps = [{"seq": i, "lat": la, "lon": lo, "alt": al, "action": "waypoint"}
-           for i, (la, lo, al) in enumerate(_BASE)]
+    # 以機體當下位置為原點（見 _harness.local_wps）：原本寫死蘇黎世座標，
+    # 上傳雖然會過，但上傳的是一份飛機永遠飛不到的任務
+    wps = local_wps(info)
     wps.append({"seq": len(wps), "lat": 0.0, "lon": 0.0, "alt": None,
                 "action": "rtl"})                     # ← 029 的回歸點
 

@@ -85,6 +85,37 @@ def fleet() -> dict:
     return get("/healthz").get("drones", {})
 
 
+def local_wps(info: dict, alt: float = 15.0,
+              offsets=((40, 0), (40, 40), (0, 40))) -> list[dict]:
+    """以該機**當下位置**為原點造航點（offsets 是公尺，(北, 東)）。
+
+    **不要在測項裡寫死座標。** SITL 的出生點由 `sim-fleet/fleet.sh` 的
+    `FLEET_HOME` 決定（現為台灣），而映像原廠預設是蘇黎世（PX4）與波士頓
+    （ArduPilot）——寫死等於把「測試能不能跑」綁在「模擬器出生在哪」。
+
+    2026-08-24 實測踩到：`mission_fly` 的航點還停在蘇黎世，距實際出生點約
+    9600 km，PX4 的任務可行性檢查直接拒絕切 AUTO_MISSION。而 harness 把
+    「機端拒絕」歸類成 skip（前提不滿足，非方言問題）——**分類本身是對的，
+    但它把一個測試資料的錯誤偽裝成了前提不足**，看起來像環境沒準備好。
+
+    這也是為什麼 `mission_upload` 一直「通過」：上傳不需要可行性檢查，
+    它上傳的是一份飛機永遠飛不到的任務。過了，但沒有驗到該驗的東西。
+    """
+    import math
+    lat, lon = info.get("lat"), info.get("lon")
+    if lat is None or lon is None or (lat == 0 and lon == 0):
+        raise Skip("這台機還沒有位置（GPS 未定位？），無法以當下位置造航點")
+    out = []
+    for i, (north_m, east_m) in enumerate(offsets):
+        out.append({
+            "seq": i,
+            "lat": round(lat + north_m / 110574.0, 7),
+            "lon": round(lon + east_m / (111320.0 * math.cos(math.radians(lat))), 7),
+            "alt": alt, "action": "waypoint",
+        })
+    return out
+
+
 def pick(autopilot: str) -> tuple[int, dict]:
     """挑一台該廠牌、**未解鎖**的機。找不到就 Skip。
 
@@ -195,6 +226,30 @@ def wait_mode(sysid: int, want: str, timeout=8.0) -> str | None:
     return last
 
 
+def firmware_of(autopilot: str, sysid=None) -> str | None:
+    """受測機的機上韌體版本（`/api/drones` 的 runtime 欄位，見 issues/038）。
+
+    **測項不會把 sysid 傳進 record()**，所以優先用 `CONF_SYSID`（跑的人指定的
+    那台），否則以廠牌比對——同一輪裡每個廠牌通常只有一台 SITL。
+
+    拿不到就回 None——**不要用「未知」之類的字串填充**，那會讓「還沒回報版本」
+    與「回報了但我們解不出來」在證據檔裡長得一樣。
+    """
+    want = sysid if sysid is not None else os.environ.get("CONF_SYSID")
+    try:
+        rows = get("/api/drones", base=BACKEND) or []
+    except Exception:
+        return None
+    for d in rows:
+        if want is not None and str(d.get("mav_sysid")) == str(want):
+            return d.get("flight_sw_version")
+    if want is not None:
+        return None
+    hit = [d for d in rows if d.get("autopilot") == autopilot
+           and d.get("flight_sw_version")]
+    return hit[0]["flight_sw_version"] if len(hit) == 1 else None
+
+
 def record(verb: str, autopilot: str, status: str, evidence: str,
            sysid: int | None = None) -> dict:
     """把結果落地。**能力值由這些檔案推導，不是人工判斷。**"""
@@ -222,6 +277,12 @@ def record(verb: str, autopilot: str, status: str, evidence: str,
         "status": status,                       # pass / fail / skip
         "evidence": evidence,                   # 人看得懂的證據，不是 True/False
         "sysid": sysid,
+        # **證據要能說出「驗的是哪一版」**：模組說明承諾了這件事，但在
+        # 2026-08-24 之前實際上沒有實作（欄位根本不存在），使得
+        # 「對 <韌體版本> 的 SITL 驗證通過」這句話說不出後半段。
+        # 版本來自 AUTOPILOT_VERSION（issues/038 才開始請求它）。
+        # None＝那台機還沒回報版本，不是「沒有版本」。
+        "firmware": firmware_of(autopilot, sysid),
         "at": time.strftime("%Y-%m-%dT%H:%M:%S"),
         "env": "sitl",                          # **不是真機**——見模組說明
     }

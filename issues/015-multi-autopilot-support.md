@@ -106,7 +106,22 @@ PM 判準：**「驗證過」要指「整條路徑可用」，不是「這三個
 - 起飛 GUIDED→arm→NAV_TAKEOFF 實測爬到 15.0m（相對高度語意正確）
 - `manual` 走**事前讀 `SYSID_MYGCS`**（見下），非人工判定
 
-**維持 unverified**：`mission_start`／`mission_fly`——AUTO 任務執行整段尚未驗。
+~~**維持 unverified**：`mission_start`／`mission_fly`——AUTO 任務執行整段尚未驗。~~
+
+> **2026-08-24 更新：兩鍵已在 SITL 驗過並開啟。** PX4 與 ArduPilot 各跑
+> `mission_upload`／`takeoff`／`mission_fly` 三個測項，全數 pass，且都是
+> **讀回 HEARTBEAT 確認機端實際狀態**（PX4 進 MISSION、ArduPilot 進 AUTO），
+> 不是看 ACK。證據檔 `data/conformance/{px4,ardupilot}.json`。
+>
+> ⚠ **證據強度**：ArduPilot 測的是 **4.0.3** SITL，而機上實機是 **4.7.0**——
+> 差 7 個 minor 版本（那個映像已五年）。所以準確語意是「對 4.0.3 SITL 驗過」，
+> 不是「對 4.7.0 真機保證可用」。
+>
+> 過程中修掉三個測試本身的問題：測項寫死蘇黎世座標（SITL 出生點早已改台灣，
+> 相距 9600km，PX4 的可行性檢查直接拒絕，而 harness 把它歸類成 skip——
+> **把測試資料錯誤偽裝成前提不足**）；`mission_upload` 因此一直在「假通過」
+> （上傳不需可行性檢查，它上傳的是一份飛機永遠飛不到的任務）；證據檔宣稱
+> 記錄韌體版本但**欄位根本不存在**，現已補上（靠 issues/038 才拿得到版本）。
 
 **混機編隊**：ArduPilot 的 arm 已開，但編隊執行序列第 3 步要切 MISSION、
 會用到 `mission_start`，**所以必須先驗 mission_start 才跑得動混機編隊**。

@@ -29,10 +29,9 @@ import time
 sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent))
 
 from _harness import (BACKEND, Skip, _driver, assert_dialect,  # noqa: E402
-                      delete, fleet, pick, post, run, wait_verb)
+                      delete, fleet, local_wps, pick, post, run, wait_verb)
 
 TAKEOFF_ALT = 15.0
-_BASE = [(47.39785, 8.54565, 15.0), (47.39800, 8.54590, 15.0), (47.39815, 8.54565, 15.0)]
 
 
 def _st(sysid):
@@ -58,8 +57,8 @@ def check(autopilot: str) -> str:
                        f"{info.get('capability_reasons', {}).get(key, '(無原因)')}")
     drv = _driver(info.get("autopilot_raw"))
 
-    wps = [{"seq": i, "lat": la, "lon": lo, "alt": al, "action": "waypoint"}
-           for i, (la, lo, al) in enumerate(_BASE)]
+    # 航點以機體當下位置為原點——不寫死座標，理由見 _harness.local_wps
+    wps = local_wps(info, TAKEOFF_ALT)
     wps.append({"seq": len(wps), "lat": 0.0, "lon": 0.0, "alt": None, "action": "rtl"})
     ok, m = post("/api/missions", {"name": f"conformance-fly-{autopilot}",
                                    "source": "plan-file", "waypoints": wps},

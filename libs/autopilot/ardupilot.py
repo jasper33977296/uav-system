@@ -179,10 +179,17 @@ class ArduPilotDriver:
         #     確認真的切到**（mode_engaged=True），不是只看 ACK
         #   arm/takeoff：GUIDED→arm→NAV_TAKEOFF（相對高度、空白參數用 0 不用
         #     NaN）實測爬到 15.0m
-        for _k in ("mission_upload", "hold", "rtl", "land", "arm", "takeoff"):
+        #   mission_start/mission_fly：**2026-08-24 SITL 一致性測試通過**——
+        #     上傳 4 項 → 起飛至 13.7m → **讀回 HEARTBEAT 確認機端實際進入
+        #     AUTO**（不是看 ACK），當下高度 13.7m。證據檔
+        #     `data/conformance/ardupilot.json`。
+        #     ⚠ **證據強度**：測的是 ArduPilot **4.0.3** SITL（映像
+        #     `radarku/ardupilot-sitl` 已五年），而機上實機是 **4.7.0**——
+        #     差 7 個 minor 版本。所以這兩鍵的準確語意是「對 4.0.3 SITL 驗過」，
+        #     **不是「對 4.7.0 真機保證可用」**。首飛前仍應以實機覆核。
+        for _k in ("mission_upload", "hold", "rtl", "land", "arm", "takeoff",
+                   "mission_start", "mission_fly"):
             caps[_k] = "ok"
             reasons.pop(_k, None)
-        # 以下**維持 unverified**（沒驗過就不開）：
-        #   mission_start/mission_fly：AUTO 任務執行整段尚未驗
         #
         return caps, reasons

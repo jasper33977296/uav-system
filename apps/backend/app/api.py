@@ -27,6 +27,11 @@ async def list_drones():
         st = fleet.get(str(d["id"]))
         d["autopilot"] = (autopilot_name(st.autopilot_raw)
                           if st and st.autopilot_raw is not None else None)
+        # 038：韌體版本與板子 UID 也是 runtime 值（非 DB 欄位）。
+        # 一致性測試靠它把「對哪一版驗過」寫進證據——沒有版本的證據，
+        # 等於宣稱「驗過」卻說不出驗的是什麼。
+        d["flight_sw_version"] = st.flight_sw_version if st else None
+        d["board_uid"] = st.board_uid if st else None
         out.append(d)
     return out
 

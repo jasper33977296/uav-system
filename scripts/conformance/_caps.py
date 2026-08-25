@@ -35,7 +35,10 @@ CAP_TESTS = {
 
 #: 尚未實作的測項——列出來是為了**讓缺口有名字**。
 #: 沒有這份清單的話，「某鍵拿不到 ok」看起來會像 bug 而不是待辦。
-NOT_IMPLEMENTED = ("takeoff", "mission_fly")
+#: 2026-08-24：takeoff 與 mission_fly 都已實作並在 PX4／ArduPilot 兩家 SITL
+#: 通過，這份清單因此清空。**清單留著不刪**——它的用途是「讓缺口有名字」，
+#: 下一個沒有測項的動詞要加回這裡，而不是靜靜地沒有證據。
+NOT_IMPLEMENTED: tuple[str, ...] = ()
 
 
 def derive(autopilot: str, results: dict) -> tuple[dict, dict]:

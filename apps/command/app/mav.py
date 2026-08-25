@@ -215,6 +215,20 @@ class MavRouter(threading.Thread):
                     # 這個參數；只讀一次的話，他照做之後我方永遠不知道——按鈕繼續
                     # 鎖著、訊息還在說「目前是 255」。那比不給提示更糟：告訴人去做，
                     # 又無視他做了。（2026-08-12 反向驗證抓到：設成 254 後仍顯示 255。）
+                    # 板子身分（issues/038）：AUTOPILOT_VERSION 帶飛控板的唯一
+                    # ID 與韌體版本，而**兩家都不主動送，要開口問**。
+                    # 由 command 問而不是 backend：請求要送 COMMAND_LONG，那是
+                    # 通用信封（同一型別可以裝 arm），backend 的 read-only 邊界
+                    # 不收它。回應是廣播式的，backend 照樣收得到並記錄。
+                    # **一次就好**：板子身分不會變。機上有我方代理時代理也會問，
+                    # 重複請求無副作用；沒有代理的機（SITL、他人的機）只有這裡問。
+                    if self.heartbeat and not d.get("caps_req"):
+                        d["caps_req"] = True
+                        try:
+                            self._sendto(sysid, lambda m: m.command_long_encode(
+                                sysid, 1, 520, 0, 1, 0, 0, 0, 0, 0, 0))
+                        except CommandError:
+                            d["caps_req"] = False      # 送不出去就下次再試
                     if (caps.autopilot_name(msg.autopilot) == "ardupilot"
                             and time.monotonic() - d.get("mygcs_req_t", 0) > MYGCS_REREAD_S):
                         d["mygcs_req_t"] = time.monotonic()
