@@ -131,6 +131,21 @@ export default function Missions() {
   const [err, setErr] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
   const [openId, setOpenId] = useState<string | null>(null);
+  // **每次點開一份航線就重檢一次**，不是只在匯入的那一刻檢查一次。
+  // 匯入時看到的報告會隨畫面關掉就消失，而使用者是在**要飛之前**才需要它；
+  // 而且圍欄的系統預設值可能在匯入之後被改過，那時舊報告就是過期的。
+  const [openCheck, setOpenCheck] = useState<PlanCheck | "loading" | null>(null);
+  useEffect(() => {
+    if (!openId) { setOpenCheck(null); return; }
+    let dead = false;
+    setOpenCheck("loading");
+    getJson<PlanCheck>(`${API}/api/missions/${openId}/check`)
+      .then((c) => { if (!dead) setOpenCheck(c); })
+      // 取不到就說取不到——**空白會被讀成「檢查過了、沒問題」**，
+      // 而那是這份報告最不能給錯的方向
+      .catch(() => { if (!dead) setOpenCheck(null); });
+    return () => { dead = true; };
+  }, [openId]);
   const [menuId, setMenuId] = useState<string | null>(null);
   const [deleting, setDeleting] = useState<string | null>(null);
   const delTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -351,6 +366,30 @@ export default function Missions() {
           const m = missions.find((x) => x.id === openId);
           return (
             <div style={{ marginTop: 12 }}>
+              {/* 幾何預檢：**每次點開重算**。放在展開區的最上面，因為它是
+                  「這份能不能飛」的答案，比使用紀錄更該先看到 */}
+              {openCheck === "loading" && (
+                <div className="hint-line">檢查中⋯</div>
+              )}
+              {openCheck === null && openId && (
+                <div className="form-err">
+                  取不到這份航線的預檢結果——**不是「沒問題」**，是沒檢查到
+                </div>
+              )}
+              {openCheck && openCheck !== "loading" && (
+                <div className="plan-report" style={{ marginBottom: 10 }}>
+                  {openCheck.ok && openCheck.warnings.length === 0 && (
+                    <div className="ok">✅ 幾何預檢通過（最遠航點 {openCheck.max_dist_m} m／
+                      {openCheck.fence_source === "plan"
+                        ? "圍欄用這份航線自帶的"
+                        : `圍欄 ${openCheck.fence_r} m，系統預設`}）</div>
+                  )}
+                  {openCheck.problems.map((p, i) =>
+                    <div className="bad" key={`op${i}`}>❌ {p}</div>)}
+                  {openCheck.warnings.map((w, i) =>
+                    <div className="warn" key={`ow${i}`}>⚠️ {w}</div>)}
+                </div>
+              )}
               <div className="drone-head">
                 <span className="meta">「{m?.name}」被使用 {mine.length} 次</span>
                 {/* 哪幾台無人機用過（識別色點＋名） */}

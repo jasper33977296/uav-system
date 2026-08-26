@@ -742,6 +742,38 @@ async def import_mission_from_vehicle(name: str | None = None):
                 settings.geofence_margin)}
 
 
+@router.get("/missions/{mission_id}/check")
+async def check_mission(mission_id: str):
+    """任務庫裡某一份的幾何預檢。**檢查不該只在匯入的那一刻做一次。**
+
+    匯入時看到的報告會隨畫面關掉就消失，而使用者是在**要飛之前**才需要它；
+    再者圍欄的系統預設值可能在匯入之後被改過，那時候舊報告就是過期的。
+    每次點開一份航線就重算一次，成本是一次查表。
+    """
+    row = await db.pool.fetchrow(
+        "SELECT name, fence, firmware_type, vehicle_type FROM missions "
+        "WHERE id = $1", mission_id)
+    if row is None:
+        raise HTTPException(404, "無此路徑")
+    rows = await db.pool.fetch(
+        "SELECT seq, lat, lon, alt, action, params FROM waypoints "
+        "WHERE mission_id = $1 ORDER BY seq", mission_id)
+    wps = []
+    for r in rows:
+        w = dict(r)
+        pm = w.get("params")
+        pm = json.loads(pm) if isinstance(pm, str) else (pm or {})
+        w["command"] = pm.get("command")
+        w["frame"] = pm.get("frame")
+        wps.append(w)
+    fence = row["fence"]
+    if isinstance(fence, str):
+        fence = json.loads(fence)
+    return plan_check.check_waypoints(
+        wps, settings.geofence_radius_m, settings.geofence_alt_m,
+        settings.geofence_margin, fence=fence)
+
+
 @router.post("/missions/{mission_id}/activate")
 async def activate_mission(mission_id: str, active: bool = True):
     async with db.pool.acquire() as con:
