@@ -46,6 +46,10 @@ class ArduPilotDriver:
 
     #: 任務線序：ArduPilot 把 home 當 seq 0，實際航點從 seq 1 起算
     home_at_seq0 = True
+    #: ArduPilot 存 RTL 用 `MAV_FRAME_GLOBAL`(0)，下載任務時原樣回報
+    #: （2026-08-26 實機證據：從這台機下載回來的 RTL 項就是 frame 0）。
+    #: **它送得出來就一定收得下**，所以 0 與 2 都接受
+    no_coord_frames = frozenset({0, 2})
     #: NAV_TAKEOFF 的 param7 是相對高度（送絕對海拔會差一整個地面海拔）
     takeoff_alt_is_relative = True
     #: Copter 必須先進 GUIDED 才能 arm 與起飛

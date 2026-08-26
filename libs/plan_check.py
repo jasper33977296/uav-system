@@ -1,22 +1,26 @@
-"""任務幾何預檢：離線檢查路徑 vs Geofence，在上傳前抓出 PX4 會拒絕的任務。
+"""任務幾何預檢：離線檢查路徑 vs 圍欄與方言規則，在上傳前抓出機端會拒絕的任務。
 
 源自現場工具 check_plan.py（2026-08-10 整合進系統）。要點：
 
-  1. 各航點離起飛點距離 vs 圍欄半徑——含餘裕警告：**實際的 Home 是
-     「無人機擺放位置」，不是圖上的起飛點**，貼著圍欄邊的路徑只要
-     擺放偏一點就會觸圈，故 >70% 半徑即警告
-  2. 高度 vs 圍欄高度上限
-  3. 首導航項應為起飛（problem）；末項應為降落（warning——.plan 以
-     RTL 結尾時 RTL 不入庫，屬正常）
+  1. **無座標項的 frame 是方言**：由 `libs/autopilot` 的驅動提供可接受值。
+     不知道目標機種時只警告不擋——用猜的去否定一份可能合法的航線更糟。
+  2. 圍欄**優先用 .plan 自帶的 geoFence**，沒帶才退回系統預設，而且報告
+     要說出用的是哪一個（`fence_source`）。
+  3. 高度上限永遠是系統設定：QGC 的 geoFence 只畫平面。
+  4. 首導航項應為起飛（problem）；末項應為降落（warning——.plan 以 RTL
+     結尾時 RTL 不入庫，屬正常）。
 
 兩個消費端、兩種嚴格度：
   - POST /missions（匯入 .plan）：回報告**不擋存檔**——任務庫可放草稿
   - command 服務上傳到機：有 problem 直接 409——那才是安全門
 
-（本檔為 apps/backend/app/plan_check.py 的同源副本，改動要同步；
- 圍欄值兩服務共用 .env 的 GEOFENCE_*，與機上 QGC 設定保持一致。）
+**這裡是唯一一份實作。** 原本 backend 與 command 各有一份「同源副本」，
+2026-08-26 發現它們早就漂移了：frame 檢查只存在於 backend 那份，於是
+匯入時擋下來的東西，上傳到機時反而不擋。同源副本靠人記得同步是行不通的。
 """
 import math
+
+import autopilot as _autopilot
 
 
 def _dist_m(lat1: float, lon1: float, lat2: float, lon2: float) -> float:
@@ -45,7 +49,8 @@ def _is_nav(w: dict) -> bool:
 
 
 def check_waypoints(wps: list[dict], fence_r: float, fence_alt: float,
-                    margin: float = 0.7, fence: dict | None = None) -> dict:
+                    margin: float = 0.7, fence: dict | None = None,
+                    autopilot: int | None = None) -> dict:
     """wps：本系統 waypoints 模型 [{seq, lat, lon, alt, action, command?}]。
     DO_* 設定類不計距離；回傳 {ok, problems, warnings, max_dist_m, ...}。"""
     problems: list[str] = []
@@ -53,6 +58,36 @@ def check_waypoints(wps: list[dict], fence_r: float, fence_alt: float,
     if not wps:
         return {"ok": False, "problems": ["沒有航點"], "warnings": [],
                 "max_dist_m": 0.0, "fence_r": fence_r, "fence_alt": fence_alt}
+
+    # 無座標項（RTL、CONDITION_*、DO_*）的 frame **是方言，不是通則**。
+    #
+    # 2026-08-12 在 PX4 SITL 實測「RTL 配 frame 0/3/5/6 全拒、只有 2 過」，
+    # 那條結果被當成通則寫死在這裡。2026-08-26 它擋下了一份**從 ArduPilot
+    # 自己下載回來的**任務——ArduPilot 存 RTL 用 frame 0，下載時原樣回報，
+    # 於是我們拿 PX4 的規則去否定 ArduPilot 自己的表示法。
+    # **一家的實測結果被當成兩家的事實**，正是 issues/026 要收掉的洩漏。
+    #
+    # 現在規則由驅動提供；**不知道目標機種時只警告不擋**——兩家不同的事，
+    # 在不知道是哪一家的情況下擋下來，等於用猜的去否定一份可能完全合法的航線。
+    drv = _autopilot.get_driver(autopilot) if autopilot is not None else None
+    allowed = drv.no_coord_frames if drv else None
+    for w in wps:
+        c, fr = _cmd(w), w.get("frame")
+        if c is None or fr is None:
+            continue
+        if not (c == _RTL or c >= 112):
+            continue
+        if allowed is None:
+            if int(fr) != 2:
+                warnings.append(
+                    f"seq {w.get('seq')}：command={c} 是無座標項、frame={fr}。"
+                    "PX4 只吃 frame 2（其餘整包拒收），ArduPilot 兩者都吃——"
+                    "**這份航線沒宣告目標機種，所以無法判定**")
+        elif int(fr) not in allowed:
+            problems.append(
+                f"seq {w.get('seq')}：command={c} 是無座標項，frame 目前是 {fr}，"
+                f"但 {_autopilot.autopilot_name(autopilot)} 只接受 "
+                f"{sorted(allowed)}——機端會拒收整包任務")
 
     nav = [w for w in wps if _is_nav(w)]
     if not nav:
@@ -116,6 +151,35 @@ def check_waypoints(wps: list[dict], fence_r: float, fence_alt: float,
             # **量測用的是哪一份圍欄，要跟著報告走**：同一句「超出圍欄」在
             # 兩種來源下的處置完全不同
             "fence_source": fence_src}
+
+
+def check_group(paths: list[dict], vsep_m: float, lsep_m: float) -> dict:
+    """群組跨路徑互檢（issue 013-A）：N 條同時飛的路徑要分離足夠。
+    paths：[{label, waypoints:[{lat,lon,alt}]}]。兩條路徑若在某處**橫向 < lsep
+    且垂直 < vsep**＝衝突（都靠太近才危險，分層或分離任一夠即安全）。
+    unified 高度分層下垂直本就 ≥ vsep，天然通過；separate 才真的互檢。"""
+    conflicts = []
+    for i in range(len(paths)):
+        for j in range(i + 1, len(paths)):
+            a, b = paths[i], paths[j]
+            wa = [w for w in a.get("waypoints", []) if w.get("lat") and w.get("lon")]
+            wb = [w for w in b.get("waypoints", []) if w.get("lat") and w.get("lon")]
+            hit = None
+            for pa in wa:
+                for pb in wb:
+                    dh = _dist_m(pa["lat"], pa["lon"], pb["lat"], pb["lon"])
+                    dv = abs((pa.get("alt") or 0) - (pb.get("alt") or 0))
+                    if dh < lsep_m and dv < vsep_m:
+                        hit = (round(dh), round(dv))
+                        break
+                if hit:
+                    break
+            if hit:
+                conflicts.append({
+                    "a": a.get("label"), "b": b.get("label"),
+                    "why": f"最近處 橫向 {hit[0]}m／垂直 {hit[1]}m"
+                           f"（門檻 橫向 {lsep_m:.0f}m 或 垂直 {vsep_m:.0f}m）"})
+    return {"ok": not conflicts, "conflicts": conflicts}
 
 
 # ── .plan 自帶的圍欄（QGC geoFence）────────────────────────────────────

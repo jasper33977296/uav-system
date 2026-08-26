@@ -40,6 +40,14 @@ class UnknownDriver:
     home_at_seq0 = False
     takeoff_alt_is_relative = False
     takeoff_needs_guided = False
+    #: 無座標任務項（RTL／DO_*／CONDITION_*）可接受的 frame。
+    #:
+    #: **這是方言，不是通則。** 2026-08-12 在 PX4 SITL 實測「RTL 配 frame
+    #: 0/3/5/6 全拒、只有 2 過」，然後那條規則被當成通則寫進預檢——結果 2026-08-26
+    #: 擋下了一份**從 ArduPilot 自己下載回來的**任務：ArduPilot 存 RTL 用
+    #: frame 0，下載時原樣回報，於是我們拿 PX4 的規則去否定 ArduPilot 自己的
+    #: 表示法。**一家的實測結果被當成兩家的事實，正是 026 要收掉的那種洩漏。**
+    no_coord_frames: frozenset = frozenset({2})
     MESSAGE_ADJUSTMENTS = ()
 
     def __init__(self):

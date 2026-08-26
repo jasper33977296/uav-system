@@ -8,7 +8,9 @@ from pydantic import BaseModel, Field, field_validator
 
 import logging
 
-from . import agent_link, db, groups, mavlink_rx, plan_check
+import plan_check          # libs/ 的共用實作（PYTHONPATH=/srv/libs）
+
+from . import agent_link, db, groups, mavlink_rx
 from .config import settings
 from .ws import manager
 
@@ -716,7 +718,8 @@ async def save_mission(m: MissionIn):
                                m.firmware_type, m.vehicle_type, m.fence)
     return {"id": mid, "check": plan_check.check_waypoints(
         wps, settings.geofence_radius_m, settings.geofence_alt_m,
-        settings.geofence_margin, fence=m.fence)}
+        settings.geofence_margin, fence=m.fence,
+        autopilot=m.firmware_type)}
 
 
 @router.post("/missions/from-vehicle")
@@ -771,7 +774,9 @@ async def check_mission(mission_id: str):
         fence = json.loads(fence)
     return plan_check.check_waypoints(
         wps, settings.geofence_radius_m, settings.geofence_alt_m,
-        settings.geofence_margin, fence=fence)
+        settings.geofence_margin, fence=fence,
+        # frame 規則是方言，要知道是給哪一家寫的才判得了（沒宣告時只警告）
+        autopilot=row["firmware_type"])
 
 
 @router.post("/missions/{mission_id}/activate")

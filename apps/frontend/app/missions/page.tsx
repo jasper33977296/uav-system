@@ -301,7 +301,11 @@ export default function Missions() {
                       <span className="chip"
                         style={t.declared ? undefined : { opacity: 0.5 }}
                         title={t.declared
-                          ? "這份航線宣告的目標機種（來自 .plan）"
+                          // **把原始 enum 一起講出來**：2026-08-26 使用者回報
+                          // 「傳上來都變 PX4」，而資料庫裡是 3（ArduPilot）。
+                          // 只顯示翻譯後的名字時，要查「畫面說的」與「檔案寫的」
+                          // 是不是同一件事，得繞到資料庫——那不該是使用者的工作
+                          ? `這份航線宣告的目標機種（來自 .plan：firmwareType=${m.firmware_type ?? "—"}、vehicleType=${m.vehicle_type ?? "—"}）`
                           : "這份 .plan 沒有寫 firmwareType／vehicleType——"
                             + "系統無法替你確認它適不適合這台機，請自己確認"}>
                         {t.text}

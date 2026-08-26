@@ -32,7 +32,9 @@ from pydantic import BaseModel
 _client_var: contextvars.ContextVar = contextvars.ContextVar("client", default=None)
 
 from . import capabilities as caps
-from . import group_exec, mav, plan_check, plans
+import plan_check          # libs/ 的共用實作（PYTHONPATH=/srv/libs）
+
+from . import group_exec, mav, plans
 from .config import settings
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(name)s %(message)s")
@@ -775,9 +777,13 @@ async def mission_upload(sysid: int, body: UploadIn):
     mf = meta["fence"] if meta else None
     if isinstance(mf, str):
         mf = json.loads(mf)
+    # 上傳時**用實際偵測到的機種**，不是航線宣告的：這一刻我們知道真相，
+    # 而航線的宣告可能是錯的（QGC 在離線狀態下規劃就會寫成預設的 PX4）
+    ap = router.autopilot_of(sysid) if router else None
     report = plan_check.check_waypoints(
         wps, settings.geofence_radius_m, settings.geofence_alt_m,
-        settings.geofence_margin, fence=mf)
+        settings.geofence_margin, fence=mf,
+        autopilot=ap if ap is not None else (meta["firmware_type"] if meta else None))
     # 機種不符：併進**既有的 warnings**而不是自成一個欄位——前端已經會顯示
     # 這份報告，多開一個欄位就多一個可能沒人接的顯示點（issues/037）。
     # 併進 warnings 不影響 `ok`，所以不會意外觸發 GEOFENCE_ENFORCE 的擋門。

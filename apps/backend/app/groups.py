@@ -6,7 +6,9 @@
 """
 import json
 
-from . import db, plan_check
+import plan_check          # libs/ 的共用實作（PYTHONPATH=/srv/libs）
+
+from . import db
 from .config import settings
 from .jsonsafe import dumps as jdumps
 
