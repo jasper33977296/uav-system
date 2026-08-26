@@ -213,6 +213,120 @@ async def agent_intent(body: GuardIn):
             "reason": ev.get("reason"), "state": ev.get("state")}
 
 
+class BackfillSample(BaseModel):
+    """機上緩衝的一筆取樣。**欄位刻意等同 telemetry 表**——補傳不是另一種
+    資料，它就是那段時間我們本來該收到的資料。"""
+    t: float                          # 機上的 unix 秒（浮點）
+    lat: float | None = None
+    lon: float | None = None
+    alt_msl: float | None = None
+    alt_rel: float | None = None
+    heading: float | None = None
+    ground_speed: float | None = None
+    battery_pct: float | None = None
+    battery_voltage: float | None = None
+    gps_fix: int | None = None
+    satellites: int | None = None
+    flight_mode: str | None = None
+    armed: bool | None = None
+
+
+class BackfillIn(BaseModel):
+    """C 層：代理把 5G 斷線期間的取樣補傳上來。"""
+    board_uid: str
+    samples: list[BackfillSample] = Field(min_length=1, max_length=5000)
+    #: 這段期間機體有沒有一直保持 armed（代理看得到，地面站看不到）。
+    #: D 層用它判斷「回來之後還算不算同一趟」
+    stayed_armed: bool | None = None
+
+
+@router.post("/telemetry/backfill")
+async def telemetry_backfill(body: BackfillIn):
+    """**這段資料本來就沒有遺失，只是送不出來。**
+
+    5G 斷線時代理照樣看得到飛控的一切；現在我們把它丟掉。這個端點讓它補回來。
+
+    三條紀律：
+
+    * **標記 `backfilled`**。它的時間戳是機上的（可能與地面站有偏差），
+      而且它不該觸發任何即時判斷。不標的話，事後分不出哪些是後補的。
+    * **不碰即時狀態**。補傳不更新 `live`、不發事件、不改 `connected`——
+      那是過去的資料，讓它影響「現在」就是把歷史當成現況。
+    * **時間戳去重**。重連後代理可能重送一段，同一秒的資料以先到的為準。
+    """
+    from . import agent_link
+    link = agent_link.links.get(body.board_uid)
+    drone_id = link.drone_id if link else None
+    if drone_id is None:
+        row = await db.pool.fetchrow(
+            "SELECT id::text AS id FROM drones WHERE board_uid = $1",
+            body.board_uid)
+        drone_id = row["id"] if row else None
+    if drone_id is None:
+        raise HTTPException(404, f"不認得的 board_uid {body.board_uid}")
+
+    lo = min(s.t for s in body.samples)
+    hi = max(s.t for s in body.samples)
+    # 這段時間屬於哪個架次？**用時間去找**，不是用「現在的架次」——補傳的
+    # 是過去的資料，而那時開著的架次可能已經因為失聯被收掉了
+    sess = await db.pool.fetchrow(
+        "SELECT id::text AS id FROM flight_sessions "
+        "WHERE drone_id = $1::uuid AND started_at <= to_timestamp($2) "
+        "AND (ended_at IS NULL OR ended_at >= to_timestamp($3)) "
+        "ORDER BY started_at DESC LIMIT 1", drone_id, hi, lo)
+    session_id = sess["id"] if sess else None
+
+    # **去重靠先查再濾，不靠 ON CONFLICT**：telemetry 是 hypertable，
+    # (drone_id, time) 上沒有唯一索引，`ON CONFLICT DO NOTHING` 因此什麼也不做
+    # ——重連後代理重送一段，資料就會變成兩份（2026-08-26 測出來的）。
+    # 補一個唯一索引要處理既有重複列，而這裡查一次範圍內的時間戳更直接。
+    exist = await db.pool.fetch(
+        "SELECT extract(epoch FROM time) AS t FROM telemetry "
+        "WHERE drone_id = $1::uuid AND time BETWEEN to_timestamp($2) "
+        "AND to_timestamp($3)", drone_id, lo - 0.5, hi + 0.5)
+    have = {round(float(r["t"]), 2) for r in exist}
+    fresh = [s for s in body.samples if round(s.t, 2) not in have]
+    rows = [(s.t, drone_id, session_id, s.lat, s.lon, s.alt_msl, s.alt_rel,
+             s.heading, s.ground_speed, s.battery_pct, s.battery_voltage,
+             s.gps_fix, s.satellites, s.flight_mode) for s in fresh]
+    await db.pool.executemany(
+        """INSERT INTO telemetry (time, drone_id, session_id, lat, lon,
+             alt_msl, alt_rel, heading, ground_speed, battery_pct,
+             battery_voltage, gps_fix, satellites, flight_mode, backfilled)
+           VALUES (to_timestamp($1), $2::uuid, $3::uuid, $4, $5, $6, $7, $8,
+                   $9, $10, $11, $12, $13, $14, true)""", rows)
+
+    # 把這段時間的失明記錄標成「已補回」
+    closed = await db.pool.fetch(
+        "UPDATE blackouts SET recovered_by = 'backfilled' "
+        "WHERE drone_id = $1::uuid AND started_at <= to_timestamp($2) "
+        "AND coalesce(ended_at, now()) >= to_timestamp($3) "
+        "RETURNING id::text AS id", drone_id, hi, lo)
+    # ── D 層：回來之後，那還算不算同一趟 ────────────────────────
+    # 代理看得到整段（它就在機上），所以它說得出「這段期間機體有沒有一直
+    # armed」。地面站看不到，只能問它。
+    #
+    # **有代理說話 → 相信它**：沒落地就沿用同一個架次（上面已經用時間找到）。
+    # **沒有代理 → 誠實說不知道**：那時 stayed_armed 是 None，我們不去猜，
+    # 只把資料補進去、把失明記錄留著。**不要假裝是同一趟**。
+    if body.stayed_armed and session_id:
+        # 架次被失聯收尾過，但機體其實一直在飛——把結束時間往後推到補傳的
+        # 尾端，並改記理由。**不重開架次**：重開會讓一趟飛行在記錄上變成兩趟
+        await db.pool.execute(
+            "UPDATE flight_sessions SET ended_at = greatest(ended_at, "
+            "to_timestamp($2)), end_reason = 'telemetry_lost_backfilled' "
+            "WHERE id = $1::uuid AND end_reason = 'telemetry_lost'",
+            session_id, hi)
+    log.info("補傳 %d 筆、跳過 %d 筆重複（%s，架次 %s，補回 %d 段失明）",
+             len(rows), len(body.samples) - len(rows), body.board_uid,
+             session_id, len(closed))
+    return {"ok": True, "inserted": len(rows),
+            "skipped_duplicate": len(body.samples) - len(rows),
+            "session_id": session_id,
+            "blackouts_recovered": [r["id"] for r in closed],
+            "stayed_armed": body.stayed_armed}
+
+
 @router.patch("/drones/{drone_id}")
 async def patch_drone(drone_id: str, body: DronePatch):
     """改名／設定影像串流位址（系統端管理機的身分與屬性，不走環境變數）。

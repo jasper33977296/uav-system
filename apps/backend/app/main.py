@@ -24,6 +24,18 @@ log = logging.getLogger("main")
 #: （2026-08-26：一筆架次開了 2.5 小時，遙測在開始後 10 秒就斷了）
 SESSION_LOST_S = 90.0
 
+#: 多久沒資料就開一筆失明記錄。**比架次收尾短很多**：失明是「這段沒有資料」
+#: 的事實，10 秒的空白在事後看軌跡時就已經是一個要說明的缺口；而架次收尾是
+#: 「這趟就記到這裡」的判斷，那件事不能因為抖一下就做
+BLACKOUT_OPEN_S = 10.0
+
+
+def _wall_of(mono: float) -> "datetime":
+    """monotonic 時刻 → 牆鐘時間。失明的起點要用得上牆鐘（存進 DB）。"""
+    from datetime import datetime, timedelta, timezone
+    return datetime.now(timezone.utc) - timedelta(
+        seconds=time.monotonic() - mono)
+
 
 async def _close_orphan_sessions() -> None:
     """機不見了就把架次收掉——**「上鎖」與「我們看不到它了」是兩件事**。
@@ -37,16 +49,37 @@ async def _close_orphan_sessions() -> None:
     """
     now = time.monotonic()
     for st in list(fleet.values()):
+        # ── B 層：失明區間的開與收（**與架次收尾分開**）───────────
+        # 失明從「最後一次收到資料」算起，不是從「發現失聯」算起——
+        # 兩者差一個逾時門檻，而那段時間我們其實也沒有資料
+        if st.connected and st.blackout_id:
+            await db.blackout_close(st.blackout_id, "telemetry_resumed")
+            log.info("失明結束：%s（%s）", st.drone_name, st.blackout_id)
+            st.blackout_id = None
+        if (not st.connected and st.ever_connected and not st.blackout_id
+                and st._lost_since is not None
+                and now - st._lost_since >= BLACKOUT_OPEN_S):
+            st.blackout_id = await db.blackout_open(
+                st.drone_id, st.session_id, "telemetry_lost", st.armed,
+                started_at=_wall_of(st._lost_since))
+            if st.blackout_id:
+                log.warning("失明開始：%s（armed=%s）", st.drone_name, st.armed)
+
+        if not st.connected and st._lost_since is None:
+            st._lost_since = now
+        elif st.connected:
+            st._lost_since = None
+
         if not st.session_id or st.connected:
             continue
-        seen = getattr(st, "_lost_since", None)
+        seen = st._lost_since
         if seen is None:
-            st._lost_since = now
             continue
         if now - seen < SESSION_LOST_S:
             continue
         sid, st.session_id, st.armed = st.session_id, None, False
-        st._lost_since = None
+        # **不清 _lost_since**：失明還在繼續，只是架次先收了。清掉的話
+        # 失明記錄會被當成新的一段重開，事後看起來像斷了兩次
         log.warning("架次 %s 因失去遙測而收尾（%s，已 %.0f 秒沒有資料）",
                     sid, st.drone_name, now - seen)
         try:

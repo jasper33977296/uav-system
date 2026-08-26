@@ -113,6 +113,13 @@ class LiveState:
     #: 失去遙測是從哪一刻開始（monotonic）。架次收尾的寬限期用它算，
     #: None＝目前沒有失聯
     _lost_since: float | None = None
+    #: 最後一次收到**這台機的 MAVLink 訊息**（monotonic）。與 link_seen_mono
+    #: 不同：那個是 5G 鏈路量測，這個是飛行遙測本身。
+    #: **A 層（顯示）要的是這個**——畫面上的高度、模式、電量全部來自它，
+    #: 所以「這些數字多舊」只能由它回答
+    telem_seen_mono: float | None = None
+    #: 目前這段失明的 blackout 記錄 id（B 層）。None＝沒有進行中的失明
+    blackout_id: str | None = None
 
     # 最後一次收到鏈路量測的時刻（monotonic clock，不受系統時間調整影響）。
     # 真機的即時通道會靜默失敗，前端需要據此顯示「已失聯 N 秒」——
@@ -134,6 +141,19 @@ class LiveState:
         if age > 5:
             return "stale"
         return self.link_state
+
+    @property
+    def telem_age_s(self) -> float | None:
+        """畫面上那些數字有多舊（秒）。None＝從來沒收到過。
+
+        **A 層的核心**：斷線時數值不會消失，它們只是變舊——而舊到某個程度
+        之後，它們與「現在」的關係就只剩誤導。2026-08-26 實測：畫面顯示
+        `armed=true / LAND / alt 1.07`，那是**兩個半小時前**的殘影，
+        而畫面上唯一的線索是角落一個 `connected:false`。
+        """
+        if self.telem_seen_mono is None:
+            return None
+        return round(_time.monotonic() - self.telem_seen_mono, 2)
 
     @property
     def link_age_s(self) -> float | None:
@@ -223,6 +243,9 @@ class LiveState:
             # 2026-08-26 看到 link_state=ok 配 link_age_s=9169（2.5 小時）。
             # 一個說「正常」、一個說「兩個半小時沒資料」，**同一份回應自相矛盾**
             "link_state": self._link_state_now(),
+            # **每一個數值的年齡**（A 層）：前端據此決定顯示、變灰、或換成
+            # 「最後已知」。None＝從來沒收到過
+            "telem_age_s": self.telem_age_s,
             "link_age_s": self.link_age_s,   # None = 從未收到；大於門檻 = 失聯
         }
 

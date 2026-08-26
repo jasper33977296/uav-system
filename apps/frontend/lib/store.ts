@@ -57,6 +57,9 @@ export interface Telemetry {
   mav_sysid?: number | null;         // 當下 sysid（選中機統一 ca0a472；null=非 MAVLink）
   link_state?: string | null;        // 機上鏈路狀態（ok/stale/lost）
   link_age_s?: number | null;        // 距最後一筆機上資料的秒數（失聯預警用）
+  //: **畫面上那些數字有多舊**（A 層）。斷線時數值不會消失，它們只是變舊——
+  //: 而舊到某個程度之後，它們與「現在」的關係就只剩誤導
+  telem_age_s?: number | null;
   // 飛行就緒（QGC「Ready To Fly」同源訊號）
   ready?: boolean | null;   // null＝判斷依據未到齊（§0.2b：不知道，非未就緒）
   not_ready_reasons?: string[];

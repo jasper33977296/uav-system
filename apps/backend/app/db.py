@@ -131,6 +131,27 @@ async def migrate() -> None:
     # 而遙測在開始後 10 秒就斷了）
     await pool.execute(
         "ALTER TABLE flight_sessions ADD COLUMN IF NOT EXISTS end_reason TEXT")
+    # ── B 層：失明區間本身是一筆記錄 ───────────────────────────
+    # 「我們沒看到的那段」原本是一個空洞，事後完全看不出來——回放會把缺口
+    # 兩端的軌跡直接連起來，**那條直線是畫出來的謊**。把它變成一等公民：
+    # 回放畫成斷點、架次摘要說得出「本趟有 N 秒沒有資料」
+    await pool.execute("""CREATE TABLE IF NOT EXISTS blackouts (
+        id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+        drone_id UUID NOT NULL REFERENCES drones(id) ON DELETE CASCADE,
+        session_id UUID REFERENCES flight_sessions(id) ON DELETE SET NULL,
+        started_at TIMESTAMPTZ NOT NULL,
+        ended_at TIMESTAMPTZ,
+        reason TEXT NOT NULL,
+        armed_at_start BOOLEAN,
+        recovered_by TEXT)""")
+    await pool.execute(
+        "CREATE INDEX IF NOT EXISTS idx_blackouts_drone_time "
+        "ON blackouts (drone_id, started_at DESC)")
+    # 補傳進來的遙測要標記出來（C 層）：它的時間戳是機上的，可能與地面站有
+    # 偏差，而且它不該觸發任何即時判斷。**不標的話，事後分不出哪些是後補的**
+    await pool.execute(
+        "ALTER TABLE telemetry ADD COLUMN IF NOT EXISTS backfilled BOOLEAN "
+        "NOT NULL DEFAULT false")
     # 架次來源分類（'research'/'test'/'unknown'）：測試殘留混研究庫的治理（PM 定案：
     # 標記不刪除）。預設 NULL＝未定＝API 視為 'unknown'（誠實：不確定就說不確定）。
     # 回填見 scripts/backfill-session-origin.sql；前向由 create_session 依觸發 client 標。
@@ -624,3 +645,44 @@ async def bump_event(event_id: int, detail: dict) -> dict | None:
     return {"id": event_id, "time": row["time"].isoformat(), "detail": detail}
 
 
+
+
+# ── B 層：失明區間 ──────────────────────────────────────────────────────
+
+async def blackout_open(drone_id: str, session_id: str | None, reason: str,
+                        armed: bool | None, started_at=None) -> str | None:
+    """開一筆失明記錄。回傳 id（開不了回 None——記錄失敗不該拖垮資料路徑）。
+
+    `started_at` 給**最後一次收到資料的時間**，不是「發現失聯的時間」——
+    兩者差一個逾時門檻，而那段時間我們其實也沒有資料。
+    """
+    try:
+        row = await pool.fetchrow(
+            "INSERT INTO blackouts (drone_id, session_id, started_at, reason, "
+            "armed_at_start) VALUES ($1::uuid, $2::uuid, "
+            "coalesce($3, now()), $4, $5) RETURNING id::text AS id",
+            drone_id, session_id, started_at, reason, armed)
+        return row["id"]
+    except Exception:
+        log.exception("失明記錄開啟失敗（不影響資料路徑）")
+        return None
+
+
+async def blackout_close(blackout_id: str, recovered_by: str) -> None:
+    """收一筆失明記錄。`recovered_by`：telemetry_resumed／backfilled／giving_up。"""
+    try:
+        await pool.execute(
+            "UPDATE blackouts SET ended_at = now(), recovered_by = $2 "
+            "WHERE id = $1::uuid AND ended_at IS NULL",
+            blackout_id, recovered_by)
+    except Exception:
+        log.exception("失明記錄收尾失敗（不影響資料路徑）")
+
+
+async def blackouts_for_session(session_id: str) -> list[dict]:
+    rows = await pool.fetch(
+        "SELECT id::text AS id, started_at, ended_at, reason, armed_at_start, "
+        "recovered_by, extract(epoch FROM coalesce(ended_at, now()) - started_at) "
+        "AS seconds FROM blackouts WHERE session_id = $1::uuid ORDER BY started_at",
+        session_id)
+    return [dict(r) for r in rows]

@@ -12,6 +12,7 @@ import { useEffect, useRef, useState } from "react";
 import EventModal from "@/components/EventModal";
 import { evText } from "@/lib/evtext";
 import { classifySinr } from "@/lib/signal";
+import { ageText, staleLevel, staleStyle } from "@/lib/staleness";
 import { useUavStore } from "@/lib/store";
 
 const BAR_LEVEL: Record<string, number> = { good: 4, warning: 3, serious: 2, critical: 1 };
@@ -230,6 +231,9 @@ export default function SimpleHud() {
     prevClsRef.current = clsKey;
   }, [clsKey]);
   const droneLost = !!live && !live.connected;
+  // A 層：畫面上那些數字有多舊。**這個判斷要作用在數值本身**，
+  // 不是只在旁邊掛一個標籤
+  const lv = staleLevel(live?.telem_age_s);
   // link_age_s > 5s＝失聯預警（warn；connected=false 才是硬斷言 danger）
   const ageStale = !!live && live.connected && (live.link_age_s ?? 0) > 5;
   const gpsBad = !!live && live.connected && live.gps_fix != null && live.gps_fix < 3;
@@ -307,16 +311,39 @@ export default function SimpleHud() {
         </div>
       )}
 
-      <div className="hud-bottom">
+      {/* **常駐的舊資料橫幅**（A 層）。原本只有一個 10 秒的 toast 說「顯示的
+          是最後已知位置」——toast 消失之後，畫面上那些數字看起來又像即時的了。
+          這條不會消失，因為它描述的是**畫面現在的性質**，不是一個事件。 */}
+      {lv === "old" && (
+        <div className="hud-stale">
+          ⚠ 這些是**最後已知**的數值，{ageText(live?.telem_age_s)}——不是現在的狀態
+        </div>
+      )}
+
+      <div className="hud-bottom" style={staleStyle(live?.telem_age_s)}>
+        {/* 過期時**數值本身要被拿掉**，不是只變灰：一個灰色的「1 m」還是
+            一個高度，人讀到的仍然是「它在 1 公尺」。要讓人讀不到那個數字，
+            才會去看時間 */}
         {live?.alt_rel != null && (
-          <span className="hud-item" title="高度">▲<span className="hud-num">{live.alt_rel.toFixed(0)}m</span></span>
+          <span className="hud-item" title={lv === "old"
+            ? `最後已知高度 ${live.alt_rel.toFixed(0)}m（${ageText(live.telem_age_s)}）`
+            : "高度"}>▲<span className="hud-num">
+            {lv === "old" ? "—" : `${live.alt_rel.toFixed(0)}m`}</span></span>
         )}
         {live?.ground_speed != null && (
-          <span className="hud-item" title="速度">→<span className="hud-num">{live.ground_speed.toFixed(1)}</span></span>
+          <span className="hud-item" title={lv === "old" ? "資料過舊" : "速度"}>
+            →<span className="hud-num">
+            {lv === "old" ? "—" : live.ground_speed.toFixed(1)}</span></span>
         )}
-        <SignalBars sinr={live?.link?.sinr} lost={!wsConnected || droneLost}
+        <SignalBars sinr={lv === "old" ? undefined : live?.link?.sinr}
+          lost={!wsConnected || droneLost}
           onOpen={() => setPanelOpen(true)} />
-        <Battery pct={live?.battery_pct} />
+        <Battery pct={lv === "old" ? undefined : live?.battery_pct} />
+        {lv === "stale" && (
+          <span className="hud-item" title="這些數值的年齡">
+            <span className="hud-num" style={{ fontSize: "0.8em" }}>
+              {ageText(live?.telem_age_s)}</span></span>
+        )}
       </div>
       {/* 事件列已移右側 EventsCard（使用者修訂）——底部全寬列移除 */}
     </>

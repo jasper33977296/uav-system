@@ -304,6 +304,7 @@ class MavlinkRx:
 
         ent["seen"] = time.monotonic()
         st = ent["state"]
+        st.telem_seen_mono = ent["seen"]      # A 層：畫面上那些數字的年齡
         st.connected = True
         st.ever_connected = True
         msg_registry.record(st, msg)     # 014-B：每則訊息進該機登錄表（型別分派前）
