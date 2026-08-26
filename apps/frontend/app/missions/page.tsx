@@ -4,7 +4,7 @@ import { useCallback, useEffect, useRef, useState } from "react";
 
 import { colorFor } from "@/components/droneLayer";
 import MissionThumb3D from "@/components/MissionThumb3D";
-import { getJson } from "@/lib/fetchJson";
+import { errText, getJson } from "@/lib/fetchJson";
 import { parseJsonb } from "@/lib/jsonb";
 import { API } from "@/lib/signal";
 
@@ -235,7 +235,7 @@ export default function Missions() {
     try {
       const res = await fetch(`${API}${path}`, init);
       const body = await res.json().catch(() => null);
-      if (!res.ok) setErr(body?.detail ?? `失敗（${res.status}）`);
+      if (!res.ok) setErr(errText(body?.detail, `失敗（${res.status}）`));
       else {
         // 讀回的任務同樣要出預檢報告：機上那份可能違反現行圍欄/高度上限，
         // 回應裡帶了 check 卻不顯示＝把已知問題藏起來（上傳 .plan 有顯示，
@@ -278,7 +278,7 @@ export default function Missions() {
         }),
       });
       const body = await res.json();
-      if (!res.ok) setErr(body.detail ?? `失敗（${res.status}）`);
+      if (!res.ok) setErr(errText(body.detail, `失敗（${res.status}）`));
       else { setReport(body.check ?? null); reload(); }
     } catch (e) {
       setErr(String(e));

@@ -650,13 +650,19 @@ class MissionIn(BaseModel):
     #: 自己的事**——沒有它就只能拿系統預設值去量，而那個值只對一個場地成立
     fence: dict | None = None
     #: QGC 的 plannedHomePosition [lat, lon, alt]。RTL 沒有座標，少了它
-    #: 返航那一段畫不出來；它也是距離量測該用的原點
-    home: list[float] | None = None
+    #: 返航那一段畫不出來；它也是距離量測該用的原點。
+    #:
+    #: **元素允許 null**：QGC 在沒有地形資料時把高度寫成 null
+    #: （`[24.77, 121.04, null]`）。原本宣告成 list[float] 於是整份 .plan 被
+    #: 422 擋下——而我們只用得到 lat/lon，高度從來沒讀過。**為了一個用不到的
+    #: 欄位拒收一份合法的航線**，是驗證訂得比需求嚴。
+    home: list[float | None] | None = None
     #: .plan 宣告的速度（cruiseSpeed／hoverSpeed），用來估預計時間
     cruise_speed: float | None = None
     hover_speed: float | None = None
-    #: QGC 的 rallyPoints.points（[[lat, lon, alt], …]）：緊急備降點
-    rally: list[list[float]] | None = None
+    #: QGC 的 rallyPoints.points（[[lat, lon, alt], …]）：緊急備降點。
+    #: 元素同樣允許 null（理由見 home）
+    rally: list[list[float | None]] | None = None
 
 
 async def _store_mission(name: str, source: str, wps: list[dict],

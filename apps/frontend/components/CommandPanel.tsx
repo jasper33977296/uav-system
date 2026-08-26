@@ -347,6 +347,27 @@ export default function CommandPanel() {
       .then((ms: Mission[]) => setMissions(ms)).catch(() => {});
   }, []);
 
+  // 機上現在載的是哪一份任務。**四個任務動作全部是相對於它的**——不知道
+  // 現在載的是什麼，按哪一顆都是猜的。跟著遙測輪詢重取，因為上傳／改航線
+  // 都會改變它
+  // sid 是字串（給 URL 用），這裡比對的是數字欄位——**兩邊型別不同**，
+  // 直接 === 永遠是 false 而且不會有任何錯誤訊息，只會安靜地永遠找不到
+  const sysidNum = live?.mav_sysid ?? null;
+  const [onboardId, setOnboardId] = useState<string | null>(null);
+  useEffect(() => {
+    if (sysidNum == null) return;
+    let dead = false;
+    const pull = () => fetch(`${API}/api/drones`).then((r) => r.json())
+      .then((ds: { mav_sysid?: number | null; current_mission_id?: string | null }[]) => {
+        if (dead) return;
+        const d = ds.find((x) => x.mav_sysid === sysidNum);
+        setOnboardId(d?.current_mission_id ?? null);
+      }).catch(() => {});
+    pull();
+    const t = setInterval(pull, 5000);
+    return () => { dead = true; clearInterval(t); };
+  }, [sysidNum]);
+
   // ── 飛行中改航線（狀態機文件 §6.3）──────────────────────────
   // 兩段式：先取提案（**不動飛機**）給人看，人確認後才執行三步序列。
   // **hook 必須放在下面那兩個早退之前**：放在後面的話，health 還是 null 的
@@ -365,6 +386,16 @@ export default function CommandPanel() {
   const sid = live?.mav_sysid != null ? String(live.mav_sysid) : null;
   const dh = sid ? health.drones[sid] ?? null : null;
   const armed = dh?.armed ?? null;
+  // ── 任務區要用的三個判斷（2026-08-26）───────────────────────
+  // **「在空中」全檔案共用同一個判準**（landed_state 或高度）——兩套判準
+  // 會在邊界上互相矛盾，而這裡決定的是「顯示哪一組按鈕」
+  const airborne = live?.landed_state === "in_air" || (live?.alt_rel ?? 0) > 2;
+  // 模式判斷一律用 mode_verb（廠牌無關），不比對原廠模式名
+  const inMission = live?.mode_verb === "mission";
+  const holding = live?.mode_verb === "hold";
+  // 機上現在載的是哪一份。**不知道就說不知道**：本系統沒上傳過的機（別的
+  // GCS 傳的、或從機上讀回的）這個欄位是空的，那時候顯示任何名字都是猜的
+  const onboardName = missions.find((m) => m.id === onboardId)?.name ?? null;
   const noChannel = !!live && live.mav_sysid == null;
   const unseen = !!sid && !dh;      // 有 sysid 但 command 服務還沒看到心跳
 
@@ -840,44 +871,72 @@ export default function CommandPanel() {
           )}
 
           {!observeOnly && !noChannel && !unseen && !!dh && (<>
+          {/* ── 任務區（2026-08-26 重排）─────────────────────────────
+              **按操作員想做的事分組，不是按端點分組。** 原本一排是
+              上傳／起飛→任務／啟動任務、另一排是解鎖／懸停／降落——那是
+              實作的形狀，不是「我現在要幹嘛」的形狀。四件事：
+              上傳任務、開始任務、中斷任務、更換任務。
+
+              而且**先講機上現在是哪一份**：這四個動作全部是相對於它的，
+              不知道現在載的是什麼，按哪一顆都是猜的。 */}
           <div className="cmd-sec">任務</div>
+          <div className="hint-line">
+            機上目前：{onboardName
+              ? <b>{onboardName}</b>
+              : <span style={{ opacity: 0.6 }}>不知道（本系統沒上傳過，
+                  或是別的 GCS 傳的）</span>}
+            {inMission && "・執行中"}
+            {holding && "・已暫停"}
+          </div>
           <div className="cmd-row">
             <select value={missionId} onChange={(e) => setMissionId(e.target.value)}>
               <option value="">選擇任務⋯</option>
               {missions.map((m) =>
                       <option key={m.id} value={m.id}>{missionLabel(m)}</option>)}
             </select>
-            {btn("上傳", "上傳", "/mission/upload",
-                 { disabled: !missionId, body: { mission_id: missionId },
-                   cap: "mission_upload", accent: true })}
-            {/* **飛行中改航線只在空中出現**（狀態機文件 §6.3）：地面上傳是
-                存檔，不需要三步序列；而確認框要保持稀有才有意義——每次上傳
-                都跳確認，會訓練人閉著眼睛按，然後空中那次也照按 */}
-            {/* 「在空中」用與返航鈕同一個判準（landed_state 或高度），
-                不要另立一套——兩套判準會在邊界上互相矛盾 */}
-            {(live?.landed_state === "in_air" || (live?.alt_rel ?? 0) > 2) && (
+          </div>
+
+          {/* 地面：上傳 → 開始。**空中不顯示上傳**——那是狀態機文件 §3-A
+              列為最高優先的危害（上傳在空中是立即生效的航線變更），而且
+              後端的守門也會擋。按了才知道不行，不如一開始就換成正確的入口 */}
+          {!airborne && (
+            <div className="cmd-row">
+              {btn("上傳", "① 上傳到機", "/mission/upload",
+                   { disabled: !missionId, body: { mission_id: missionId },
+                     cap: "mission_upload", accent: true })}
+              <label className="cmd-alt">起飛高度
+                <input type="number" min={3} max={100} step={1} value={alt}
+                  onChange={(e) => setAlt(Number(e.target.value) || 10)} /> m
+              </label>
+              {btn("起飛→任務", "② 開始任務（起飛→執行）", "/mission/fly",
+                   { confirm: true, cap: "mission_fly",
+                     body: { mission_id: missionId || undefined, takeoff_alt: alt } })}
+            </div>
+          )}
+
+          {/* 空中：中斷／繼續／更換。**三顆按當下狀態亮**——飛行中不給
+              「繼續」、暫停中不給「中斷」，那兩顆按下去只會被守門擋回來 */}
+          {airborne && (
+            <div className="cmd-row">
+              {inMission && btn("中斷任務", "⏸ 中斷任務（原地懸停）",
+                                "/mode/hold", { cap: "hold" })}
+              {holding && btn("繼續任務", "▶ 繼續任務", "/mode/mission",
+                              { confirm: true, cap: "mission_start" })}
               <button className="btn-plain btn-sm"
                 disabled={!missionId || busy !== null}
-                title="機在空中時改航線：先看系統打算怎麼調整，確認後才執行"
+                title="飛行中換一份航線：先看系統打算怎麼調整（暫停→上傳→從最近的航點續飛），確認後才執行"
                 onClick={() => proposeChangeRoute()}>
-                {busy === "改航線" ? "⋯" : "改航線⋯"}
+                {busy === "改航線" ? "⋯" : "⇄ 更換任務⋯"}
               </button>
-            )}
-          </div>
-          {/* 起飛→任務：實戰教訓——地面直接啟動任務會失敗，須先到高度。
-              一鍵序列：解鎖→起飛→等高度到達→切 MISSION */}
-          <div className="cmd-row">
-            <label className="cmd-alt">高度
-              <input type="number" min={3} max={100} step={1} value={alt}
-                onChange={(e) => setAlt(Number(e.target.value) || 10)} /> m
-            </label>
-            {btn("起飛→任務", "起飛→任務", "/mission/fly",
-                 { confirm: true, cap: "mission_fly",
-                   body: { mission_id: missionId || undefined, takeoff_alt: alt } })}
-            {btn("啟動任務", "啟動任務", "/mission/start",
-                 { confirm: true, cap: "mission_start" })}
-          </div>
-          {capHints(["mission_upload", "mission_fly", "mission_start"])}
+            </div>
+          )}
+          {airborne && !inMission && !holding && (
+            <div className="hint-line">
+              目前不在任務模式（{live?.flight_mode ?? "模式未知"}）——
+              飛手可能拿著遙控器。系統此時只觀察不介入。
+            </div>
+          )}
+          {capHints(["mission_upload", "mission_fly", "mission_start", "hold"])}
 
           {/* 起飛/返航住標題列主按鈕（單一住所），這裡只留其餘飛行操作 */}
           <div className="cmd-sec">飛行</div>

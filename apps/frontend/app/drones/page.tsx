@@ -5,7 +5,7 @@ import { useCallback, useEffect, useState } from "react";
 import ConfirmModal from "@/components/ConfirmModal";
 import { Battery, SignalBars } from "@/components/SimpleHud";
 import { buildNeedsNotice, buildNoticeText } from "@/lib/buildInfo";
-import { getJson } from "@/lib/fetchJson";
+import { errText, getJson } from "@/lib/fetchJson";
 import { parseJsonb } from "@/lib/jsonb";
 import { API } from "@/lib/signal";
 import { AgentState, useUavStore } from "@/lib/store";
@@ -133,7 +133,7 @@ export default function Drones() {
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify(body),
     });
-    if (!res.ok) setErr((await res.json()).detail ?? `${what}失敗`);
+    if (!res.ok) setErr(errText((await res.json()).detail, `${what}失敗`));
     reload();
   }
 
@@ -143,7 +143,7 @@ export default function Drones() {
     setErr(null);
     const res = await fetch(`${API}/api/drones/${d.id}`, { method: "DELETE" });
     if (!res.ok) {
-      setErr((await res.json()).detail ?? `刪除失敗（${res.status}）`);
+      setErr(errText((await res.json()).detail, `刪除失敗（${res.status}）`));
       return;
     }
     reload();
@@ -261,7 +261,7 @@ export default function Drones() {
                     headers: { "Content-Type": "application/json" },
                     body: JSON.stringify({ video_url: v === "http://" ? "" : v }),
                   });
-                  if (!res.ok) setErr((await res.json()).detail ?? "設定失敗");
+                  if (!res.ok) setErr(errText((await res.json()).detail, "設定失敗"));
                   reload();
                 }}>影像{d.video_url ? " ✓" : ""}</button>{" "}
               {!d.is_primary && (
@@ -270,7 +270,7 @@ export default function Drones() {
                   onClick={async () => {
                     const res = await fetch(`${API}/api/drones/${d.id}/primary`,
                       { method: "POST" });
-                    if (!res.ok) setErr((await res.json()).detail ?? "切換失敗");
+                    if (!res.ok) setErr(errText((await res.json()).detail, "切換失敗"));
                     reload();
                   }}>設為主機</button>
               )}{" "}

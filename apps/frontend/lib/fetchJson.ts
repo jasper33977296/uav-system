@@ -27,3 +27,35 @@ export async function getJson<T = unknown>(url: string, init?: RequestInit): Pro
   if (!r.ok) throw new HttpError(r.status, url);
   return (await r.json()) as T;
 }
+
+/** HTTP 錯誤回應的 `detail` → **一定是字串**。
+ *
+ * **為什麼需要這個**：FastAPI 的 422（欄位驗證失敗）回的 `detail` 是一個
+ * **物件陣列**，不是字串。前端各處都寫 `setErr(body.detail)` 然後 `{err}`
+ * 丟進 JSX——React 遇到物件會拋 "Objects are not valid as a React child"，
+ * 整頁白畫面。2026-08-26 實際發生：一份 QGC 的 .plan 因為
+ * `plannedHomePosition` 的高度是 null 而被擋下，使用者看到的不是「這個欄位
+ * 不合法」，是**前端整個崩潰**。
+ *
+ * 錯誤處理本身把畫面弄壞，比原本那個錯誤嚴重得多。
+ */
+export function errText(detail: unknown, fallback: string): string {
+  if (detail == null) return fallback;
+  if (typeof detail === "string") return detail;
+  if (Array.isArray(detail)) {
+    // FastAPI 422：[{loc: [...], msg: "...", type: "..."}]
+    const parts = detail.map((d: any) => {
+      if (typeof d === "string") return d;
+      const loc = Array.isArray(d?.loc) ? d.loc.filter(
+        (x: unknown) => x !== "body").join(".") : "";
+      return loc ? `${loc}：${d?.msg ?? JSON.stringify(d)}` : (d?.msg ?? JSON.stringify(d));
+    });
+    return parts.join("；") || fallback;
+  }
+  if (typeof detail === "object") {
+    const d = detail as Record<string, unknown>;
+    if (typeof d.msg === "string") return d.msg;
+    return JSON.stringify(detail);
+  }
+  return String(detail);
+}
