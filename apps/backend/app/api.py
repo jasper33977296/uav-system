@@ -655,6 +655,8 @@ class MissionIn(BaseModel):
     #: .plan 宣告的速度（cruiseSpeed／hoverSpeed），用來估預計時間
     cruise_speed: float | None = None
     hover_speed: float | None = None
+    #: QGC 的 rallyPoints.points（[[lat, lon, alt], …]）：緊急備降點
+    rally: list[list[float]] | None = None
 
 
 async def _store_mission(name: str, source: str, wps: list[dict],
@@ -663,17 +665,19 @@ async def _store_mission(name: str, source: str, wps: list[dict],
                          fence: dict | None = None,
                          home: list[float] | None = None,
                          cruise: float | None = None,
-                         hover: float | None = None) -> str:
+                         hover: float | None = None,
+                         rally: list | None = None) -> str:
     async with db.pool.acquire() as con:
         async with con.transaction():
             row = await con.fetchrow(
                 "INSERT INTO missions (name, created_by, kind, firmware_type, "
-                "vehicle_type, fence, home, cruise_speed, hover_speed) "
-                "VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9) RETURNING id",
+                "vehicle_type, fence, home, cruise_speed, hover_speed, rally) "
+                "VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10) RETURNING id",
                 name, source, "from-vehicle" if source == "vehicle" else "imported",
                 firmware_type, vehicle_type,
                 jdumps(fence) if fence else None,
-                jdumps(home) if home else None, cruise, hover)
+                jdumps(home) if home else None, cruise, hover,
+                jdumps(rally) if rally else None)
             await con.executemany(
                 """INSERT INTO waypoints (mission_id, seq, lat, lon, alt, action, params)
                    VALUES ($1, $2, $3, $4, $5, $6, $7)""",
@@ -732,7 +736,7 @@ async def list_missions():
 @router.get("/missions/active")
 async def active_mission():
     row = await db.pool.fetchrow(
-        "SELECT id, name, home FROM missions WHERE is_active LIMIT 1")
+        "SELECT id, name, home, fence, rally FROM missions WHERE is_active LIMIT 1")
     if row is None:
         raise HTTPException(404, "沒有啟用中的路徑")
     wps = await db.pool.fetch(
@@ -743,7 +747,12 @@ async def active_mission():
         home = json.loads(home)
     # **返航那一段要畫得出來**：RTL 沒有座標（它的意思是「回到 home」），
     # 少了 home，畫面上航線就停在最後一個航點，看起來像規劃到一半
+    def _j(v):
+        return json.loads(v) if isinstance(v, str) else v
+    # **圍欄與備降點也要畫**：QGC 畫得出來、我們畫不出來，兩邊的圖就不一樣
+    # ——而使用者是拿這張圖來確認「機會怎麼飛」的（2026-08-26 回報）
     return {"id": str(row["id"]), "name": row["name"], "home": home,
+            "fence": _j(row["fence"]), "rally": _j(row["rally"]),
             "waypoints": [dict(w) for w in wps]}
 
 
@@ -764,7 +773,7 @@ async def save_mission(m: MissionIn):
     wps = [w.model_dump() for w in m.waypoints]
     mid = await _store_mission(m.name, m.source, wps,
                                m.firmware_type, m.vehicle_type, m.fence, m.home,
-                               m.cruise_speed, m.hover_speed)
+                               m.cruise_speed, m.hover_speed, m.rally)
     return {"id": mid, "check": plan_check.check_waypoints(
         wps, settings.geofence_radius_m, settings.geofence_alt_m,
         settings.geofence_margin, fence=m.fence,

@@ -62,6 +62,9 @@ async def migrate() -> None:
         "ALTER TABLE missions ADD COLUMN IF NOT EXISTS cruise_speed REAL")
     await pool.execute(
         "ALTER TABLE missions ADD COLUMN IF NOT EXISTS hover_speed REAL")
+    # QGC 的 rallyPoints（緊急備降點）。**QGC 畫得出來、我們畫不出來，
+    # 兩邊的圖就不一樣**——而使用者是拿這張圖來確認「機會怎麼飛」的
+    await pool.execute("ALTER TABLE missions ADD COLUMN IF NOT EXISTS rally JSONB")
     # 039/038 兩層身分的**人工維護那層**：機架序號與型號。
     # **不動 serial_no**——它現在扛著自動註冊的冪等性（四處 ON CONFLICT），
     # 改它的語意風險不對稱：那條路徑出錯會讓每次心跳都新增一筆機。

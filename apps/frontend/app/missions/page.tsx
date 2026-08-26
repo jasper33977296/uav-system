@@ -16,6 +16,7 @@ interface Mission {
   eta_s?: number | null;
   eta_unknown?: string[];
   eta_assumptions?: string[];
+  home?: number[] | null;                  // 縮圖要用它補起飛／返航段
   // 037：這份任務是照哪一家自駕儀的語意寫的。null＝檔案沒說（手繪／舊資料）
   firmware_type: number | null; vehicle_type: number | null;
 }
@@ -112,6 +113,7 @@ interface ParsedPlan {
   home: number[] | null;                   // plannedHomePosition [lat, lon, alt]
   cruise_speed: number | null;
   hover_speed: number | null;
+  rally: number[][] | null;                // rallyPoints：緊急備降點
 }
 function parsePlan(text: string): ParsedPlan {
   const j = JSON.parse(text);
@@ -146,6 +148,9 @@ function parsePlan(text: string): ParsedPlan {
     // 速度：估預計時間用。**沒宣告就不估**，不給預設值
     cruise_speed: j?.mission?.cruiseSpeed ?? null,
     hover_speed: j?.mission?.hoverSpeed ?? null,
+    // 備降點：QGC 畫得出來、我們畫不出來，兩邊的圖就不一樣
+    rally: Array.isArray(j?.rallyPoints?.points) && j.rallyPoints.points.length
+      ? j.rallyPoints.points : null,
   };
 }
 
@@ -188,7 +193,23 @@ export default function Missions() {
       if (thumbs[m.id]) continue;
       // 縮圖取不到＝該卡無縮圖（顯性缺口，不會假裝沒事），沿用靜默 catch
       getJson<{ waypoints?: any[] }>(`${API}/api/missions/${m.id}/waypoints`)
-        .then((d) => setThumbs((t) => ({ ...t, [m.id]: d.waypoints ?? [] })))
+        .then((d) => {
+          // 縮圖也要含起飛與返航段：那兩項在 .plan 裡沒有座標（意思是
+          // 「從 home 起飛」「回 home」），照 lat/lon 過濾會讓縮圖從第一個
+          // 航點畫起——與 QGC 的圖形狀不同（2026-08-26 使用者回報）
+          const all = d.waypoints ?? [];
+          const h = m.home;
+          const pts = all.filter((w: any) => w.lat && w.lon);
+          if (!Array.isArray(h) || h.length < 2 || !(h[0] || h[1]))
+            return setThumbs((t) => ({ ...t, [m.id]: pts }));
+          const first = all.find((w: any) => w.action !== "do");
+          const out = [...pts];
+          if (first?.action === "takeoff" && !(first.lat || first.lon))
+            out.unshift({ lat: h[0], lon: h[1] });
+          if (all.some((w: any) => w.action === "rtl" || w.action === "land"))
+            out.push({ lat: h[0], lon: h[1] });
+          setThumbs((t) => ({ ...t, [m.id]: out }));
+        })
         .catch(() => {});
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -253,6 +274,7 @@ export default function Missions() {
           firmware_type: parsed.firmware_type, vehicle_type: parsed.vehicle_type,
           fence: parsed.fence, home: parsed.home,
           cruise_speed: parsed.cruise_speed, hover_speed: parsed.hover_speed,
+          rally: parsed.rally,
         }),
       });
       const body = await res.json();

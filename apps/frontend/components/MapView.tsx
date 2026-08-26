@@ -288,6 +288,23 @@ export default function MapView() {
         paint: { "circle-radius": 4, "circle-color": "transparent",
                  "circle-stroke-width": 1.5, "circle-stroke-color": "#8f8b80" },
       }, "trail-line");
+      // **圍欄與備降點**：QGC 畫得出來、我們畫不出來，兩邊的圖就不一樣——
+      // 而使用者是拿這張圖來確認「機會怎麼飛」的（2026-08-26 回報）。
+      // 含納區用實線、排除區用紅色：兩者的意思相反，用同一種樣式等於沒畫
+      map.addSource("plan-fence", { type: "geojson", data: EMPTY });
+      map.addLayer({
+        id: "plan-fence-line", type: "line", source: "plan-fence",
+        paint: {
+          "line-color": ["case", ["get", "exclude"], "#d03b3b", "#4a9d5f"],
+          "line-width": 1.5, "line-opacity": 0.9,
+        },
+      }, "trail-line");
+      map.addSource("plan-rally", { type: "geojson", data: EMPTY });
+      map.addLayer({
+        id: "plan-rally-pt", type: "circle", source: "plan-rally",
+        paint: { "circle-radius": 6, "circle-color": "transparent",
+                 "circle-stroke-width": 2, "circle-stroke-color": "#c8a44a" },
+      }, "trail-line");
 
       // ⚠ 繪製順序（§2.4c）：**計畫路徑必須在 deck overlay 之前建立**。
       // interleaved overlay 掛上時插在「當下最上層」，之後才 addLayer 的
@@ -328,20 +345,34 @@ export default function MapView() {
       const refreshPlan = async () => {
         try {
           let wps: any[] = [];
+          let planFence: any = null;
+          let planRally: any[] | null = null;
           // 沒有啟用中的航線時後端回 404——那是正常態不是錯誤（!ok 就清空
           // 疊圖）。console 會看到一則 404，不必追
           const ra = await fetch(`${API}/api/missions/active`);
           if (ra.ok) {
             const plan = await ra.json();
+            planFence = plan.fence ?? null;
+            planRally = plan.rally ?? null;
             const all = plan.waypoints ?? [];
             wps = all.filter((w: any) => w.lat && w.lon);
             // **返航那一段要畫出來**：RTL／LAND 沒有座標（它們的意思是
             // 「回到 home」），照 lat/lon 過濾會把它們整個丟掉，於是畫面上
             // 航線停在最後一個航點——看起來像規劃到一半就沒了
             // （2026-08-26 使用者回報）。用 .plan 的 plannedHomePosition 補上。
+            const h = plan.home;
+            // **起飛段也要畫**：NAV_TAKEOFF 在 ArduPilot 只需要高度，經緯度
+            // 是 0,0，於是照 lat/lon 過濾會把它丟掉——折線就從第一個航點
+            // 開始，而不是從起飛點。QGC 從 home 畫起，兩張圖因此形狀不同
+            // （2026-08-26 使用者回報）。
+            const first = all.find((w: any) => w.action !== "do");
+            if (first && first.action === "takeoff" && !(first.lat || first.lon)
+                && Array.isArray(h) && h.length >= 2 && (h[0] || h[1])) {
+              wps = [{ lat: h[0], lon: h[1], alt: first.alt ?? 0,
+                       action: "takeoff-leg" }, ...wps];
+            }
             const back = all.some((w: any) =>
               w.action === "rtl" || w.action === "land");
-            const h = plan.home;
             if (back && Array.isArray(h) && h.length >= 2 && (h[0] || h[1])
                 && wps.length) {
               const last = wps[wps.length - 1];
@@ -369,6 +400,64 @@ export default function MapView() {
                 })),
               ],
             } : EMPTY);
+          // 圍欄：含納／排除的圓與多邊形。圓用 64 邊形近似——地圖上
+          // 看不出差別，而多一個圖層型別就多一份維護
+          const fenceFeat: GeoJSON.Feature[] = [];
+          const f = planFence;
+          const ring = (lat: number, lon: number, r: number) => {
+            const pts: [number, number][] = [];
+            const dLat = r / 111320;
+            const dLon = r / (111320 * Math.cos(lat * Math.PI / 180));
+            for (let i = 0; i <= 64; i++) {
+              const a = (i / 64) * 2 * Math.PI;
+              pts.push([lon + dLon * Math.cos(a), lat + dLat * Math.sin(a)]);
+            }
+            return pts;
+          };
+          for (const [key, exclude] of [["inclusion_circles", false],
+                                        ["exclusion_circles", true]] as const) {
+            for (const c of (f?.[key] ?? []) as any[]) {
+              fenceFeat.push({ type: "Feature", properties: { exclude },
+                geometry: { type: "LineString",
+                            coordinates: ring(c.lat, c.lon, c.radius) } });
+            }
+          }
+          for (const [key, exclude] of [["inclusion_polygons", false],
+                                        ["exclusion_polygons", true]] as const) {
+            for (const poly of (f?.[key] ?? []) as any[]) {
+              const co = poly.map((v: number[]) => [v[1], v[0]]);
+              if (co.length >= 3) co.push(co[0]);   // 收口
+              fenceFeat.push({ type: "Feature", properties: { exclude },
+                geometry: { type: "LineString", coordinates: co } });
+            }
+          }
+          (map.getSource("plan-fence") as maplibregl.GeoJSONSource | undefined)
+            ?.setData({ type: "FeatureCollection", features: fenceFeat });
+          // **沒有機體座標時，把畫面帶到航線上。**
+          // 原本只有「收到第一筆遙測座標」會置中，於是 GPS 沒定位（室內、
+          // 剛開機、或機根本沒連）時，地圖停在世界預設位置 [0,20]——
+          // 航線明明載入了、圖層也建好了，畫面上卻空無一物。
+          // 使用者回報「跟 QGC 的圖不同」時，我第一次量到的就是這個：
+          // 不是畫錯，是**根本不在畫面上**。
+          const box = [...wps, ...fenceFeat.flatMap((f: any) =>
+            (f.geometry.coordinates as [number, number][]).map(
+              ([lon, lat]) => ({ lat, lon })))];
+          if (!centeredRef.current && box.length) {
+            centeredRef.current = true;
+            const lats = box.map((w: any) => w.lat), lons = box.map((w: any) => w.lon);
+            map.fitBounds(
+              [[Math.min(...lons), Math.min(...lats)],
+               [Math.max(...lons), Math.max(...lats)]],
+              { padding: 60, duration: 0, maxZoom: 18 });
+          }
+          (map.getSource("plan-rally") as maplibregl.GeoJSONSource | undefined)
+            ?.setData({
+              type: "FeatureCollection",
+              features: (planRally ?? []).map((r: number[]) => ({
+                type: "Feature" as const, properties: {},
+                geometry: { type: "Point" as const, coordinates: [r[1], r[0]] },
+              })),
+            });
         } catch { /* 無任務即空疊圖 */ }
       };
       refreshPlanRef.current = refreshPlan;
