@@ -279,16 +279,26 @@ class MavlinkRx:
             # ADDR_WARN_COOLDOWN 秒最多發一次。
             st = ent["state"]
             now = time.monotonic()
-            if now - ent.get("addr_warn_t", 0) >= ADDR_WARN_COOLDOWN:
+            # **同 IP 換 port ≠ 撞號。** 機上代理每次 5G 斷線重連都會拿到新的
+            # 來源埠——那是正常重連，不是「兩台機用同一個 sysid」。原本兩者
+            # 都發 warning，於是這條警告在本場域一天響好幾次（2026-08-26 實測
+            # 一小時內三次），而**一天到晚響的警告等於沒有警告**：真的撞號時
+            # 沒有人會多看一眼。IP 不同才是需要人介入的那一種。
+            same_host = ent["addr"][0] == addr[0]
+            if same_host:
+                log.info("sysid %d 來源埠改變 %s → %s（同一台主機，重連）",
+                         sysid, ent["addr"], addr)
+            elif now - ent.get("addr_warn_t", 0) >= ADDR_WARN_COOLDOWN:
                 ent["addr_warn_t"] = now
                 ev = await db.insert_event(
                     st.drone_id, st.session_id, "warning", "sysid_addr_change",
                     {"sysid": sysid,
-                     "note": "同 sysid 從多個來源收到——撞號或換網路，資料可能混料",
+                     "note": "同一個 sysid 從**不同主機**收到——兩台機用了同一個"
+                             "sysid，遙測會互相覆蓋。先確認機上的 SYSID 參數",
                      "from_addr": "%s:%d" % ent["addr"], "to_addr": "%s:%d" % addr})
                 ev["drone"] = st.drone_name
                 await manager.broadcast({"type": "event", "event": ev})
-                log.warning("sysid %d 來源位址改變 %s → %s（撞號？換網路？）",
+                log.warning("sysid %d 來源**主機**改變 %s → %s（撞號）",
                             sysid, ent["addr"], addr)
             ent["addr"] = addr
 

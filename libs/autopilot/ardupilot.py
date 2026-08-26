@@ -102,8 +102,16 @@ class ArduPilotDriver:
 
     # ── 模式 ────────────────────────────────────────────────────────
     def decode_mode(self, custom_mode: int) -> str:
-        if not custom_mode:
-            return "—"
+        """**ArduPilot 的 custom_mode 0 是 STABILIZE，不是「未設定」。**
+
+        這裡原本抄了 PX4 的 `if not custom_mode: return "—"`——那條對 PX4 成立
+        （它把 main/sub 模式打包在高位元組，0＝什麼都沒設），對 ArduPilot 是錯的。
+        後果不只是顯示難看：STABILIZE 正是**飛手用遙控器手飛的模式**，
+        而我們用 `mode_verb` 判斷「飛手是不是接管了」。譯成「—」時 verb 是
+        None，地面站就分不出「飛手拿著」與「不知道現在什麼模式」——
+        那是狀態機文件 §1 說「必須是顯式狀態」的那一格。
+        2026-08-26 實機看到：機在 STABILIZE，畫面顯示「—」。
+        """
         return _COPTER.get(custom_mode, f"MODE_{custom_mode}")
 
     def decode_verb(self, custom_mode: int) -> str | None:
@@ -114,9 +122,12 @@ class ArduPilotDriver:
         ArduPilot 叫 LOITER（UI/UX 2026-08-12 要求）。
 
         用 `mode_matches` 反查而不是另外維護一份反向表——兩份表一定會漂移。
+
+        **這裡沒有 `if not custom_mode` 的捷徑**（PX4 那份有，因為它的 0 是
+        「未設定」）。ArduPilot 的 0 是 STABILIZE，它本來就不在動詞表裡，
+        所以走迴圈一樣回 None——但**不要留一份「0＝什麼都不是」的假設在
+        ArduPilot 的檔案裡**，那正是上面 decode_mode 踩過的坑。
         """
-        if not custom_mode:
-            return None
         for verb in self.modes:
             if self.mode_matches(custom_mode, verb):
                 return verb
