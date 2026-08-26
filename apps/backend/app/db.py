@@ -125,6 +125,12 @@ async def migrate() -> None:
         "ALTER TABLE group_assignments ADD COLUMN IF NOT EXISTS updated_at TIMESTAMPTZ")
     # 架次自訂備註（使用者要標實驗條件，如「開干擾器那趟」）：短文字，PATCH 可改
     await pool.execute("ALTER TABLE flight_sessions ADD COLUMN IF NOT EXISTS note TEXT")
+    # 架次為什麼結束。**「上鎖」與「我們看不到它了」是兩件事**：後者代表
+    # 這筆記錄在那一刻之後就沒有資料，飛機可能還飛了很久。不分開的話，
+    # 事後看架次會以為那趟飛行就是那麼長（2026-08-26：一筆架次開著 2.5 小時，
+    # 而遙測在開始後 10 秒就斷了）
+    await pool.execute(
+        "ALTER TABLE flight_sessions ADD COLUMN IF NOT EXISTS end_reason TEXT")
     # 架次來源分類（'research'/'test'/'unknown'）：測試殘留混研究庫的治理（PM 定案：
     # 標記不刪除）。預設 NULL＝未定＝API 視為 'unknown'（誠實：不確定就說不確定）。
     # 回填見 scripts/backfill-session-origin.sql；前向由 create_session 依觸發 client 標。
@@ -411,8 +417,12 @@ async def create_session(drone_id: str, link_mission: bool = True,
     return str(row["id"])
 
 
-async def end_session(session_id: str) -> None:
-    """關閉架次並統計本次的飛行與鏈路摘要（干擾研究常看的統計先算好）。"""
+async def end_session(session_id: str, reason: str = "disarmed") -> None:
+    """關閉架次並統計本次的飛行與鏈路摘要（干擾研究常看的統計先算好）。
+
+    `reason`：`disarmed`＝看到機體上鎖（正常結束）；`telemetry_lost`＝**我們
+    看不到它了**。後者不代表飛行結束——飛機可能還飛了很久，只是我們沒有資料。
+    """
     summary = await pool.fetchrow(
         """
         SELECT
@@ -426,9 +436,17 @@ async def end_session(session_id: str) -> None:
         """,
         session_id,
     )
+    # **失去遙測時，結束時間用最後一筆資料的時間**，不是「現在」。
+    # 用 now() 會讓架次長度包含我們什麼都沒看到的那一大段——那不是飛行時間，
+    # 是我們的失明時間。兩者混在一起，事後的架次統計全部失真
+    ended = "now()" if reason == "disarmed" else (
+        "coalesce((SELECT max(time) FROM telemetry WHERE session_id = $1), now())")
     await pool.execute(
-        "UPDATE flight_sessions SET ended_at = now(), summary = $2 WHERE id = $1",
-        session_id, jdumps({k: (float(v) if v is not None else None) if k not in ("samples_in_zone", "samples_total") else int(v or 0) for k, v in dict(summary).items()}),
+        f"UPDATE flight_sessions SET ended_at = {ended}, summary = $2, "
+        "end_reason = $3 WHERE id = $1",
+        session_id,
+        jdumps({k: (float(v) if v is not None else None) if k not in ("samples_in_zone", "samples_total") else int(v or 0) for k, v in dict(summary).items()}),
+        reason,
     )
 
 

@@ -1,5 +1,6 @@
 import asyncio
 import logging
+import time
 from contextlib import asynccontextmanager
 
 from fastapi import FastAPI, WebSocket, WebSocketDisconnect
@@ -15,6 +16,50 @@ from .ws import manager
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(name)s %(message)s")
 log = logging.getLogger("main")
+
+
+#: 失去遙測多久就把架次收掉。**遠大於 5G 抖動、遠小於一趟飛行**——
+#: 本場域實測抖動是數十秒等級，所以 90 秒不會把一趟飛行切成好幾段；
+#: 而讓架次無限開著的代價是系統在捏造一趟還在進行的飛行
+#: （2026-08-26：一筆架次開了 2.5 小時，遙測在開始後 10 秒就斷了）
+SESSION_LOST_S = 90.0
+
+
+async def _close_orphan_sessions() -> None:
+    """機不見了就把架次收掉——**「上鎖」與「我們看不到它了」是兩件事**。
+
+    架次原本只在看到 `armed → not armed` 時結束。機體在 armed 狀態下消失
+    （5G 斷、Pi 掛、電池拔掉）時那個轉換永遠不會來，架次就永遠開著：
+    畫面顯示「進行中」、機卡顯示飛行中、統計持續累積一趟早就結束的飛行。
+
+    **收掉時記 `end_reason='telemetry_lost'`**：那不代表飛行結束，只代表
+    我們的資料在那裡斷了。兩者混在一起，事後看架次會以為那趟就是那麼長。
+    """
+    now = time.monotonic()
+    for st in list(fleet.values()):
+        if not st.session_id or st.connected:
+            continue
+        seen = getattr(st, "_lost_since", None)
+        if seen is None:
+            st._lost_since = now
+            continue
+        if now - seen < SESSION_LOST_S:
+            continue
+        sid, st.session_id, st.armed = st.session_id, None, False
+        st._lost_since = None
+        log.warning("架次 %s 因失去遙測而收尾（%s，已 %.0f 秒沒有資料）",
+                    sid, st.drone_name, now - seen)
+        try:
+            await db.end_session(sid, reason="telemetry_lost")
+            ev = await db.insert_event(
+                st.drone_id, sid, "warning", "session_orphaned",
+                {"note": "機體在 armed 狀態下失去遙測，架次已收尾。"
+                         "**這不代表飛行結束**——飛機可能還在飛，只是我們沒有資料",
+                 "silent_s": round(now - seen)})
+            ev["drone"] = st.drone_name
+            await manager.broadcast({"type": "event", "event": ev})
+        except Exception:
+            log.exception("架次收尾失敗")
 
 
 async def _link_and_db_loop() -> None:
@@ -52,6 +97,7 @@ async def _link_and_db_loop() -> None:
         await asyncio.sleep(1.0 / settings.db_write_hz)
         if mavlink_rx.rx:
             mavlink_rx.rx.refresh_connected()     # 逾時未見訊息 → 失聯標記
+            await _close_orphan_sessions()
         for st in list(fleet.values()):
             if st.lat is None or st.lon is None:
                 continue

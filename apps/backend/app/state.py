@@ -110,6 +110,9 @@ class LiveState:
     # 鏈路狀態機的狀態（ok / degraded / lost）。放在這裡是因為模擬與真機兩條路徑
     # 都要用它——模擬走 _link_and_db_loop，真機走 /api/link-metrics/live。
     link_state: str = "ok"
+    #: 失去遙測是從哪一刻開始（monotonic）。架次收尾的寬限期用它算，
+    #: None＝目前沒有失聯
+    _lost_since: float | None = None
 
     # 最後一次收到鏈路量測的時刻（monotonic clock，不受系統時間調整影響）。
     # 真機的即時通道會靜默失敗，前端需要據此顯示「已失聯 N 秒」——
@@ -118,6 +121,19 @@ class LiveState:
 
     def mark_link_seen(self) -> None:
         self.link_seen_mono = _time.monotonic()
+
+    def _link_state_now(self) -> str:
+        """鏈路狀態要跟著資料年齡走。模擬路徑另有 SINR 分級的狀態機
+        （link_events.transition），那時 link_state 已經是新鮮的判斷；
+        真機路徑沒有那條，就用年齡說話——**不知道多久沒資料時不說 ok**。"""
+        age = self.link_age_s
+        if age is None:
+            return "unknown"
+        if age > 30:
+            return "lost"
+        if age > 5:
+            return "stale"
+        return self.link_state
 
     @property
     def link_age_s(self) -> float | None:
@@ -202,7 +218,11 @@ class LiveState:
             "link": self.link,
             # 錄影現況（022 §2.9 記錄燈說明用）：無進行中架次＝None
             "video_mode": self.video_mode,
-            "link_state": self.link_state,
+            # **link_state 不能在資料過期時還說 ok。** 它原本只在模擬路徑上
+            # 由 link_transition 更新，真機路徑設一次「ok」就再也不動——
+            # 2026-08-26 看到 link_state=ok 配 link_age_s=9169（2.5 小時）。
+            # 一個說「正常」、一個說「兩個半小時沒資料」，**同一份回應自相矛盾**
+            "link_state": self._link_state_now(),
             "link_age_s": self.link_age_s,   # None = 從未收到；大於門檻 = 失聯
         }
 
