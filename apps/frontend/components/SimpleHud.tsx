@@ -74,12 +74,39 @@ export function EventsCard() {
   const mixed = useUavStore((s) => new Set(Object.values(s.fleet)
     .filter((t) => t.connected && t.autopilot).map((t) => t.autopilot)).size >= 2);
   const [src, setSrc] = useState<"all" | "vehicle" | "system">("all");
+  // **事件流分機**（使用者指示 2026-08-26）：多機時所有機的事件擠在同一條
+  // 時間軸上，要判讀「這台機發生了什麼」得先在腦子裡把別台的濾掉——而事件
+  // 流存在的理由就是回答那個問題。
+  //
+  // 預設跟著「選中機」走（側欄／地圖點誰就看誰），與畫面其餘部分同一個對象；
+  // 想看全部再切「全機」。**單機時整排不出現**——只有一台機時「分機」是
+  // 沒有意義的選擇，多一顆按鈕只是多一個要理解的東西
+  const fleet = useUavStore((s) => s.fleet);
+  const selectedId = useUavStore((s) => s.selectedId);
+  const live = useUavStore((s) => s.live);
+  const [scope, setScope] = useState<"selected" | "all">("selected");
+  // fleet 裡的機都是**收過遙測**才進來的（見 store.setLive），所以不必再濾
+  const knownDrones = Object.entries(fleet)
+    .map(([id, t]) => ({ id, name: t.drone_name ?? id.slice(0, 6) }));
+  const multi = knownDrones.length >= 2;
+  const focusId = selectedId ?? live?.drone_id ?? null;
+  const focusName = knownDrones.find((d) => d.id === focusId)?.name ?? null;
   // 事件詳情 modal（§2.7）：單一 modal、新點替換；存 id 不存物件——
   // fold 就地更新時 modal 跟著長 ×N
   const [openEvId, setOpenEvId] = useState<number | null>(null);
   const openEv = events.find((e) => e.id === openEvId);
-  const shown = events.filter((e) =>
-    src === "all" || (src === "vehicle" ? e.source === "vehicle" : e.source !== "vehicle"));
+  const shown = events.filter((e) => {
+    if (!(src === "all"
+          || (src === "vehicle" ? e.source === "vehicle" : e.source !== "vehicle")))
+      return false;
+    if (!multi || scope === "all" || !focusId) return true;
+    // **來源不明的事件不藏**：REST 補歷史那條路徑帶 drone_id、WS 帶名字，
+    // 兩者都沒有的（系統層事件）不屬於任何一台機。分機檢視時把它們濾掉，
+    // 等於讓「系統剛剛說了什麼」在多機環境下消失——那是最不該被藏的一類
+    if (e.drone_id == null && e.drone == null) return true;
+    return e.drone_id === focusId
+      || (e.drone != null && e.drone === focusName);
+  });
   const evTime = (t: string) =>
     new Date(t).toLocaleTimeString("zh-TW", { hour12: false });
   // 014 字典版本旗標（§2.7 c）：unknown 用次要文字色而非警告色——那是我方
@@ -98,6 +125,20 @@ export function EventsCard() {
         {dictUnknownAll && (
           <span className="ev-dictnote">未能確認字典版本與機上韌體相符</span>
         )}
+        {/* 分機切換擺在來源篩選**前面**：先問「看哪一台」再問「看哪一類」，
+            那是判讀的順序。單機時整排不出現 */}
+        {multi && (
+          <span className="ev-filter">
+            <button className={scope === "selected" ? "on" : ""}
+              title={focusName ? `只看「${focusName}」的事件` : "只看選中機的事件"}
+              onClick={() => setScope("selected")}>
+              {focusName ?? "選中機"}
+            </button>
+            <button className={scope === "all" ? "on" : ""}
+              title="所有機的事件混在同一條時間軸"
+              onClick={() => setScope("all")}>全機</button>
+          </span>
+        )}
         <span className="ev-filter">
           {([["all", "全部"], ["vehicle", "機上訊息"], ["system", "系統"]] as const)
             .map(([k, label]) => (
@@ -110,7 +151,14 @@ export function EventsCard() {
         {/* 空事件流有兩個成因：真的沒事件、或我方取不到。同形而語意相反——
             前者說「沒有異常發生」，後者只能說「我不知道」（§0.2e） */}
         {shown.length === 0 && (
-          <div className="empty">{eventsFailed ? "無法取得事件" : "尚無事件"}</div>
+          // 空事件流的三個成因要分開講：取不到、這台機沒事件、真的沒事件。
+          // **「這台機沒事件」不等於「沒有異常發生」**——別台可能正在出事
+          <div className="empty">
+            {eventsFailed ? "無法取得事件"
+              : multi && scope === "selected"
+                ? `「${focusName ?? "選中機"}」尚無事件（其他機可能有，切「全機」看）`
+                : "尚無事件"}
+          </div>
         )}
         {shown.map((e) => {
           const count = (e.type === "statustext" || e.type === "vehicle_event")
