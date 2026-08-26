@@ -47,6 +47,10 @@ async def migrate() -> None:
     # 038：飛控板的唯一 ID（AUTOPILOT_VERSION.uid2）。**目前唯一機器可驗證的
     # 身分**——sysid 只是機上可改的參數。NULL＝還沒問到（不是「沒有」）
     await pool.execute("ALTER TABLE drones ADD COLUMN IF NOT EXISTS board_uid TEXT")
+    # 航線自帶的圍欄（QGC .plan 的 geoFence）。**圍欄是每份航線自己的事**，
+    # 不是系統的全域設定——測繪任務與定點巡檢的合理範圍可以差一個數量級。
+    # NULL＝這份 .plan 沒畫圍欄（退回系統預設，而且報告會說出用的是哪一個）
+    await pool.execute("ALTER TABLE missions ADD COLUMN IF NOT EXISTS fence JSONB")
     # 039/038 兩層身分的**人工維護那層**：機架序號與型號。
     # **不動 serial_no**——它現在扛著自動註冊的冪等性（四處 ON CONFLICT），
     # 改它的語意風險不對稱：那條路徑出錯會讓每次心跳都新增一筆機。

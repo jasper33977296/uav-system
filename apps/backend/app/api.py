@@ -643,18 +643,23 @@ class MissionIn(BaseModel):
     # 不填＝這份任務沒說（手繪、舊資料、從機上讀回）。
     firmware_type: int | None = None
     vehicle_type: int | None = None
+    #: 航線自帶的圍欄（前端從 .plan 的 geoFence 解出來）。**圍欄是每份航線
+    #: 自己的事**——沒有它就只能拿系統預設值去量，而那個值只對一個場地成立
+    fence: dict | None = None
 
 
 async def _store_mission(name: str, source: str, wps: list[dict],
                          firmware_type: int | None = None,
-                         vehicle_type: int | None = None) -> str:
+                         vehicle_type: int | None = None,
+                         fence: dict | None = None) -> str:
     async with db.pool.acquire() as con:
         async with con.transaction():
             row = await con.fetchrow(
                 "INSERT INTO missions (name, created_by, kind, firmware_type, "
-                "vehicle_type) VALUES ($1, $2, $3, $4, $5) RETURNING id",
+                "vehicle_type, fence) VALUES ($1, $2, $3, $4, $5, $6) RETURNING id",
                 name, source, "from-vehicle" if source == "vehicle" else "imported",
-                firmware_type, vehicle_type)
+                firmware_type, vehicle_type,
+                jdumps(fence) if fence else None)
             await con.executemany(
                 """INSERT INTO waypoints (mission_id, seq, lat, lon, alt, action, params)
                    VALUES ($1, $2, $3, $4, $5, $6, $7)""",
@@ -708,10 +713,10 @@ async def save_mission(m: MissionIn):
     可放草稿；真正的擋門在 command 服務上傳到機那一步。"""
     wps = [w.model_dump() for w in m.waypoints]
     mid = await _store_mission(m.name, m.source, wps,
-                               m.firmware_type, m.vehicle_type)
+                               m.firmware_type, m.vehicle_type, m.fence)
     return {"id": mid, "check": plan_check.check_waypoints(
         wps, settings.geofence_radius_m, settings.geofence_alt_m,
-        settings.geofence_margin)}
+        settings.geofence_margin, fence=m.fence)}
 
 
 @router.post("/missions/from-vehicle")

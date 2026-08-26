@@ -31,6 +31,29 @@ const VT_NAMES: Record<number, string> = {
  *
  * 這與 §0.2e「不知道≠不行」不衝突——那條說的是不要把「不知道」畫成「不行」，
  * 不是叫我們不要講「不知道」。 */
+/** QGC geoFence → 本系統的形狀。只取**含納**（inclusion）的圓與多邊形——
+ * 那是「只准在裡面飛」的邊界；排除區是另一回事，一併帶著給後端查。
+ * 沒有可用的圍欄回 null（＝這份航線沒宣告，後端會退回系統預設並說出來）。 */
+function parseFence(gf: any): Record<string, unknown> | null {
+  const incC: unknown[] = [], excC: unknown[] = [];
+  const incP: unknown[] = [], excP: unknown[] = [];
+  for (const c of gf?.circles ?? []) {
+    const ctr = c?.circle?.center, r = c?.circle?.radius;
+    if (!Array.isArray(ctr) || ctr.length < 2 || !r) continue;
+    (c.inclusion !== false ? incC : excC).push(
+      { lat: ctr[0], lon: ctr[1], radius: Number(r) });
+  }
+  for (const p of gf?.polygons ?? []) {
+    const pts = (p?.polygon ?? []).filter((v: unknown) =>
+      Array.isArray(v) && v.length >= 2).map((v: number[]) => [v[0], v[1]]);
+    if (pts.length < 3) continue;
+    (p.inclusion !== false ? incP : excP).push(pts);
+  }
+  if (!incC.length && !excC.length && !incP.length && !excP.length) return null;
+  return { inclusion_circles: incC, exclusion_circles: excC,
+           inclusion_polygons: incP, exclusion_polygons: excP };
+}
+
 function planTarget(m: Mission): { text: string; declared: boolean } {
   const ap = m.firmware_type == null ? null
     : (AP_NAMES[m.firmware_type] ?? `firmware ${m.firmware_type}`);
@@ -44,6 +67,9 @@ function planTarget(m: Mission): { text: string; declared: boolean } {
 interface PlanCheck {
   ok: boolean; problems: string[]; warnings: string[];
   max_dist_m: number; fence_r: number; fence_alt: number;
+  //: 量測用的是哪一份圍欄。**同一句「超出圍欄」在兩種來源下處置完全不同**：
+  //: plan＝這份航線宣告了邊界而你超出；default＝這份沒宣告，我拿系統預設在量
+  fence_source?: "plan" | "default";
 }
 interface Sess {
   id: string; drone_id: string; drone_name: string; mission_id: string | null;
@@ -67,6 +93,7 @@ interface ParsedPlan {
   wps: PlanWp[];
   firmware_type: number | null;
   vehicle_type: number | null;
+  fence: Record<string, unknown> | null;   // .plan 自帶的 geoFence
 }
 function parsePlan(text: string): ParsedPlan {
   const j = JSON.parse(text);
@@ -90,6 +117,10 @@ function parsePlan(text: string): ParsedPlan {
     wps: out,
     firmware_type: j?.mission?.firmwareType ?? null,
     vehicle_type: j?.mission?.vehicleType ?? null,
+    // **圍欄跟著航線走**：QGC 的 .plan 本來就帶 geoFence，讀它就好。
+    // 系統預設值是「這套系統只在一個場地飛」才成立的假設，而測繪任務與
+    // 定點巡檢的合理範圍可以差一個數量級
+    fence: parseFence(j?.geoFence),
   };
 }
 
@@ -176,6 +207,7 @@ export default function Missions() {
           // 機種一起送：航點的 frame 與 params 是照哪一家的語意寫的，
           // 只有這兩個欄位說得出來（issues/037）
           firmware_type: parsed.firmware_type, vehicle_type: parsed.vehicle_type,
+          fence: parsed.fence,
         }),
       });
       const body = await res.json();
@@ -195,7 +227,17 @@ export default function Missions() {
         <div className="plan-report">
           {report.ok && report.warnings.length === 0 && (
             <div className="ok">✅ 幾何預檢通過（最遠航點 {report.max_dist_m} m／
-              圍欄 {report.fence_r} m）</div>
+              {report.fence_source === "plan"
+                ? "圍欄用這份航線自帶的"
+                : `圍欄 ${report.fence_r} m，來自系統預設——這份 .plan 沒畫 geoFence`}）
+            </div>
+          )}
+          {report.fence_source === "default" && !report.ok && (
+            <div className="warn">
+              ⚠️ 這份 .plan 沒有 geoFence，上面的圍欄判定用的是**系統預設值**
+              （{report.fence_r} m／{report.fence_alt} m）。要讓判定貼合實際場地，
+              在 QGC 的 Plan 頁畫一個 GeoFence 再存檔——圍欄是每份航線自己的事。
+            </div>
           )}
           {report.problems.map((p, i) => (
             <div className="bad" key={`p${i}`}>❌ {p}</div>

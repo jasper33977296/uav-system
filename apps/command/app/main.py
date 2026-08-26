@@ -759,7 +759,7 @@ async def mission_upload(sysid: int, body: UploadIn):
     if not rows:
         raise HTTPException(404, "任務不存在或沒有航點")
     meta = await pool.fetchrow(
-        "SELECT firmware_type, vehicle_type FROM missions WHERE id = $1",
+        "SELECT firmware_type, vehicle_type, fence FROM missions WHERE id = $1",
         body.mission_id)
     wps = []
     for r in rows:
@@ -770,9 +770,14 @@ async def mission_upload(sysid: int, body: UploadIn):
         wps.append(w)
     # 幾何預檢：報告一律附在回應與留痕；GEOFENCE_ENFORCE=true 才擋
     # （預設不擋——2026-08-10 使用者決定；空中防線是 PX4 自己的 Geofence）
+    # 圍欄用**這份航線自己宣告的**（存在 missions.fence，來自 .plan 的
+    # geoFence）；沒宣告才退回系統預設，而報告會說出用的是哪一個
+    mf = meta["fence"] if meta else None
+    if isinstance(mf, str):
+        mf = json.loads(mf)
     report = plan_check.check_waypoints(
         wps, settings.geofence_radius_m, settings.geofence_alt_m,
-        settings.geofence_margin)
+        settings.geofence_margin, fence=mf)
     # 機種不符：併進**既有的 warnings**而不是自成一個欄位——前端已經會顯示
     # 這份報告，多開一個欄位就多一個可能沒人接的顯示點（issues/037）。
     # 併進 warnings 不影響 `ok`，所以不會意外觸發 GEOFENCE_ENFORCE 的擋門。
