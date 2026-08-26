@@ -11,6 +11,11 @@ import { API } from "@/lib/signal";
 interface Mission {
   id: string; name: string; source: string | null;
   created_at: string; is_active: boolean; waypoint_count: number;
+  //: 預計飛行時間（秒）。**null＝算不出來**，eta_unknown 說明為什麼——
+  //: 不給預設速度，因為使用者會拿這個數字去安排電池
+  eta_s?: number | null;
+  eta_unknown?: string[];
+  eta_assumptions?: string[];
   // 037：這份任務是照哪一家自駕儀的語意寫的。null＝檔案沒說（手繪／舊資料）
   firmware_type: number | null; vehicle_type: number | null;
 }
@@ -52,6 +57,15 @@ function parseFence(gf: any): Record<string, unknown> | null {
   if (!incC.length && !excC.length && !incP.length && !excP.length) return null;
   return { inclusion_circles: incC, exclusion_circles: excC,
            inclusion_polygons: incP, exclusion_polygons: excP };
+}
+
+/** 秒 → 人看的長度。**算不出來就說算不出來**，不要顯示「0 分」——
+ * 那會被讀成「這條航線很短」而不是「我不知道」。 */
+function etaText(m: Mission): string {
+  if (m.eta_s == null) return "時間未知";
+  const t = Math.round(m.eta_s);
+  const mm = Math.floor(t / 60), ss = t % 60;
+  return mm ? `約 ${mm} 分 ${String(ss).padStart(2, "0")} 秒` : `約 ${ss} 秒`;
 }
 
 function planTarget(m: Mission): { text: string; declared: boolean } {
@@ -96,6 +110,8 @@ interface ParsedPlan {
   vehicle_type: number | null;
   fence: Record<string, unknown> | null;   // .plan 自帶的 geoFence
   home: number[] | null;                   // plannedHomePosition [lat, lon, alt]
+  cruise_speed: number | null;
+  hover_speed: number | null;
 }
 function parsePlan(text: string): ParsedPlan {
   const j = JSON.parse(text);
@@ -127,6 +143,9 @@ function parsePlan(text: string): ParsedPlan {
     // 在畫面上畫不出來，使用者會以為航線在最後一個航點就結束了
     home: Array.isArray(j?.mission?.plannedHomePosition)
       ? j.mission.plannedHomePosition : null,
+    // 速度：估預計時間用。**沒宣告就不估**，不給預設值
+    cruise_speed: j?.mission?.cruiseSpeed ?? null,
+    hover_speed: j?.mission?.hoverSpeed ?? null,
   };
 }
 
@@ -140,16 +159,21 @@ export default function Missions() {
   // **每次點開一份航線就重檢一次**，不是只在匯入的那一刻檢查一次。
   // 匯入時看到的報告會隨畫面關掉就消失，而使用者是在**要飛之前**才需要它；
   // 而且圍欄的系統預設值可能在匯入之後被改過，那時舊報告就是過期的。
-  const [openCheck, setOpenCheck] = useState<PlanCheck | "loading" | null>(null);
+  // **報告只有一個顯示點**（頁面最上方）。上傳完的報告與點開卡片的報告
+  // 各自顯示一次時，同一份航線的同一句話會在畫面上出現兩遍——重複的訊息
+  // 會讓人開始略過它們，而這是唯一會說「這份不能飛」的地方
+  const [report, setReport] =
+    useState<PlanCheck | "loading" | "failed" | null>(null);
+  const [reportOf, setReportOf] = useState<string | null>(null);   // 這份報告在講誰
   useEffect(() => {
-    if (!openId) { setOpenCheck(null); return; }
+    if (!openId) return;
     let dead = false;
-    setOpenCheck("loading");
+    setReport("loading"); setReportOf(openId);
     getJson<PlanCheck>(`${API}/api/missions/${openId}/check`)
-      .then((c) => { if (!dead) setOpenCheck(c); })
+      .then((c) => { if (!dead) setReport(c); })
       // 取不到就說取不到——**空白會被讀成「檢查過了、沒問題」**，
       // 而那是這份報告最不能給錯的方向
-      .catch(() => { if (!dead) setOpenCheck(null); });
+      .catch(() => { if (!dead) setReport("failed"); });
     return () => { dead = true; };
   }, [openId]);
   const [menuId, setMenuId] = useState<string | null>(null);
@@ -205,7 +229,6 @@ export default function Missions() {
     }
   }
 
-  const [report, setReport] = useState<PlanCheck | null>(null);
 
   async function uploadPlan(f: File) {
     setErr(null); setReport(null);
@@ -229,6 +252,7 @@ export default function Missions() {
           // 只有這兩個欄位說得出來（issues/037）
           firmware_type: parsed.firmware_type, vehicle_type: parsed.vehicle_type,
           fence: parsed.fence, home: parsed.home,
+          cruise_speed: parsed.cruise_speed, hover_speed: parsed.hover_speed,
         }),
       });
       const body = await res.json();
@@ -244,8 +268,23 @@ export default function Missions() {
   return (
     <div className="page-pad">
       {err && <div className="form-err">{err}</div>}
-      {report && (
+      {report === "loading" && <div className="plan-report">檢查中⋯</div>}
+      {report === "failed" && (
         <div className="plan-report">
+          <div className="bad">
+            取不到這份航線的預檢結果——**不是「沒問題」**，是沒檢查到
+          </div>
+        </div>
+      )}
+      {report && report !== "loading" && report !== "failed" && (
+        <div className="plan-report">
+          {/* **報告要指名在講誰**：它是點卡片換內容的，不寫清楚就會出現
+              「看著 A 的卡片、讀著 B 的報告」 */}
+          {reportOf && (
+            <div className="hint-line">
+              「{missions.find((m) => m.id === reportOf)?.name ?? "—"}」的幾何預檢
+            </div>
+          )}
           {report.ok && report.warnings.length === 0 && (
             <div className="ok">✅ 幾何預檢通過（最遠航點 {report.max_dist_m} m
               {report.max_alt_m != null && `／最高 ${report.max_alt_m} m`}
@@ -290,6 +329,17 @@ export default function Missions() {
               </div>
               <div className="mcard-chips">
                 {m.is_active && <span className="chip on-chip">顯示中</span>}
+                {/* 預計時間：**估計值，不是承諾**——tooltip 攤開估了什麼、
+                    沒估什麼（不含風、不含加減速）。算不出來時說「時間未知」
+                    而不是顯示 0 分，後者會被讀成「這條航線很短」 */}
+                <span className="chip"
+                  style={m.eta_s == null ? { opacity: 0.5 } : undefined}
+                  title={m.eta_s == null
+                    ? (m.eta_unknown ?? []).join("；") || "算不出預計時間"
+                    : "預計飛行時間（估計值）：\n"
+                      + (m.eta_assumptions ?? []).map((a) => "· " + a).join("\n")}>
+                  {etaText(m)}
+                </span>
                   {/* 目標機種：選檔當下就看得到這份航線是給誰寫的。
                       沒宣告時**照樣顯示一顆弱化的膠囊**說「未宣告」——留白會被
                       讀成「還沒載入」或「這版沒這功能」（issues/037 二修） */}
@@ -368,29 +418,9 @@ export default function Missions() {
           const m = missions.find((x) => x.id === openId);
           return (
             <div style={{ marginTop: 12 }}>
-              {/* 幾何預檢：**每次點開重算**。放在展開區的最上面，因為它是
-                  「這份能不能飛」的答案，比使用紀錄更該先看到 */}
-              {openCheck === "loading" && (
-                <div className="hint-line">檢查中⋯</div>
-              )}
-              {openCheck === null && openId && (
-                <div className="form-err">
-                  取不到這份航線的預檢結果——**不是「沒問題」**，是沒檢查到
-                </div>
-              )}
-              {openCheck && openCheck !== "loading" && (
-                <div className="plan-report" style={{ marginBottom: 10 }}>
-                  {openCheck.ok && openCheck.warnings.length === 0 && (
-                    <div className="ok">✅ 幾何預檢通過（最遠航點 {openCheck.max_dist_m} m
-                      {openCheck.max_alt_m != null && `／最高 ${openCheck.max_alt_m} m`}
-                      {openCheck.fence_source === "plan" && "／圍欄用這份航線自帶的"}）</div>
-                  )}
-                  {openCheck.problems.map((p, i) =>
-                    <div className="bad" key={`op${i}`}>❌ {p}</div>)}
-                  {openCheck.warnings.map((w, i) =>
-                    <div className="warn" key={`ow${i}`}>⚠️ {w}</div>)}
-                </div>
-              )}
+              {/* 預檢報告在**頁面最上方**，不在這裡——同一份航線的同一句話
+                  出現兩遍，會讓人開始略過它們，而那是唯一會說「這份不能飛」
+                  的地方（2026-08-26 使用者回報重複） */}
               <div className="drone-head">
                 <span className="meta">「{m?.name}」被使用 {mine.length} 次</span>
                 {/* 哪幾台無人機用過（識別色點＋名） */}

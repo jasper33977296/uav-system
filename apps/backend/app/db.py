@@ -56,6 +56,12 @@ async def migrate() -> None:
     # 使用者會以為航線在最後一個航點就結束了（2026-08-26 使用者回報）。
     # 它同時也是距離量測該用的原點：起飛項在很多 .plan 裡是 0,0
     await pool.execute("ALTER TABLE missions ADD COLUMN IF NOT EXISTS home JSONB")
+    # .plan 宣告的速度，用來估預計時間。**沒宣告就不估**（不給預設值——
+    # 猜一個看起來合理的數字，使用者會拿它安排電池）
+    await pool.execute(
+        "ALTER TABLE missions ADD COLUMN IF NOT EXISTS cruise_speed REAL")
+    await pool.execute(
+        "ALTER TABLE missions ADD COLUMN IF NOT EXISTS hover_speed REAL")
     # 039/038 兩層身分的**人工維護那層**：機架序號與型號。
     # **不動 serial_no**——它現在扛著自動註冊的冪等性（四處 ON CONFLICT），
     # 改它的語意風險不對稱：那條路徑出錯會讓每次心跳都新增一筆機。

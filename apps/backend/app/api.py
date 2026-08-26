@@ -8,7 +8,8 @@ from pydantic import BaseModel, Field, field_validator
 
 import logging
 
-import plan_check          # libs/ 的共用實作（PYTHONPATH=/srv/libs）
+import mission_time        # libs/ 的共用實作（PYTHONPATH=/srv/libs）
+import plan_check
 
 from . import agent_link, db, groups, mavlink_rx
 from .config import settings
@@ -651,23 +652,28 @@ class MissionIn(BaseModel):
     #: QGC 的 plannedHomePosition [lat, lon, alt]。RTL 沒有座標，少了它
     #: 返航那一段畫不出來；它也是距離量測該用的原點
     home: list[float] | None = None
+    #: .plan 宣告的速度（cruiseSpeed／hoverSpeed），用來估預計時間
+    cruise_speed: float | None = None
+    hover_speed: float | None = None
 
 
 async def _store_mission(name: str, source: str, wps: list[dict],
                          firmware_type: int | None = None,
                          vehicle_type: int | None = None,
                          fence: dict | None = None,
-                         home: list[float] | None = None) -> str:
+                         home: list[float] | None = None,
+                         cruise: float | None = None,
+                         hover: float | None = None) -> str:
     async with db.pool.acquire() as con:
         async with con.transaction():
             row = await con.fetchrow(
                 "INSERT INTO missions (name, created_by, kind, firmware_type, "
-                "vehicle_type, fence, home) VALUES ($1, $2, $3, $4, $5, $6, $7) "
-                "RETURNING id",
+                "vehicle_type, fence, home, cruise_speed, hover_speed) "
+                "VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9) RETURNING id",
                 name, source, "from-vehicle" if source == "vehicle" else "imported",
                 firmware_type, vehicle_type,
                 jdumps(fence) if fence else None,
-                jdumps(home) if home else None)
+                jdumps(home) if home else None, cruise, hover)
             await con.executemany(
                 """INSERT INTO waypoints (mission_id, seq, lat, lon, alt, action, params)
                    VALUES ($1, $2, $3, $4, $5, $6, $7)""",
@@ -686,12 +692,41 @@ async def list_missions():
     # materialized 任務、不是任務庫草稿，會污染一般任務清單 UI（issue 013-B 前端回報）。
     rows = await db.pool.fetch("""
         SELECT m.id, m.name, m.created_by AS source, m.created_at, m.is_active,
-               m.firmware_type, m.vehicle_type,
+               m.firmware_type, m.vehicle_type, m.home,
+               m.cruise_speed, m.hover_speed,
                count(w.seq) AS waypoint_count
         FROM missions m LEFT JOIN waypoints w ON w.mission_id = m.id
         WHERE m.kind IS DISTINCT FROM 'generated'
         GROUP BY m.id ORDER BY m.created_at DESC""")
-    return [dict(r) for r in rows]
+    out = [dict(r) for r in rows]
+    if not out:
+        return out
+    # 預計時間：**一次撈完所有航點再算**，不要一份一份查（N+1）。
+    # 算不出來時 eta_s 是 null 並附上 eta_unknown 說明為什麼——
+    # 不給預設速度，因為使用者會拿這個數字去安排電池
+    ids = [r["id"] for r in out]
+    wrows = await db.pool.fetch(
+        "SELECT mission_id, seq, lat, lon, alt, action, params FROM waypoints "
+        "WHERE mission_id = ANY($1::uuid[]) ORDER BY mission_id, seq", ids)
+    by_mission: dict = {}
+    for r in wrows:
+        w = dict(r)
+        pm = w.get("params")
+        pm = json.loads(pm) if isinstance(pm, str) else (pm or {})
+        w.update({k: pm.get(k) for k in ("command", "frame", "p1", "p2")})
+        by_mission.setdefault(w["mission_id"], []).append(w)
+    for d in out:
+        home = d.get("home")
+        if isinstance(home, str):
+            home = json.loads(home)
+        d["home"] = home
+        est = mission_time.estimate(
+            by_mission.get(d["id"], []), d.get("cruise_speed"),
+            d.get("hover_speed"), home)
+        d["eta_s"] = est["seconds"]
+        d["eta_unknown"] = est["unknown"]
+        d["eta_assumptions"] = est["assumptions"]
+    return out
 
 
 @router.get("/missions/active")
@@ -728,7 +763,8 @@ async def save_mission(m: MissionIn):
     可放草稿；真正的擋門在 command 服務上傳到機那一步。"""
     wps = [w.model_dump() for w in m.waypoints]
     mid = await _store_mission(m.name, m.source, wps,
-                               m.firmware_type, m.vehicle_type, m.fence, m.home)
+                               m.firmware_type, m.vehicle_type, m.fence, m.home,
+                               m.cruise_speed, m.hover_speed)
     return {"id": mid, "check": plan_check.check_waypoints(
         wps, settings.geofence_radius_m, settings.geofence_alt_m,
         settings.geofence_margin, fence=m.fence,

@@ -21,8 +21,10 @@ import json
 import logging
 import time
 
+from fastapi import HTTPException
+
 from . import capabilities as caps
-from . import mav
+from . import guard_client, mav
 
 log = logging.getLogger("command.group")
 
@@ -94,7 +96,23 @@ class GroupExecutor:
     async def _submit_audited(self, sysid: int, action: str, fn, *args,
                               timeout: float = 35.0):
         """逐台指令＋留痕（指令史是實驗記錄的一部分）。群組執行器的每台
-        upload/arm/takeoff/mode 都寫 command_log，失敗一樣留痕、可事後追軌跡。"""
+        upload/arm/takeoff/mode 都寫 command_log，失敗一樣留痕、可事後追軌跡。
+
+        **守門也走這裡**（2026-08-26 補）：原本這條路直接呼叫底層 MAVLink，
+        完全繞過機上守門——同一個危險操作，用單機介面會被擋、用群組介面
+        直接執行，而多機的風險本來就更高（一次動好幾台）。
+
+        守門是**逐台問**的：編隊裡每台機的狀態可能不同（一台還在地上、
+        一台已經在飛），拿其中一台的判決套用到全部，就等於沒問。
+        """
+        try:
+            await guard_client.ask_guard(sysid, action)
+        except HTTPException as e:
+            detail = e.detail if isinstance(e.detail, str) else \
+                (e.detail or {}).get("msg", str(e.detail))
+            await self._audit(sysid, f"group:{action}", {},
+                              "rejected_guard", str(detail)[:400])
+            raise
         try:
             res = await self._submit(fn, sysid, *args, timeout=timeout)
         except Exception as e:

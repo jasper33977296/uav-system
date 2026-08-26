@@ -34,7 +34,7 @@ _client_var: contextvars.ContextVar = contextvars.ContextVar("client", default=N
 from . import capabilities as caps
 import plan_check          # libs/ 的共用實作（PYTHONPATH=/srv/libs）
 
-from . import group_exec, mav, plans
+from . import group_exec, guard_client, mav, plans
 from .config import settings
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(name)s %(message)s")
@@ -174,6 +174,8 @@ async def lifespan(app):
     router = mav.MavRouter(settings.command_mavlink_url,
                            heartbeat=settings.enable_commands)
     router.start()
+    # 守門客戶端要拿到同一個 router 與 pool（它有兩個呼叫端：本檔與 group_exec）
+    guard_client.bind(router, pool)
     executor = group_exec.GroupExecutor(router, pool, build_items, _audit)
     log.info("command 服務啟動：%s（enable_commands=%s，sysid=%d）",
              settings.command_mavlink_url, settings.enable_commands, mav.GCS_SYSID)
@@ -270,6 +272,10 @@ async def arm(sysid: int, intent: str | None = None):
 @app.post("/api/command/{sysid}/disarm")
 async def disarm(sysid: int):
     _require_enabled(); _require_capability(sysid, "disarm")
+    # **空中上鎖＝馬達停轉、飛機直接掉下來**——那不是「停止」，是墜毀。
+    # 守門只在機體確定在地上時放行；真的要緊急切斷動力用遙控器（那是本系統
+    # 設計裡人接管的那一層，而且它不經過我們）
+    await guard_client.ask_guard(sysid, "disarm")
     return await _run(sysid, "disarm", mav.job_command, 400, [0.0])
 
 
@@ -281,20 +287,20 @@ async def set_mode(sysid: int, mode: str, skip_guard: bool = False):
     # skip_guard 只給**改航線序列內部**用：那條序列整體已經過守門，
     # 序列中的每一步再問一次會被守門用「已經在 hold 了」擋下自己
     if not skip_guard:
-        await _ask_guard(sysid, f"mode:{mode}")
+        await guard_client.ask_guard(sysid, f"mode:{mode}")
     return await _run(sysid, f"mode:{mode}", mav.job_set_mode, mode)
 
 
 @app.post("/api/command/{sysid}/mission/start")
 async def mission_start(sysid: int):
     _require_enabled(); _require_capability(sysid, "mission_start")
-    await _ask_guard(sysid, "mission_start")
+    await guard_client.ask_guard(sysid, "mission_start")
     res = await _run(sysid, "mission_start", mav.job_command, 300, [0.0])
     # 啟動的是**機上現有**的任務，所以要查這台機現在綁的是哪一份
     mid = await pool.fetchval(
         "SELECT current_mission_id::text FROM drones WHERE mav_sysid = $1", sysid)
     if mid:
-        await _show_on_live(sysid, mid, "任務已啟動")
+        await guard_client.show_on_live(sysid, mid, "任務已啟動")
     return res
 
 
@@ -368,7 +374,7 @@ async def mission_fly(sysid: int, body: FlyIn):
     （PX4 起飛後自動懸停），並回報卡在哪一步。
     """
     _require_enabled(); _require_capability(sysid, "mission_fly")
-    await _ask_guard(sysid, "mission_fly")
+    await guard_client.ask_guard(sysid, "mission_fly")
     steps = {}
     if body.mission_id:
         steps["upload"] = await mission_upload(sysid, UploadIn(mission_id=body.mission_id))
@@ -403,7 +409,7 @@ async def mission_fly(sysid: int, body: FlyIn):
     mid = body.mission_id or await pool.fetchval(
         "SELECT current_mission_id::text FROM drones WHERE mav_sysid = $1", sysid)
     if mid:
-        await _show_on_live(sysid, mid, "起飛→任務")
+        await guard_client.show_on_live(sysid, mid, "起飛→任務")
     return {"ok": True, "steps": steps}
 
 
@@ -506,96 +512,6 @@ async def mission_goto(sysid: int, body: GotoIn):
                       params={"index": body.index})
 
 
-#: 指令服務的動作 → 意圖名（丙案：守門在代理，執行在這裡）
-_INTENT_OF = {
-    "mode:hold": "pause", "mode:mission": "resume",
-    "mission_start": "start_mission", "mission_fly": "start_mission",
-    "change_route": "change_route",
-}
-
-
-async def _ask_guard(sysid: int, action: str, intent_id: str | None = None,
-                     params: dict | None = None, kind: str = "intent"):
-    """執行前先問機上守門（協定 §5.2、丙案分工）。
-
-    **為什麼問在這裡而不是前端**：守門只在前端問的話它就不是守門——前端可以
-    不問，而且還有別的呼叫端（驗收 rig、MCP、curl）。要擋得住，就得擋在真的
-    會動到飛機的那條路上。
-
-    三種結果，**「不知道」歸到「不行」那一側**：
-    * `cleared`／`no_agent` → 放行（沒有代理的機沿用原本的檢查）
-    * `refused` → 擋下，理由原樣轉給操作員
-    * `unknown`（逾時、斷線）→ **擋下**。不知道守門怎麼說，在飛安路徑上就是不行
-    """
-    intent = _INTENT_OF.get(action)
-    if intent is None:
-        return None                       # 這個動作不在守門範圍（如 arm/upload）
-    uid = (router.drones.get(sysid) or {}).get("board_uid") if router else None
-    body = json.dumps({"kind": kind, "action": intent,
-                       "intent_id": intent_id,
-                       "board_uid": uid, "params": params,
-                       "drone_id": await _drone_id_of(sysid)}).encode()
-    loop = asyncio.get_running_loop()
-
-    def _post():
-        req = urllib.request.Request(
-            f"{settings.backend_api}/api/agent/intent", data=body,
-            method="POST", headers={"Content-Type": "application/json"})
-        with urllib.request.urlopen(req, timeout=6) as r:
-            return json.loads(r.read().decode())
-    try:
-        res = await loop.run_in_executor(None, _post)
-    except Exception as e:
-        # 問不到守門服務本身（backend 掛了）。**不擋**——守門是額外一層，
-        # 讓它的故障變成飛行操作的故障，是把可靠度往下拉而不是往上
-        log.warning("問不到守門（%s），沿用本地檢查", e)
-        return None
-    v = res.get("verdict")
-    if v in ("cleared", "no_agent", None):
-        return res
-    if v == "unknown":
-        raise HTTPException(409, {
-            "msg": f"問不到機上守門的判決（{res.get('reason')}）——"
-                   "不知道不等於可以，這個操作先擋下",
-            "code": "guard_unknown"})
-    raise HTTPException(409, {
-        "msg": f"機上守門擋下：{res.get('reason')}",
-        "code": "guard_refused", "state": res.get("state")})
-
-
-async def _show_on_live(sysid: int, mission_id: str, why: str) -> None:
-    """把這份航線推到即時畫面上，並在事件流留一筆。
-
-    **為什麼上傳完就要顯示**：上傳的那一刻起，機上的航線就是這一份了——
-    而即時頁上畫的如果還是別份（或什麼都沒有），畫面與飛機的事實就對不上。
-    改航線確認後同理，而且那一次更重要：使用者剛剛才決定要換成這一條。
-
-    失敗不擋指令：顯示是輔助，上傳已經成功的事不該因為畫面沒更新而回報失敗。
-    """
-    loop = asyncio.get_running_loop()
-
-    def _post():
-        q = urllib.parse.urlencode({"why": why, "sysid": sysid})
-        req = urllib.request.Request(
-            f"{settings.backend_api}/api/missions/{mission_id}/show?{q}",
-            data=b"", method="POST",
-            headers={"Content-Type": "application/json"})
-        try:
-            urllib.request.urlopen(req, timeout=4).read()
-        except Exception as e:
-            log.warning("即時畫面更新失敗：%s", e)
-    try:
-        await loop.run_in_executor(None, _post)
-    except Exception:
-        log.warning("即時畫面更新失敗（不影響指令）", exc_info=True)
-
-
-async def _drone_id_of(sysid: int) -> str | None:
-    row = await pool.fetchrow(
-        "SELECT id::text AS id FROM drones WHERE mav_sysid = $1", sysid)
-    return row["id"] if row else None
-
-
 async def _load_wps(mission_id: str) -> tuple[list[dict], str]:
     rows = await pool.fetch(
         "SELECT seq, lat, lon, alt, action, params FROM waypoints "
@@ -648,7 +564,7 @@ async def change_route_proposal(sysid: int, body: ChangeRouteIn):
     # **先問機上**：提案的權威在代理（狀態機文件 §0.1）——它讀飛控是微秒級，
     # 而我們手上的位置經 5G 回來已經過期。10 m/s 巡航下一次鏈路抖動就是數十
     # 公尺誤差，而「離當前位置最近的航點」正是對位置最敏感的判斷
-    res = await _ask_guard(sysid, "change_route", params={
+    res = await guard_client.ask_guard(sysid, "change_route", params={
         "wps": [{k: w[k] for k in ("seq", "lat", "lon", "alt", "action",
                                    "command") if k in w} for w in wps],
         "hold_alt": body.hold_alt, "mission_name": name,
@@ -688,7 +604,7 @@ async def change_route_exec(sysid: int, body: ChangeRouteIn):
     # **送 decision，不是把提案送回去**（協定 §4.5）：提案留在機上，
     # 所以沒有「送回來的那份跟人看到的不一樣」的空間。代理收到確認後自己
     # 重算並比對過期，守門也在那一刻再過一次（狀態可能在人看提案時變了）
-    res = await _ask_guard(sysid, "change_route", intent_id=body.intent_id,
+    res = await guard_client.ask_guard(sysid, "change_route", intent_id=body.intent_id,
                            kind="decision", params={"approved": True})
     if res is None or res.get("verdict") == "no_agent":
         raise HTTPException(409, {
@@ -711,7 +627,7 @@ async def change_route_exec(sysid: int, body: ChangeRouteIn):
         """把每一步回報給機上（協定 §4.6）。**不是為了記帳**——代理要知道
         序列跑到哪一步，因為 §7 規定序列進行中失聯要立刻 RTL。"""
         try:
-            await _ask_guard(sysid, "change_route", intent_id=body.intent_id,
+            await guard_client.ask_guard(sysid, "change_route", intent_id=body.intent_id,
                              kind="progress",
                              params={"step": step, "ok": ok_,
                                      "detail": str(detail)[:200]})
@@ -747,7 +663,7 @@ async def change_route_exec(sysid: int, body: ChangeRouteIn):
 
     await _audit(sysid, "change_route", body.model_dump(), "ok",
                  f"續飛第 {fresh['resume_wp']['index']} 點")
-    await _show_on_live(sysid, body.mission_id,
+    await guard_client.show_on_live(sysid, body.mission_id,
                         f"改航線完成，從第 {fresh['resume_wp']['index']} 點續飛")
     return {"ok": True, "steps": steps, "proposal": fresh}
 
@@ -822,7 +738,7 @@ async def mission_upload(sysid: int, body: UploadIn):
                        body.mission_id, sysid)
     # **上傳成功 → 即時畫面就該畫這一份**：從這一刻起機上的航線就是它，
     # 畫面上還畫別份（或什麼都不畫）就是與飛機的事實對不上
-    await _show_on_live(sysid, body.mission_id, "已上傳到機上")
+    await guard_client.show_on_live(sysid, body.mission_id, "已上傳到機上")
     return {**res, "check": report}
 
 
