@@ -4,7 +4,6 @@ import { useCallback, useEffect, useState } from "react";
 
 import ConfirmModal from "@/components/ConfirmModal";
 import { Battery, SignalBars } from "@/components/SimpleHud";
-import { buildNeedsNotice, buildNoticeText } from "@/lib/buildInfo";
 import { errText, getJson } from "@/lib/fetchJson";
 import { parseJsonb } from "@/lib/jsonb";
 import { API } from "@/lib/signal";
@@ -151,11 +150,12 @@ export default function Drones() {
 
   return (
     <div className="page-pad">
-      {/* §0.2f：版本未知或 dirty 必須**非 hover 可見**——tooltip 是藏起來的，
-          用它宣告「我不知道我是誰」等於沒宣告。**也不能放進收合區**：
-          我第一版放在「＋ 註冊無人機」的 <details> 裡，元素在、內容量到是空的
-          （收合＝不可見），比 tooltip 更糟。正常態不顯示，也不進飛行畫面 */}
-      {buildNeedsNotice && <div className="build-notice">{buildNoticeText}</div>}
+      {/* **版本橫幅移除**（使用者指示 2026-08-26）：dirty 建置在開發期是常態，
+          橫幅天天都在，於是它從「這件事要注意」變成畫面上的固定裝飾——
+          常駐的警告等於沒有警告。
+          §0.2f 要防的問題（「系統說不出自己是誰」）沒有被丟掉，只是換了地方：
+          版本仍在導覽列品名的 tooltip、console，以及 `GET /api/version`。
+          **要程式問得到才是那條規則的重點**，橫幅只是其中一種呈現。 */}
       {/* 註冊表單已移除（issues/038）：代理一上線就自報身分，機器問得到的東西
           不勞人打字。原本這裡有一段「機是怎麼出現在這裡的」說明，也拿掉了——
           它解釋的是**系統怎麼運作**，不是使用者此刻要做的決定；常駐在清單頂端
