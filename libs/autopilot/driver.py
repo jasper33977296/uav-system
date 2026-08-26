@@ -102,6 +102,15 @@ class AutopilotDriver(Protocol):
     未來要加動詞（`goto_location`、`pause` 等）就加方法，不預先開空方法。
     """
 
+    #: ── 方言旗標（**每個驅動都要自己宣告**，這裡是 Protocol 不是基底類別）──
+    #: 漏宣告的後果是執行期 AttributeError——2026-08-26 就發生過：
+    #: `no_coord_frames` 加在 UnknownDriver 與 ArduPilotDriver 上、漏了 PX4，
+    #: 於是預檢對 PX4 的任務直接炸掉。`test-driver-flags.py` 現在會擋住這件事。
+    home_at_seq0: bool
+    takeoff_alt_is_relative: bool
+    takeoff_needs_guided: bool
+    no_coord_frames: frozenset
+
     #: 廠牌識別（`MAV_AUTOPILOT_*` 的值）與人話名
     autopilot_raw: int
     name: str

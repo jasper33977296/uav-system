@@ -51,6 +51,11 @@ async def migrate() -> None:
     # 不是系統的全域設定——測繪任務與定點巡檢的合理範圍可以差一個數量級。
     # NULL＝這份 .plan 沒畫圍欄（退回系統預設，而且報告會說出用的是哪一個）
     await pool.execute("ALTER TABLE missions ADD COLUMN IF NOT EXISTS fence JSONB")
+    # QGC 的 plannedHomePosition [lat, lon, alt]。**RTL 沒有座標**——它的意思是
+    # 「回到 home」，所以少了這個點，返航那一段在畫面上根本畫不出來，
+    # 使用者會以為航線在最後一個航點就結束了（2026-08-26 使用者回報）。
+    # 它同時也是距離量測該用的原點：起飛項在很多 .plan 裡是 0,0
+    await pool.execute("ALTER TABLE missions ADD COLUMN IF NOT EXISTS home JSONB")
     # 039/038 兩層身分的**人工維護那層**：機架序號與型號。
     # **不動 serial_no**——它現在扛著自動註冊的冪等性（四處 ON CONFLICT），
     # 改它的語意風險不對稱：那條路徑出錯會讓每次心跳都新增一筆機。

@@ -66,10 +66,11 @@ function planTarget(m: Mission): { text: string; declared: boolean } {
 }
 interface PlanCheck {
   ok: boolean; problems: string[]; warnings: string[];
-  max_dist_m: number; fence_r: number; fence_alt: number;
-  //: 量測用的是哪一份圍欄。**同一句「超出圍欄」在兩種來源下處置完全不同**：
-  //: plan＝這份航線宣告了邊界而你超出；default＝這份沒宣告，我拿系統預設在量
-  fence_source?: "plan" | "default";
+  max_dist_m: number; max_alt_m?: number;
+  //: 圍欄從哪來。plan＝這份航線自己宣告的（超出就是真的超出）；
+  //: none＝**這份沒宣告，系統也不替它設一個**——一個全域數字只對一個場地
+  //: 成立，拿它去判會產生看起來很具體的假錯誤
+  fence_source?: "plan" | "none";
 }
 interface Sess {
   id: string; drone_id: string; drone_name: string; mission_id: string | null;
@@ -94,6 +95,7 @@ interface ParsedPlan {
   firmware_type: number | null;
   vehicle_type: number | null;
   fence: Record<string, unknown> | null;   // .plan 自帶的 geoFence
+  home: number[] | null;                   // plannedHomePosition [lat, lon, alt]
 }
 function parsePlan(text: string): ParsedPlan {
   const j = JSON.parse(text);
@@ -121,6 +123,10 @@ function parsePlan(text: string): ParsedPlan {
     // 系統預設值是「這套系統只在一個場地飛」才成立的假設，而測繪任務與
     // 定點巡檢的合理範圍可以差一個數量級
     fence: parseFence(j?.geoFence),
+    // **RTL 沒有座標**——它的意思是「回到 home」。少了這個點，返航那一段
+    // 在畫面上畫不出來，使用者會以為航線在最後一個航點就結束了
+    home: Array.isArray(j?.mission?.plannedHomePosition)
+      ? j.mission.plannedHomePosition : null,
   };
 }
 
@@ -222,7 +228,7 @@ export default function Missions() {
           // 機種一起送：航點的 frame 與 params 是照哪一家的語意寫的，
           // 只有這兩個欄位說得出來（issues/037）
           firmware_type: parsed.firmware_type, vehicle_type: parsed.vehicle_type,
-          fence: parsed.fence,
+          fence: parsed.fence, home: parsed.home,
         }),
       });
       const body = await res.json();
@@ -241,17 +247,9 @@ export default function Missions() {
       {report && (
         <div className="plan-report">
           {report.ok && report.warnings.length === 0 && (
-            <div className="ok">✅ 幾何預檢通過（最遠航點 {report.max_dist_m} m／
-              {report.fence_source === "plan"
-                ? "圍欄用這份航線自帶的"
-                : `圍欄 ${report.fence_r} m，來自系統預設——這份 .plan 沒畫 geoFence`}）
-            </div>
-          )}
-          {report.fence_source === "default" && !report.ok && (
-            <div className="warn">
-              ⚠️ 這份 .plan 沒有 geoFence，上面的圍欄判定用的是**系統預設值**
-              （{report.fence_r} m／{report.fence_alt} m）。要讓判定貼合實際場地，
-              在 QGC 的 Plan 頁畫一個 GeoFence 再存檔——圍欄是每份航線自己的事。
+            <div className="ok">✅ 幾何預檢通過（最遠航點 {report.max_dist_m} m
+              {report.max_alt_m != null && `／最高 ${report.max_alt_m} m`}
+              {report.fence_source === "plan" && "／圍欄用這份航線自帶的"}）
             </div>
           )}
           {report.problems.map((p, i) => (
@@ -383,10 +381,9 @@ export default function Missions() {
               {openCheck && openCheck !== "loading" && (
                 <div className="plan-report" style={{ marginBottom: 10 }}>
                   {openCheck.ok && openCheck.warnings.length === 0 && (
-                    <div className="ok">✅ 幾何預檢通過（最遠航點 {openCheck.max_dist_m} m／
-                      {openCheck.fence_source === "plan"
-                        ? "圍欄用這份航線自帶的"
-                        : `圍欄 ${openCheck.fence_r} m，系統預設`}）</div>
+                    <div className="ok">✅ 幾何預檢通過（最遠航點 {openCheck.max_dist_m} m
+                      {openCheck.max_alt_m != null && `／最高 ${openCheck.max_alt_m} m`}
+                      {openCheck.fence_source === "plan" && "／圍欄用這份航線自帶的"}）</div>
                   )}
                   {openCheck.problems.map((p, i) =>
                     <div className="bad" key={`op${i}`}>❌ {p}</div>)}

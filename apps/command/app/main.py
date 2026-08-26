@@ -761,7 +761,7 @@ async def mission_upload(sysid: int, body: UploadIn):
     if not rows:
         raise HTTPException(404, "任務不存在或沒有航點")
     meta = await pool.fetchrow(
-        "SELECT firmware_type, vehicle_type, fence FROM missions WHERE id = $1",
+        "SELECT firmware_type, vehicle_type, fence, home FROM missions WHERE id = $1",
         body.mission_id)
     wps = []
     for r in rows:
@@ -783,7 +783,9 @@ async def mission_upload(sysid: int, body: UploadIn):
     report = plan_check.check_waypoints(
         wps, settings.geofence_radius_m, settings.geofence_alt_m,
         settings.geofence_margin, fence=mf,
-        autopilot=ap if ap is not None else (meta["firmware_type"] if meta else None))
+        autopilot=ap if ap is not None else (meta["firmware_type"] if meta else None),
+        home=json.loads(meta["home"]) if meta and isinstance(meta["home"], str)
+        else (meta["home"] if meta else None))
     # 機種不符：併進**既有的 warnings**而不是自成一個欄位——前端已經會顯示
     # 這份報告，多開一個欄位就多一個可能沒人接的顯示點（issues/037）。
     # 併進 warnings 不影響 `ok`，所以不會意外觸發 GEOFENCE_ENFORCE 的擋門。

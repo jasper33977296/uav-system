@@ -21,7 +21,10 @@ for idx in (0, 1):
     ev(f"document.querySelectorAll('.mcard')[{idx}].click()")
     time.sleep(2.5)
     txt = ev("document.body.innerText")
-    has = "幾何預檢通過" in txt or "❌" in txt or "檢查中" in txt
+    # 報告有四種長相：通過(✅)／有問題(❌)／只有警告(⚠️)／載入中。
+    # 第一版漏了 ⚠️，於是「只有警告」的那份被判成沒有報告——**斷言比被測的
+    # 東西還窄，測到的就不是那件事**
+    has = any(k in txt for k in ("幾何預檢通過", "❌", "⚠️", "檢查中"))
     print(f"{'✓' if has else '✗'} 點第 {idx+1} 張卡 → 展開區有預檢結果")
     ok &= has
     line = next((l for l in txt.split("\n") if l.startswith(("❌","✅","⚠️"))), "")

@@ -17,6 +17,12 @@ class Settings(BaseSettings):
     # 起飛→任務序列要讀高度（等實際到達才切 MISSION），來源是 backend 的
     # live 快照（同主機不同容器）
     backend_api: str = "http://localhost:38000"
+    # **不再有系統預設圍欄**（2026-08-26 使用者裁定）：圍欄是每份航線自己的
+    # 事，一個全域數字只對一個場地成立，而它會產生「seq 6 離起飛點 54 m，
+    # 超過圍欄半徑 50 m」這種**看起來很具體的假錯誤**——那個 50 是模擬環境
+    # 留下來的值，跟使用者的場地毫無關係。
+    # 這兩個值只剩 plan_check 的呼叫簽章還在收，實際上不參與判定；
+    # 保留是為了不動簽章，日後確定沒有其他用途再一起拿掉。
     geofence_radius_m: float = 50.0
     geofence_alt_m: float = 15.0
     geofence_margin: float = 0.7

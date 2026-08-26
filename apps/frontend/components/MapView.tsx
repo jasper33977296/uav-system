@@ -331,7 +331,27 @@ export default function MapView() {
           // 沒有啟用中的航線時後端回 404——那是正常態不是錯誤（!ok 就清空
           // 疊圖）。console 會看到一則 404，不必追
           const ra = await fetch(`${API}/api/missions/active`);
-          if (ra.ok) wps = ((await ra.json()).waypoints ?? []).filter((w: any) => w.lat && w.lon);
+          if (ra.ok) {
+            const plan = await ra.json();
+            const all = plan.waypoints ?? [];
+            wps = all.filter((w: any) => w.lat && w.lon);
+            // **返航那一段要畫出來**：RTL／LAND 沒有座標（它們的意思是
+            // 「回到 home」），照 lat/lon 過濾會把它們整個丟掉，於是畫面上
+            // 航線停在最後一個航點——看起來像規劃到一半就沒了
+            // （2026-08-26 使用者回報）。用 .plan 的 plannedHomePosition 補上。
+            const back = all.some((w: any) =>
+              w.action === "rtl" || w.action === "land");
+            const h = plan.home;
+            if (back && Array.isArray(h) && h.length >= 2 && (h[0] || h[1])
+                && wps.length) {
+              const last = wps[wps.length - 1];
+              // 高度取最後航點的：返航是**先平飛回去再下降**，不是斜線下降。
+              // 畫成斜線會讓人以為航線會穿過中間的地形
+              wps = [...wps, { lat: h[0], lon: h[1], alt: last.alt,
+                               action: "rtl-leg" },
+                             { lat: h[0], lon: h[1], alt: 0, action: "rtl-land" }];
+            }
+          }
           const has = wps.length >= 2;
           (map.getSource("plan3d") as maplibregl.GeoJSONSource | undefined)?.setData(
             has ? ribbon(wps.map((w: any) => ({ lat: w.lat, lon: w.lon, alt: w.alt })),

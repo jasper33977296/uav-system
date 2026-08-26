@@ -648,20 +648,26 @@ class MissionIn(BaseModel):
     #: 航線自帶的圍欄（前端從 .plan 的 geoFence 解出來）。**圍欄是每份航線
     #: 自己的事**——沒有它就只能拿系統預設值去量，而那個值只對一個場地成立
     fence: dict | None = None
+    #: QGC 的 plannedHomePosition [lat, lon, alt]。RTL 沒有座標，少了它
+    #: 返航那一段畫不出來；它也是距離量測該用的原點
+    home: list[float] | None = None
 
 
 async def _store_mission(name: str, source: str, wps: list[dict],
                          firmware_type: int | None = None,
                          vehicle_type: int | None = None,
-                         fence: dict | None = None) -> str:
+                         fence: dict | None = None,
+                         home: list[float] | None = None) -> str:
     async with db.pool.acquire() as con:
         async with con.transaction():
             row = await con.fetchrow(
                 "INSERT INTO missions (name, created_by, kind, firmware_type, "
-                "vehicle_type, fence) VALUES ($1, $2, $3, $4, $5, $6) RETURNING id",
+                "vehicle_type, fence, home) VALUES ($1, $2, $3, $4, $5, $6, $7) "
+                "RETURNING id",
                 name, source, "from-vehicle" if source == "vehicle" else "imported",
                 firmware_type, vehicle_type,
-                jdumps(fence) if fence else None)
+                jdumps(fence) if fence else None,
+                jdumps(home) if home else None)
             await con.executemany(
                 """INSERT INTO waypoints (mission_id, seq, lat, lon, alt, action, params)
                    VALUES ($1, $2, $3, $4, $5, $6, $7)""",
@@ -690,13 +696,20 @@ async def list_missions():
 
 @router.get("/missions/active")
 async def active_mission():
-    row = await db.pool.fetchrow("SELECT id, name FROM missions WHERE is_active LIMIT 1")
+    row = await db.pool.fetchrow(
+        "SELECT id, name, home FROM missions WHERE is_active LIMIT 1")
     if row is None:
         raise HTTPException(404, "沒有啟用中的路徑")
     wps = await db.pool.fetch(
         "SELECT seq, lat, lon, alt, action FROM waypoints WHERE mission_id = $1 ORDER BY seq",
         row["id"])
-    return {"id": str(row["id"]), "name": row["name"], "waypoints": [dict(w) for w in wps]}
+    home = row["home"]
+    if isinstance(home, str):
+        home = json.loads(home)
+    # **返航那一段要畫得出來**：RTL 沒有座標（它的意思是「回到 home」），
+    # 少了 home，畫面上航線就停在最後一個航點，看起來像規劃到一半
+    return {"id": str(row["id"]), "name": row["name"], "home": home,
+            "waypoints": [dict(w) for w in wps]}
 
 
 @router.get("/missions/{mission_id}/waypoints")
@@ -715,11 +728,11 @@ async def save_mission(m: MissionIn):
     可放草稿；真正的擋門在 command 服務上傳到機那一步。"""
     wps = [w.model_dump() for w in m.waypoints]
     mid = await _store_mission(m.name, m.source, wps,
-                               m.firmware_type, m.vehicle_type, m.fence)
+                               m.firmware_type, m.vehicle_type, m.fence, m.home)
     return {"id": mid, "check": plan_check.check_waypoints(
         wps, settings.geofence_radius_m, settings.geofence_alt_m,
         settings.geofence_margin, fence=m.fence,
-        autopilot=m.firmware_type)}
+        autopilot=m.firmware_type, home=m.home)}
 
 
 @router.post("/missions/from-vehicle")
@@ -754,7 +767,7 @@ async def check_mission(mission_id: str):
     每次點開一份航線就重算一次，成本是一次查表。
     """
     row = await db.pool.fetchrow(
-        "SELECT name, fence, firmware_type, vehicle_type FROM missions "
+        "SELECT name, fence, home, firmware_type, vehicle_type FROM missions "
         "WHERE id = $1", mission_id)
     if row is None:
         raise HTTPException(404, "無此路徑")
@@ -776,7 +789,8 @@ async def check_mission(mission_id: str):
         wps, settings.geofence_radius_m, settings.geofence_alt_m,
         settings.geofence_margin, fence=fence,
         # frame 規則是方言，要知道是給哪一家寫的才判得了（沒宣告時只警告）
-        autopilot=row["firmware_type"])
+        autopilot=row["firmware_type"],
+        home=json.loads(row["home"]) if isinstance(row["home"], str) else row["home"])
 
 
 @router.post("/missions/{mission_id}/activate")

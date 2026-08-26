@@ -40,6 +40,9 @@ class Px4Driver:
 
     #: 任務線序：PX4 不把 home 當 seq 0
     home_at_seq0 = False
+    #: 2026-08-12 PX4 SITL 實測：RTL 配 frame 0/3/5/6 全拒、只有 2 過，
+    #: 而且是**拒收整包任務**（MAV_MISSION_UNSUPPORTED）
+    no_coord_frames = frozenset({2})
     #: NAV_TAKEOFF 的 param7 是絕對海拔
     takeoff_alt_is_relative = False
     #: 不需要先進 GUIDED
