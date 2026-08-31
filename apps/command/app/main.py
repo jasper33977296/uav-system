@@ -201,6 +201,11 @@ async def healthz():
     「HTTP 層還活著」——issue 034：2026-08-11 router 執行緒被網路瞬斷殺死後，
     心跳停發、指令全逾時，而這裡照回 `{"ok": true}`，於是沒有任何人與腳本
     看得出異常，拖了近一小時才發現。失效不得冒充合法狀態（ui-spec §0.2e）。
+
+    **2026-08-31 語意變窄了**：GCS 心跳已搬到獨立行程（issues/033 §4.2.1），
+    所以 router 卡住**不再等於心跳停發**。`ok` 仍然是 false（指令送不出去仍然
+    是「指不動飛機」），但下面的 detail 不能再說「GCS 心跳已停發」——
+    那句話現在是假的，而**一句假的診斷會把人帶去查錯的地方**。
     """
     alive = router is not None and router.alive()
     body = {"ok": alive, "router_alive": alive,
@@ -211,7 +216,10 @@ async def healthz():
         # 外部監看）不會去讀 body，回 200 就是對它們謊報健康。
         body["detail"] = (
             "MAVLink router 迴圈未在運轉（執行緒死亡，或卡住超過 "
-            f"{mav.STALL_S:.0f} 秒）：GCS 心跳已停發、指令不會送達飛機。"
+            f"{mav.STALL_S:.0f} 秒）：指令不會送達飛機，遙測也不再更新。"
+            "**GCS 心跳不受影響**（已獨立為 uav-heartbeat，issues/033 §4.2.1）"
+            "——所以飛控不會因為這件事觸發 GCS failsafe，但它也代表"
+            "「飛控看起來一切正常」而我們其實指不動它。"
             "查 command 服務日誌後重啟服務。")
         return JSONResponse(body, status_code=503)
     return body

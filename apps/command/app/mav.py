@@ -12,6 +12,7 @@
 API 層用 submit() 丟工作進佇列、等 future。對話期間 _wait() 內仍持續
 處理心跳與路由表更新。
 """
+import json
 import os
 
 os.environ.setdefault("MAVLINK20", "1")     # 強制 MAVLink 2（MISSION_ITEM_INT 需要）
@@ -41,6 +42,14 @@ M = mavutil.mavlink
 #: （QGC 設定裡可改 MAVLink System ID），不要改回這裡——改回來就會退回
 #: 「指令被靜默丟棄、沒有任何錯誤訊息」那個狀態。
 GCS_SYSID = 255
+#: 位址表輸出路徑（issues/033 §4.2.1）。**心跳已經搬到獨立行程**（`app/hb.py`），
+#: 它需要每台機的來源位址，而那只有正在收包的這裡知道。寫成檔案是為了讓它
+#: **跨本服務的重啟存活**——本服務一重啟心跳就跟著瞎掉的話，等於沒有解耦。
+PEERS_PATH = os.environ.get("GCS_PEERS_PATH", "/state/peers.json")
+PEERS_WRITE_S = 1.0
+#: 位址表裡的一筆最多留這麼久。比心跳行程的過期門檻大一個量級——過期由它判，
+#: 這裡只是防止檔案無限長大（例如反覆換 sysid 的測試機）
+PEERS_KEEP_S = 300.0
 #: 活性門檻：主迴圈超過這麼久沒跑過一圈＝卡住（見 MavRouter.alive）。
 #: 正常節奏是 run() 每圈 ≤0.2s、指令對話期間 _wait() 每圈 ≤0.2s，
 #: 兩條路徑都會呼叫 _tick()，所以 5s 對「正常但忙碌」有極大餘裕。
@@ -111,6 +120,7 @@ class MavRouter(threading.Thread):
         self.jobs: queue.Queue = queue.Queue()
         self._hb_t = 0.0
         self._send_warn_t = 0.0             # sendto 失敗告警節流（見 _sendto）
+        self._peers_warn_t = 0.0            # 位址表寫入失敗告警節流
         # 迴圈活性時戳（見 alive()／STALL_S）。初值設為現在而非 0：執行緒
         # start() 之前就被健康檢查問到時，不該回報成「卡住」。
         self._alive_t = time.monotonic()
@@ -186,14 +196,14 @@ class MavRouter(threading.Thread):
         # 裡數十秒，但 _wait() 每圈都呼叫 _tick()（心跳不能斷），所以這裡才是
         # 「迴圈真的有在轉」的唯一共同點。
         self._alive_t = now
-        if self.heartbeat and now - self._hb_t >= 1.0:
+        # **心跳不在這裡發了**（issues/033 §4.2.1，2026-08-31 使用者裁定）。
+        # 原本每秒在這裡送 `MAV_TYPE_GCS` 心跳，於是本服務的每一次重啟——
+        # 包含只是存一個檔案觸發 `--reload`——都是一次真實的 GCS 心跳中斷，
+        # 而那可能超過飛控的 `FS_GCS_TIMEOUT`。現在改由獨立行程 `app/hb.py` 發，
+        # 這裡只負責把它需要的東西（每台機的來源位址）寫出去。
+        if self.heartbeat and now - self._hb_t >= PEERS_WRITE_S:
             self._hb_t = now
-            for sysid in list(self.drones):
-                try:
-                    self._sendto(sysid, lambda m: m.heartbeat_encode(
-                        M.MAV_TYPE_GCS, M.MAV_AUTOPILOT_INVALID, 0, 0, 0))
-                except CommandError:
-                    pass
+            self._write_peers()
 
     def _recv(self, timeout: float):
         msg = self.conn.recv_match(blocking=True, timeout=timeout)
@@ -268,6 +278,54 @@ class MavRouter(threading.Thread):
         """該機的 HEARTBEAT.autopilot（MAV_AUTOPILOT_*）；未見心跳時 None。"""
         d = self.drones.get(sysid) or {}
         return d.get("autopilot")
+
+    def _write_peers(self) -> None:
+        """把每台機的來源位址寫給心跳行程（issues/033 §4.2.1）。
+
+        **用寫暫存檔再 rename**：rename 在同一個檔案系統上是原子的，所以讀端
+        永遠讀到一份完整的表。直接覆寫的話，心跳行程有機會讀到寫了一半的 JSON
+        ——而它每秒讀一次，撞上的機率不低。
+
+        時戳用 `time.time()`（牆鐘）不是 monotonic：讀的是**另一個行程**，
+        兩邊的 monotonic 沒有可比性。
+        """
+        # **先讀回舊的再疊上新的，不是直接覆寫。** 本服務重啟後 `self.drones`
+        # 是空的，直接覆寫就會把位址表清成 `{}`——心跳行程於是在我們重啟的那
+        # 幾秒沒有對象可發，**正好抵銷掉解耦本身**（2026-08-31 實測：最大間隔
+        # 因此從 2s 變成 3s，逼近 FS_GCS_TIMEOUT 的 5s 預設）。
+        # 舊的一筆不會永遠留著：時戳是「最後聽到」，過期由心跳行程自己判。
+        peers = {}
+        try:
+            with open(PEERS_PATH, encoding="utf-8") as f:
+                peers = json.load(f).get("peers") or {}
+        except (OSError, ValueError):
+            pass
+        now_mono, now_wall = time.monotonic(), time.time()
+        peers = {k: v for k, v in peers.items()
+                 if isinstance(v, dict)
+                 and now_wall - float(v.get("t") or 0) < PEERS_KEEP_S}
+        for sysid, d in self.drones.items():
+            addr, seen = d.get("addr"), d.get("seen_mono")
+            if not addr or seen is None:
+                continue
+            # **時戳是「最後聽到這台機」，不是「寫這個檔案」。** 寫成後者的話
+            # 每秒都會刷新，位址永遠不會過期——心跳行程就會對著一台早就不在的
+            # 機一直發，而且 log 顯示一切正常。2026-08-31 的反向驗證抓到這個。
+            peers[str(sysid)] = {"ip": addr[0], "port": addr[1],
+                                 "t": now_wall - (now_mono - seen)}
+        payload = json.dumps({"peers": peers}, ensure_ascii=False)
+        tmp = f"{PEERS_PATH}.tmp"
+        try:
+            os.makedirs(os.path.dirname(PEERS_PATH), exist_ok=True)
+            with open(tmp, "w", encoding="utf-8") as f:
+                f.write(payload)
+            os.replace(tmp, PEERS_PATH)
+        except OSError as e:
+            # **不能讓它殺掉主迴圈**：寫不出位址表只是心跳會停在舊位址，
+            # 而主迴圈死掉是指令完全送不出去。節流告警，繼續跑
+            if time.monotonic() - self._peers_warn_t > 30.0:
+                self._peers_warn_t = time.monotonic()
+                log.warning("位址表寫入失敗（%s）——心跳行程會沿用舊的一份", e)
 
     def _sendto(self, sysid: int, encode_fn):
         """encode + 直接 sendto 該 sysid 的來源位址（不經 mavutil 的廣播式 write）。"""

@@ -129,6 +129,10 @@ services:
       # 出現「改了沒反應」，而映像裡那份是舊的（issue 026 B2）
       - ./libs:/srv/libs:ro
       - ./missions:/srv/missions:ro   # 航線檔（外部觸發 GET /api/plans、POST /api/start）；唯讀
+      # 位址表：本服務寫、uav-heartbeat 讀（issues/033 §4.2.1）。心跳搬出去之後
+      # 「每台機的來源位址」是唯一還需要跨行程傳的東西——而它只有正在收包的
+      # 這個服務知道
+      - gcsstate:/state
     environment:
       DATABASE_URL: postgresql://uav:uav@localhost:${DB_PORT:-35432}/uav
       PYTHONPATH: /srv/libs        # 共用驅動層（libs/autopilot）
@@ -140,6 +144,32 @@ services:
       GEOFENCE_ALT_M: ${GEOFENCE_ALT_M:-15}
     depends_on:
       uav-db: { condition: service_healthy }
+    logging:
+      driver: json-file
+      options: { max-size: "50m", max-file: "3" }
+    restart: unless-stopped
+
+  # ── GCS 心跳（issues/033 §4.2.1；2026-08-31 使用者裁定從 command 搬出）──
+  # **與 uav-video 同一個理由**：那邊寫著「錄影不放進 backend，因為 backend 掛
+  # --reload、改一行程式就重啟＝錄影中斷」。心跳的後果更嚴重——飛控的 GCS
+  # failsafe 盯的就是它，中斷超過 FS_GCS_TIMEOUT（ArduPilot 預設 5s）飛行中的
+  # 機體就會自己動作。而 command 的 graceful shutdown 上限就有 3 秒。
+  #
+  # **刻意不掛原始碼、刻意沒有 --reload**：這個容器存在的唯一理由就是不隨我方的
+  # 開發動作重啟。做成跟 command 一樣的形狀等於白做。改它要重建映像，這是特性。
+  uav-heartbeat:
+    container_name: uav-heartbeat
+    build:
+      context: .
+      dockerfile: apps/command/Dockerfile   # 共用映像：要的是 pymavlink 與 app 套件
+    network_mode: host                      # 與 command 同網路命名空間才送得到機
+    command: ["python", "-m", "app.hb"]
+    volumes:
+      - gcsstate:/state:ro                  # 只讀位址表——它不該寫任何東西
+    environment:
+      GCS_PEERS_PATH: /state/peers.json
+      # 幾秒沒更新就當那台機不在了，停止對它發。**停發要看得見**（見 hb.py）
+      GCS_PEER_STALE_S: ${GCS_PEER_STALE_S:-30}
     logging:
       driver: json-file
       options: { max-size: "50m", max-file: "3" }
@@ -210,3 +240,4 @@ volumes:
   dbdata:
   mavcap:
   videorec:
+  gcsstate:      # command 寫、uav-heartbeat 讀的位址表（issues/033 §4.2.1）
