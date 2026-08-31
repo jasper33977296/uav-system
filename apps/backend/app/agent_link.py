@@ -1,8 +1,8 @@
 """意圖協定的地面站端（doc/agent-intent-protocol.md）。
 
-**本版只做到 `state`**：接受機上代理的 WebSocket 連線、驗信封、收 `hello` 與
-`state`，把最新狀態放進登錄表並推給前端。不下任何指令——`intent`／`proposal`
-／`decision` 尚未實作，收到就明說「未支援」而不是靜靜丟掉。
+接受機上代理的 WebSocket 連線、驗信封、收 `hello`／`state`／`event`／`ack`，
+把最新狀態放進登錄表並推給前端；反方向送 `intent`／`decision`／`progress`。
+不認得的型別明說「未支援」而不是靜靜丟掉。
 
 三條刻意的紀律：
 
@@ -24,6 +24,14 @@ PROTOCOL_V = 1
 #: 多久沒收到 state 就視為這條意圖通道不新鮮（代理 1 Hz 保活）
 STALE_S = 5.0
 
+#: 斷線期間最多壓幾則 intent（039 複裁 G）。**有上限而且滿了要說**：
+#: 操作員在失聯期間連按十次「改航線」時，十則都補送過去毫無意義——
+#: 他要的是最後那一個意思，而前面九則只會讓恢復後的畫面塞滿待確認
+PENDING_MAX = 8
+#: 壓過這麼久的 intent 不再補送。恢復時飛機早就不在當初那個位置，
+#: 而補送的目的是「讓人重新看一次」，不是把一個十分鐘前的念頭放出來
+PENDING_TTL_S = 600.0
+
 
 @dataclass
 class AgentLink:
@@ -42,6 +50,13 @@ class AgentLink:
     payload: dict | None = None          # 最後一則 state 的完整內容
     ws: object = None                    # 送 intent 用的連線（斷線時清掉）
     waiters: dict = field(default_factory=dict)   # intent_id → asyncio.Future
+    #: intent_id → 代理回執的時刻（協定 §2）。**與 waiters 分開**：回執說的是
+    #: 「我收到了」，event 說的是「我判決了」。逾時的時候這兩者要分得出來——
+    #: 「送不到」與「送到了但代理算不出判決」是完全不同的故障
+    receipts: dict = field(default_factory=dict)
+    #: 斷線期間壓著的 intent（039 複裁 G），恢復後補送。存的是原話＋壓進來的
+    #: 時刻，因為補送時要告訴人「這是你 N 分鐘前按的」
+    pending: list = field(default_factory=list)
 
     def fresh(self) -> bool:
         return (self.connected and self.last_state_at is not None
@@ -65,6 +80,12 @@ class AgentLink:
             # 是操作員該知道的事，藏在機上等於沒說（協定 §4.2）
             "intent_id": p.get("intent_id"), "seq_step": p.get("seq_step"),
             "derived": p.get("derived"),
+            # **RC 遙控器連上了沒有**（039 複裁 A）。這是「機在地上失聯只告警」
+            # 那格的前提：沒有 RC 就沒有人能接管。權威守門在代理，這裡只鏡像，
+            # 讓畫面說得出「為什麼現在不能起飛」。代理還沒開始送時是 None＝
+            # **不知道**，不是「沒有」——畫面要照這個分別顯示
+            "rc_link": p.get("rc_link"),
+            "pending": len(self.pending),
         }
 
 
@@ -134,6 +155,65 @@ def on_event(link: AgentLink, msg: dict) -> None:
         fut.set_result(msg)
 
 
+def on_ack(link: AgentLink, msg: dict) -> None:
+    """代理對一則 intent 的回執（協定 §2，039 複裁 G）。
+
+    **回執不是判決。** 它只說「這則我收到了」，判決仍然要等 `event`。分開記
+    是為了讓逾時說得出是哪一段斷的：送不出去（5G 掉了）與代理收到卻算不出
+    判決（守門卡住、飛控沒回應）要走不同的處理，而原本兩者長得一模一樣。
+    """
+    iid = msg.get("intent_id")
+    if not iid:
+        return
+    link.receipts[iid] = time.monotonic()
+    # 只留還在等的那些：waiters 清掉時這裡也該跟著清，否則長跑的地面站會
+    # 累積一份永遠不會再被查詢的 intent_id 清單
+    for k in [k for k in link.receipts if k not in link.waiters]:
+        if k != iid:
+            link.receipts.pop(k, None)
+
+
+def queue_intent(link: AgentLink, action: str, params: dict | None,
+                 intent_id: str) -> tuple[int, int]:
+    """意圖通道斷線時把 intent 壓下來（039 複裁 G：補送，由代理守門擋）。
+
+    回傳 (佇列長度, 丟掉幾則)。**滿了丟最舊的**：操作員在失聯期間按的最後
+    一次才是他現在的意思，而最舊的那則距離現況最遠。丟掉會留 log——
+    安靜地丟掉一個飛行操作，等於系統替人做了決定卻沒說。
+    """
+    now = time.monotonic()
+    before = len(link.pending)
+    link.pending = [q for q in link.pending if now - q["at"] < PENDING_TTL_S]
+    expired = before - len(link.pending)
+    link.pending.append({"action": action, "params": params or {},
+                         "intent_id": intent_id, "at": now})
+    over = max(0, len(link.pending) - PENDING_MAX)
+    if over:
+        link.pending = link.pending[over:]
+    dropped = expired + over
+    if dropped:
+        log.warning("意圖佇列丟掉 %d 則（%d 則過期、%d 則超過上限 %d）：%s",
+                    dropped, expired, over, PENDING_MAX, link.board_uid)
+    return len(link.pending), dropped
+
+
+def take_pending(link: AgentLink) -> list[dict]:
+    """取出並清空待補送的 intent，順便濾掉過期的。
+
+    **取出就清空**：補送只做一次。失敗了也不要留著自動再試——重試一個
+    人在十分鐘前按下的飛行操作，是這條規則最該避免的事。
+    """
+    now = time.monotonic()
+    out = [q for q in link.pending if now - q["at"] < PENDING_TTL_S]
+    if len(out) < len(link.pending):
+        log.info("補送前濾掉 %d 則過期 intent（%s）",
+                 len(link.pending) - len(out), link.board_uid)
+    link.pending = []
+    for q in out:
+        q["age_s"] = now - q["at"]
+    return out
+
+
 def on_disconnect(link: AgentLink) -> None:
     link.connected = False
     link.ws = None
@@ -142,7 +222,9 @@ def on_disconnect(link: AgentLink) -> None:
         if not fut.done():
             fut.set_exception(ConnectionError("意圖通道在等待期間斷線"))
     link.waiters.clear()
+    link.receipts.clear()
     # state 保留：最後已知狀態是有用的資訊，清空等於宣告「不知道」
+    # pending 也保留：那正是「斷線期間壓下來、恢復後補送」要用的東西
 
 
 async def send_intent(link: AgentLink, action: str, params: dict | None,
@@ -152,6 +234,10 @@ async def send_intent(link: AgentLink, action: str, params: dict | None,
 
     **逾時不等於放行。** 等不到回覆就是不知道守門怎麼說，而「不知道」在飛安
     路徑上要當成「不行」——呼叫端據此擋下操作，並說出是逾時而不是被拒。
+
+    逾時的說法分兩種（039 複裁 G 的逐則回執）：收過回執＝送到了、是代理那端
+    算不出判決；沒收過＝這則根本沒送達。兩種都是「不行」，但**要查的地方
+    完全不同**，而原本它們回同一句話。
     """
     import asyncio
     if not link.connected or link.ws is None:
@@ -167,5 +253,11 @@ async def send_intent(link: AgentLink, action: str, params: dict | None,
             {"params": params or {}})
         await link.ws.send_json(msg)
         return await asyncio.wait_for(fut, timeout)
+    except (TimeoutError, asyncio.TimeoutError):
+        raise TimeoutError(
+            "代理已回執（收到了）但沒有在時限內給出判決"
+            if intent_id in link.receipts else
+            "代理連回執都沒有回——這則很可能沒有送達") from None
     finally:
         link.waiters.pop(intent_id, None)
+        link.receipts.pop(intent_id, None)

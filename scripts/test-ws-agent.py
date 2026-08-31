@@ -89,7 +89,8 @@ c.send(env(type="hello", board_uid=UID, agent_version="0.3.0",
 r = recv_until(c, "ack")
 check("hello 收到 ack 並認出是哪台機",
       r.get("type") == "ack" and r.get("drone_id"), f"drone_id={r.get('drone_id')}")
-check("ack 說明本站目前收哪些型別", r.get("accepts") == ["state"], str(r.get("accepts")))
+check("ack 說明本站目前收哪些型別",
+      r.get("accepts") == ["state", "event", "ack"], str(r.get("accepts")))
 
 # ── 4. state 推得到前端 ────────────────────────────────────
 c.send(env(type="state", state="FLYING_MISSION", sysid=1,

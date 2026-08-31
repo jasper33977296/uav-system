@@ -228,12 +228,27 @@ r = ask("change_route", iid3, kind="decision", params={"approved": True})
 chk("人按了確認，代理仍然拒絕", r["verdict"] == "refused", r.get("reason"))
 STATE["v"] = "FLYING_MISSION"
 
-print("\n── 代理不見了：不能把指令擋死，也不能假裝放行 ──────────")
+print("\n── 代理不見了：分辨「沒有代理」與「有代理但失聯」──────────")
+# **這兩件事原本同形**（都回 no_agent＝放行沿用本地檢查），2026-08-31 複裁 G
+# 把它們分開：失聯時放行沒有意義——指令與意圖走同一條 5G，那一刻它根本送不到
+# 飛機。壓下來、恢復後重新問一次判決攤給人看，才是這時候唯一誠實的做法。
 link.stop()
 time.sleep(1.5)
 r = ask("change_route")
-chk("代理斷線 → no_agent（沿用本地檢查，不是擋死）",
-    r["verdict"] == "no_agent", r.get("reason"))
+chk("有代理但失聯 → queued（擋下，並記下來等恢復）",
+    r["verdict"] == "queued", r.get("reason"))
+chk("回話說得出「沒有送出去」（不能讓人以為做了）",
+    "沒有送出去" in (r.get("reason") or ""))
+
+body = json.dumps({"kind": "intent", "action": "change_route",
+                   "board_uid": "guardtest-never-connected"}).encode()
+req = urllib.request.Request(f"{API}/api/agent/intent", data=body,
+                             method="POST",
+                             headers={"Content-Type": "application/json"})
+with urllib.request.urlopen(req, timeout=10) as resp:
+    r2 = json.loads(resp.read().decode())
+chk("從來沒有代理的機仍回 no_agent（沿用本地檢查，不是擋死）",
+    r2["verdict"] == "no_agent", r2.get("reason"))
 
 psql("DELETE FROM drones WHERE serial_no = '__guardtest';")
 print("\n" + ("全部通過" if ok else "**有未通過項目**"))

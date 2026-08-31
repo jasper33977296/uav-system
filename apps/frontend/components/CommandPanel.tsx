@@ -26,6 +26,13 @@ const CAP_LABELS: Record<CapKey, string> = {
   mission_upload: "上傳", mission_start: "啟動任務", mission_fly: "起飛→任務",
 };
 const AP_LABELS: Record<string, string> = { px4: "PX4", ardupilot: "ArduPilot" };
+// 意圖協定的動作 → 畫面上的說法（039 複裁 G 的補送清單用）。**照枚舉列，
+// 不猜字串**：漏一個就顯示原文，比顯示一個猜錯的中文好
+const INTENT_LABELS: Record<string, string> = {
+  start_mission: "開始任務", pause: "中斷任務", resume: "繼續任務",
+  change_route: "更換任務", rtl: "返航", land: "降落",
+  abort: "中止（原地懸停）", disarm: "上鎖",
+};
 
 // 013-B 狀態對照（group-missions-design §7.1 → 畫面人話，照枚舉不猜字串）
 const GROUP_STATUS: Record<string, string> = {
@@ -109,6 +116,10 @@ export default function CommandPanel() {
   const selectedId = useUavStore((s) => s.selectedId);
   const primaryId = useUavStore((s) => s.primaryId);
   const focusId = selectedId ?? primaryId;
+  // 意圖通道鏡像：RC 連線（複裁 A）與失聯期間的補送清單（複裁 G）都從這裡來
+  const agentsMap = useUavStore((s) => s.agents);
+  const replays = useUavStore((s) => s.replays);
+  const clearReplays = useUavStore((s) => s.clearReplays);
   const draftGroup = useUavStore((s) => s.draftGroup);
   const [groupBusy, setGroupBusy] = useState(false);
   // draft 失效＝連伺服器端一起清（07260a6 的 DELETE，限 draft；409 不理）——
@@ -386,6 +397,14 @@ export default function CommandPanel() {
   const sid = live?.mav_sysid != null ? String(live.mav_sysid) : null;
   const dh = sid ? health.drones[sid] ?? null : null;
   const armed = dh?.armed ?? null;
+  // 039 複裁 A：**RC 未連線不得起飛、不得開始任務**。「機在地上失聯只告警」
+  // 那格的前提是有人能用遙控器接管——沒有 RC 就沒有人。權威守門在機上代理，
+  // 這裡把同一條規則畫成按不下去，免得人按了被擋卻不知道為什麼。
+  // **`null` 不擋**：那是舊版代理還沒送這個欄位＝不知道，把「不知道」當成
+  // 「沒有 RC」會讓所有還沒升級的機都起飛不了（issues/036 的同一個教訓）
+  const agentHere = focusId ? agentsMap[focusId] ?? null : null;
+  const rcDown = agentHere?.rc_link === false;
+  const replayList = focusId ? replays[focusId] ?? [] : [];
   // ── 任務區要用的三個判斷（2026-08-26）───────────────────────
   // **「在空中」全檔案共用同一個判準**（landed_state 或高度）——兩套判準
   // 會在邊界上互相矛盾，而這裡決定的是「顯示哪一組按鈕」
@@ -576,7 +595,8 @@ export default function CommandPanel() {
             {(live?.landed_state === "in_air" || (live?.alt_rel ?? 0) > 2)
               ? btn("RTL", "⌂ 返航", "/mode/rtl", { danger: true, cap: "rtl" })
               : btn("起飛", "↑ 起飛", "/takeoff",
-                    { confirm: true, body: { alt }, cap: "takeoff", accent: true })}
+                    { confirm: true, body: { alt }, cap: "takeoff", accent: true,
+                      disabled: rcDown })}
           </span>
         )}
         <span className="meta">{open ? "▾" : "▸"}</span>
@@ -593,6 +613,32 @@ export default function CommandPanel() {
 
       {open && health.enabled && (
         <div className="cmd-body">
+          {/* 039 複裁 G：失聯期間按下的操作。**這不是「已經做了」的通知**，
+              是「你按過、系統沒有送出去」的清單——鏈路恢復後只重新問了一次
+              守門判決（乾跑，飛機沒有動）。要做的話人再按一次，走原本那條
+              完整路徑：那則意圖附帶的幾何是斷線前算的，直接放出去等於拿一個
+              過期的位置去指揮現在的飛機 */}
+          {replayList.length > 0 && (
+            <div className="cmd-replay">
+              <div>
+                <b>失聯期間你按了 {replayList.length} 個操作，系統沒有執行。</b>
+                鏈路恢復後重新問過機上守門（乾跑，飛機沒有動）——要做請重新按一次。
+              </div>
+              {replayList.map((r) => (
+                <div className="hint-line" key={r.intent_id}>
+                  · {INTENT_LABELS[r.action] ?? r.action}
+                  （{Math.round(r.age_s)} 秒前按下）：
+                  {r.verdict === "guard_refused"
+                    ? `現在會被守門擋下——${r.reason ?? "未說明原因"}`
+                    : r.verdict === "unknown"
+                      ? `問不到判決——${r.reason ?? "未說明原因"}`
+                      : `守門現在放行（機端狀態 ${r.state ?? "未知"}）`}
+                </div>
+              ))}
+              <button className="btn-plain btn-sm"
+                onClick={() => focusId && clearReplays(focusId)}>知道了</button>
+            </div>
+          )}
           {/* ── 013-A 編隊視圖（§2.5）：設定＋預覽先行，執行進度視圖等 013-B ── */}
           {formation && (() => {
             const members = Object.entries(fleet).filter(([, t]) => t.connected);
@@ -909,8 +955,14 @@ export default function CommandPanel() {
                   onChange={(e) => setAlt(Number(e.target.value) || 10)} /> m
               </label>
               {btn("起飛→任務", "② 開始任務（起飛→執行）", "/mission/fly",
-                   { confirm: true, cap: "mission_fly",
+                   { confirm: true, cap: "mission_fly", disabled: rcDown,
                      body: { mission_id: missionId || undefined, takeoff_alt: alt } })}
+              {rcDown && (
+                <div className="hint-line">
+                  · 遙控器未連線——自動起飛的前提是有人能隨時接管，
+                  請先確認遙控器開機並與飛控連上（039 複裁 A）
+                </div>
+              )}
             </div>
           )}
 

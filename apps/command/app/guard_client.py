@@ -54,7 +54,10 @@ async def ask_guard(sysid: int, action: str, intent_id: str | None = None,
     三種結果，**「不知道」歸到「不行」那一側**：
     * `cleared`／`no_agent` → 放行（沒有代理的機沿用原本的檢查）
     * `refused` → 擋下，理由原樣轉給操作員
-    * `unknown`（逾時、斷線）→ **擋下**。不知道守門怎麼說，在飛安路徑上就是不行
+    * `unknown`（逾時）→ **擋下**。不知道守門怎麼說，在飛安路徑上就是不行
+    * `queued`（有代理但失聯中）→ **擋下**，並說明操作已記下、恢復後會攤給人
+      重新確認。這格原本被歸進 `no_agent` 一起放行——而失聯時放行沒有意義：
+      指令與意圖走同一條 5G，那一刻它根本送不到飛機（issues/039 複裁 G）
     """
     intent = _INTENT_OF.get(action)
     if intent is None:
@@ -82,6 +85,11 @@ async def ask_guard(sysid: int, action: str, intent_id: str | None = None,
     v = res.get("verdict")
     if v in ("cleared", "no_agent", None):
         return res
+    if v == "queued":
+        raise HTTPException(409, {
+            "msg": res.get("reason") or "這台機失聯中，操作已記下、尚未送出",
+            "code": "guard_queued", "intent_id": res.get("intent_id"),
+            "pending": res.get("pending")})
     if v == "unknown":
         raise HTTPException(409, {
             "msg": f"問不到機上守門的判決（{res.get('reason')}）——"

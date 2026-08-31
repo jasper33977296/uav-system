@@ -37,6 +37,25 @@ export interface AgentState {
   since: string | null;
   mission_seq?: number | null; mission_total?: number | null;
   derived?: Record<string, unknown> | null;
+  /** 遙控器連上了沒有（039 複裁 A）。**null＝不知道**（舊版代理還沒開始送），
+   * 與 false＝確定沒連上是兩件事——畫面要分開講，不能把「不知道」畫成「沒有」。
+   * 這是「機在地上失聯只告警」那格的前提：沒有 RC 就沒有人能接管。 */
+  rc_link?: boolean | null;
+  /** 失聯期間壓下來、等著補送的 intent 則數（039 複裁 G）。 */
+  pending?: number;
+}
+
+/** 失聯期間按下的操作，恢復後系統重算的判決（039 複裁 G）。
+ * **這不是「已經做了」的通知，是「你按過、但沒有送出去」的清單**——
+ * 要不要真的做，人再按一次，走原本那條完整路徑。 */
+export interface IntentReplay {
+  drone_id: string | null; board_uid: string;
+  action: string; intent_id: string;
+  age_s: number;            // 當初按下距離補送有多久
+  verdict: string | null;   // 代理重算後的判決（乾跑，沒有動飛機）
+  reason: string | null;
+  state: string | null;
+  at: number;               // 收到補送結果的本地時刻（畫面排序用）
 }
 
 export interface Telemetry {
@@ -116,6 +135,11 @@ interface UavStore {
   // 那種連線在後端 log 看得到，但它不對應畫面上任何一台機）
   agents: Record<string, AgentState>;
   setAgent: (a: AgentState) => void;
+  //: 補送結果，鍵為 drone_id。**留著直到人自己關掉**：它描述的是一件
+  //: 已經發生的事（你按過、系統沒做），不是一個會自己過期的狀態
+  replays: Record<string, IntentReplay[]>;
+  pushReplay: (r: IntentReplay) => void;
+  clearReplays: (droneId: string) => void;
   events: UavEvent[];
   sinrHistories: Record<string, number[]>;   // 每機 sparkline，各 120 筆
   // simple-first：專業數值面板是抽屜（預設關、點訊號格/▤ 開）
@@ -184,6 +208,18 @@ export const useUavStore = create<UavStore>((set) => ({
   agents: {},
   setAgent: (a) =>
     set((s) => (a.drone_id ? { agents: { ...s.agents, [a.drone_id]: a } } : s)),
+  replays: {},
+  pushReplay: (r) =>
+    set((s) => {
+      const k = r.drone_id ?? r.board_uid;
+      return { replays: { ...s.replays, [k]: [...(s.replays[k] ?? []), r] } };
+    }),
+  clearReplays: (droneId) =>
+    set((s) => {
+      const next = { ...s.replays };
+      delete next[droneId];
+      return { replays: next };
+    }),
   events: [],
   sinrHistories: {},
   panelOpen: false,

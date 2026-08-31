@@ -9,7 +9,7 @@ import { useUavStore } from "./store";
 /** 連上 backend 的 telemetry WebSocket，自動重連。 */
 export function useTelemetry() {
   const { setLive, setWsConnected, pushEvent, seedEvents, setRegistry,
-    setAgent, setEventsFailed } = useUavStore();
+    setAgent, setEventsFailed, pushReplay } = useUavStore();
 
   // 事件流開頁先補歷史：WS 只送「開頁之後」的事件，中途開頁會漏掉先前的
   // 轉換（實際發生過：飛行中開頁，degraded/lost 都發過了，畫面卻是「尚無事件」）。
@@ -51,6 +51,10 @@ export function useTelemetry() {
         // 機上資料 §2.8：訊息登錄表 1–2Hz（014 Phase B，暫定契約形）
         // 意圖協定 §4.2 的狀態鏡像（代理 → 地面站，1Hz 保活＋變化即送）
         else if (msg.type === "agent_state") setAgent(msg);
+        // 失聯期間按下的操作，恢復後的重算判決（039 複裁 G）。**乾跑，
+        // 飛機沒有動**——要不要真的做由人再按一次
+        else if (msg.type === "agent_intent_replay")
+          pushReplay({ ...msg, at: Date.now() });
         else if (msg.type === "msg_registry" && msg.drone_id)
           setRegistry(msg.drone_id,
             { sensors: msg.sensors ?? [], messages: msg.messages ?? [] });

@@ -263,13 +263,58 @@ async def ws_telemetry(ws: WebSocket):
         manager.disconnect(ws)
 
 
+async def _replay_pending(link) -> None:
+    """恢復連線後補送失聯期間壓下來的 intent（issues/039 複裁 G）。
+
+    **補送＝重新問一次判決並攤給人看，不是重新執行。** 每則都帶 `dry_run`：
+    代理照樣過守門、照樣重算提案，但不動飛機。理由是狀態守門用的是「當下
+    狀態」——它擋得住恢復後狀態已經變了的（已經在 RETURNING 卻收到改航線），
+    **擋不住狀態又剛好合法的**：那則 intent 附帶的幾何是斷線前算的，40 秒
+    × 10 m/s ＝ 400 公尺誤差，而守門只看狀態、不看新鮮度。
+
+    所以這裡的產出是一張「你在失聯期間按過這些、系統重算的判決是這樣」的
+    清單，要不要真的做由人再按一次——走原本那條完整路徑。
+    """
+    items = agent_link.take_pending(link)
+    for q in items:
+        age = q.get("age_s") or 0.0
+        try:
+            ev = await agent_link.send_intent(
+                link, q["action"], {**q["params"], "dry_run": True},
+                q["intent_id"])
+            verdict, reason = ev.get("event"), ev.get("reason")
+        except Exception as e:
+            # 補送失敗不重試（take_pending 已經清空）。**重試一個人在十分鐘前
+            # 按下的飛行操作，正是這條規則最該避免的事**
+            verdict, reason, ev = "unknown", str(e), None
+        log.warning("補送失聯期間的 intent：%s（%.0f 秒前）→ %s（%s）",
+                    q["action"], age, verdict, reason or "")
+        try:
+            row = await db.insert_event(
+                link.drone_id, None, "warn", "intent_replayed",
+                {"action": q["action"], "age_s": round(age, 1),
+                 "verdict": verdict, "reason": reason,
+                 "note": "失聯期間按下的操作，恢復後只重算判決、未執行"})
+            row["drone"] = link.drone_name
+            await manager.broadcast({"type": "event", "event": row})
+        except Exception:
+            log.exception("補送事件寫入失敗（不影響指令路徑）")
+        await manager.broadcast({
+            "type": "agent_intent_replay", "drone_id": link.drone_id,
+            "board_uid": link.board_uid, "action": q["action"],
+            "intent_id": q["intent_id"], "age_s": round(age, 1),
+            "verdict": verdict, "reason": reason,
+            "proposal": (ev or {}).get("proposal"),
+            "state": (ev or {}).get("state")})
+
+
 @app.websocket("/ws/agent")
 async def ws_agent(ws: WebSocket):
     """機上代理的意圖通道（doc/agent-intent-protocol.md §2）。
 
-    **本版只收 `hello` 與 `state`，不下任何指令。** 地面站是鏡像＋意圖來源，
-    而意圖（intent／proposal／decision）還沒實作——收到就明說未支援，
-    不靜靜丟掉：機上如果以為送出去了，畫面卻是空的，那比報錯更難查。
+    收 `hello`／`state`／`event`／`ack`，反方向送 `intent`／`decision`／
+    `progress`。不認得的型別**明說未支援，不靜靜丟掉**：機上如果以為送出去
+    了、畫面卻是空的，那比報錯更難查。
 
     第一則必須是 `hello`。理由不是形式主義：沒有 `board_uid` 就不知道這條
     連線是哪一台機的，之後的 `state` 只能記成無主資料。
@@ -311,11 +356,16 @@ async def ws_agent(ws: WebSocket):
                 link.ws = ws          # 送 intent 走這條
                 await ws.send_json({"type": "ack", "of": "hello",
                                     "drone_id": link.drone_id,
-                                    "accepts": ["state"]})
+                                    "accepts": ["state", "event", "ack"]})
                 log.info("意圖通道連上：%s（board_uid=%s，代理 %s）",
                          link.drone_name or "未註冊", uid, link.agent_version)
                 await manager.broadcast({"type": "agent_state",
                                          **link.as_dict()})
+                if link.pending:
+                    # **補送要另開 task，不能在這裡 await**：補送等的是代理回的
+                    # event，而 event 正是由這個迴圈收進來的——在這裡等就是等
+                    # 自己，整條通道會卡死到逾時
+                    asyncio.create_task(_replay_pending(link))
             elif t == "state":
                 if link is None:
                     await ws.send_json({"type": "error",
@@ -331,6 +381,11 @@ async def ws_agent(ws: WebSocket):
                 await ws.send_json({"type": "ack", "of": "state"})
                 await manager.broadcast({"type": "agent_state",
                                          **link.as_dict()})
+            elif t == "ack":
+                # 代理對一則 intent 的回執（協定 §2，039 複裁 G）。**不回話**：
+                # 對回執再回一個 ack 只會讓兩邊互相確認到天亮
+                if link is not None:
+                    agent_link.on_ack(link, msg)
             elif t == "event":
                 if link is None:
                     await ws.send_json({"type": "error",

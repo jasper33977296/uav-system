@@ -163,8 +163,16 @@ async def agent_intent(body: GuardIn):
 
     **沒有代理不等於不能飛**：這台機可能根本沒裝代理（他人的 QGC、SITL）。
     那種情況回 `no_agent`，由呼叫端沿用自己原本的檢查——守門是額外一層，
-    不是唯一一層。但**代理在、卻問不到**（逾時、斷線）要當成拒絕：
-    那是「不知道守門怎麼說」，而不知道在飛安路徑上就是不行。
+    不是唯一一層。但**代理在、卻問不到**（逾時）要當成拒絕：那是「不知道
+    守門怎麼說」，而不知道在飛安路徑上就是不行。
+
+    **有代理但失聯中回 `queued`**（039 複裁 G）：操作不送出、壓進佇列，
+    鏈路恢復時重新問一次判決並攤給人確認。這與 `no_agent` 分開，是因為原本
+    兩者同形——而「這台機沒裝代理」與「這台機失聯了」在飛安上完全不同。
+
+    > **已知限制**：`links` 是行程內的記憶體登錄表。地面站重啟後，一台失聯中
+    > 的機會退回 `no_agent`（＝放行沿用本地檢查），因為那條 hello 從來沒進來
+    > 過。要修就得把代理登錄持久化，屬 issues/033 的範圍。
     """
     import uuid as _uuid
     from . import agent_link
@@ -174,14 +182,33 @@ async def agent_intent(body: GuardIn):
     elif body.drone_id:
         link = next((l for l in agent_link.links.values()
                      if l.drone_id == body.drone_id), None)
-    if link is None or not link.connected:
+    if body.kind not in ("intent", "decision", "progress"):
+        raise HTTPException(422, f"不認得的協定型別 {body.kind}")
+    if link is None:
         return {"verdict": "no_agent",
-                "reason": "這台機沒有連線中的機上代理，守門這一層不存在"}
+                "reason": "這台機沒有機上代理，守門這一層不存在"}
+    if not link.connected:
+        # **有代理但失聯中**——這與「沒有代理」是兩件事，原本兩者都回
+        # `no_agent`（＝放行沿用本地檢查）。039 複裁 G：壓下來，恢復後補送。
+        iid = body.intent_id or str(_uuid.uuid4())
+        if body.kind != "intent":
+            # decision／progress 是「已經開始的那件事」的後續，壓下來沒有意義：
+            # 那件事在機上早就因為失聯自己收尾了（協定 §6）
+            return {"verdict": "unknown", "intent_id": iid,
+                    "reason": "意圖通道失聯中，這則後續送不出去"}
+        if body.action not in (link.vets or []):
+            return {"verdict": "no_agent",
+                    "reason": f"機上代理（{link.agent_version}）沒有宣告守 "
+                              f"{body.action}，守門這一層不存在"}
+        n, dropped = agent_link.queue_intent(link, body.action, body.params, iid)
+        return {"verdict": "queued", "intent_id": iid, "pending": n,
+                "dropped": dropped,
+                "reason": "這台機的意圖通道失聯中，操作**沒有送出去**。"
+                          "已經記下來，鏈路恢復後會重新問一次判決並攤給你確認"
+                          "——不會自動執行"}
     # **版本協商**：代理在 hello 裡宣告它守哪些意圖（`vets`）。舊版代理沒有
     # 這個欄位，也不會回 event——不先問清楚就送過去，只會等到逾時，然後
     # 「不知道＝不行」把所有飛行操作擋死。**能力宣告要用問的，不要用試的。**
-    if body.kind not in ("intent", "decision", "progress"):
-        raise HTTPException(422, f"不認得的協定型別 {body.kind}")
     # decision／progress 是**已經開始的那件事的後續**，守門在 intent 那一關
     # 已經問過了；這裡只檢查 intent
     if body.kind == "intent" and body.action not in (link.vets or []):

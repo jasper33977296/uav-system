@@ -1135,3 +1135,13 @@ details.card summary { cursor: pointer; font-size: 14px; font-weight: 600; }
   font-size: 12px; padding: 5px 12px; border-radius: 999px;
   white-space: nowrap; pointer-events: none;
 }
+
+/* 039 複裁 G：失聯期間按下、但沒有執行的操作清單。橘框而不是紅框——
+   它不是一個故障，是一件「系統替你停下來了」的事，而人需要看到並自己決定 */
+.cmd-replay {
+  border: 1px solid var(--status-serious);
+  background: var(--status-serious-bg);
+  border-radius: 6px; padding: 8px 10px; margin: 0 0 8px;
+  font-size: 12.5px; display: flex; flex-direction: column; gap: 4px;
+}
+.cmd-replay button { align-self: flex-start; margin-top: 2px; }
