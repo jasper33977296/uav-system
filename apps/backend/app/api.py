@@ -1,5 +1,6 @@
 import asyncio
 import json
+import time
 from datetime import datetime
 from uuid import UUID
 
@@ -258,6 +259,15 @@ class BackfillSample(BaseModel):
     armed: bool | None = None
 
 
+#: 補傳樣本的時間戳下限（2025-01-01Z）。**機端的時鐘不可信**：機上 Pi 的 RTC
+#: 沒有電池，每次冷開機系統時間都從 1970 起算、靠 NTP 修正——而 NTP 走 5G，
+#: 正是斷線期間不通的那一條。取樣條件（板子 UID 來自 UART、gs_link_ok 預設
+#: False）在 NTP 同步**之前**就成立，所以一批補傳裡可能混著 1970 的時間戳。
+BACKFILL_MIN_T = 1735689600.0
+#: 未來多少秒內還算合理（時鐘小偏差）。再遠就是壞掉的時鐘，不是慢半拍
+BACKFILL_FUTURE_S = 120.0
+
+
 class BackfillIn(BaseModel):
     """C 層：代理把 5G 斷線期間的取樣補傳上來。"""
     board_uid: str
@@ -292,8 +302,32 @@ async def telemetry_backfill(body: BackfillIn):
     if drone_id is None:
         raise HTTPException(404, f"不認得的 board_uid {body.board_uid}")
 
-    lo = min(s.t for s in body.samples)
-    hi = max(s.t for s in body.samples)
+    # **時間戳先過濾，再拿去算範圍。** 混進一筆 1970 的樣本，`lo` 就變成 1970，
+    # 而下面兩條範圍查詢會因此掃過整段歷史——最嚴重的是 blackouts 那條
+    # UPDATE：它會把這台機**有史以來每一段失明記錄**都標成「已補回」，
+    # 而那些洞其實從來沒有被補上。壞資料進來一次，歷史就永遠說了謊。
+    now_t = time.time()
+
+    def plausible(t: float) -> bool:
+        return BACKFILL_MIN_T <= t <= now_t + BACKFILL_FUTURE_S
+
+    good = [s for s in body.samples if plausible(s.t)]
+    rej = [s.t for s in body.samples if not plausible(s.t)]
+    bad = len(rej)
+    if bad:
+        # **不安靜地丟**：回報幾筆、範圍多少，機端才查得出自己的時鐘出了事
+        log.warning("補傳丟掉 %d 筆時間戳不合理的樣本（%s，最早 %.0f、最晚 %.0f）"
+                    "——機上時鐘可能還沒與 NTP 同步", bad, body.board_uid,
+                    min(rej), max(rej))
+    if not good:
+        raise HTTPException(422, {
+            "code": "implausible_timestamps",
+            "msg": f"{len(body.samples)} 筆樣本的時間戳全部不合理"
+                   f"（下限 {BACKFILL_MIN_T:.0f}）——機上時鐘還沒對過時，"
+                   "補上來只會在歷史裡長出假資料",
+            "rejected": bad})
+    lo = min(s.t for s in good)
+    hi = max(s.t for s in good)
     # 這段時間屬於哪個架次？**用時間去找**，不是用「現在的架次」——補傳的
     # 是過去的資料，而那時開著的架次可能已經因為失聯被收掉了
     sess = await db.pool.fetchrow(
@@ -312,7 +346,7 @@ async def telemetry_backfill(body: BackfillIn):
         "WHERE drone_id = $1::uuid AND time BETWEEN to_timestamp($2) "
         "AND to_timestamp($3)", drone_id, lo - 0.5, hi + 0.5)
     have = {round(float(r["t"]), 2) for r in exist}
-    fresh = [s for s in body.samples if round(s.t, 2) not in have]
+    fresh = [s for s in good if round(s.t, 2) not in have]
     rows = [(s.t, drone_id, session_id, s.lat, s.lon, s.alt_msl, s.alt_rel,
              s.heading, s.ground_speed, s.battery_pct, s.battery_voltage,
              s.gps_fix, s.satellites, s.flight_mode) for s in fresh]
@@ -344,11 +378,15 @@ async def telemetry_backfill(body: BackfillIn):
             "to_timestamp($2)), end_reason = 'telemetry_lost_backfilled' "
             "WHERE id = $1::uuid AND end_reason = 'telemetry_lost'",
             session_id, hi)
-    log.info("補傳 %d 筆、跳過 %d 筆重複（%s，架次 %s，補回 %d 段失明）",
-             len(rows), len(body.samples) - len(rows), body.board_uid,
+    # **重複與時間戳不合理要分開報**：兩者都是「沒寫進去」，但一個是正常的
+    # 重送、一個是機上時鐘壞了，混成一個數字等於把後者藏起來
+    log.info("補傳 %d 筆、跳過 %d 筆重複、丟棄 %d 筆時間戳不合理"
+             "（%s，架次 %s，補回 %d 段失明）",
+             len(rows), len(good) - len(rows), bad, body.board_uid,
              session_id, len(closed))
     return {"ok": True, "inserted": len(rows),
-            "skipped_duplicate": len(body.samples) - len(rows),
+            "skipped_duplicate": len(good) - len(rows),
+            "rejected_implausible": bad,
             "session_id": session_id,
             "blackouts_recovered": [r["id"] for r in closed],
             "stayed_armed": body.stayed_armed}

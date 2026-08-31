@@ -97,6 +97,48 @@ chk("重送不會變成兩份", n2 == "120", f"重送後 {n2} 筆")
 chk("而且明說跳過了幾筆（不是安靜地丟掉）",
     r2.get("skipped_duplicate") == 50, r2.get("skipped_duplicate"))
 
+print("\n── 機上時鐘還沒對過時：1970 的時間戳不能進來 ─────────────")
+# 機上 Pi 的 RTC 沒有電池，冷開機時系統時間從 1970 起算、靠 NTP 修正，而 NTP
+# 走 5G——正是斷線期間不通的那條。取樣在同步之前就開始，所以一批補傳裡會混著
+# 1970。**危害不是那幾筆假資料本身**：`lo` 變成 1970 之後，blackouts 那條
+# UPDATE 的範圍條件會匹配到這台機**有史以來每一段失明記錄**，把從來沒補回的
+# 洞全部標成「已補回」——歷史就此永遠說了謊。
+epoch_junk = [{"t": 14.0 + i, "lat": 25.05, "lon": 121.50, "alt_rel": 30.0}
+              for i in range(5)]
+r4 = post("/api/telemetry/backfill",
+          {"board_uid": UID, "samples": epoch_junk, "stayed_armed": True})
+chk("整批都是 1970 → 422 拒收（不是靜靜寫進歷史）",
+    r4.get("_status") == 422, r4.get("detail"))
+n_junk = psql("SELECT count(*) FROM telemetry WHERE time < '2000-01-01';")
+chk("**反向驗證**：1970 那幾筆一筆都沒進資料庫", n_junk == "0", n_junk)
+
+# 種一段**上個月的、沒補回的**失明。沒有它，下面那條斷言是空的（0 → 0）——
+# 而一條永遠成立的斷言擋不住任何迴歸
+old_bid = psql(
+    f"INSERT INTO blackouts (drone_id, started_at, ended_at, reason, "
+    f"armed_at_start) VALUES ('{did}', now() - interval '30 days', "
+    f"now() - interval '30 days' + interval '5 min', 'telemetry_gap', true) "
+    f"RETURNING id;")
+before = psql(f"SELECT count(*) FROM blackouts WHERE drone_id = '{did}' "
+              f"AND recovered_by IS NULL;")
+chk("（前置）確實有一段沒補回的舊失明可以被誤標", before == "1", before)
+mixed = epoch_junk + [{"t": t_lost + 200 + i, "lat": 25.05, "lon": 121.50,
+                       "alt_rel": 30.0} for i in range(3)]
+r5 = post("/api/telemetry/backfill",
+          {"board_uid": UID, "samples": mixed, "stayed_armed": True})
+chk("混著 1970 的一批：好的收下、壞的丟掉",
+    r5.get("inserted") == 3 and r5.get("rejected_implausible") == 5,
+    f"inserted={r5.get('inserted')} rejected={r5.get('rejected_implausible')}")
+chk("丟掉的筆數與重複的筆數分開報（不能混成一個數字）",
+    r5.get("skipped_duplicate") == 0, r5.get("skipped_duplicate"))
+after = psql(f"SELECT count(*) FROM blackouts WHERE drone_id = '{did}' "
+             f"AND recovered_by IS NULL;")
+chk("**沒有把無關的失明記錄一起標成已補回**", before == after == "1",
+    f"未補回的失明：{before} → {after}")
+still = psql(f"SELECT coalesce(recovered_by, '(null)') FROM blackouts "
+             f"WHERE id = '{old_bid}';")
+chk("上個月那段失明仍然是沒補回的", still == "(null)", still)
+
 print("\n── 認不得的板子要拒絕，不是安靜地丟掉 ─────────────────")
 r3 = post("/api/telemetry/backfill",
           {"board_uid": "nobody-knows-me", "samples": samples[:2]})
