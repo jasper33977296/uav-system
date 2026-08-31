@@ -1,6 +1,6 @@
 # 036 · 即時頁把「沒有資料」畫成「有資料」
 
-- 狀態：in-progress
+- 狀態：**closed**（2026-08-31 對帳收案；實作在 `3d5193f`，A 層過期顯示在 `16f5b1e`）
 - 嚴重度：medium（顯示正確性；其中假座標一項在地圖上會直接誤導）
 - 位置：`apps/backend/app/main.py`（廣播）、`mavlink_rx.py`（位置寫入）、
   `apps/frontend/components/MapView.tsx`、`apps/frontend/app/drones/page.tsx`
@@ -98,4 +98,17 @@ st.lat = msg.lat / 1e7        # mavlink_rx.py:332，無條件
 
 ## 解決方式
 
-（closed 時補：commit hash）
+`3d5193f`（A／B／C 三種情況）＋ `16f5b1e`（A 層：過期資料不得長得像即時的）。
+2026-08-31 逐項對帳：
+
+* **A 曾連上、後來斷線**：`state.ever_connected`（`state.py:34`）＋
+  `MapView.tsx:520` 的紅色外框閃爍。**閃爍由本地時鐘驅動而不是 store 變動**
+  ——機一斷線遙測就停、store 不再變、畫面不重繪，於是「已經斷線」會**因為
+  斷線本身而顯示不出來**（`MapView.tsx:675` 的註解記著這個坑）。
+  後續 `16f5b1e` 再補一層：資料過舊時把數值換成「—」並掛常駐橫幅，因為
+  一個灰色的「1 m」人讀到的仍然是「它在 1 公尺」。
+* **B 從未連上**：不進 fleet，幽靈機不再佔畫面（`main.py:185`）。
+* **C 連著但無定位**：`mavlink_rx.py:401` 的 0,0 哨兵判定，
+  **判準用哨兵值而不是 `gps_fix`**（位置來源不一定是 GPS）。
+
+三者現在在畫面上長得不一樣，這正是本案的全部要求。

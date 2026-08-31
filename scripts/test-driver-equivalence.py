@@ -87,11 +87,28 @@ def main():
                 got = drv.decode_mode(cm)
                 if want != got:
                     fails.append(f"decode_mode(cm={cm:#x}, ap={raw}) 舊={want!r} 新={got!r}")
+    #: 與基準點刻意不同的模式解碼：{(ap_raw, custom_mode): (舊, 新, 為什麼)}
+    #: 同樣是具名豁免——沒登記的差異照樣失敗，登記了卻不再分歧的也失敗。
+    ACCEPTED_MODE_DRIFT = {
+        (3, 0): ("—", "STABILIZE",
+                 "ArduPilot 的 STABILIZE 是模式 0，而舊表把 0 當成「沒有值」"
+                 "顯示成「—」（a92b8e1 修）。**0 是合法模式號，不是空值**"),
+    }
+    seen_mode_drift = set()
     for cm in list(range(0, 40)) + [99, 255, 1000]:
         want = old_dialect.mode_name(cm, 3)
         got = autopilot.get_driver(3).decode_mode(cm)
-        if want != got:
-            fails.append(f"decode_mode(cm={cm}, ardupilot) 舊={want!r} 新={got!r}")
+        if want == got:
+            continue
+        exp = ACCEPTED_MODE_DRIFT.get((3, cm))
+        if exp and (exp[0], exp[1]) == (want, got):
+            seen_mode_drift.add((3, cm))
+            continue
+        fails.append(f"decode_mode(cm={cm}, ardupilot) 舊={want!r} 新={got!r}")
+    for key, (_o, _n, why) in ACCEPTED_MODE_DRIFT.items():
+        if key not in seen_mode_drift:
+            fails.append(f"模式分歧表上的 {key} 已經不再分歧——**豁免過期了，"
+                         f"請刪掉**（登記理由：{why}）")
 
     # ── 2. autopilot_name ───────────────────────────────────────────
     for raw in (12, 3, 0, 1, None, 99):
@@ -119,6 +136,29 @@ def main():
             fails.append(f"ArduPilot mode_matches({name!r}) 對自己的編碼竟然不成立")
 
     # ── 4. capabilities：含 ctx 的各種狀態，逐鍵比對值與原因文字 ────
+    #
+    # **能力四態會隨裁定改變，而基準點是凍結的過去**（2026-08-31 補記）。
+    # 直接逐鍵比對的話，每一次「刻意改變能力」都會讓這支護欄永遠紅——而一支
+    # 永遠紅的測試等於沒有測試：真正的回歸會淹在固定的雜訊裡沒人看見。
+    #
+    # 但**「有差異就放過」等於把護欄拆掉**。所以改成具名的分歧表：
+    #   * 表上有的差異 → 放行（每筆都寫得出為什麼）
+    #   * 表上沒有的差異 → 照樣失敗
+    #   * 表上有、但實際已經不再分歧 → 也失敗（**過期的豁免要清掉**，
+    #     留著它就會在日後真的回歸時默默放行）
+    ACCEPTED_CAP_DRIFT = {
+        ("px4", "manual"): "虛擬搖桿整塊移除（issues/035）",
+        ("ardupilot", "manual"): "虛擬搖桿整塊移除（issues/035）",
+        ("unknown", "manual"): "虛擬搖桿整塊移除（issues/035）",
+        ("ardupilot", "mission_start"):
+            "2026-08-24 SITL 一致性測試通過後由 unverified 開為 ok（issues/015）",
+        ("ardupilot", "mission_fly"):
+            "2026-08-24 SITL 一致性測試通過後由 unverified 開為 ok（issues/015）",
+    }
+    seen_drift = set()
+
+    # ctx 現在兩家驅動都不看（`sysid_mygcs` 隨搖桿一起走了），所以這一圈驗的
+    # 已經不是「ctx 會不會改變輸出」的舊語意，而是**它不該改變輸出**。留著
     ctxs = [None, {}, {"sysid_mygcs": 254}, {"sysid_mygcs": 255},
             {"sysid_mygcs": 1}, {"sysid_mygcs": None}]
     for raw, ap in ((12, "px4"), (3, "ardupilot"), (0, "unknown"), (None, "unknown")):
@@ -126,15 +166,20 @@ def main():
         for ctx in ctxs:
             w_caps, w_reasons = old_caps.capabilities_for(ap, ctx)
             g_caps, g_reasons = drv.capabilities(ctx)
-            if w_caps != g_caps:
-                diff = {k: (w_caps.get(k), g_caps.get(k))
-                        for k in set(w_caps) | set(g_caps) if w_caps.get(k) != g_caps.get(k)}
-                fails.append(f"capabilities({ap}, ctx={ctx}) 值不一致：{diff}")
-            if w_reasons != g_reasons:
-                diff = {k: (w_reasons.get(k), g_reasons.get(k))
-                        for k in set(w_reasons) | set(g_reasons)
-                        if w_reasons.get(k) != g_reasons.get(k)}
-                fails.append(f"capabilities({ap}, ctx={ctx}) **原因文字**不一致：{diff}")
+            for label, w, g in (("值", w_caps, g_caps),
+                                ("**原因文字**", w_reasons, g_reasons)):
+                for k in set(w) | set(g):
+                    if w.get(k) == g.get(k):
+                        continue
+                    if (ap, k) in ACCEPTED_CAP_DRIFT:
+                        seen_drift.add((ap, k))
+                        continue
+                    fails.append(f"capabilities({ap}, ctx={ctx}) {label}不一致："
+                                 f"{k}：舊={w.get(k)!r} 新={g.get(k)!r}")
+    for key, why in ACCEPTED_CAP_DRIFT.items():
+        if key not in seen_drift:
+            fails.append(f"分歧表上的 {key} 已經不再分歧——**豁免過期了，請刪掉**"
+                         f"（登記理由：{why}）")
 
     # ── 5. 串流策略：只有 ArduPilot 要主動要求 ──────────────────────
     for raw in (12, 3, None, 99):

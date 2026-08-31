@@ -80,8 +80,13 @@ def main():
     # ── 5. 模式解讀（B0 是純搬運，值必須與搬運前相同）──────────────
     cases = [
         # (custom_mode, autopilot_raw, 期望)
-        (0, 12, "—"),                       # 未設定模式
-        (0, 3, "—"),
+        # **PX4 與 ArduPilot 對 custom_mode=0 的意思不同，這裡不能共用一格**：
+        # PX4 的 0 是「主模式欄還沒填」＝真的沒有模式；ArduPilot 的 0 是
+        # **STABILIZE**，一個合法且常用的手飛模式。舊表兩家都當成「—」，
+        # 於是機在 STABILIZE 時畫面顯示「沒有模式」（`a92b8e1` 修）。
+        # 這一格 2026-08-31 對帳時仍寫著舊期望，**測試在替一個已修的 bug 背書**
+        (0, 12, "—"),                       # PX4：主模式未設定
+        (0, 3, "STABILIZE"),                # ArduPilot：0 是合法模式號，不是空值
         (4 << 16 | 4 << 24, 12, "MISSION"),  # PX4 AUTO.MISSION
         (3 << 16, 12, "POSCTL"),             # PX4 主模式
         (4, 3, "GUIDED"),                    # ArduPilot Copter GUIDED

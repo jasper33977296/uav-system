@@ -56,7 +56,11 @@ interface DroneHealth {
   capability_reasons?: Partial<Record<CapKey, string>>;   // 僅非 ok 鍵
 }
 interface Health {
+  //: **`ok` 講的是「還能不能指揮飛機」**，不是「HTTP 層還活著」（issue 034）。
+  //: router 執行緒死掉或卡住時它是 false，而 healthz 同時回 503——但 `fetch`
+  //: 不會因為 503 拋錯，所以**不讀這個欄位就等於沒有這道防線**
   ok: boolean;
+  detail?: string;          // ok=false 時服務給的人話說明
   enabled: boolean;
   drones: Record<string, DroneHealth>;
 }
@@ -394,6 +398,12 @@ export default function CommandPanel() {
   // 導出——側欄/地圖色點選誰，這裡就指揮誰，遙測與指令對象永遠同一台。
   // WS 的 mav_sysid 是「當下事實」（DB 的持久值斷線後會漂移，不用）；
   // null＝非 MAVLink 機＝無指令通道
+  // issue 034：指令服務的 router 變殭屍——HTTP 還在回話，但心跳已停發、
+  // 指令不會送達飛機。**這是最會騙人的一種失效**：遙測照樣流動（backend 直接
+  // 收 MAVLink，與指令服務是兩條路），所以畫面上一切正常，只有這個欄位會說。
+  // **嚴格比對 false**：舊版服務沒有這個欄位時是 undefined，那是「不知道」，
+  // 不該把整個面板鎖掉
+  const routerDead = health.ok === false;
   const sid = live?.mav_sysid != null ? String(live.mav_sysid) : null;
   const dh = sid ? health.drones[sid] ?? null : null;
   const armed = dh?.armed ?? null;
@@ -588,8 +598,9 @@ export default function CommandPanel() {
         {!health.enabled && <span className="meta">未啟用</span>}
         {health.enabled && !live && <span className="meta">無遙測</span>}
         {health.enabled && noChannel && <span className="meta">無指令通道</span>}
+        {routerDead && <span className="meta meta-dead">指令服務失效</span>}
         <span className="spacer" />
-        {health.enabled && !formation && sid && dh && !observeOnly && (
+        {health.enabled && !routerDead && !formation && sid && dh && !observeOnly && (
           <span onPointerDown={(e) => e.stopPropagation()}
             onPointerUp={(e) => e.stopPropagation()}>
             {(live?.landed_state === "in_air" || (live?.alt_rel ?? 0) > 2)
@@ -611,7 +622,29 @@ export default function CommandPanel() {
         </div>
       )}
 
-      {open && health.enabled && (
+      {/* issue 034：router 殭屍時**不給可按的指令鈕**——按下去必然逾時，
+          而「按了才發現」正是 ui-spec §0.2e 禁止的「失效冒充合法狀態」。
+          擋在這裡而不是逐顆鈕 disable：失效的是整條指令通道，不是某個能力 */}
+      {open && routerDead && (
+        <div className="cmd-body">
+          <div className="cmd-dead">
+            <b>指令服務失效——現在指揮不了飛機。</b>
+            <div className="hint-line">
+              {health.detail
+                ?? "MAVLink router 迴圈未在運轉：GCS 心跳已停發、指令不會送達。"}
+            </div>
+            <div className="hint-line">
+              · 遙測可能仍然正常（那是另一條路），**畫面正常不代表指得動**
+            </div>
+            <div className="hint-line">
+              · 機上仍有自己的 failsafe 與待命的實體遙控器；
+              查 command 服務日誌後重啟服務
+            </div>
+          </div>
+        </div>
+      )}
+
+      {open && health.enabled && !routerDead && (
         <div className="cmd-body">
           {/* 039 複裁 G：失聯期間按下的操作。**這不是「已經做了」的通知**，
               是「你按過、系統沒有送出去」的清單——鏈路恢復後只重新問了一次

@@ -1,6 +1,6 @@
 # 037 · `.plan` 自報的目標機種被完全忽略
 
-- 狀態：in-progress
+- 狀態：**closed**（2026-08-31 對帳收案；實作在 `b79fbae`）
 - 嚴重度：**high**（會讓錯的航線靜默上到機上，且事後查不出原因）
 - 位置：`apps/frontend/app/missions/page.tsx`（匯入）、`apps/backend/app/api.py`
   （入庫）、`apps/command/app/main.py`（上傳前比對）、`plans.py`（外部觸發）
@@ -85,5 +85,18 @@
   （已定案放在機上代理），那才會把 A 家語意翻成 B 家。
 
 ## 解決方式
+
+`b79fbae`。2026-08-31 逐條對帳，修法四步全部落地：
+
+| 步 | 落點 |
+|---|---|
+| 1 存下來 | `missions.firmware_type`／`vehicle_type`（值域＝`MAV_AUTOPILOT`／`MAV_TYPE`，與 HEARTBEAT 同源） |
+| 2 三條入庫路徑 | UI 匯入 `missions/page.tsx:138`；外部觸發 `apps/command/app/plans.py:88`；從機上讀回 `apps/backend/app/api.py`（用 `live.autopilot_raw`／`vehicle_type_raw`，機種就是那台機） |
+| 3 選檔看得到 | 任務卡片 chip（`missions/page.tsx:378`），檔案沒說就不顯示 |
+| 4 上傳前比對 | `apps/command/app/main.py:469 _target_mismatch`，`:712` 併進 `check.warnings`——**示警放行**，不自成欄位、不影響 `ok` |
+
+「尚未做」那兩條維持不做，且**不是本案的缺口**：機種資訊只到宣告層級
+（手繪任務仍無警示），差異點的翻譯歸 [026](026-autopilot-driver-abstraction.md)
+的驅動層。兩者都需要新的能力，不是這條 issue 沒做完。
 
 （closed 時補：commit hash）

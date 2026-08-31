@@ -25,9 +25,10 @@ _RAW_BY_NAME = {"px4": 12, "ardupilot": 3}
 def capabilities_for(ap_name: str, ctx: dict | None = None):
     """回傳 (capabilities dict, reasons dict)。reasons 只含非 ok 的鍵。
 
-    `ctx`＝該機的 router 狀態（可含 `sysid_mygcs`）。**前提可事前查證時就查**
-    ——不要讓使用者按下按鈕、等一個永遠不會有的回應才發現前提沒滿足
-    （ui-spec §0.2c 條款 6）。
+    `ctx`＝該機的 router 狀態。**目前兩家驅動都沒有用到它**（原本唯一的用途是
+    搖桿的 `sysid_mygcs` 前提，已隨 issues/035 移除）。介面保留：能力四態本來
+    就該允許「依機端當下事實而定」的鍵，而那正是 ui-spec §0.2c 條款 6
+    （前提可事前查證時就查）的落點。
 
     保留 `ap_name`（字串）介面：呼叫端手上就是字串，改成傳原值只是把轉換
     推給每個呼叫點。

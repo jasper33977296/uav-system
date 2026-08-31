@@ -1,6 +1,6 @@
 # 034 · `/healthz` 不反映 router 死活：殭屍服務照回 ok
 
-- 狀態：in-progress
+- 狀態：in-progress（偵測與前端告示都已落地；**只剩「要不要自動重啟」待裁**）
 - 嚴重度：high
 - 位置：`apps/command/app/main.py:184`（healthz）、`apps/command/app/mav.py`（MavRouter）
 - 建立：2026-08-24
@@ -56,11 +56,22 @@ return {"ok": True, "enabled": settings.enable_commands,
 - router 不健康時 `/healthz` 回 **503**＋`detail` 說明。只看狀態碼的檢查
   （`curl -f`／docker healthcheck／外部監看）不會去讀 body，回 200 就是對它們謊報。
 
-### 尚未做（本案不含，另行處理）
+### 前端：2026-08-31 已補
 
-- **前端**：`CommandPanel` 目前只分「fetch 得到／fetch 不到」，不讀 `ok`。router
-  殭屍時面板照常顯示可按的指令鈕——按下去必然逾時。依 §0.2e 應改為顯示明確的
-  失效告示。這是 033 分層防線的一部分。
+`CommandPanel` 原本只分「fetch 得到／fetch 不到」，**型別裡有 `ok` 欄位卻從來
+沒有人讀**。而 `fetch` 不會因為 503 拋錯——所以那個 503 一路被讀成一次成功的
+回應，面板照常顯示可按的指令鈕。**不讀那個欄位，等於這道防線在前端不存在。**
+
+改法：`routerDead = health.ok === false`（嚴格比對 `false`——舊版服務沒有這個
+欄位時是 `undefined`＝不知道，不該把整個面板鎖掉），標頭掛「指令服務失效」、
+整個指令區換成告示，**不給任何可按的指令鈕**。擋在整區而不是逐顆鈕 disable：
+失效的是整條指令通道，不是某一個能力。
+
+告示裡明講一句容易被忽略的事：**遙測可能仍然正常**（backend 直接收 MAVLink，
+與指令服務是兩條路），所以「畫面正常」不代表指得動——這正是本案最會騙人的地方。
+
+### 尚未做（待裁，不是待做）
+
 - **自動重啟**：偵測到之後要不要讓 router 自我重建（或讓 docker healthcheck 重啟
   容器）尚未決定。飛行中重啟會有一段心跳空窗，取捨需要先決定，不宜順手加。
 

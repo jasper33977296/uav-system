@@ -73,6 +73,50 @@
 * command 服務重載無例外、`router_alive: true`。
 * 前端 `✓ Compiled successfully`。
 
+## 對帳補漏：`SYSID_MYGCS` 探測（2026-08-31）
+
+移除範圍表列了「ArduPilot 的 `SYSID_MYGCS` 探測」，但**實際沒有拔掉**——
+`mav.py` 每 30 秒對每台 ArduPilot 機重讀一次那個參數（兩個新舊參數名都問），
+而它存在的唯一理由是註解自己寫的那句：「ArduPilot 只信 SYSID_MYGCS 指定來源的
+**MANUAL_CONTROL**」。搖桿移除之後 `d["sysid_mygcs"]` 沒有任何判斷在讀它，
+兩家驅動的 `capabilities(ctx)` 也都不再看 `ctx`。
+
+**死流量加上一段會誤導的註解**：下一個讀到那段的人會以為系統還在為搖桿做前提
+檢查。已移除探測、`MYGCS_REREAD_S`、`PARAM_VALUE` 分支與那段說明，並改寫
+`capabilities_for` 的 docstring（不再點名一個沒人填的欄位）。
+
+`GCS_SYSID = 255` **留著**，它的理由沒有變：ArduPilot 只信該參數指定來源的部分
+指令，而 255 是出廠預設，改我方常數比要求每台實機改參數可靠。
+
+### 但 `scripts/accept-ardupilot.py` 的 B 項不刪，改寫理由
+
+那項檢查的**理由**死了（搖桿），**檢查本身沒死**：ArduPilot 用 `SYSID_MYGCS`
+決定誰的心跳算 GCS 心跳，那是 GCS failsafe（`FS_GCS`）的判準，也是
+[039](039-autonomous-flight-state-machine.md) 整套失聯處置的機上前提——不符的話
+飛控根本不覺得我們斷過線。順帶修掉裡面那句過期的「須設 SYSID_MYGCS=254」
+（我方早已改為 255）。
+
+**判斷方式值得記下來**：清死碼時要分「這段程式為什麼存在」與「這段程式做了
+什麼」。理由消失不等於行為無用——照理由刪會刪掉還在保護東西的檢查。
+
+### 連帶查出兩支永遠紅的測試（同一天修）
+
+清理時跑回歸才發現，有兩支測試**在改動之前就已經是紅的**，而且都紅在
+「刻意改變的行為」上——它們把過去的行為當成正確答案：
+
+* `scripts/test-driver-equivalence.py`：拿 git 基準點 `41471cc` 的舊實作比對
+  今天的驅動。035 移除 `manual` 能力鍵、015 在 08-24 把 ArduPilot 的
+  `mission_start`／`mission_fly` 由 unverified 開為 ok——這三筆刻意的改變讓它
+  **永遠紅**。改成具名的分歧表：表上有的放行（每筆寫得出為什麼）、
+  表上沒有的照樣失敗、**表上有卻已經不再分歧的也失敗**（過期的豁免要清掉，
+  留著它會在日後真的回歸時默默放行）。已反向驗證：拿掉任一筆豁免，測試會擋下。
+* `scripts/test-dialect-boundary.py`：斷言 `mode_name(0, ardupilot) == "—"`——
+  那正是 `a92b8e1` 修掉的 bug（ArduPilot 的 0 是 **STABILIZE**，一個合法的
+  手飛模式，不是「沒有模式」）。**測試在替一個已修的 bug 背書。**
+
+**一支永遠紅的測試等於沒有測試**：真正的回歸會淹在固定的雜訊裡，而且沒有人
+會第二次去看它。這兩支都不是本案造成的，但它們是同一種帳沒對完的痕跡。
+
 ## 解決方式
 
 （closed 時補：commit hash）

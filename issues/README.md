@@ -59,13 +59,13 @@
 | [028](028-primary-drone-assumption-in-takeoff.md) | 起飛序列讀「主機」高度：非主機判斷全錯，反向會把地面機切進 AUTO.MISSION ✔實飛驗證 | high | **closed** | `apps/command/app/main.py` |
 | [029](029-mission-frame-default-breaks-rtl.md) | 含 RTL 的任務一律上不去：無座標項 frame 預設錯（附 PX4 實測值域表）✔實測 | high | **closed** | `build_items`／`plan_check` |
 | [030](030-manual-failsafe-wrong-mode-ardupilot.md) | 搖桿失聯自動懸停在 ArduPilot 切錯模式（承諾 Hold 實送 GUIDED）；附搖桿實飛驗證 ✔實飛 | high | **closed** | `mav.py:_tick_manual` |
-| [031](031-arm-guard-auto-mode.md) | arm 防護：自動模式＋機上有任務時裸 arm＝立即自主起飛（SITL 實際發生）| high | open | `apps/command` |
+| [031](031-arm-guard-auto-mode.md) | arm 防護：自動模式下裸 arm＝立即自主起飛（SITL 實際發生）；判準用模式動詞、附 intent override ✔對帳 | high | **closed** | `apps/command/app/main.py:226` |
 | [032](032-joystick-cannot-control-rb5.md) | 搖桿無法真正控制 RB5 → **隨功能移除而結案（035），根因未確認**；排查過程對「靜默丟棄」類故障仍可參考 | high | **closed** | `apps/command`＋`reference/` |
 | [033](033-emergency-availability-design.md) | 意外狀況下的可用性保障：分層防線設計（機上 failsafe 核定／緊急通道／手動接管／deploy guard／心跳解耦）| high | open | 跨服務＋部署流程 |
-| [034](034-healthz-hides-zombie-router.md) | `/healthz` 不反映 router 死活：殭屍服務照回 ok（心跳停發近一小時無人察覺）| high | in-progress | `apps/command/app/main.py:184` |
+| [034](034-healthz-hides-zombie-router.md) | `/healthz` 不反映 router 死活：殭屍服務照回 ok（心跳停發近一小時無人察覺）；偵測＋503＋前端告示已落地，**只剩自動重啟待裁** | high | in-progress | `apps/command/app/main.py:198`＋`CommandPanel.tsx` |
 | [035](035-remove-manual-control.md) | 移除虛擬搖桿：系統範圍收斂為航路管理＋飛行安全，連續操縱交給實體遙控器（含 026 待決點 1 定案）| medium | in-progress | `apps/command`／`libs/autopilot`／`apps/frontend` |
-| [036](036-live-page-display-honesty.md) | 即時頁把「沒有資料」畫成「有資料」：斷線／從未連上／無定位三者同形，0,0 哨兵被當成座標畫在幾內亞灣 | medium | in-progress | `mavlink_rx.py`／`main.py`／`MapView.tsx` |
-| [037](037-plan-autopilot-mismatch.md) | `.plan` 自報的 firmwareType／vehicleType 被完全忽略：PX4 寫的航線靜默上到 ArduPilot 機，事後查不出原因 | **high** | in-progress | 匯入／入庫／上傳三處 |
+| [036](036-live-page-display-honesty.md) | 即時頁把「沒有資料」畫成「有資料」：斷線／從未連上／無定位三者同形，0,0 哨兵被畫在幾內亞灣 ✔對帳 | medium | **closed** | `mavlink_rx.py`／`main.py`／`MapView.tsx` |
+| [037](037-plan-autopilot-mismatch.md) | `.plan` 自報的 firmwareType／vehicleType 被完全忽略：PX4 寫的航線靜默上到 ArduPilot 機 ✔三處對帳，示警放行 | **high** | **closed** | 匯入／入庫／上傳三處 |
 | [038](038-board-identity.md) | 系統不知道哪台是哪台：sysid 是唯一的身分鏈，而 serial_no 只是名稱複製品。本階段請求並記錄飛控板 UID | medium | in-progress | `mavlink_rx.py`＋uav-agent |
 | [039](039-autonomous-flight-state-machine.md) | 全自動飛行的狀態機與安全守門：**飛行中上傳任務會立刻改道且無任何守門**（SITL 實測）。飛安裁定全數完成（08-31 複裁七條），A／C／E／G 待實作 | **high** | in-progress | `doc/autonomous-flight-state-machine.md` |
 

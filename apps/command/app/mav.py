@@ -41,7 +41,6 @@ M = mavutil.mavlink
 #: （QGC 設定裡可改 MAVLink System ID），不要改回這裡——改回來就會退回
 #: 「指令被靜默丟棄、沒有任何錯誤訊息」那個狀態。
 GCS_SYSID = 255
-MYGCS_REREAD_S = 30.0   # SYSID_MYGCS 重讀間隔（見 _recv：使用者改了要看得到）
 #: 活性門檻：主迴圈超過這麼久沒跑過一圈＝卡住（見 MavRouter.alive）。
 #: 正常節奏是 run() 每圈 ≤0.2s、指令對話期間 _wait() 每圈 ≤0.2s，
 #: 兩條路徑都會呼叫 _tick()，所以 5s 對「正常但忙碌」有極大餘裕。
@@ -217,15 +216,6 @@ class MavRouter(threading.Thread):
                     d["custom_mode"] = msg.custom_mode
                     d["autopilot"] = msg.autopilot   # 飛安：模式指令方言分家
                     d["type"] = msg.type             # （issue 015／gap-analysis.md）
-                    # **前提可事前查證時，就不要讓使用者用失敗去發現它**
-                    # （ui-spec §0.2c 條款 6）。ArduPilot 只信 SYSID_MYGCS 指定
-                    # 來源的 MANUAL_CONTROL，不符就**靜默丟棄**——而 MANUAL_CONTROL
-                    # 沒有 ACK，事後完全偵測不到。所以連上時直接把該參數讀回來，
-                    # 用「機端目前是 N、需改成 254」這種可行動的事實取代靜默失敗。
-                    # **定期重讀，不是讀到就不再問**：我們在 reason 裡叫使用者去改
-                    # 這個參數；只讀一次的話，他照做之後我方永遠不知道——按鈕繼續
-                    # 鎖著、訊息還在說「目前是 255」。那比不給提示更糟：告訴人去做，
-                    # 又無視他做了。（2026-08-12 反向驗證抓到：設成 254 後仍顯示 255。）
                     # 板子身分（issues/038）：AUTOPILOT_VERSION 帶飛控板的唯一
                     # ID 與韌體版本，而**兩家都不主動送，要開口問**。
                     # 由 command 問而不是 backend：請求要送 COMMAND_LONG，那是
@@ -240,15 +230,6 @@ class MavRouter(threading.Thread):
                                 sysid, 1, 520, 0, 1, 0, 0, 0, 0, 0, 0))
                         except CommandError:
                             d["caps_req"] = False      # 送不出去就下次再試
-                    if (caps.autopilot_name(msg.autopilot) == "ardupilot"
-                            and time.monotonic() - d.get("mygcs_req_t", 0) > MYGCS_REREAD_S):
-                        d["mygcs_req_t"] = time.monotonic()
-                        for pname in (b"SYSID_MYGCS", b"MAV_GCS_SYSID"):
-                            try:      # 新舊韌體參數改過名，兩個都問
-                                self._sendto(sysid, lambda m, pn=pname:
-                                             m.param_request_read_encode(sysid, 1, pn, -1))
-                            except CommandError:
-                                pass
                 elif msg.get_type() == "GLOBAL_POSITION_INT":
                     # per-sysid 高度——「等到達高度才切 MISSION」的依據
                     # （issue 013-B；單機 mission_fly 教訓的多機版，不靠 backend）。
@@ -272,9 +253,6 @@ class MavRouter(threading.Thread):
                     # 掉頭」。沒有它那句警告就永遠不會出現——**而不是不會發生**
                     if msg.hdg != 65535:          # 65535＝不知道
                         d["heading"] = msg.hdg / 100.0
-                elif msg.get_type() == "PARAM_VALUE":
-                    if msg.param_id in ("SYSID_MYGCS", "MAV_GCS_SYSID"):
-                        d["sysid_mygcs"] = int(msg.param_value)
                 elif msg.get_type() == "STATUSTEXT":
                     # PX4 的解釋（"Arming denied: ..."）——被拒時要能拿出來給人看。
                     # 實戰教訓：沒有這段文字，操作員只看到 result code 乾瞪眼

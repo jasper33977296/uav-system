@@ -1,6 +1,6 @@
 # 031 · arm 防護：自動模式＋機上有任務時，裸 arm ＝ 立即自主起飛
 
-- 狀態：open
+- 狀態：**closed**（2026-08-31 對帳收案；實作在 `be00220`）
 - 嚴重度：**high**（真機上等於 fly-away；SITL 已實際發生一次）
 - 位置：`apps/command`（arm 端點／能力 gating）
 - 建立：2026-08-13（PM 記錄當日事故，配號 031）
@@ -57,4 +57,26 @@ lower right arms and **to the lower left disarms the vehicle**」。左搖桿＝
 
 ## 解決方式
 
-（closed 時補）
+`be00220` 實作 `_guard_bare_arm`（`apps/command/app/main.py:226`），接在
+`POST /api/command/{sysid}/arm`。2026-08-31 逐項對帳確認：
+
+* **判準用模式動詞不用模式名**（`_AUTO_EXEC_VERBS = {mission, rtl, land}`）——
+  PX4 叫 MISSION、ArduPilot 叫 AUTO，比字串會漏（030 的教訓）。
+  `guided` 刻意不在此列：那是「解鎖後等指令」的正常起飛前置。
+* 拒絕訊息給兩條出路與 `intent=start_mission` override，照修法方向。
+* **收不到心跳時不擋**：不知道模式就不亂擋（能力 gating 另有把關）。
+* **只擋這個 HTTP 端點**：`_do_takeoff` 與群組執行器直接呼叫 `job_command`，
+  那些 arm 是起飛序列的一步、有意圖，不該被擋。
+
+### 與原始描述的一個差異（刻意）
+
+標題寫的是「自動模式**＋機上有任務**」，實作只看模式、不查機上任務。
+**這是更嚴的一邊**：AUTO 模式下就算機上任務是空的，解鎖後的行為也不是
+「安靜地待在地上」——不值得為了放行一個沒人需要的情境去多讀一次任務。
+
+### 同族第二條已隨功能消滅
+
+「搖桿值可構成 disarm 手勢」那一條的前提是 `_tick_manual` 會把搖桿值送給
+飛控。虛擬搖桿已隨 [035](035-remove-manual-control.md) 整塊移除，
+`_tick_manual` 不存在，**該路徑不再可達**——是消滅不是修好，記在這裡免得
+日後有人以為驗過。

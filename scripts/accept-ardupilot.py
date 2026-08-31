@@ -105,7 +105,12 @@ def main():
         rec("D %s" % name, ok,
             "ACK=%s" % (M.enums['MAV_RESULT'][a.result].name if a else "無回應"))
 
-    # ── B. SYSID_MYGCS：我方 254 的 MANUAL_CONTROL 會不會被靜默丟棄 ──
+    # ── B. SYSID_MYGCS：ArduPilot 認不認我方是「那個 GCS」──────────
+    # **這項的理由 2026-08-31 改寫過。** 原本是「我方 254 的 MANUAL_CONTROL
+    # 會不會被靜默丟棄」——搖桿已隨 issues/035 整塊移除，那個理由不在了。
+    # 但檢查本身仍然要做，而且更重要：ArduPilot 用這個參數決定**誰的心跳算
+    # GCS 心跳**，那是 GCS failsafe（FS_GCS）的判準，也是 issues/039 整套
+    # 失聯處置的機上前提。不符的話飛控根本不覺得我們斷過線。
     m.mav.param_request_read_send(tgt, 1, b"SYSID_MYGCS", -1)
     pv = m.recv_match(type='PARAM_VALUE', blocking=True, timeout=10)
     mygcs = pv.param_value if pv else None
@@ -116,9 +121,11 @@ def main():
     rec("B SYSID_MYGCS", mygcs is not None and int(mygcs) == GCS_SYSID,
         "機端值=%s，我方 GCS sysid=%d → %s"
         % (int(mygcs) if mygcs is not None else "讀不到", GCS_SYSID,
-           "相符，搖桿可用" if (mygcs is not None and int(mygcs) == GCS_SYSID)
-           else "**不符：我方的 MANUAL_CONTROL 會被靜默丟棄**（接 ArduPilot 機時"
-                "須設 SYSID_MYGCS=254，屬機端前提設定）"))
+           "相符，飛控認我方為 GCS" if (mygcs is not None and int(mygcs) == GCS_SYSID)
+           else "**不符：飛控不會把我方的心跳當成 GCS 心跳**，"
+                "GCS failsafe 因此不會依我們的斷線觸發（issues/039 的機上前提）。"
+                "我方 GCS sysid 已是 255＝ArduPilot 出廠預設，"
+                "所以正常情況不需要動機端；讀到別的值代表這台被改過"))
 
     print("\n" + "=" * 60)
     for item, ok, _ in results:
