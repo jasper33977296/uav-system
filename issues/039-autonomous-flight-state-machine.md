@@ -1,6 +1,6 @@
 # 039 · 全自動飛行的狀態機與安全守門
 
-- 狀態：**in-progress**（複裁 A／C／E／G 機端已實作待上機；**新增一條待裁：`FS_GCS_ENABLE`**，見下）
+- 狀態：**in-progress**（複裁 A／C／E／G 機端已實作待上機；`FS_GCS_ENABLE` 2026-09-01 裁定開、逾時 45s）
 - 嚴重度：**high**（飛安）
 - 位置：設計見 [`doc/autonomous-flight-state-machine.md`](../doc/autonomous-flight-state-machine.md)
 - 建立：2026-08-24
@@ -87,7 +87,7 @@
 **代理現在沒有解 RC 狀態**（`agent.py` 裡與 RC 相關的只剩搖桿移除時留下的註解），
 A 要新增訂閱；判定來源與哨兵值列為待覆核（協定 §7.2）。
 
-## ⚠ 新的待裁：`FS_GCS_ENABLE`（2026-08-31 查證後浮現）
+## `FS_GCS_ENABLE`：2026-09-01 裁定「開」（選項 B）
 
 選項 C 的整套設計文件與部署查核表都寫著「飛控的 GCS failsafe 盯的是機上代理的
 心跳，5G 斷了代理照樣心跳，所以飛控完全無感」。**那句推論是錯的**——GCS 心跳是
@@ -102,8 +102,24 @@ A 要新增訂閱；判定來源與哨兵值列為待覆核（協定 §7.2）。
 * **關（0）**：選項 C 照裁定生效，但失聯時只有代理這一層；代理自己掛掉（乙類
   失聯）時就沒有任何人了。
 
-**裁定前不要動機端這個參數**，只記錄現值。理由與完整事實鏈見
-[`doc/verification-checklist.md`](../doc/verification-checklist.md) 的註記。
+**裁定：開，`FS_GCS_TIMEOUT = 45`。** 飛控那層當代理的後備，只在代理沒有動手
+時才出手。
+
+> **裁定當下我寫的條件是錯的（太弱），一併更正**：原本寫
+> `FS_GCS_TIMEOUT > LINK_ACTION_S`（10s）。但代理在第 10 秒只是**開始判斷**，
+> `FLYING_MISSION` 那一格會**繼續飛到單飛滿 `LINK_LOSS_MAX_SOLO_S`（30s）**
+> ——所以**代理最晚動手的時刻是 30 秒**。逾時設 15 秒的話，飛控會在代理續飛
+> 的中途搶先，「跑完任務再 RTL」那一格照樣不會發生，而那正是 08-31 裁過的
+> 那一格。正確的不變式是：
+>
+>     FS_GCS_TIMEOUT  >  LINK_LOSS_MAX_SOLO_S（30s）  >  LINK_ACTION_S（10s）
+>
+> **代價**：代理自己掛掉（乙類失聯）時沒有任何人管到第 45 秒；出廠的 5 秒只要
+> 5 秒。這是在賭「代理活著」的機率高於「任務被無謂打斷」的成本——甲類在本場域
+> 是常態、乙類罕見，所以合理，但它是一個賭。要調整就調 45。
+
+完整事實鏈見 [`doc/verification-checklist.md`](../doc/verification-checklist.md)
+與 [`doc/emergency-availability-design.md`](../doc/emergency-availability-design.md) §1.3。
 順帶：開啟時 [034](034-healthz-hides-zombie-router.md) 的殭屍 router 會讓 5G
 明明正常、飛控卻進 GCS failsafe——因為心跳的來源正是那個停擺的迴圈。
 

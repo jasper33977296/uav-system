@@ -1,6 +1,6 @@
 # 033 · 意外狀況下的無人機可用性保障：分層防線設計
 
-- 狀態：**needs-decision**（設計文件 2026-08-31 交付：[`doc/emergency-availability-design.md`](../doc/emergency-availability-design.md)；**兩條已裁、兩條待裁**，分批實作中）
+- 狀態：**needs-decision**（設計文件 2026-08-31 交付：[`doc/emergency-availability-design.md`](../doc/emergency-availability-design.md)；**三條已裁、一條待裁**，分批實作中）
 - 嚴重度：**high**（2026-08-13 部署環境事故的預防面；使用者明示「先做預防」）
 - 位置：跨 command／backend／前端／部署流程
 - 建立：2026-08-13（使用者提出，PM 配號）
@@ -65,7 +65,13 @@
 * 建議沒有被採納，而使用者的理由更強：解耦之後「我們自己的部署動作會不會變成
   飛控的失聯事件」**整類消失**，不是靠記得別在飛行中重啟去迴避。
 
-**兩條仍待裁**（完整代價見文件 §7）：`FS_GCS_ENABLE`／`FS_GCS_TIMEOUT` 的取捨
+* **`FS_GCS_ENABLE` 裁定「開」（2026-09-01），`FS_GCS_TIMEOUT = 45`。**
+  **順帶更正我原本寫錯的條件**：不變式是 `FS_GCS_TIMEOUT >
+  LINK_LOSS_MAX_SOLO_S`（30s）而不是 `> LINK_ACTION_S`（10s）——代理在第 10 秒
+  只是開始判斷，`FLYING_MISSION` 那一格會續飛到第 30 秒才動手。設 15 秒的話
+  飛控仍然會搶在中途。
+
+**一條仍待裁**（完整代價見文件 §7）：`FS_GCS_ENABLE`／`FS_GCS_TIMEOUT` 的取捨
 （會決定 039 選項 C 是否真的生效，優先度最高）、第二層做不做、心跳要不要解耦、
 deploy guard 擋在哪一層。
 
