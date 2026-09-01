@@ -54,7 +54,7 @@
 | [023](023-missions-table-role-cleanup.md) | missions 表正名瘦身：死欄位＋生成物污染＋刪除語意（含 010）| medium | **closed** | `db/init/01_schema.sql` |
 | [024](024-video-anchor-offset.md) | 影像時間錨點早 0.41s：暫緩修正，待真機實測（含重啟觸發條件）| low | deferred | `doc/flight-video-design.md` §9 |
 | [025](025-group-rtl-stagger-not-implemented.md) | 編隊 RTL 高度錯開未實作：separate 同高任務緊急返航無分離保證 | low | deferred | `doc/group-missions-design.md` §10.2 |
-| [026](026-autopilot-driver-abstraction.md) | 自駕儀驅動層抽象：廠牌差異收進獨立驅動，系統只呼叫抽象動詞 | medium | in-progress | 跨 backend／command |
+| [026](026-autopilot-driver-abstraction.md) | 自駕儀驅動層抽象：B1–B3 完成；**B4 搬家進行中**（協定契約＋執行期不一致護欄已上線，機端移植待做）| medium | in-progress | `libs/autopilot`＋uav-agent |
 | [027](027-arclength-projection-endpoint.md) | 弧長投影後端端點（§6b 共用查詢層供 MCP；含自適應格寬三要求）| low | open | `apps/backend` |
 | [028](028-primary-drone-assumption-in-takeoff.md) | 起飛序列讀「主機」高度：非主機判斷全錯，反向會把地面機切進 AUTO.MISSION ✔實飛驗證 | high | **closed** | `apps/command/app/main.py` |
 | [029](029-mission-frame-default-breaks-rtl.md) | 含 RTL 的任務一律上不去：無座標項 frame 預設錯（附 PX4 實測值域表）✔實測 | high | **closed** | `build_items`／`plan_check` |

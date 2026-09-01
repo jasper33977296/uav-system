@@ -57,6 +57,11 @@ class AgentLink:
     #: 斷線期間壓著的 intent（039 複裁 G），恢復後補送。存的是原話＋壓進來的
     #: 時刻，因為補送時要告訴人「這是你 N 分鐘前按的」
     pending: list = field(default_factory=list)
+    #: 代理自報的驅動（協定 §4.1 的 `driver`，026 待決點 6）。驅動跟著飛機走，
+    #: 所以機隊裡可能同時有不同版本——**先讓差異看得見**，守則之後再說
+    driver: dict = field(default_factory=dict)
+    #: 正在持續中的正規化不一致：欄位 → 第一次看到的時刻（見 crosscheck）
+    disagree_since: dict = field(default_factory=dict)
 
     def fresh(self) -> bool:
         return (self.connected and self.last_state_at is not None
@@ -86,6 +91,13 @@ class AgentLink:
             # **不知道**，不是「沒有」——畫面要照這個分別顯示
             "rc_link": p.get("rc_link"),
             "pending": len(self.pending),
+            # B4-a（026 §9）：代理算出來的正規化值。**地面站認得的廠牌會自己
+            # 再算一次並比對**（見 crosscheck）——這裡原樣帶出，不修正、不補值
+            "derived_mode_name": (p.get("derived") or {}).get("mode_name"),
+            "derived_mode_verb": (p.get("derived") or {}).get("mode_verb"),
+            "derived_ready": (p.get("derived") or {}).get("ready"),
+            "not_ready_reasons": (p.get("derived") or {}).get("not_ready_reasons"),
+            "driver": self.driver,
         }
 
 
@@ -138,6 +150,7 @@ def on_hello(msg: dict, drone_id: str | None,
     link.connected_at = time.monotonic()
     link.executes = list(msg.get("executes") or [])
     link.vets = list(msg.get("vets") or [])
+    link.driver = dict(msg.get("driver") or {})     # 026 待決點 6
     links[uid] = link
     return link, stale_ws
 
@@ -153,6 +166,42 @@ def on_event(link: AgentLink, msg: dict) -> None:
     fut = link.waiters.pop(msg.get("intent_id"), None)
     if fut is not None and not fut.done():
         fut.set_result(msg)
+
+
+#: 不一致要持續這麼久才報。**模式切換的當下兩邊必然短暫不一致**（代理在飛控
+#: 旁邊、地面站的那份經 5G 回來），立刻報就是 issues/002 那種抖動狂噴的事件流
+DISAGREE_HOLD_S = 3.0
+
+
+def crosscheck(link: AgentLink, ground: dict | None) -> list[str]:
+    """比對代理算的與地面站自己算的（協定 §4.2 B4-a／026 §9）。
+
+    **不是拿來選一邊的**：兩邊看的是同一份遙測，算出不同結果代表**有一邊的
+    驅動是錯的**，那是要修的 bug 不是要調解的分歧。回傳持續超過門檻的欄位。
+
+    `ground` 是地面站對同一台機的判讀（`None`＝地面站不認得這個廠牌，
+    此時**沒有意見就不要製造意見**，直接不比）。
+    """
+    d = (link.payload or {}).get("derived") or {}
+    if not ground:
+        link.disagree_since.clear()
+        return []
+    now = time.monotonic()
+    out = []
+    for field_name in ("mode_verb", "mode_name", "ready"):
+        mine, theirs = d.get(field_name), ground.get(field_name)
+        # **缺欄位＝代理沒說，不是不一致**：舊版代理不送這些欄位，
+        # 把「沒說」當成「說了 None」會讓每一台舊代理都在報警
+        if mine is None or theirs is None:
+            link.disagree_since.pop(field_name, None)
+            continue
+        if mine == theirs:
+            link.disagree_since.pop(field_name, None)
+            continue
+        t0 = link.disagree_since.setdefault(field_name, now)
+        if now - t0 >= DISAGREE_HOLD_S:
+            out.append(f"{field_name}：機上算 {mine!r}、地面站算 {theirs!r}")
+    return out
 
 
 def on_ack(link: AgentLink, msg: dict) -> None:

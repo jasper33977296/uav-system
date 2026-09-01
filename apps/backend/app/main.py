@@ -263,6 +263,43 @@ async def ws_telemetry(ws: WebSocket):
         manager.disconnect(ws)
 
 
+async def _crosscheck_normalized(link) -> None:
+    """比對代理算的正規化值與地面站自己算的（026 §9 B4-a／協定 §4.2）。
+
+    **驅動搬到機上之後，兩份實作會並存一段時間——那正是唯一能做這個比對的
+    窗口。** 而且它讓「搬家有沒有搬對」變成執行期的性質，不是只有跑測試時
+    才問得到：兩邊看的是同一份遙測，算出不同結果代表**有一邊的驅動是錯的**。
+
+    地面站不認得那個廠牌時**不比**（`UnknownDriver`）：沒有意見的時候不要
+    製造意見，那才是搬家真正要換到的東西。
+    """
+    from .dialect import autopilot_name
+    st = fleet.get(link.drone_id) if link.drone_id else None
+    ground = None
+    if st is not None and autopilot_name(st.autopilot_raw) != "unknown":
+        ready, _reasons = st.readiness()
+        ground = {"mode_verb": st.mode_verb, "mode_name": st.flight_mode,
+                  "ready": ready}
+    bad = agent_link.crosscheck(link, ground)
+    if not bad:
+        return
+    log.error("⚠ 正規化不一致（%s）：%s——**有一邊的驅動是錯的**",
+              link.drone_name or link.board_uid, "；".join(bad))
+    try:
+        ev = await db.insert_event(
+            link.drone_id, None, "warn", "driver_disagreement",
+            {"fields": bad, "agent_version": link.agent_version,
+             "driver": link.driver,
+             "note": "機上與地面站對同一份遙測算出不同結果（issues/026 §9）"})
+        ev["drone"] = link.drone_name
+        await manager.broadcast({"type": "event", "event": ev})
+    except Exception:
+        log.exception("不一致事件寫入失敗（不影響指令路徑）")
+    # 報過就重新計時：**同一個不一致不要每秒噴一則**（issues/002 的教訓），
+    # 但它若持續存在，每 DISAGREE_HOLD_S 會再提醒一次——不是報一次就算了
+    link.disagree_since.clear()
+
+
 async def _replay_pending(link) -> None:
     """恢復連線後補送失聯期間壓下來的 intent（issues/039 複裁 G）。
 
@@ -372,6 +409,7 @@ async def ws_agent(ws: WebSocket):
                                         "reason": "第一則必須是 hello"})
                     continue
                 agent_link.on_state(link, msg)
+                await _crosscheck_normalized(link)
                 # **每則 state 回一個輕量 ack**（協定 §2 的靜默逾時那一半）。
                 # 不是為了確認內容，是為了讓機端知道**這條連線還通**：5G 路由掉
                 # 的時候 TCP 的 send() 只是塞進 kernel buffer 就回傳成功，機端
