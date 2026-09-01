@@ -1,6 +1,6 @@
 # 033 · 意外狀況下的無人機可用性保障：分層防線設計
 
-- 狀態：**needs-decision**（設計文件 2026-08-31 交付：[`doc/emergency-availability-design.md`](../doc/emergency-availability-design.md)；**三條已裁、一條待裁**，分批實作中）
+- 狀態：**needs-decision**（設計文件 2026-08-31 交付：[`doc/emergency-availability-design.md`](../doc/emergency-availability-design.md)；**四條裁定全數完成並實作**；剩實機參數覆核與呈現層）
 - 嚴重度：**high**（2026-08-13 部署環境事故的預防面；使用者明示「先做預防」）
 - 位置：跨 command／backend／前端／部署流程
 - 建立：2026-08-13（使用者提出，PM 配號）
@@ -71,7 +71,12 @@
   只是開始判斷，`FLYING_MISSION` 那一格會續飛到第 30 秒才動手。設 15 秒的話
   飛控仍然會搶在中途。
 
-**一條仍待裁**（完整代價見文件 §7）：`FS_GCS_ENABLE`／`FS_GCS_TIMEOUT` 的取捨
+* **deploy guard：拿掉生產的 `--reload`（2026-09-01 裁定，已實作）。**
+  熱重載與原始碼掛載移進 `docker-compose.dev.yml`。實作時發現一個不一致：
+  前端早就是這個形狀，而 backend／command 的熱重載寫死在基底檔——**同一個
+  repo 裡兩套規矩，而寫死的那兩個正好是會動到飛機的那兩個。**
+
+**四條待裁全數結案。** 以下留作紀錄（完整代價見文件 §7）：`FS_GCS_ENABLE`／`FS_GCS_TIMEOUT` 的取捨
 （會決定 039 選項 C 是否真的生效，優先度最高）、第二層做不做、心跳要不要解耦、
 deploy guard 擋在哪一層。
 

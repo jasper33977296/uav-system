@@ -53,6 +53,11 @@
 > **它沒起來的話，飛控會在 `FS_GCS_TIMEOUT` 之後判定 GCS 失聯**，而 command
 > 的 `/healthz` 仍然會顯示一切正常——那兩件事現在是分開的。
 > 它刻意不掛原始碼、沒有 `--reload`：改它要重建映像，這是特性不是不便。
+>
+> **2026-09-01 起 backend 與 command 也是這個形狀**（issues/033 §4.1 裁定）：
+> 部署環境的 `.env` **不要**設 `COMPOSE_FILE=…:docker-compose.dev.yml`。
+> 設了的話熱重載會回來，而**存一個檔案就會重啟服務**——現場改一行設定
+> 就可能中斷指令通道。現場自檢：`docker compose config | grep reload` 應為空。
 
 - [ ] **建置前端映像前先設 `BUILD_SHA`**（版本標記，§0.2f；漏設不會報錯，
       只會讓 UI 與 `/api/version` 永遠顯示「未知版本」——部署後看到「未知版本」

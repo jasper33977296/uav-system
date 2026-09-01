@@ -53,17 +53,16 @@ services:
       context: .                       # repo 根：映像要裝得到共用的 libs/autopilot
       dockerfile: apps/backend/Dockerfile
     network_mode: host          # 直接收 SITL 的 UDP；API 服務於 :${BACKEND_PORT:-38000}
-    command: ["uvicorn", "app.main:app", "--reload",
-              # --reload 的 graceful shutdown 會等連線關閉，前端 /ws/telemetry 常駐
-              # WS 不會自己關 → reload 無限卡 down（見 doc/deployment.md 開發注意）。
-              # 上限 3s，reload 自救、不再卡死。
+    # **基底＝生產形：沒有 `--reload`、不掛原始碼**（issues/033 §4.1，
+    # 2026-09-01 使用者裁定）。原本兩者都寫在這裡，於是**存一個檔案就會重啟
+    # 服務**——不需要有人下 restart 指令。熱重載搬到 docker-compose.dev.yml，
+    # 由 .env 的 COMPOSE_FILE 啟用；部署環境沒有那行。
+    # graceful shutdown 上限留著：它也界定 `docker compose restart` 的長度，
+    # 而前端的 /ws/telemetry 是常駐 WS、不會自己關。
+    command: ["uvicorn", "app.main:app",
               "--timeout-graceful-shutdown", "3",
               "--host", "0.0.0.0", "--port", "${BACKEND_PORT:-38000}"]
     volumes:
-      - ./apps/backend/app:/srv/app  # 原始碼掛進去，改檔案 reload 立即生效
-      # 共用驅動層也掛進來：不掛的話 --reload 看不到 libs/ 的改動，開發時會
-      # 出現「改了沒反應」，而映像裡那份是舊的（issue 026 B2）
-      - ./libs:/srv/libs:ro
       - ./reference/px4-events:/srv/reference/px4-events:ro   # PX4 事件字典（014）
       - mavcap:/data/mavcap          # 原始層錄製（MAVLink tlog，滾動 30 天）
       - videorec:/rec:ro             # 影像（022）：掃描錄影目錄入庫；唯讀＝寫入是 uav-video 的職責
@@ -117,17 +116,13 @@ services:
       context: .                       # repo 根：映像要裝得到共用的 libs/autopilot
       dockerfile: apps/command/Dockerfile
     network_mode: host
-    command: ["uvicorn", "app.main:app", "--reload",
-              # 與 backend 同款保險：--reload 的 graceful shutdown 會等連線關閉。
-              # command 沒有常駐 WS，不像 backend 那樣會被卡死，但長請求（任務上傳
-              # 握手可達 30s）同樣能拖住重啟——上限 3s，行為可預期。
+    # 基底＝生產形，理由同 backend（issues/033 §4.1）。command 這一側更要緊：
+    # 它重啟會中斷指令通道，而在心跳解耦之前還會一併中斷 GCS 心跳。
+    command: ["uvicorn", "app.main:app",
+              # 長請求（任務上傳握手可達 30s）能拖住重啟——上限 3s，行為可預期
               "--timeout-graceful-shutdown", "3",
               "--host", "0.0.0.0", "--port", "${COMMAND_PORT:-38001}"]
     volumes:
-      - ./apps/command/app:/srv/app
-      # 共用驅動層也掛進來：不掛的話 --reload 看不到 libs/ 的改動，開發時會
-      # 出現「改了沒反應」，而映像裡那份是舊的（issue 026 B2）
-      - ./libs:/srv/libs:ro
       - ./missions:/srv/missions:ro   # 航線檔（外部觸發 GET /api/plans、POST /api/start）；唯讀
       # 位址表：本服務寫、uav-heartbeat 讀（issues/033 §4.2.1）。心跳搬出去之後
       # 「每台機的來源位址」是唯一還需要跨行程傳的東西——而它只有正在收包的

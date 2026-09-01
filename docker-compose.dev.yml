@@ -1,6 +1,16 @@
-# 開發覆寫（不影響部署）：原始碼 bind mount + next dev 熱重載。
+# 開發覆寫（不影響部署）：原始碼 bind mount + 熱重載。
 # 啟用方式：.env 加 COMPOSE_FILE=docker-compose.yml:docker-compose.dev.yml
 # （scripts/setup.sh 會自動設定；部署環境沒有這行，跑的是基底的 production build）
+#
+# **2026-09-01 起 backend 與 command 也在這裡**（issues/033 §4.1 裁定）。
+# 在那之前它們的 `--reload` 與原始碼掛載寫死在基底檔——於是**存一個檔案就會
+# 重啟服務**，不需要有人下 restart 指令。而 command 重啟會中斷指令通道，
+# 在心跳解耦之前還會一併中斷 GCS 心跳、可能超過飛控的 FS_GCS_TIMEOUT。
+# 換句話說：**在部署環境編輯一個檔案，就可能讓飛行中的機體觸發 failsafe。**
+#
+# 所以熱重載現在是**要明確打開的東西**，不是預設。這個檔案沒被載入時，
+# 改原始碼不會有任何效果——要重建映像（`docker compose up -d --build`）。
+# 那個「不便」正是這條裁定要的：部署環境不該有一條靠人記得別踩的路。
 services:
   uav-frontend:
     working_dir: /app
@@ -15,3 +25,35 @@ services:
       HOME: /tmp
     # 保險絲：映像已含依賴，僅匿名 volume 異常殘缺時自救
     command: sh -c "[ -x node_modules/.bin/next ] || npm ci; exec npm run dev -- --port ${FRONTEND_PORT:-33000} -H 0.0.0.0"
+
+  # ── 後端與指令服務的熱重載（原本寫死在基底檔，2026-09-01 搬過來）────────
+  uav-backend:
+    command: ["uvicorn", "app.main:app", "--reload",
+              # --reload 的 graceful shutdown 會等連線關閉，而前端的
+              # /ws/telemetry 是常駐 WS、不會自己關 → reload 無限卡 down
+              # （見 doc/deployment.md 開發注意）。上限 3s，reload 自救。
+              "--timeout-graceful-shutdown", "3",
+              "--host", "0.0.0.0", "--port", "${BACKEND_PORT:-38000}"]
+    volumes:
+      - ./apps/backend/app:/srv/app   # 原始碼掛進去，改檔案 reload 立即生效
+      # 共用驅動層也掛進來：不掛的話 --reload 看不到 libs/ 的改動，開發時會
+      # 出現「改了沒反應」，而映像裡那份是舊的（issue 026 B2）
+      - ./libs:/srv/libs:ro
+      - ./reference/px4-events:/srv/reference/px4-events:ro
+      - mavcap:/data/mavcap
+      - videorec:/rec:ro
+
+  uav-command:
+    command: ["uvicorn", "app.main:app", "--reload",
+              "--timeout-graceful-shutdown", "3",
+              "--host", "0.0.0.0", "--port", "${COMMAND_PORT:-38001}"]
+    volumes:
+      - ./apps/command/app:/srv/app
+      - ./libs:/srv/libs:ro
+      - ./missions:/srv/missions:ro
+      - gcsstate:/state
+
+volumes:
+  mavcap:
+  videorec:
+  gcsstate:

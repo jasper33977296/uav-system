@@ -371,6 +371,21 @@ build；開發加 `docker-compose.dev.yml` 覆寫＝bind mount + 熱重載。
 > 0..N-1 會讓**第一個航點被 home 覆蓋而消失**（且回讀筆數相同、比對抓不到）。
 > 修正前請勿用本系統對 ArduPilot 機上傳任務。
 
+### ⚠ `--reload` 現在是開發環境限定（2026-09-01）
+
+`--reload` 與原始碼掛載**已從基底 compose 移到 `docker-compose.dev.yml`**
+（issues/033 §4.1 裁定）。在那之前它們寫死在基底檔，於是**部署環境編輯一個
+檔案就會重啟服務**——不需要有人下 restart 指令。而 command 重啟會中斷指令通道，
+在心跳解耦之前還會一併中斷 GCS 心跳、可能超過飛控的 `FS_GCS_TIMEOUT`。
+**換句話說：在部署環境存一個檔案，就可能讓飛行中的機體觸發 failsafe。**
+
+* **開發**：`.env` 加 `COMPOSE_FILE=docker-compose.yml:docker-compose.dev.yml`
+  （`scripts/setup.sh` 會自動設）。下面那條 WebSocket 卡死的注意事項只在這個
+  模式下適用。
+* **部署**：不設那一行。改原始碼**不會有任何效果**，要
+  `docker compose up -d --build`。那個「不便」正是要的——
+  **部署環境不該有一條靠人記得別踩的路**。
+
 ### 開發注意事項：backend `--reload` 會被常駐 WebSocket 卡死
 
 開發環境 backend 掛 bind mount + `uvicorn --reload`，改 `apps/backend/app/`
