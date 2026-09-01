@@ -38,6 +38,36 @@ for raw, name in KNOWN.items():
         val = getattr(drv, flag, "**沒有宣告**")
         print(f"{'✓' if good else '✗'} {name:<10} {flag:<24} = {val}")
 
+print("\n── 方言方法：漏一個同樣是執行期才炸 ────────────────────")
+# 旗標會漏，**方法一樣會漏**——而且更難發現：`hasattr` 過得了，要真的呼叫
+# 才知道。2026-09-01 加 `gcs_failsafe_params` 時一起釘住。
+METHODS = {"gcs_failsafe_params": dict}
+for raw, name in KNOWN.items():
+    drv = autopilot.get_driver(raw)
+    for meth, typ in METHODS.items():
+        try:
+            val = getattr(drv, meth)()
+            good = isinstance(val, typ)
+        except Exception as e:
+            val, good = f"**呼叫就炸：{e}**", False
+        ok &= good
+        print(f"{'✓' if good else '✗'} {name:<10} {meth+'()':<24} = {val}")
+
+print("\n── 失聯 failsafe 參數名：兩家不同，未知的要是空的 ─────")
+# **這三格分別擋掉三種寫錯**：兩家抄成一樣（那就不是方言了）、
+# 未知廠牌硬給一個名字（拿別家的參數名去問，問不到又被讀成「沒設定」）、
+# 以及少了必要的鍵（呼叫端 KeyError）
+apf = autopilot.get_driver(3).gcs_failsafe_params()
+pxf = autopilot.get_driver(12).gcs_failsafe_params()
+unf = autopilot.get_driver(0).gcs_failsafe_params()
+for label, cond, note in [
+        ("ArduPilot 與 PX4 的參數名不同", apf != pxf, f"{apf} vs {pxf}"),
+        ("兩家都有 enable 與 timeout_s 兩個鍵",
+         set(apf) == set(pxf) == {"enable", "timeout_s"}, f"{sorted(apf)}"),
+        ("**未知廠牌回空表**（沒有意見時不要製造意見）", unf == {}, unf)]:
+    ok &= cond
+    print(f"{'✓' if cond else '✗'} {label}｜{note}")
+
 print("\n── 方言旗標不能兩家一模一樣（那就不叫方言了）──────────")
 ap, px = autopilot.get_driver(3), autopilot.get_driver(12)
 diff = [f for f in FLAGS if getattr(ap, f, None) != getattr(px, f, None)]
