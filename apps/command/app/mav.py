@@ -89,6 +89,11 @@ def dialect(r: "MavRouter", sysid: int) -> dict:
     }
 
 
+#: 一則指令工作最多等多久。**這個數字要說得出口**——逾時訊息會引用它，
+#: 而「30 秒沒回應」與「內部錯誤」是完全不同的兩句話
+JOB_TIMEOUT_S = 30.0
+
+
 class CommandError(Exception):
     """指令失敗（逾時、被拒、比對不符）。訊息可直接呈現給操作員。"""
 
@@ -126,7 +131,7 @@ class MavRouter(threading.Thread):
         self._alive_t = time.monotonic()
 
     # ── API 層入口（任意執行緒呼叫；在 executor 裡跑，不阻塞事件迴圈）──
-    def submit(self, fn, *args, timeout: float = 30.0):
+    def submit(self, fn, *args, timeout: float = JOB_TIMEOUT_S):
         fut: concurrent.futures.Future = concurrent.futures.Future()
         self.jobs.put((fn, args, fut))
         return fut.result(timeout=timeout)
@@ -522,6 +527,36 @@ def job_takeoff(r: MavRouter, sysid: int, alt: float, ground_amsl=None) -> dict:
         [0.0, 0.0, 0.0, blank, blank, blank, p7])
     return {"steps": steps, "alt_param7": p7,
             "alt_semantics": "relative" if d["takeoff_alt_is_relative"] else "amsl"}
+
+
+def job_clear_mission(r: MavRouter, sysid: int) -> dict:
+    """清掉機上那份任務（`MISSION_CLEAR_ALL`）＋ 讀回確認真的變成 0 項。
+
+    **為什麼要有這個**：原本要換掉一份任務只能「上傳另一份蓋過去」，而那是
+    一個比清除**更重**的動作——它要跑完整的握手、逐項送、逐項讀回比對。
+    人真正想做的是「把它清掉」，卻被迫做一件更複雜的事。
+
+    **讀回確認不能省。** MISSION_ACK 是「我收到了」不是「我清乾淨了」——
+    這條規矩在本專案已經踩過一次（換 sysid 那次）。所以清完再問一次
+    `MISSION_REQUEST_LIST`，看機端回報的 count 是不是 0。
+    """
+    mt = M.MAV_MISSION_TYPE_MISSION
+    r._sendto(sysid, lambda m: m.mission_clear_all_encode(sysid, 1, mt))
+    ack = r._wait(sysid, ("MISSION_ACK",), timeout=5.0)
+    if ack is None:
+        raise CommandError("清除任務沒有收到 ACK")
+    if ack.type != M.MAV_MISSION_ACCEPTED:
+        raise CommandError(f"機端拒絕清除任務（MISSION_ACK type={ack.type}）")
+    # ── 讀回：機上真的沒有任務了嗎 ──────────────────────────
+    r._sendto(sysid, lambda m: m.mission_request_list_encode(sysid, 1, mt))
+    cnt = r._wait(sysid, ("MISSION_COUNT",), timeout=5.0)
+    if cnt is None:
+        # 清除本身成功了，但我們沒讀回。**說出來**，不要當成完全成功
+        return {"accepted": True, "verified": False,
+                "note": "清除已被接受，但讀不回機端的任務數——請自行確認"}
+    left = int(cnt.count)
+    return {"accepted": True, "verified": left == 0, "remaining": left,
+            "note": "機上已無任務" if left == 0 else f"機上還有 {left} 項"}
 
 
 def job_upload_mission(r: MavRouter, sysid: int, items: list) -> dict:

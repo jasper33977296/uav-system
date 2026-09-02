@@ -101,6 +101,11 @@ class AgentLink:
             # 前端，而機端與 API 都是好的，症狀是「畫面永遠說 0 份待回傳」。
             # （同一類的坑記在 issues/014：`fw_match` 接了一半、恆為 unknown。）
             "record_upload": p.get("record_upload"),
+            # **這個 LOITER 是誰造成的**：us／pilot／None＝不知道。
+            # 它決定守門讓不讓地面站動這台機——`None` 時放行（使用者裁定），
+            # 但畫面要說得出「來源不明」，不然操作員不知道自己是在
+            # 接管一個可能有人正在飛的機體
+            "mode_owner": p.get("mode_owner"),
             # B4-a（026 §9）：代理算出來的正規化值。**地面站認得的廠牌會自己
             # 再算一次並比對**（見 crosscheck）——這裡原樣帶出，不修正、不補值
             "derived_mode_name": (p.get("derived") or {}).get("mode_name"),

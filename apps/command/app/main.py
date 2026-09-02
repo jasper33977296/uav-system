@@ -13,6 +13,7 @@
 """
 import asyncio
 import contextvars
+import concurrent.futures
 import json
 import logging
 import math
@@ -144,9 +145,32 @@ async def _run(sysid: int, action: str, fn, *args, params=None):
     except mav.CommandError as e:
         await _audit(sysid, action, params, "failed", str(e))
         raise HTTPException(502, str(e))
+    except (concurrent.futures.TimeoutError, TimeoutError) as e:
+        # **逾時不是「內部錯誤」，它是一個說得出來的故障**：指令排進去了，
+        # 但那條工作在 30 秒內沒有做完——在這條鏈路上幾乎一定是
+        # 「送到飛機的方向不通」（遙測還是會照樣回來，因為那是反方向）。
+        #
+        # 而它原本被 `f"內部錯誤：{e}"` 吞掉，**連「逾時」兩個字都沒有**：
+        # `str(TimeoutError())` 是**空字串**，所以操作員看到的literally 是
+        # 「內部錯誤：」後面什麼都沒有（2026-09-02 現場實測）。
+        await _audit(sysid, action, params, "error", "TimeoutError")
+        raise HTTPException(504, {
+            "code": "link_timeout",
+            "msg": f"{action} 送出去了，但 {mav.JOB_TIMEOUT_S:.0f} 秒內沒有回應",
+            "hint": "指令到飛機的方向不通。**遙測照樣回得來不代表指令送得過去**"
+                    "——那是兩個方向。先看代理的 rx_from_gs 有沒有在增加，"
+                    "以及地面站的 5G 介面有沒有重新列舉",
+            "how_to": ["確認地面站的 5G 介面沒有換名字（ip -br addr）",
+                       "確認 uav-heartbeat 發得到機上（docker compose logs uav-heartbeat）",
+                       "機上 journalctl -u uav-agent 看 rx_from_gs 是否停住"]})
     except Exception as e:
+        # **`str(e)` 可能是空的**（TimeoutError 就是），所以一律帶上型別名，
+        # 不然操作員看到的是一句沒有內容的「內部錯誤：」
+        detail = f"{type(e).__name__}: {e}" if str(e) else type(e).__name__
         await _audit(sysid, action, params, "error", repr(e))
-        raise HTTPException(500, f"內部錯誤：{e}")
+        raise HTTPException(500, {"code": "internal", "msg": f"內部錯誤（{detail}）",
+                                  "hint": "這一則會進 command_log，"
+                                          "細節欄有完整的例外"})
     ok = res.get("accepted", True) and res.get("verified", True)
     await _audit(sysid, action, params, "accepted" if ok else "rejected", json.dumps(res))
     if not ok:
@@ -717,6 +741,29 @@ async def change_route_exec(sysid: int, body: ChangeRouteIn):
     await guard_client.show_on_live(sysid, body.mission_id,
                         f"改航線完成，從第 {fresh['resume_wp']['index']} 點續飛")
     return {"ok": True, "steps": steps, "proposal": fresh}
+
+
+@app.post("/api/command/{sysid}/mission/clear", tags=["任務"],
+          summary="清掉機上那份任務")
+async def mission_clear(sysid: int):
+    """把機上的任務清空。
+
+    **空中守門與上傳同一條**（`_inflight_upload_block`）：正在飛任務時清掉它，
+    後果不會比上傳新的一份輕——飛控手上那份航線消失，而它正在照著飛。
+    合法路徑一樣是先 `mode/hold`。
+
+    地面上則放行：那正是這個按鈕存在的理由——**換任務不該被迫用「上傳另一份
+    蓋過去」來達成**，那是一個更重、更容易出錯的動作。
+    """
+    _require_enabled(); await _require_capability(sysid, "mission_upload")
+    blocked = _inflight_upload_block(sysid)
+    if blocked:
+        raise HTTPException(409, {"msg": blocked, "code": "inflight_clear",
+                                  "how_to": [
+                                      "先 POST /api/command/{sysid}/mode/hold 並確認進了 hold",
+                                      "此時再清除（機體在懸停，清除不會造成移動）"]})
+    await guard_client.ask_guard(sysid, "mission_clear")
+    return await _run(sysid, "mission_clear", mav.job_clear_mission)
 
 
 @app.post("/api/command/{sysid}/mission/upload", tags=["任務"],

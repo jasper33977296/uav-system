@@ -1048,6 +1048,11 @@ export default function CommandPanel() {
               {btn("起飛→任務", "② 開始任務（起飛→執行）", "/mission/fly",
                    { confirm: true, cap: "mission_fly", disabled: rcDown,
                      body: { mission_id: missionId || undefined, takeoff_alt: alt } })}
+              {/* **換任務不該被迫用「上傳另一份蓋過去」來達成**——那是一個
+                  更重、更容易出錯的動作（完整握手＋逐項讀回比對）。
+                  兩段式確認：清掉機上航線是不可復原的 */}
+              {btn("清除任務", "清掉機上那份任務", "/mission/clear",
+                   { confirm: true, cap: "mission_upload", danger: true })}
               {rcDown && (
                 <div className="hint-line">
                   · 遙控器未連線——自動起飛的前提是有人能隨時接管，
@@ -1071,6 +1076,15 @@ export default function CommandPanel() {
                 onClick={() => proposeChangeRoute()}>
                 {busy === "改航線" ? "⋯" : "⇄ 更換任務⋯"}
               </button>
+            </div>
+          )}
+          {/* **暫停的來源不明時要說**（039／守門三態）：溯源不明的 LOITER
+              現在算 HOLDING、地面站指得動它，但那個 LOITER 也可能是飛手切的
+              ——操作員有權在按下「繼續任務」之前知道這件事 */}
+          {holding && agentHere?.mode_owner == null && (
+            <div className="hint-line">
+              · 這個暫停<b>來源不明</b>——可能是本系統按的，也可能是飛手切到 LOITER。
+              指令仍可下達；按「繼續任務」之前請先確認沒有人正在手動飛它。
             </div>
           )}
           {airborne && !inMission && !holding && (
