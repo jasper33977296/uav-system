@@ -101,6 +101,13 @@
 - [ ] **sysid 不用手動配**：由地面站配號，代理收到 `change` 會自己
       `PARAM_SET MAV_SYS_ID` ＋ 重開飛控（**只在地面、只試一次**）。
       現場只要確認最後 `curl :38000/api/admission/<sysid>` 回 **`admitted`**
+- [ ] **機上錄製的空間**：`ssh pi@<機> df -h /home` 與 `du -sh ~/uav-record`。
+      代理會滾動（512 MB 換檔、保留 20 份 ≈ 10 GB 上限），但**卡滿了會讓整台機
+      出問題**——包括代理自己（寫不了 log、補傳緩衝也存不下）
+- [ ] **落地後取回機上錄製**：`scp pi@<機>:~/uav-record/*.tlog ./`。
+      那份是**飛控送出的一切**，含 5G 斷線期間地面站沒收到的那一段。
+      > 飛控**內部**的 dataflash `.BIN` 不在這裡——它在飛控自己的 SD 卡上，
+      > 過不了 57600（見 issues/014 的算術）。要它得換路徑或換 UART 速率。
 - [ ] **`uav-heartbeat` 容器有在跑**（`docker compose ps uav-heartbeat`）：
       GCS 心跳已從 command 服務搬出。**它沒起來的話飛控會在 `FS_GCS_TIMEOUT`
       之後判定 GCS 失聯，而 command 的 `/healthz` 仍然顯示一切正常**
