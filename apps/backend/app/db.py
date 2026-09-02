@@ -47,6 +47,10 @@ async def migrate() -> None:
     # 038：飛控板的唯一 ID（AUTOPILOT_VERSION.uid2）。**目前唯一機器可驗證的
     # 身分**——sysid 只是機上可改的參數。NULL＝還沒問到（不是「沒有」）
     await pool.execute("ALTER TABLE drones ADD COLUMN IF NOT EXISTS board_uid TEXT")
+    # **這筆記錄該是哪一家的自駕儀**（issues/038 的比對半邊，2026-09-02）。
+    # 沒有它就沒有「期望值」可比：sysid 撞號時新來的機會直接繼承舊記錄，
+    # 而廠牌從 ArduPilot 變成 PX4 這種明顯矛盾也沒有任何人看得出來。
+    await pool.execute("ALTER TABLE drones ADD COLUMN IF NOT EXISTS autopilot INT")
     # 航線自帶的圍欄（QGC .plan 的 geoFence）。**圍欄是每份航線自己的事**，
     # 不是系統的全域設定——測繪任務與定點巡檢的合理範圍可以差一個數量級。
     # NULL＝這份 .plan 沒畫圍欄（退回系統預設，而且報告會說出用的是哪一個）
@@ -283,28 +287,48 @@ async def ensure_drone_by_board(board_uid: str, *, autopilot: str | None = None,
     return row["id"], row["name"], created
 
 
-async def load_board_identity(drone_id: str | None) -> tuple[str | None, str | None]:
-    """從 DB 取回這台機上次記錄的板子身分（uid, 韌體版本）。
+async def load_board_identity(
+        drone_id: str | None) -> tuple[str | None, str | None, int | None]:
+    """從 DB 取回這台機上次記錄的身分（uid, 韌體版本, 自駕儀廠牌）。
 
     **給 backend 重啟後回填 LiveState 用。** 沒有這一步的話：值在 DB 裡、
     畫面上卻是空的，而且不會自己好——請求 AUTOPILOT_VERSION 的是 command
     服務，它的「已問過」旗標不隨 backend 重啟而清除。
+
+    **回填同時也是「期望值」**（issues/038，2026-09-02）：新接上的機若與這裡
+    記的對不上，那就不是同一台。2026-09-01 的實例：PX4 SITL 用 sysid 1 連上，
+    直接繼承了一台 ArduPilot 真機的記錄，而**回填這一步把真機的 board_uid
+    填到了模擬器的狀態上**——身分鏈被我們自己接反了。
     """
     if not drone_id:
-        return None, None
+        return None, None, None
     row = await pool.fetchrow(
-        "SELECT board_uid, flight_sw_version FROM drones WHERE id = $1::uuid",
+        "SELECT board_uid, flight_sw_version, autopilot FROM drones WHERE id = $1::uuid",
         drone_id)
-    return (row["board_uid"], row["flight_sw_version"]) if row else (None, None)
+    return ((row["board_uid"], row["flight_sw_version"], row["autopilot"])
+            if row else (None, None, None))
+
+
+async def set_autopilot(drone_id: str | None, raw: int) -> None:
+    """第一次認得這台機是哪一家時記下來。**只在原本是 NULL 時寫**——
+    有值之後它就是期望值，覆蓋它等於把守門自己關掉。"""
+    if not drone_id or raw is None:
+        return
+    await pool.execute(
+        "UPDATE drones SET autopilot = $2 WHERE id = $1::uuid AND autopilot IS NULL",
+        drone_id, raw)
 
 
 async def set_board_uid(drone_id: str | None, uid: str,
                         fw: str | None = None) -> None:
     """記下這筆記錄目前對應的飛控板。
 
-    **這一步只記錄，不比對、不擋。** 之後要做的「UID 變了就示警」（＝這筆記錄
-    現在指的是別塊板子）需要先有一段時間的真實資料，確認 uid2 在同一塊板子上
-    跨重開機/韌體升級是穩定的——沒驗證過就先加告警，只會製造假警報。
+    **原本這裡只記錄、不比對、不擋**，理由是 uid2 在同一塊板子上跨重開機／
+    韌體升級穩不穩定還沒有真實資料，沒驗證過就加告警只會製造假警報。
+    那個顧慮**現在仍然成立**，所以 uid 不合只示警、不擋（見 mavlink_rx 的
+    `_identity_guard`）——但**不再覆蓋**：覆蓋等於把唯一的期望值抹掉，
+    之後永遠比不出來。廠牌不合才是硬擋的那一條（那個訊號沒有穩定性疑慮：
+    一台機不會重開機之後從 ArduPilot 變成 PX4）。
     """
     if not drone_id:
         return

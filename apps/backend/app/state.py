@@ -67,6 +67,16 @@ class LiveState:
     mission_seq: int | None = None
     mission_total: int | None = None       # 機端任務總項數（新韌體才有）
     autopilot_raw: int | None = None      # MAV_AUTOPILOT_*（方言分表；issue 015）
+    #: 這台機的身分對得上這筆記錄嗎（issues/038 比對半邊）。False＝sysid 撞號、
+    #: 新來的機不是這筆記錄原本那台。**資料從此不記在這筆記錄名下**——
+    #: 混料比斷線嚴重，而且它是靜默發生的
+    identity_ok: bool = True
+    identity_reason: str | None = None
+    #: DB 記著的期望值（認領時回填）。**與 board_uid／autopilot_raw 分開存**：
+    #: 後者是「機端現在說它是誰」，前者是「這筆記錄本來是誰」——混成一個欄位
+    #: 就再也比不出來了
+    expect_board_uid: str | None = None
+    expect_autopilot: int | None = None
     # ── 板子身分（038）：AUTOPILOT_VERSION 帶的硬體識別 ──────────────
     #: 飛控板的唯一 ID（`uid2`，十六進位字串）。**這是目前唯一機器可驗證的
     #: 身分**——sysid 只是機上一個可以隨時改的參數，換板子、重刷韌體、
@@ -231,6 +241,8 @@ class LiveState:
             "battery_pct": self.battery_pct,
             "battery_voltage": self.battery_voltage,
             "gps_fix": self.gps_fix, "satellites": self.satellites,
+            "identity_ok": self.identity_ok,
+            "identity_reason": self.identity_reason,
             "flight_mode": self.flight_mode, "armed": self.armed,
             # 顯示用 flight_mode（原廠名），判斷/分組用 mode_verb——PX4 的 HOLD
             # 與 ArduPilot 的 LOITER 是同一件事，前端不該靠比字串知道這件事

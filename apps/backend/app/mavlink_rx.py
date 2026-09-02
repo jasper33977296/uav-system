@@ -246,8 +246,12 @@ class MavlinkRx:
             # 回填上次記錄的板子身分：**它是板子的穩定屬性，不該因為 backend
             # 重啟就從畫面上消失**（請求 AUTOPILOT_VERSION 的是 command 服務，
             # 它不會因為我們重啟而重問）。機端之後回報新值時會覆蓋。
-            st.board_uid, st.flight_sw_version = \
+            st.board_uid, st.flight_sw_version, st.expect_autopilot = \
                 await db.load_board_identity(drone_id)
+            # **回填的 uid 同時是期望值。** 2026-09-01 的教訓：這一步把一台真機
+            # 的 board_uid 填到了 PX4 SITL 的狀態上（兩者都用 sysid 1），
+            # 於是身分鏈被我們自己接反了——機端還沒開口，記錄就先替它答了
+            st.expect_board_uid = st.board_uid
             claimed = st is live
             log.info("sysid %d → %s（%s）", sysid, name,
                      "既有主機" if claimed else "自動註冊")
@@ -319,6 +323,7 @@ class MavlinkRx:
                 await manager.broadcast({"type": "event", "event": ev})
             st.mav_state = state_name
             st.autopilot_raw = msg.autopilot        # 方言分表解碼與 UI 徽章用
+            await self._identity_guard(st, autopilot=msg.autopilot)
             st.vehicle_type_raw = msg.type
             mode = dialect.mode_name(msg.custom_mode, msg.autopilot)
             verb = dialect.mode_verb(msg.custom_mode, msg.autopilot)
@@ -395,8 +400,9 @@ class MavlinkRx:
             if st.board_uid:
                 log.info("sysid %d 板子身分：uid=%s 韌體=%s",
                          sysid, st.board_uid, st.flight_sw_version)
-                await db.set_board_uid(st.drone_id, st.board_uid,
-                                       st.flight_sw_version)
+                if await self._identity_guard(st, board_uid=st.board_uid):
+                    await db.set_board_uid(st.drone_id, st.board_uid,
+                                           st.flight_sw_version)
         elif t == "GLOBAL_POSITION_INT":
             # **0,0 是自駕儀的「不知道」哨兵，不是幾內亞灣外海。**
             # GLOBAL_POSITION_INT 在沒有位置估計時送 lat=lon=0；照寫會把
@@ -537,11 +543,86 @@ class MavlinkRx:
                            "count": 1, "t": now}
         await manager.broadcast({"type": "event", "event": ev})
 
+    async def _identity_guard(self, st: LiveState, autopilot: int | None = None,
+                              board_uid: str | None = None) -> bool:
+        """新接上的機，是不是這筆記錄原本那一台（issues/038 的比對半邊）。
+
+        **2026-09-01 實際發生**：PX4 SITL 用 sysid 1 連上，系統把它認領進一台
+        ArduPilot 真機的記錄，33 筆 PX4 的 `vehicle_event` 寫進了那台真機的
+        事件流——而全程只有一行 `log.info`。遙測沒被污染純粹是因為 issues/004
+        的修法（未 armed 不入庫），不是因為有人擋住。
+
+        **兩個訊號的強度不同，所以處置也不同**：
+
+        * **廠牌不合 → 硬擋**。一台機不會重開機之後從 ArduPilot 變成 PX4，
+          這個判準沒有誤判空間。
+        * **`board_uid` 不合 → 只示警、不擋、也不覆蓋**。`set_board_uid` 的
+          註解記著一個仍然成立的顧慮：uid2 在同一塊板子上跨重開機／韌體升級
+          穩不穩定還沒有真實資料，沒驗證過就硬擋只會製造假警報。
+          但**不再覆蓋**——覆蓋等於把唯一的期望值抹掉，之後就永遠比不出來。
+
+        回傳「可以照常記錄嗎」。
+        """
+        bad = None
+        if (autopilot is not None and st.expect_autopilot is not None
+                and autopilot != st.expect_autopilot):
+            from .dialect import autopilot_name
+            bad = (f"這筆記錄是 {autopilot_name(st.expect_autopilot)} 的機，"
+                   f"但現在這台自報 {autopilot_name(autopilot)}"
+                   "——**同一個 sysid，不同的飛機**")
+        elif (board_uid and st.expect_board_uid
+                and board_uid != st.expect_board_uid):
+            # 只示警：uid 的穩定性還沒有實測支撐（見上）
+            log.warning("⚠ sysid %s 的 board_uid 與記錄不符（記錄 %s、現在 %s）"
+                        "——**不覆蓋**，也不擋；uid 跨韌體升級穩不穩定尚未驗證",
+                        st.sysid, st.expect_board_uid, board_uid)
+            try:
+                ev = await db.insert_event(
+                    st.drone_id, st.session_id, "warn", "board_uid_changed",
+                    {"expected": st.expect_board_uid, "got": board_uid,
+                     "note": "這筆記錄現在指的可能是別塊板子。沒有硬擋，"
+                             "因為 uid2 跨重開機／韌體升級的穩定性還沒實測"})
+                ev["drone"] = st.drone_name
+                await manager.broadcast({"type": "event", "event": ev})
+            except Exception:
+                log.exception("board_uid 變更事件寫入失敗")
+            return False          # 不覆蓋 DB 裡的期望值
+        if bad is None:
+            if autopilot is not None and st.expect_autopilot is None:
+                # 第一次認得：記下來當期望值。**只在原本是 NULL 時寫**
+                st.expect_autopilot = autopilot
+                await db.set_autopilot(st.drone_id, autopilot)
+            return True
+        if st.identity_ok:        # 只在轉態的那一次報，不要每拍都噴
+            st.identity_ok, st.identity_reason = False, bad
+            log.error("⛔ 身分不符：sysid %s %s。**這台機的資料不再記在這筆記錄"
+                      "名下**——混料比斷線嚴重，而且它是靜默發生的",
+                      st.sysid, bad)
+            try:
+                ev = await db.insert_event(
+                    st.drone_id, None, "critical", "identity_mismatch",
+                    {"sysid": st.sysid, "reason": bad,
+                     "expected_autopilot": st.expect_autopilot,
+                     "got_autopilot": autopilot,
+                     "note": "資料已停止記入這筆記錄。sysid 撞號時新來的機會"
+                             "繼承舊記錄——要根治得由系統指派 sysid"})
+                ev["drone"] = st.drone_name
+                await manager.broadcast({"type": "event", "event": ev})
+            except Exception:
+                log.exception("身分不符事件寫入失敗")
+        return False
+
     async def _vehicle_event(self, ent: dict, st: LiveState, msg) -> None:
         """MAVLink EVENT（410）→ 事件流（issue 014 Phase A.2）。折疊同 STATUSTEXT：
         同 event_id 連續重複折成一筆帶 count。type='vehicle_event'、source='vehicle'；
         detail 帶 event_id＋args（前端顯示「機上事件 #id（severity）」骨架，metadata
         文字落地時同列升級全文）。"""
+        if not st.identity_ok:
+            # 身分不符時連事件都不記（issues/038）。2026-09-01 就是這條路徑
+            # 把 33 筆 PX4 SITL 的 vehicle_event 寫進一台 ArduPilot 真機的
+            # 事件流——**遙測沒被污染只是因為它沒解鎖，不是因為有人擋住**
+            return
+
         try:
             d = _decode_event(msg.get_msgbuf())
         except Exception:

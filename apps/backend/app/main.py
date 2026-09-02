@@ -141,6 +141,12 @@ async def _link_and_db_loop() -> None:
                 st.link = _source_for(st.drone_id).sample(st.lat, st.lon, st.alt_rel)
                 st.mark_link_seen()   # 前端待機時仍看得到鏈路品質
 
+            # **身分對不上就不記**（issues/038）：sysid 撞號時新來的機會繼承
+            # 舊記錄，寫進去就是把兩台機的資料混在一起——而混料事後幾乎救不回來
+            if not st.identity_ok:
+                recording[st.drone_id] = False
+                continue
+
             # 同時檢查 session_id：armed 由 rx worker 設定，剛解鎖的瞬間可能
             # 還沒建好 session，此時寫入會產生 session_id NULL 的孤兒資料。
             if not (st.armed and st.session_id):
