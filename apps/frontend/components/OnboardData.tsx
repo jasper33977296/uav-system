@@ -101,7 +101,7 @@ function InspectorSheet({ droneId, onClose }: { droneId: string; onClose: () => 
                   </div>
                 )}
                 {opened && fields.length === 0 && (
-                  <div className="insp-fields hint-line">（登錄表未帶此型別欄位值）</div>
+                  <div className="insp-fields hint-line">（這則訊息沒有帶數值）</div>
                 )}
               </div>
             );
@@ -109,7 +109,7 @@ function InspectorSheet({ droneId, onClose }: { droneId: string; onClose: () => 
           {rows.length === 0 && <div className="empty">無符合的訊息型別</div>}
         </div>
         {/* 誠實標注：這是 1–2Hz 登錄表快照，不是即時封包流（§2.8 規則 1） */}
-        <div className="hint-line">更新率 1–2Hz（登錄表快照，非即時封包流）</div>
+        <div className="hint-line">更新率 1–2Hz（定期快照，不是即時封包流）</div>
       </div>
     </div>
   );

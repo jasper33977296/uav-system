@@ -379,7 +379,7 @@ export default function Drones() {
       })}
       {drones.length === 0 && (
         <div className="card"><div className="empty">
-          {dronesErr ? "無法連線到 backend"
+          {dronesErr ? "無法連線到系統"
             : dronesLoaded ? "尚無無人機" : "讀取中…"}
         </div></div>
       )}

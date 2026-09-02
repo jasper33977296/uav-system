@@ -998,7 +998,7 @@ export default function CommandPanel() {
               ⚠ 此機型（{dh?.vehicle_type ?? apLabel ?? "未知"}）
               {allUnsupported
                 ? "不支援現行指令集，指令已鎖定。"
-                : "控制尚未驗證，指令已鎖定——現行指令集對本機型可能誤觸危險模式（詳 issues/015）。"}
+                : "控制尚未驗證，指令已鎖定——現行指令集對本機型可能誤觸危險模式。"}
               遙測與紀錄不受影響。
             </div>
           )}
@@ -1047,7 +1047,7 @@ export default function CommandPanel() {
               {rcDown && (
                 <div className="hint-line">
                   · 遙控器未連線——自動起飛的前提是有人能隨時接管，
-                  請先確認遙控器開機並與飛控連上（039 複裁 A）
+                  請先確認遙控器開機並與飛控連上
                 </div>
               )}
             </div>

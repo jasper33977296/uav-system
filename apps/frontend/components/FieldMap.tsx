@@ -309,7 +309,7 @@ export default function FieldMap() {
           <div className="cmd-head" onClick={() => setPanelOpen((o) => !o)}>
             <span className="name">場域訊號</span>
             <span className="meta"
-              title={`樣本數 ≥${MIN_SAMPLES} 的架次（門檻與後端 min_samples 對齊）`}>
+              title={`樣本數 ≥${MIN_SAMPLES} 的架次`}>
               {visLoaded.length} 趟</span>
             {loading && <span className="meta">載入 {loadedN}/{sessions.length}…</span>}
             <span className="spacer" />
