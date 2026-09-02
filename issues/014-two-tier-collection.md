@@ -61,6 +61,29 @@ JSON，QGC 那套）才翻得出——排 013-B 之後。前端先顯示「機�
    文字翻譯（逐韌體 JSON）＋411 CURRENT_EVENT_SEQUENCE 掉包偵測／補請求——排 013-B 後
 2. COMMAND_ACK/MISSION_ACK 入流（command 服務已留痕 command_log，
    backend 側可從 tlog 重放）
-3. ~~EKF／感測器健康旗標~~（2026-08-11 done：SYS_STATUS 位元、PREARM_CHECK、ESTIMATOR_STATUS、EXTENDED_SYS_STATE、MAV_STATE→failsafe 事件、前端 Ready to fly 橫幅）；MISSION_CURRENT、RC 狀態待做
+3. ~~EKF／感測器健康旗標~~（2026-08-11 done）；~~MISSION_CURRENT~~（done）；
+   ~~**RC 狀態**~~ → **2026-09-02 done，但實測發現它在真機上還沒有訊號來源**：
+
+   * `st.rc_link` 三態（True／False／**None＝不知道**），判準與機上代理
+     **逐字相同**：`SYS_STATUS` 的 `present` 位元決定「知不知道」、`health`
+     決定真假，**不看 `enabled`**（那是「壞了沒」不是「在不在」），
+     **不用 `RC_CHANNELS.rssi`**（rssi 沒有「不知道」這一態，255 是無效值
+     不是滿格）。判準不同的話 crosscheck 會噴一堆假的不一致，
+     **而真的不一致就會淹在裡面**。
+   * 轉態時發事件，**含「不知道 → 掉線」那一格**——那是最該被看見的一次
+     轉換，只比對 True/False 的寫法會讓它安靜地過去。
+   * 併進 026 §9 的執行期 crosscheck（`rc_link` 在協定裡是頂層欄位不在
+     `derived` 裡，比對前攤平——**位置不同不代表它不該被比對**）。
+
+   > ### ⚠ 真機實測：ArduPilot 4.7 **不回報這個位元**
+   >
+   > 2026-09-02 從 `msg_registry` 讀真機的 `SYS_STATUS`：**回報 18 個感測器，
+   > RC 接收機不在其中**。所以這台機的 `rc_link` 恆為 `None`，
+   > 兩邊一致（實測：地面站 `None`、代理 `None`，crosscheck 0 筆不一致）。
+   >
+   > **後果：[039](039-autonomous-flight-state-machine.md) 複裁 A 的 RC 守門
+   > 在這台真機上從未生效。** `None` 不擋是對的（把「不知道」當成「沒有 RC」
+   > 會讓所有還沒回報這個位元的機都起飛不了），所以**要修的不是那條政策，
+   > 是「這個廠牌的訊號來源」**——見 039 的待查項。
 4. modem 擴充（鄰區/QTEMP/流量計數）、companion 健康、ulog 事後回收
 5. 錄製檔的系統內可見性（列表/下載 API 或文件化取用方式）

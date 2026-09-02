@@ -187,14 +187,19 @@ def crosscheck(link: AgentLink, ground: dict | None) -> list[str]:
     `ground` 是地面站對同一台機的判讀（`None`＝地面站不認得這個廠牌，
     此時**沒有意見就不要製造意見**，直接不比）。
     """
-    d = (link.payload or {}).get("derived") or {}
+    p = link.payload or {}
+    d = p.get("derived") or {}
+    # `rc_link` 在協定裡是**頂層欄位**不在 `derived` 裡（agent 那側刻意放頂層，
+    # 因為鏡像讀的是頂層）。這裡把兩處攤平成同一張表再比——**位置不同不代表
+    # 它不該被比對**，而 RC 正是 039 複裁 A 整條規則的事實來源
+    mine_all = {**d, "rc_link": p.get("rc_link")}
     if not ground:
         link.disagree_since.clear()
         return []
     now = time.monotonic()
     out = []
-    for field_name in ("mode_verb", "mode_name", "ready"):
-        mine, theirs = d.get(field_name), ground.get(field_name)
+    for field_name in ("mode_verb", "mode_name", "ready", "rc_link"):
+        mine, theirs = mine_all.get(field_name), ground.get(field_name)
         # **缺欄位＝代理沒說，不是不一致**：舊版代理不送這些欄位，
         # 把「沒說」當成「說了 None」會讓每一台舊代理都在報警
         if mine is None or theirs is None:

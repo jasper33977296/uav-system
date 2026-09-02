@@ -285,7 +285,11 @@ async def _crosscheck_normalized(link) -> None:
     if st is not None and autopilot_name(st.autopilot_raw) != "unknown":
         ready, _reasons = st.readiness()
         ground = {"mode_verb": st.mode_verb, "mode_name": st.flight_mode,
-                  "ready": ready}
+                  "ready": ready,
+                  # RC 兩邊用**同一條判準**（SYS_STATUS 的 present/health 位元，
+                  # 不看 enabled、不用 rssi）。判準不同的話這裡會噴出一堆假的
+                  # 不一致，而**真的不一致就會淹在裡面**——那比沒有比對更糟
+                  "rc_link": st.rc_link}
     bad = agent_link.crosscheck(link, ground)
     if not bad:
         return

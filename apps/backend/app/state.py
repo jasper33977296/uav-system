@@ -72,6 +72,11 @@ class LiveState:
     #: 混料比斷線嚴重，而且它是靜默發生的
     identity_ok: bool = True
     identity_reason: str | None = None
+    #: 遙控器接收機在不在（issues/014 結構層／039 複裁 A）。**三態**：
+    #: True／False／None＝不知道（韌體沒回報 present 位元）。
+    #: 判準與機上代理**逐字相同**——不同的話 crosscheck 會噴出一堆假的不一致，
+    #: 而那比沒有比對更糟（真的不一致會淹在裡面）
+    rc_link: bool | None = None
     #: DB 記著的期望值（認領時回填）。**與 board_uid／autopilot_raw 分開存**：
     #: 後者是「機端現在說它是誰」，前者是「這筆記錄本來是誰」——混成一個欄位
     #: 就再也比不出來了
@@ -241,6 +246,7 @@ class LiveState:
             "battery_pct": self.battery_pct,
             "battery_voltage": self.battery_voltage,
             "gps_fix": self.gps_fix, "satellites": self.satellites,
+            "rc_link": self.rc_link,
             "identity_ok": self.identity_ok,
             "identity_reason": self.identity_reason,
             "flight_mode": self.flight_mode, "armed": self.armed,

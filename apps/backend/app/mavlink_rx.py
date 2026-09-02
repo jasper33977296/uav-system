@@ -482,6 +482,34 @@ class MavlinkRx:
             st.sensors_unhealthy = [
                 name for name, bit in _SENSOR_BITS
                 if (p_ & bit) and (e_ & bit) and not (h_ & bit)]
+            # ── RC 接收機（issues/014 結構層／039 複裁 A）─────────────
+            # **判準與機上代理逐字相同**：`present` 決定「知不知道」、
+            # `health` 決定真假，**不看 `enabled`**（上面 `sensors_unhealthy`
+            # 那條有看，兩者是不同的問題：那條問「壞了沒」，這條問「在不在」）。
+            #
+            # **刻意不用 `RC_CHANNELS.rssi`**：rssi 沒有「不知道」這一態——
+            # 255 在 MAVLink 裡是無效值不是滿格，讀錯方向會讓守門在 RC 掉線時
+            # 照樣放行。三態的分別是這件事的全部價值。
+            rc_bit = M.MAV_SYS_STATUS_SENSOR_RC_RECEIVER
+            prev_rc = st.rc_link
+            st.rc_link = bool(h_ & rc_bit) if (p_ & rc_bit) else None
+            if ent.get("rc_seen") and prev_rc != st.rc_link:
+                # **「不知道 → 掉線」也要留痕。** 那是最該被看見的一次轉換，
+                # 而只比對 True/False 的寫法會讓它安靜地過去
+                txt = ("遙控器已連線" if st.rc_link else
+                       "⚠ 遙控器離線——此時不得起飛／開始任務" if st.rc_link is False
+                       else "遙控器狀態不明（韌體停止回報）")
+                try:
+                    ev = await db.insert_event(
+                        st.drone_id, st.session_id,
+                        "warn" if st.rc_link is not True else "info",
+                        "rc_link", {"rc_link": st.rc_link, "text": txt,
+                                    "note": "RC 是最後的接管手段（issues/033 第 3 層）"})
+                    ev["drone"] = st.drone_name
+                    await manager.broadcast({"type": "event", "event": ev})
+                except Exception:
+                    log.exception("rc_link 事件寫入失敗")
+            ent["rc_seen"] = True
         elif t in dialect.EKF_MSG_TYPES:
             # 訊息層方言（差異 8→12）：PX4 發 ESTIMATOR_STATUS、ArduPilot 發
             # EKF_STATUS_REPORT，**同一件事兩個訊息名**，所需位元同義。等價的
