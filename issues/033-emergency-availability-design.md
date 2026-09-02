@@ -1,6 +1,6 @@
 # 033 · 意外狀況下的無人機可用性保障：分層防線設計
 
-- 狀態：**needs-decision**（設計文件 2026-08-31 交付：[`doc/emergency-availability-design.md`](../doc/emergency-availability-design.md)；**四條裁定全數完成並實作**；剩實機參數覆核與呈現層）
+- 狀態：**in-progress**（設計文件 2026-08-31 交付：[`doc/emergency-availability-design.md`](../doc/emergency-availability-design.md)；**四條裁定全數完成並實作**；剩實機參數覆核與呈現層）
 - 嚴重度：**high**（2026-08-13 部署環境事故的預防面；使用者明示「先做預防」）
 - 位置：跨 command／backend／前端／部署流程
 - 建立：2026-08-13（使用者提出，PM 配號）
