@@ -272,7 +272,8 @@ async def migrate() -> None:
 async def ensure_drone_by_board(board_uid: str, *, autopilot: str | None = None,
                                 fw: str | None = None,
                                 agent_uid: str | None = None,
-                                vehicle_type: int | None = None) -> tuple[str, str, bool]:
+                                vehicle_type: int | None = None,
+                                claimed_sysid: int | None = None) -> tuple[str, str, bool]:
     """以**飛控板 UID** 確保有一筆機體記錄。回傳 (drone_id, name, 是否新建)。
 
     **為什麼鍵是 board_uid 而不是 sysid**：sysid 是機上一個可以隨時改的參數。
@@ -289,6 +290,21 @@ async def ensure_drone_by_board(board_uid: str, *, autopilot: str | None = None,
     row = await pool.fetchrow(
         "SELECT id::text AS id, name FROM drones WHERE board_uid = $1", board_uid)
     created = False
+    if row is None and claimed_sysid is not None:
+        # **收養佔位記錄，不要長出第二筆**（issues/040 A4）。一台機通常先用
+        # MAVLink 出現（`drone_for_sysid` 建 `uav-s{sysid}` 佔位），代理稍後才
+        # 帶著板號來註冊。兩條路各建一筆的話，**同一台飛機會有兩筆記錄，
+        # 而遙測在其中一筆、身分在另一筆**——那比沒有身分更難查。
+        #
+        # **只收養沒有板號的**：有板號的那筆已經有身分了，蓋掉它等於把兩台機
+        # 併成一台（09-01 的 SITL 事件就是這種合併的鏡像）。
+        row = await pool.fetchrow(
+            "UPDATE drones SET board_uid = $2 WHERE mav_sysid = $1 "
+            "AND board_uid IS NULL RETURNING id::text AS id, name",
+            claimed_sysid, board_uid)
+        if row:
+            log.info("板號 %s 收養既有的佔位記錄 %s（sysid %d）",
+                     board_uid[-6:], row["name"], claimed_sysid)
     if row is None:
         name = f"uav-{board_uid[-6:]}"      # 之後由人改名
         row = await pool.fetchrow(
@@ -452,19 +468,35 @@ async def drone_for_sysid(sysid: int) -> tuple[str, str]:
     """sysid → (drone_id, name)。多機自動註冊（issues/011 定案）：
 
     1. 已有 mav_sysid 對應 → 直接用
-    2. 主機還沒認領 sysid → 認領給主機——既有單機部署升級時，
-       不會因為多了 sysid 概念而生出一台幽靈機
+    2. **配號登錄說這個號碼是配給某塊板子的 → 用那筆**（issues/040 A4）
     3. 都不是 → 自動建檔（uav-s{sysid}，之後無人機頁改名）
+
+    ## 第 2 步 2026-09-02 換掉了，因為原本那條認錯過機
+
+    原本寫的是「**主機**還沒認領 sysid → 認領給主機」。2026-08-24 實際出事：
+    一筆早已停用的舊記錄仍是主機、`mav_sysid` 空著，新接上的機一開機就被認領
+    進那筆記錄，`/api/live` 顯示的是**別台機的名字**——而全程只有一行 log。
+
+    **問題不在那條規則寫錯，在它用錯了鍵**：`is_primary` 是「哪一台是主要顯示
+    對象」，它從來就不是身分。用它來回答「這個號碼是誰的」，等於拿一個排版設定
+    去做身分判斷。
+
+    現在改用**配號登錄**（`assigned_sysid`）：那張表的鍵是板號，而板號是唯一
+    穩定的身分（2026-09-02 使用者裁定）。**認領因此以板號為鍵，只是繞了一層
+    號碼**——而那一層正是我們自己配的，不是機端自報的。
     """
     row = await pool.fetchrow(
         "SELECT id::text AS id, name FROM drones WHERE mav_sysid = $1", sysid)
     if row:
         return row["id"], row["name"]
     row = await pool.fetchrow(
-        "SELECT id::text AS id, name FROM drones WHERE is_primary AND mav_sysid IS NULL")
+        "SELECT id::text AS id, name FROM drones "
+        "WHERE assigned_sysid = $1 AND board_uid IS NOT NULL", sysid)
     if row:
-        await pool.execute("UPDATE drones SET mav_sysid = $2 WHERE id = $1",
+        # **配號登錄說這個號碼是它的**，所以這是它回來了，不是一台新機
+        await pool.execute("UPDATE drones SET mav_sysid = $2 WHERE id = $1::uuid",
                            row["id"], sysid)
+        log.info("sysid %d 依配號登錄歸給 %s（板號為鍵）", sysid, row["name"])
         return row["id"], row["name"]
     name = f"uav-s{sysid}"
     # is_simulated 由 config 決定（SITL/dev 全 true、生產 false）——見 config 註解，

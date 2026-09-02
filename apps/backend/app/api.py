@@ -186,7 +186,10 @@ async def agent_hello(h: AgentHello):
         raise HTTPException(422, "board_uid 不可為空——沒有它就沒有穩定的身分")
     drone_id, name, created = await db.ensure_drone_by_board(
         uid, autopilot=h.autopilot, fw=h.fw, agent_uid=h.agent_uid,
-        vehicle_type=h.vehicle_type)
+        vehicle_type=h.vehicle_type,
+        # A4：代理自報的號碼讓我們認得出「那筆佔位記錄就是它」，
+        # 免得同一台飛機長出兩筆
+        claimed_sysid=h.sysid)
     if created:
         # **新機出現不該是靜默的。** 自動化省掉的是打字，不是知情。
         ev = await db.insert_event(
