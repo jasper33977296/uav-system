@@ -1239,3 +1239,12 @@ details.card summary { cursor: pointer; font-size: 14px; font-weight: 600; }
   .cap-tname { text-align: left; }
   .cap-axis { margin-left: 0; }
 }
+
+/* 「怎麼解」那一行（lib/prearm.ts）。**縮排＋弱化**：它從屬於上面那條原因，
+   不是另一條原因；而原因本身仍是主角——處置是加上去的，不是取代它。 */
+.cmd-fix {
+  margin: 2px 0 6px 14px; font-size: 12px; color: var(--ink-2);
+  border-left: 2px solid var(--border); padding-left: 8px;
+}
+.cmd-fix b { color: var(--ink); }
+.cmd-fix-none { color: var(--muted); }

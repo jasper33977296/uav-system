@@ -12,6 +12,7 @@ import { useEffect, useRef, useState } from "react";
 import { colorFor } from "@/components/droneLayer";
 import { modeLabel } from "@/lib/modeVerb";
 import { API, CLIENT_HEADERS, COMMAND_API } from "@/lib/signal";
+import { armFix } from "@/lib/prearm";
 import { useUavStore } from "@/lib/store";
 
 /** 能力四態（doc/capability-ui-proposal.md，issue 015）：按鈕由每機
@@ -981,9 +982,24 @@ export default function CommandPanel() {
           </div>
           {/* 原因行：未就緒（知道不行）與遙測不足（不知道）都要說明白——
               後端在 ready=null 時也帶原因句（「尚未收到 SYS_STATUS…」） */}
-          {live && live.ready !== true && (live.not_ready_reasons ?? []).map((r, i) => (
-            <div className="hint-line" key={i}>· {r}</div>
-          ))}
+          {live && live.ready !== true && (live.not_ready_reasons ?? []).map((r, i) => {
+            const fix = armFix(r);
+            return (
+              <div className="hint-line" key={i}>
+                · {r}
+                {/* **「為什麼」與「怎麼辦」是兩件事，畫面上要都有。**
+                    飛控說得出哪裡不對（Throttle (RC3) is not neutral），
+                    說不出要做什麼——而站在場邊的人需要的是後者。
+                    **原文不刪**：處置是加在後面，不是取代它。 */}
+                {fix
+                  ? <div className="cmd-fix">→ {fix}</div>
+                  : <div className="cmd-fix cmd-fix-none">
+                      → 這一項還沒有對應的處置。<b>原文照列在上面</b>——
+                      看起來合理但其實錯誤的指示，比沒有指示更糟。
+                    </div>}
+              </div>
+            );
+          })}
           {/* sysid chips 移除（選中機統一）：換機＝左上機隊色點／側欄，
               全站單一「選中機」概念，不再有第二個選擇器 */}
           {noChannel && (
@@ -992,7 +1008,10 @@ export default function CommandPanel() {
             </div>
           )}
           {unseen && (
-            <div className="hint-line">指令服務尚未看到此機（sysid {sid}）。</div>
+            <div className="hint-line">指令服務尚未看到此機（sysid {sid}）。
+              <div className="cmd-fix">→ 它還沒收到這台機的 MAVLink。
+                確認代理在跑、而且地面站到機上的路是通的。</div>
+            </div>
           )}
 
           {/* 僅觀察（未驗證/不支援機型）：指令區整個換成鎖定橫幅——

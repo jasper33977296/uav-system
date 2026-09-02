@@ -11,6 +11,7 @@ import { useEffect, useRef, useState } from "react";
 
 import EventModal from "@/components/EventModal";
 import { evText } from "@/lib/evtext";
+import { armFix } from "@/lib/prearm";
 import { classifySinr } from "@/lib/signal";
 import { ageText, staleLevel, staleStyle } from "@/lib/staleness";
 import { useUavStore } from "@/lib/store";
@@ -302,9 +303,12 @@ export default function SimpleHud() {
           t: brief(`無法${denial.action}：${denial.text}`),
           sev: "warn" as const, expand: true }
     : live && live.ready === false && why
-      // 還沒按就先說。**「為什麼不能飛」不必等到按下去被拒才出現**
+      // 還沒按就先說。**「為什麼不能飛」不必等到按下去被拒才出現**，
+      // 而且**帶上怎麼解**——站在場邊的人要的是那半（見 lib/prearm.ts）
       ? { key: `notready:${why}`,
-          t: brief(`現在還不能飛：${why}${moreWhy ? `（另有 ${moreWhy} 項）` : ""}`),
+          t: brief(`現在還不能飛：${why}`
+            + (armFix(why) ? ` → ${armFix(why)}` : "")
+            + (moreWhy ? `（另有 ${moreWhy} 項）` : ""), 96),
           sev: "warn" as const, expand: true }
     : vidFailActive
       ? { key: `vid:${vidFail!.id}`, t: "影像錄製中斷——遙測與紀錄不受影響",
