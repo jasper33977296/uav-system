@@ -93,6 +93,56 @@ class DronePatch(BaseModel):
     model: str | None = None             # 空字串＝清除
 
 
+#: 入列狀態（issues/040 A2／`doc/drone-admission-protocol.md` §3）。
+#: **只有 `admitted` 可以被指揮。**
+ADMISSION_STATES = ("seen", "identifying", "admitted", "quarantined", "unmanaged")
+
+
+@router.get("/admission/{sysid}")
+async def admission_state(sysid: int):
+    """這台機可不可以被指揮（issues/040 A2）。
+
+    **由 backend 回答而不是 command 自己判斷**：入列要看的三樣東西——板號、
+    代理連線、配號登錄——全都在這一側。command 只有 MAVLink router，
+    它看得到號碼但看不到身分。
+
+    **代理強制**（使用者 2026-09-02 裁定）：沒有代理的機一律 `unmanaged`，
+    看得到、指不動。這不是降級處理，是明確分類。
+    """
+    from . import agent_link
+    from .state import fleet
+    st = next((s for s in fleet.values() if s.sysid == sysid), None)
+    if st is None:
+        return {"sysid": sysid, "state": "seen",
+                "reason": "這個號碼上沒有任何遙測——不知道它是誰"}
+    base = {"sysid": sysid, "drone_id": st.drone_id, "drone": st.drone_name,
+            "board_uid": st.board_uid}
+    if not st.identity_ok:
+        return {**base, "state": "quarantined",
+                "reason": st.identity_reason or "身分與記錄矛盾"}
+    link = next((l for l in agent_link.links.values()
+                 if l.drone_id and l.drone_id == st.drone_id and l.connected),
+                None)
+    if link is None:
+        return {**base, "state": "unmanaged",
+                "reason": "這台機沒有連線中的機上代理——本系統只指揮有代理的機"}
+    if not st.board_uid:
+        return {**base, "state": "identifying",
+                "reason": "還沒拿到飛控板 UID，身分未定"}
+    row = await db.pool.fetchrow(
+        "SELECT assigned_sysid FROM drones WHERE id = $1::uuid", st.drone_id)
+    assigned = row["assigned_sysid"] if row else None
+    if assigned is None:
+        return {**base, "state": "identifying", "reason": "這塊板子還沒有配號"}
+    if assigned != sysid:
+        # 它在用一個不是配給它的號碼。**這不是隔離，是還沒換過來**——
+        # 換號屬 A3，本階段只是不放行
+        return {**base, "state": "identifying", "assigned_sysid": assigned,
+                "reason": f"配給這塊板子的號碼是 {assigned}，它現在用 {sysid}"}
+    return {**base, "state": "admitted", "assigned_sysid": assigned,
+            "reason": "板號、配號、代理連線三者相符"}
+
+
 class AgentHello(BaseModel):
     """機上代理上線時自報。**註冊是收到它的副作用**（issues/038、協定 §4.1）。
 

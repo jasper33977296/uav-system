@@ -351,6 +351,18 @@ export default function CommandPanel() {
       } catch {
         if (!stop) setHealth("off");
       }
+      // 入列狀態（040 A2）。跟著 healthz 同一圈問，不另開輪詢——
+      // 多一條輪詢就多一個會各自漂移的節奏
+      // 直接從 store 取當下的 sysid：**不用 ref**——這個輪詢跑在 effect 裡，
+      // 而 sid 是在元件本體後面才算出來的，用閉包捕捉會拿到第一次渲染那個值
+      const s = useUavStore.getState().live?.mav_sysid;
+      if (s == null) { if (!stop) setAdm(null); return; }
+      try {
+        const r = await fetch(`${API}/api/admission/${s}`);
+        if (!stop) setAdm(r.ok ? await r.json() : null);
+      } catch {
+        if (!stop) setAdm(null);      // 問不到＝不知道，不是「未入列」
+      }
     };
     poll();
     const t = setInterval(poll, 3000);
@@ -390,6 +402,10 @@ export default function CommandPanel() {
   // → React #310「Rendered more hooks than during the previous render」，
   // 整個即時頁白畫面。2026-08-25 實際炸過一次
   const [proposal, setProposal] = useState<any>(null);
+  //: 入列狀態（issues/040 A2）。**事先查、不要讓使用者用失敗去發現**
+  //: （ui-spec §0.2c 條款 6）——身分不明時按鈕就不該是可按的。
+  //: null＝還沒問到（不是「未入列」）：那兩者不能同形
+  const [adm, setAdm] = useState<{ state: string; reason?: string } | null>(null);
 
   if (health === null) return null;
   if (health === "off") return null;           // 服務未部署/未連線：不佔版面
@@ -414,6 +430,9 @@ export default function CommandPanel() {
   // 「沒有 RC」會讓所有還沒升級的機都起飛不了（issues/036 的同一個教訓）
   const agentHere = focusId ? agentsMap[focusId] ?? null : null;
   const rcDown = agentHere?.rc_link === false;
+  // 040 A2：入列沒過就指不動。**`null` 不擋**——那是「還沒問到」，
+  // 與「問到了、沒過」是兩件事（同 rc_link 的三態紀律）
+  const notAdmitted = adm !== null && adm.state !== "admitted";
   const replayList = focusId ? replays[focusId] ?? [] : [];
   // ── 任務區要用的三個判斷（2026-08-26）───────────────────────
   // **「在空中」全檔案共用同一個判準**（landed_state 或高度）——兩套判準
@@ -565,7 +584,7 @@ export default function CommandPanel() {
     <button
       className={opts.danger ? "btn-danger btn-sm"
         : opts.accent ? "btn-accent btn-sm" : "btn-plain btn-sm"}
-      disabled={!sid || busy !== null || !!opts.disabled
+      disabled={!sid || busy !== null || !!opts.disabled || notAdmitted
         || (opts.cap ? capState(opts.cap) !== "ok" : false)}
       onClick={() => exec(action, path, opts.confirm, opts.body)}
     >
@@ -644,7 +663,24 @@ export default function CommandPanel() {
         </div>
       )}
 
-      {open && health.enabled && !routerDead && (
+      {/* 040 A2：入列沒過。**事先標示而不是等按下去才說**（ui-spec §0.2c
+          條款 6）——而且原因要可行動：「未驗證」不是原因，「這台機沒有代理」
+          才是。緊急退路（實體遙控器）不受影響，這句話要出現在畫面上，
+          否則「指不動」會被讀成「沒救了」 */}
+      {open && health.enabled && !routerDead && notAdmitted && (
+        <div className="cmd-body">
+          <div className="cmd-dead">
+            <b>這台機還不能被指揮（{adm?.state}）。</b>
+            <div className="hint-line">{adm?.reason ?? "入列檢查未通過"}</div>
+            <div className="hint-line">
+              · 本系統只指揮通過入列的機——身分不明時指令可能送到錯的飛機
+            </div>
+            <div className="hint-line">· **實體遙控器不受影響**</div>
+          </div>
+        </div>
+      )}
+
+      {open && health.enabled && !routerDead && !notAdmitted && (
         <div className="cmd-body">
           {/* 039 複裁 G：失聯期間按下的操作。**這不是「已經做了」的通知**，
               是「你按過、系統沒有送出去」的清單——鏈路恢復後只重新問了一次

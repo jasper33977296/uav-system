@@ -384,8 +384,18 @@ class MavlinkRx:
             # 尾端補位的 0 去掉再存：長度隨板子而異，留著會讓同一塊板子在
             # 不同韌體上算出不同字串
             uid2 = uid2.rstrip(b"\x00")
-            st.board_uid = uid2.hex() if uid2 else (
-                f"{msg.uid:016x}" if getattr(msg, "uid", 0) else None)
+            # **`uid2` 全 0 就是沒有板號，不退回舊的 `uid` 欄位**
+            # （2026-09-02 使用者裁定，issues/040）。原本會退回去，而實測 PX4
+            # SITL 的 `uid2` 全是 0、`uid` 是 `0x4954414c44494e4f`＝ASCII
+            # **"ITALDINO"**——**一個常數**。把常數當成板號等於**發明一個身分**，
+            # 而在「板號是唯一鍵值」的制度下，那會讓每一台 SITL 都解析成同一筆
+            # 記錄、**安靜地合併成一台飛機**。那比 sysid 撞號更嚴重：撞號至少
+            # 會被 `_identity_guard` 抓到（廠牌不同），合併連矛盾都不會產生。
+            #
+            # 代價講明白：**沒有 uid2 的機從此沒有身分，也就不可被指揮**。
+            # 那正是「代理強制」裁定下應有的結果——要被指揮就得拿得出身分，
+            # 而不是讓系統從一個常數裡誤讀出一個。
+            st.board_uid = uid2.hex() if uid2 else None
             st.board_version = getattr(msg, "board_version", None)
             st.board_vendor_id = getattr(msg, "vendor_id", None)
             st.board_product_id = getattr(msg, "product_id", None)

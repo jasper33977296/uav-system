@@ -34,7 +34,7 @@ _client_var: contextvars.ContextVar = contextvars.ContextVar("client", default=N
 from . import capabilities as caps
 import plan_check          # libs/ 的共用實作（PYTHONPATH=/srv/libs）
 
-from . import group_exec, guard_client, mav, plans
+from . import admission, group_exec, guard_client, mav, plans
 from .config import settings
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(name)s %(message)s")
@@ -108,9 +108,21 @@ def _require_enabled():
 # 一律拒發——UI 與實際放行永不背離。取代舊 _require_px4 硬碼（ardupilot 現在走
 # unverified＝全鎖，比舊版嚴、符合四態「僅觀察」）。可攜指令在某機型 SITL 驗過
 # 後把該鍵開 "ok"，前後端同時放行。
-def _require_capability(sysid: int, endpoint_key: str):
+async def _require_capability(sysid: int, endpoint_key: str):
     if sysid not in router.drones:
         raise HTTPException(409, f"sysid {sysid} 未連線（心跳未見）")
+    # **入列檢查排在能力檢查之前**（issues/040 A2）：「這台機是不是我們的」
+    # 比「這台機做不做得到」更根本——對一台身分不明的機談能力沒有意義。
+    info = await admission.state_of(sysid)
+    if info.get("state") not in admission.COMMANDABLE:
+        raise HTTPException(403, {
+            "msg": admission.why_blocked(info),
+            "code": "not_admitted", "admission": info.get("state"),
+            "sysid": sysid, "drone": info.get("drone"),
+            # 用的是舊答案時要說——「幾秒前的答案」與「現在的答案」
+            # 是不同的可信度
+            "stale": info.get("stale", False),
+            "hint": "本系統只指揮通過入列的機。緊急時實體遙控器不受影響"})
     ap = mav.caps.autopilot_name(router.autopilot_of(sysid))
     cap_key = mav.caps.ENDPOINT_CAP.get(endpoint_key, endpoint_key)
     cap, reasons = mav.caps.capabilities_for(ap, (router.drones.get(sysid) or {}))
@@ -267,7 +279,7 @@ def _guard_bare_arm(sysid: int) -> None:
 
 @app.post("/api/command/{sysid}/arm")
 async def arm(sysid: int, intent: str | None = None):
-    _require_enabled(); _require_capability(sysid, "arm")
+    _require_enabled(); await _require_capability(sysid, "arm")
     if intent != "start_mission":
         _guard_bare_arm(sysid)
     else:
@@ -279,7 +291,7 @@ async def arm(sysid: int, intent: str | None = None):
 
 @app.post("/api/command/{sysid}/disarm")
 async def disarm(sysid: int):
-    _require_enabled(); _require_capability(sysid, "disarm")
+    _require_enabled(); await _require_capability(sysid, "disarm")
     # **空中上鎖＝馬達停轉、飛機直接掉下來**——那不是「停止」，是墜毀。
     # 守門只在機體確定在地上時放行；真的要緊急切斷動力用遙控器（那是本系統
     # 設計裡人接管的那一層，而且它不經過我們）
@@ -291,7 +303,7 @@ async def disarm(sysid: int):
 async def set_mode(sysid: int, mode: str, skip_guard: bool = False):
     if mode not in mav.PX4_MODES:
         raise HTTPException(422, f"mode 須為 {sorted(mav.PX4_MODES)}")
-    _require_enabled(); _require_capability(sysid, f"mode:{mode}")
+    _require_enabled(); await _require_capability(sysid, f"mode:{mode}")
     # skip_guard 只給**改航線序列內部**用：那條序列整體已經過守門，
     # 序列中的每一步再問一次會被守門用「已經在 hold 了」擋下自己
     if not skip_guard:
@@ -301,7 +313,7 @@ async def set_mode(sysid: int, mode: str, skip_guard: bool = False):
 
 @app.post("/api/command/{sysid}/mission/start")
 async def mission_start(sysid: int):
-    _require_enabled(); _require_capability(sysid, "mission_start")
+    _require_enabled(); await _require_capability(sysid, "mission_start")
     await guard_client.ask_guard(sysid, "mission_start")
     res = await _run(sysid, "mission_start", mav.job_command, 300, [0.0])
     # 啟動的是**機上現有**的任務，所以要查這台機現在綁的是哪一份
@@ -360,7 +372,7 @@ class UploadIn(BaseModel):
 async def takeoff(sysid: int, body: TakeoffIn):
     """監督式起飛：解鎖＋爬升到指定高度後自動懸停（PX4 自主執行）。
     取代「用 RC 手動飛到高度」的操作——連續操縱仍是 RC 的職權。"""
-    _require_enabled(); _require_capability(sysid, "takeoff")
+    _require_enabled(); await _require_capability(sysid, "takeoff")
     return await _do_takeoff(sysid, body.alt)
 
 
@@ -381,7 +393,7 @@ async def mission_fly(sysid: int, body: FlyIn):
     高度沒到就不切任務——序列在任何一步失敗都停在安全狀態
     （PX4 起飛後自動懸停），並回報卡在哪一步。
     """
-    _require_enabled(); _require_capability(sysid, "mission_fly")
+    _require_enabled(); await _require_capability(sysid, "mission_fly")
     await guard_client.ask_guard(sysid, "mission_fly")
     steps = {}
     if body.mission_id:
@@ -513,7 +525,7 @@ async def mission_goto(sysid: int, body: GotoIn):
     參數是**我方索引**而不是機端 seq：機端 seq 的慣例因廠牌而異
     （ArduPilot 的 home 佔 0），讓呼叫端算＝把方言洩漏到每一個呼叫點。
     """
-    _require_enabled(); _require_capability(sysid, "mission_start")
+    _require_enabled(); await _require_capability(sysid, "mission_start")
     if body.index < 0:
         raise HTTPException(422, "index 不得為負")
     return await _run(sysid, "mission_goto", mav.job_mission_goto, body.index,
@@ -678,7 +690,7 @@ async def change_route_exec(sysid: int, body: ChangeRouteIn):
 
 @app.post("/api/command/{sysid}/mission/upload")
 async def mission_upload(sysid: int, body: UploadIn):
-    _require_enabled(); _require_capability(sysid, "mission_upload")
+    _require_enabled(); await _require_capability(sysid, "mission_upload")
     rows = await pool.fetch(
         "SELECT seq, lat, lon, alt, action, params FROM waypoints "
         "WHERE mission_id = $1 ORDER BY seq", body.mission_id)
