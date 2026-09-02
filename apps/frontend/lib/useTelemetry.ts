@@ -55,6 +55,11 @@ export function useTelemetry() {
         // 飛機沒有動**——要不要真的做由人再按一次
         else if (msg.type === "agent_intent_replay")
           pushReplay({ ...msg, at: Date.now() });
+        // 記錄被刪除了。**要主動清，不能等重新整理**——前端的機隊表是累積的，
+        // 不清的話畫面會繼續顯示一台已經不存在的機，而且它與一台「只是斷線」
+        // 的真機完全同形
+        else if (msg.type === "drone_removed" && msg.drone_id)
+          useUavStore.getState().removeDrone(msg.drone_id);
         else if (msg.type === "msg_registry" && msg.drone_id)
           setRegistry(msg.drone_id,
             { sensors: msg.sensors ?? [], messages: msg.messages ?? [] });

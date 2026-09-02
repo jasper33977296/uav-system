@@ -202,6 +202,10 @@ interface UavStore {
   setDraftGroup: (g: UavStore["draftGroup"]) => void;
   setLive: (t: Telemetry) => void;
   select: (id: string) => void;
+  /** 記錄被刪除了：把這台機從所有以 drone_id 為鍵的表裡拿掉。
+   * **少清一張表，它就會在那張表撐著半條命**——例如尾跡還在地圖上、
+   * 或側欄鎖著一台已經不存在的機。 */
+  removeDrone: (id: string) => void;
   setWsConnected: (v: boolean) => void;
   setRegistry: (droneId: string, r: DroneRegistry) => void;
   pushEvent: (e: UavEvent, fold?: boolean) => void;
@@ -288,6 +292,25 @@ export const useUavStore = create<UavStore>((set) => ({
     }),
   select: (id) =>
     set((s) => ({ selectedId: id, live: s.fleet[id] ?? s.live })),
+  removeDrone: (id) =>
+    set((st) => {
+      const drop = <T,>(m: Record<string, T>) => {
+        const n = { ...m }; delete n[id]; return n;
+      };
+      const assign = { ...st.formationCfg.assign }; delete assign[id];
+      return {
+        fleet: drop(st.fleet), trails: drop(st.trails),
+        registry: drop(st.registry), agents: drop(st.agents),
+        replays: drop(st.replays), sinrHistories: drop(st.sinrHistories),
+        // **選中／主機指到它就要放手**：留著的話側欄會鎖在一台不存在的機上，
+        // 而畫面看起來只是「那台機沒有資料」
+        selectedId: st.selectedId === id ? null : st.selectedId,
+        primaryId: st.primaryId === id ? null : st.primaryId,
+        live: st.live?.drone_id === id ? null : st.live,
+        targetIds: st.targetIds.filter((t) => t !== id),
+        formationCfg: { ...st.formationCfg, assign },
+      };
+    }),
   setWsConnected: (v) => set({ wsConnected: v }),
   setRegistry: (droneId, r) =>
     set((s) => ({ registry: { ...s.registry, [droneId]: r } })),

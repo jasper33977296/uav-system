@@ -71,6 +71,28 @@ _SEVERITY = {0: "critical", 1: "critical", 2: "critical", 3: "critical",
              4: "warning", 5: "info", 6: "info"}
 
 
+def forget(drone_id: str) -> int:
+    """記錄被刪除時，把這台機從**執行期**狀態裡也拿掉。回傳清掉幾個 sysid。
+
+    **刪掉資料庫那一列不會讓它從畫面上消失。** 執行期的 `fleet` 與這裡的
+    sysid 對照表各自握著一份，廣播迴圈照樣每 0.2 秒送一次它的最後已知位置
+    ——而那台機**已經不存在了**，畫面上卻與一台「只是斷線」的真機完全同形。
+
+    注意：**這不保證它不會回來。** 那個 sysid 若還在發心跳，下一則就會重新
+    自動註冊（`drone_for_sysid`）——那是對的，機還在天上就該看得到它。
+    要它真的消失，得先讓它停止發送。
+    """
+    if rx is None:
+        return 0
+    n = 0
+    for sysid, ent in list(rx.sysids.items()):
+        if ent.get("drone_id") == drone_id:
+            del rx.sysids[sysid]
+            n += 1
+    rx.by_drone.pop(drone_id, None)
+    return n
+
+
 def _decode_event(msgbuf) -> dict | None:
     """手工解 MAVLink EVENT（msg 410）裸 frame（issue 014 Phase A.2）。
 

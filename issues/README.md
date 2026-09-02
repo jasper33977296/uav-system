@@ -68,7 +68,7 @@
 | [033](033-emergency-availability-design.md) | 意外狀況下的可用性保障：分層防線設計已交付（`doc/emergency-availability-design.md`）；**四條裁定全數完成並實作**：第 2 層取消、心跳解耦、`FS_GCS` 開（逾時 45s＞代理 30s）、生產拿掉 `--reload`；剩實機參數覆核與呈現層 | high | in-progress | 跨服務＋部署流程 |
 | [034](034-healthz-hides-zombie-router.md) | `/healthz` 不反映 router 死活：殭屍服務照回 ok（心跳停發近一小時無人察覺）；偵測＋503＋前端告示已落地，**只剩自動重啟待裁** | high | in-progress | `apps/command/app/main.py:198`＋`CommandPanel.tsx` |
 | [035](035-remove-manual-control.md) | 移除虛擬搖桿：系統範圍收斂為航路管理＋飛行安全，連續操縱交給實體遙控器（含 026 待決點 1 定案）| medium | in-progress | `apps/command`／`libs/autopilot`／`apps/frontend` |
-| [036](036-live-page-display-honesty.md) | 即時頁把「沒有資料」畫成「有資料」：斷線／從未連上／無定位三者同形，0,0 哨兵被畫在幾內亞灣 ✔對帳 | medium | **closed** | `mavlink_rx.py`／`main.py`／`MapView.tsx` |
+| [036](036-live-page-display-honesty.md) | 即時頁把「沒有資料」畫成「有資料」：斷線／從未連上／無定位三者同形，0,0 哨兵被畫在幾內亞灣 ✔對帳；**09-02 同族第五處：刪掉的機還在即時頁上**（刪除只動資料庫，執行期照樣廣播）| medium | **closed** | `mavlink_rx.py`／`main.py`／`MapView.tsx` |
 | [037](037-plan-autopilot-mismatch.md) | `.plan` 自報的 firmwareType／vehicleType 被完全忽略：PX4 寫的航線靜默上到 ArduPilot 機 ✔三處對帳，示警放行 | **high** | **closed** | 匯入／入庫／上傳三處 |
 | [038](038-board-identity.md) | 系統不知道哪台是哪台：本階段請求並記錄飛控板 UID；**比對與告警 09-02 實作**（撞號的 PX4 SITL 曾寫 46 筆假事件進真機記錄）| medium | in-progress | `mavlink_rx.py`＋uav-agent |
 | [039](039-autonomous-flight-state-machine.md) | 全自動飛行的狀態機與安全守門：**飛行中上傳任務會立刻改道且無任何守門**（SITL 實測）。飛安裁定全數完成（08-31 複裁七條），A／C／E／G 待實作 | **high** | in-progress | `doc/autonomous-flight-state-machine.md` |

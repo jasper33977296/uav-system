@@ -895,6 +895,19 @@ async def delete_drone(drone_id: str):
             r = await con.execute("DELETE FROM drones WHERE id = $1", drone_id)
     if r.split()[-1] == "0":
         raise HTTPException(404, "無此無人機")
+    # **刪掉資料庫那一列不會讓它從畫面上消失。** 執行期還握著三份：機隊
+    # 註冊表（廣播迴圈每 0.2 秒送一次它的最後已知位置）、sysid 對照表、
+    # 意圖通道。不清的話，即時頁會繼續顯示一台**已經不存在的機**，
+    # 而且它與一台「只是斷線」的真機完全同形——要等 backend 重啟才會不見。
+    from .state import fleet
+    fleet.pop(drone_id, None)
+    counts["runtime_sysids"] = mavlink_rx.forget(drone_id)
+    for uid, l in list(agent_link.links.items()):
+        if l.drone_id == drone_id:
+            agent_link.links.pop(uid, None)
+    # **還要跟畫面說一聲。** 前端的機隊表也是累積的，沒有這一則的話，
+    # 已經開著的分頁要重新整理才看得到刪除的結果
+    await manager.broadcast({"type": "drone_removed", "drone_id": drone_id})
     return {"deleted": counts}
 
 

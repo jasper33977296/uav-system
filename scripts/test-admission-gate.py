@@ -55,6 +55,17 @@ def post(url, payload=None):
         return e.code, json.loads(e.read().decode() or "{}")
 
 
+def drone_ids() -> set:
+    return {d["id"] for d in get(f"{BACKEND}/api/drones")}
+
+
+#: 開跑前的機隊。**假機一連上，backend 就會替它自動註冊一筆記錄**——
+#: 那是對的（機在天上就該看得到它），但它不會自己消失：跑完之後那筆
+#: `uav-s42` 會**永遠留在機隊裡，而且出現在即時頁上**，長得跟一台真的、
+#: 只是斷線的機一模一樣（2026-09-02 實際被使用者抓到）。
+#: 記下開跑前的樣子，結束時只刪多出來的那幾筆。
+before = drone_ids()
+
 fake = subprocess.Popen(
     [sys.executable, "scripts/fake-drone.py", "--sysid", str(a.fake_sysid)],
     cwd="/home/k200/uav-system",
@@ -112,6 +123,22 @@ try:
 finally:
     fake.terminate()
     fake.wait(timeout=5)
+    # ── 把假機留下的記錄收掉 ────────────────────────────────────
+    # **殺掉程序不等於收拾乾淨**：`teardown-fakes.sh` 收的是程序，
+    # 而自動註冊出來的那筆記錄要另外刪——不刪的話它會停在即時頁上，
+    # 而且與一台「只是斷線」的真機完全同形。
+    time.sleep(1)
+    for did in drone_ids() - before:
+        try:
+            req = urllib.request.Request(f"{BACKEND}/api/drones/{did}",
+                                         method="DELETE")
+            with urllib.request.urlopen(req, timeout=15):
+                pass
+        except urllib.error.HTTPError as e:
+            print(f"  ⚠ 假機記錄 {did[:8]} 刪不掉（HTTP {e.code}）——手動清")
+    chk("**假機留下的記錄收乾淨了**（不然它會停在即時頁上，"
+        "而且長得跟一台只是斷線的真機一樣）", not (drone_ids() - before),
+        sorted(drone_ids() - before))
 
 print("\n" + ("全部通過" if ok else "**有未通過項目**"))
 sys.exit(0 if ok else 1)
