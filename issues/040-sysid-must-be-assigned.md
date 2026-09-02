@@ -223,11 +223,39 @@ uid (舊欄位) = 0x4954414c44494e4f                      ← ASCII "ITALDINO"
 > （畸形請求本來就到不了飛機），但測到的是「畸形請求進不去」而不是
 > 「入列擋下」，兩者都安全、只有後者是要驗的東西。
 
-## 機端待做（原本要交辦給 uav-agent session，該 session 已結束）
+### A3 自動換號（2026-09-02 完成，兩側）
 
-1. **`say_hello()` 的 body 加 `sysid`**（`self.mon.state.get("sysid")`，手上已有）。
-   地面站據此判斷「它跑錯號碼了沒」；不送的話只能配號給它、無法判斷。
-2. **收到 `sysid_action: "change"` 之後真的換號**（A3）：
+**地面站側**：`state.reassigning`（`{from, to, phase}`）原封鏡像；
+`/api/admission/{sysid}` 新增 `reassigning` 狀態，**排在 `board_uid` 檢查之前**
+——重開飛控期間代理收不到 `AUTOPILOT_VERSION`，若先判 `identifying`，
+畫面會說「身分未定」而不是「換號中」，**那會讓一個我們主動發起的動作看起來
+像故障**。
+
+**機端側**（uav-agent `a874afe`）：hello 帶 `sysid`；收到 `change` 後
+`PARAM_SET MAV_SYS_ID` → 讀回確認 → 重開飛控 → 用新號碼回來 → 重新註冊。
+守門比其他地方都嚴，因為**這是代理唯一會重開飛控的動作**：只在地面
+（`flight_state()` 三格）、一個行程只試一次（**反覆重開飛控比不換號更糟**）、
+讀回確認才重開、逾時放棄並大聲說。
+
+`reassigning` 那一格不能省：換號期間機會用舊號碼消失、用新號碼回來，
+**沒有它那個消失就是一次失聯**，039 選項 C 會據此動作——我們會為了修好身分而
+讓飛機以為地面站不見了。（重開的是飛控不是 Pi，所以意圖通道不會斷。）
+
+> **一個沒有補的方言缺口**：參數**讀取**已走驅動（`decode_param`），
+> **寫入沒有 `encode_param`**（PX4 把整數位元組原樣塞進 float32）。
+> 沒有在機端自己補——`autopilot/` 是上游的逐字複製品，加東西會讓
+> `driver-parity.py` 從此都是紅的，**而那支護欄的價值就在於它平常是綠的**。
+> 要補請補在上游。在那之前**非 ArduPilot 機不要開自動換號**
+> （`--no-sysid-auto-apply`）。
+
+驗證 `uav-agent/tools/sysid-reassign.py`（17 項）：含「在天上不換」
+「讀回不符不重開」「逾時放棄」「只試一次」，與兩條反向驗證（關掉開關完全不動、
+號碼本來就對也不動）。`driver-parity.py` 仍全綠。
+
+## 機端已完成（原本要交辦給 uav-agent session，該 session 已結束，改由本 session 做）
+
+1. ~~**`say_hello()` 的 body 加 `sysid`**~~ → 完成（`a874afe`）。
+2. ~~**收到 `sysid_action: "change"` 之後真的換號**~~ → 完成（`a874afe`）：
    `PARAM_SET MAV_SYS_ID` → 讀回確認 → 重開飛控 → 用新號碼回來 → 再註冊一次拿到
    `keep`。四個注意事項：**只在地面做**（用現成的 `flight_state()` 擋，
    只在 `DISARMED`／`NOT_READY`／`READY` 執行）；**`REASSIGNING` 期間要回報**

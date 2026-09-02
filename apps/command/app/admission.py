@@ -95,5 +95,7 @@ def why_blocked(info: dict) -> str:
                        "等代理回報板號與配號相符即可指揮",
         "quarantined": f"sysid {sysid} 的身分與記錄矛盾：{reason}。"
                        "**在查清楚之前不指揮它**——指令可能送到錯的飛機",
+        "reassigning": f"sysid {sysid} 正在換號：{reason}。**這是我們自己發起的**"
+                       "，不是故障——等它用新號碼回來即可",
         "seen": f"sysid {sysid} 上沒有任何遙測，不知道它是誰",
     }.get(info.get("state"), reason or f"sysid {sysid} 未通過入列檢查")

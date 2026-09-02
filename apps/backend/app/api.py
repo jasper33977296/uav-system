@@ -95,7 +95,8 @@ class DronePatch(BaseModel):
 
 #: 入列狀態（issues/040 A2／`doc/drone-admission-protocol.md` §3）。
 #: **只有 `admitted` 可以被指揮。**
-ADMISSION_STATES = ("seen", "identifying", "admitted", "quarantined", "unmanaged")
+ADMISSION_STATES = ("seen", "identifying", "reassigning", "admitted",
+                   "quarantined", "unmanaged")
 
 
 @router.get("/admission/{sysid}")
@@ -126,6 +127,15 @@ async def admission_state(sysid: int):
     if link is None:
         return {**base, "state": "unmanaged",
                 "reason": "這台機沒有連線中的機上代理——本系統只指揮有代理的機"}
+    # 換號中（A3）：**這不是失聯也不是身分矛盾，是我們自己叫它去換的**。
+    # 排在 board_uid 檢查之前——重開飛控期間代理收不到 AUTOPILOT_VERSION，
+    # 若先判 identifying，畫面會說「身分未定」而不是「換號中」，
+    # 那會讓一個我們主動發起的動作看起來像故障
+    re = (link.payload or {}).get("reassigning")
+    if re:
+        return {**base, "state": "reassigning", "reassigning": re,
+                "reason": f"正在把號碼從 {re.get('from')} 換成 {re.get('to')}"
+                          "（重開飛控中，稍候它會用新號碼回來）"}
     if not st.board_uid:
         return {**base, "state": "identifying",
                 "reason": "還沒拿到飛控板 UID，身分未定"}
