@@ -97,6 +97,24 @@ def _decode_event(msgbuf) -> dict | None:
     return {"event_id": ev_id, "seq": seq,
             "severity_ext": log_levels & 0x0F, "args_hex": args.hex()}
 
+def _decode_event_seq(msgbuf) -> dict | None:
+    """手工解 `CURRENT_EVENT_SEQUENCE`（msg 411），理由同 410：
+    當前 pymavlink 方言未定義它，顯示成 `UNKNOWN_411`、payload 解不出。
+
+    線序（MAVLink2 依型別大小排序）：`sequence(u16) flags(u8)` ＝ 3 bytes。
+    `flags` 的 bit0＝`RESET`：機端把序號歸零了（重開機／重連），
+    **此時序號倒退不是掉包**。
+    """
+    mb = bytes(msgbuf)
+    if len(mb) < 13 or mb[0] != 0xFD:
+        return None
+    payload = bytes(mb[10:10 + mb[1]]) + b"\x00" * 3
+    return {"seq": int.from_bytes(payload[0:2], "little"), "flags": payload[2]}
+
+
+#: 411 flags 的 bit0：機端序號歸零
+_EVT_SEQ_RESET = 0x01
+
 # 飛行就緒訊號（QGC「Ready To Fly」同源；docs.px4.io pre_flight_checks）
 _MAV_STATE = {0: "UNINIT", 1: "BOOT", 2: "CALIBRATING", 3: "STANDBY",
               4: "ACTIVE", 5: "CRITICAL", 6: "EMERGENCY", 7: "POWEROFF",
@@ -113,6 +131,41 @@ _SENSOR_BITS = [
     ("電池", M.MAV_SYS_STATUS_SENSOR_BATTERY),
 ]
 _LANDED = {1: "on_ground", 2: "in_air", 3: "takeoff", 4: "landing"}
+
+#: `RC_CHANNELS` 多久沒來就不再拿它下判斷。**「我們不再聽到」不等於「RC 在」**
+#: ——留著一個過期的計數，等於用一個舊事實回答一個關於現在的問題。
+#: 實測真機是 4 Hz，5 秒＝漏 20 則才會轉成「不知道」
+RC_STALE_S = 5.0
+
+
+def _derive_rc(ent: dict) -> bool | None:
+    """RC 接收機在不在。**三態**：True／False／None＝不知道。
+
+    兩個來源分層，**不是二選一**：
+
+    1. **`SYS_STATUS` 的 `RC_RECEIVER` 位元**（`present` 決定知不知道、
+       `health` 決定真假）——PX4 有設，權威。
+    2. **`RC_CHANNELS.chancount`**——ArduPilot 4.7 **不設**上面那個位元，
+       但它有送這則（實測 4 Hz）。規格：「正在接收的 RC 通道總數；
+       **沒有可用的 RC 通道時應為 0**」。**那是計數不是哨兵**，所以 0 是真值。
+
+    **同一則訊息裡的 `rssi` 不能用**：實測真機回 **255**，而 255 在 MAVLink 裡
+    是「無效」不是「滿格」。一則訊息裡一個欄位可用、一個不可用——
+    這就是規格要逐欄讀、不能整包信的原因。
+
+    兩者都沒有 → `None`。**`None` 不擋**（039 複裁 A）：把「不知道」當成
+    「沒有 RC」會讓所有還沒回報的機都起飛不了。
+    """
+    v = ent.get("rc_sys_status")
+    if v is not None:
+        ent["rc_source"] = "sys_status"
+        return v
+    n, t0 = ent.get("rc_chancount"), ent.get("rc_chan_t")
+    if n is not None and t0 is not None and time.monotonic() - t0 <= RC_STALE_S:
+        ent["rc_source"] = "rc_channels"
+        return n > 0
+    ent["rc_source"] = None
+    return None
 
 
 class _Proto(asyncio.DatagramProtocol):
@@ -491,36 +544,42 @@ class MavlinkRx:
             # 255 在 MAVLink 裡是無效值不是滿格，讀錯方向會讓守門在 RC 掉線時
             # 照樣放行。三態的分別是這件事的全部價值。
             rc_bit = M.MAV_SYS_STATUS_SENSOR_RC_RECEIVER
+            ent["rc_sys_status"] = (
+                bool(h_ & rc_bit) if (p_ & rc_bit) else None)
             prev_rc = st.rc_link
-            st.rc_link = bool(h_ & rc_bit) if (p_ & rc_bit) else None
-            if ent.get("rc_seen") and prev_rc != st.rc_link:
-                # **「不知道 → 掉線」也要留痕。** 那是最該被看見的一次轉換，
-                # 而只比對 True/False 的寫法會讓它安靜地過去
-                txt = ("遙控器已連線" if st.rc_link else
-                       "⚠ 遙控器離線——此時不得起飛／開始任務" if st.rc_link is False
-                       else "遙控器狀態不明（韌體停止回報）")
-                try:
-                    ev = await db.insert_event(
-                        st.drone_id, st.session_id,
-                        "warn" if st.rc_link is not True else "info",
-                        "rc_link", {"rc_link": st.rc_link, "text": txt,
-                                    "note": "RC 是最後的接管手段（issues/033 第 3 層）"})
-                    ev["drone"] = st.drone_name
-                    await manager.broadcast({"type": "event", "event": ev})
-                except Exception:
-                    log.exception("rc_link 事件寫入失敗")
-            ent["rc_seen"] = True
+            st.rc_link = _derive_rc(ent)
+            await self._rc_event(st, ent, prev_rc)
         elif t in dialect.EKF_MSG_TYPES:
             # 訊息層方言（差異 8→12）：PX4 發 ESTIMATOR_STATUS、ArduPilot 發
             # EKF_STATUS_REPORT，**同一件事兩個訊息名**，所需位元同義。等價的
             # 邊界（哪些位元可以互換、哪些不行）寫在 dialect.py §1。
             st.ekf_ok = dialect.ekf_ready(msg.flags)
+        elif t == "RC_CHANNELS":
+            # **第二個訊號來源**（2026-09-02 實測後新增）：ArduPilot 4.7 不設
+            # `SYS_STATUS` 的 RC_RECEIVER present 位元，但**它有在送
+            # RC_CHANNELS**（實測 4 Hz）。`chancount` 在 MAVLink 規格裡的定義
+            # 是「正在接收的 RC 通道總數；**沒有可用的 RC 通道時應為 0**」
+            # ——那是一個**計數**，0 是真值不是哨兵，所以它給得出三態。
+            #
+            # 對照組：同一則訊息的 `rssi` 實測是 **255**，而 255 在 MAVLink 裡
+            # 是「無效」不是「滿格」。**同一則訊息裡一個欄位可用、一個不可用**
+            # ——這就是當初否決 rssi 的判斷為什麼是對的。
+            ent["rc_chancount"] = getattr(msg, "chancount", None)
+            ent["rc_chan_t"] = time.monotonic()
+            prev_rc = st.rc_link
+            st.rc_link = _derive_rc(ent)
+            await self._rc_event(st, ent, prev_rc)
         elif t == "EXTENDED_SYS_STATE":
             st.landed_state = _LANDED.get(msg.landed_state)
         elif t == "STATUSTEXT":
             await self._statustext(ent, st, msg)
         elif t == "UNKNOWN_410":         # MAVLink EVENT（PX4 vehicle 通知，Phase A.2）
             await self._vehicle_event(ent, st, msg)
+        elif t == "UNKNOWN_411":         # CURRENT_EVENT_SEQUENCE（掉包偵測）
+            d = _decode_event_seq(msg.get_msgbuf())
+            if d:
+                await self._event_gap(st, ent, d["seq"],
+                                      bool(d["flags"] & _EVT_SEQ_RESET), "411")
 
     # ── STATUSTEXT → 事件流（issue 014 Phase A）───────────────────────
     # 自駕儀的 log。三件事：長訊息**分段重組**（MAVLink2 STATUSTEXT 切 50 字
@@ -580,6 +639,73 @@ class MavlinkRx:
         ent["stx_last"] = {"id": ev["id"], "text": text, "sev": sev,
                            "count": 1, "t": now}
         await manager.broadcast({"type": "event", "event": ev})
+
+    async def _event_gap(self, st: LiveState, ent: dict, seq: int,
+                         reset: bool, src: str) -> None:
+        """機上事件的序號缺口（issues/014）。
+
+        **為什麼要做**：EVENT 走 UDP，掉了就是掉了。而**「沒有事件」與
+        「事件掉了」在畫面上完全同形**——一段安靜的事件流可能代表飛得很順，
+        也可能代表我們瞎了那一段。序號是唯一分得出來的東西。
+
+        兩個來源都餵進這裡：410 自己帶的 `sequence`，以及 411
+        `CURRENT_EVENT_SEQUENCE`（**機端主動報「我現在到第幾號」**——
+        它讓「整批都沒收到」也偵測得出來，那是 410 自己看不到的情況）。
+
+        **只偵測不補請求**：補請求要送 `MAV_CMD_REQUEST_EVENT`＝`COMMAND_LONG`，
+        而 backend 的唯讀邊界是**依訊息型別**擋的——放行它等於同時放行 arm
+        與切模式（見 `scripts/test-readonly-boundary.py`）。要補請求該由
+        command 服務做，與 038 的 `AUTOPILOT_VERSION` 同一條路。
+        """
+        prev = ent.get("evt_seq")
+        ent["evt_seq"] = seq
+        if reset or prev is None:
+            # 機端歸零（重開機／重連）或我們第一次看到——**都不是掉包**
+            if reset:
+                ent["evt_seq"] = seq
+            return
+        gap = (seq - prev) & 0xFFFF        # u16 迴繞
+        if gap <= 1 or gap > 0x8000:
+            return                          # 沒缺口，或序號倒退（不當成掉包）
+        missed = gap - 1
+        log.warning("機上事件序號缺口：%d → %d（漏 %d 則，來源 %s）",
+                    prev, seq, missed, src)
+        try:
+            ev = await db.insert_event(
+                st.drone_id, st.session_id, "warning", "vehicle_events_missed",
+                {"from_seq": prev, "to_seq": seq, "missed": missed, "source": src,
+                 "note": "這段期間的機上事件沒有收到。**事件流的安靜在這裡"
+                         "不代表沒事**——只代表我們沒看到"})
+            ev["drone"] = st.drone_name
+            await manager.broadcast({"type": "event", "event": ev})
+        except Exception:
+            log.exception("事件缺口紀錄寫入失敗")
+
+    async def _rc_event(self, st: LiveState, ent: dict, prev) -> None:
+        """RC 狀態轉態時留痕。
+
+        **「不知道 → 掉線」也要留痕**：那是最該被看見的一次轉換，而只比對
+        True/False 的寫法會讓它安靜地過去。第一次讀到不算轉態（沒有「之前」）。
+        """
+        if not ent.get("rc_seen"):
+            ent["rc_seen"] = True
+            return
+        if prev == st.rc_link:
+            return
+        txt = ("遙控器已連線" if st.rc_link else
+               "⚠ 遙控器離線——此時不得起飛／開始任務" if st.rc_link is False
+               else "遙控器狀態不明（收不到判定所需的訊息）")
+        try:
+            ev = await db.insert_event(
+                st.drone_id, st.session_id,
+                "warn" if st.rc_link is not True else "info",
+                "rc_link", {"rc_link": st.rc_link, "text": txt,
+                            "source": ent.get("rc_source"),
+                            "note": "RC 是最後的接管手段（issues/033 第 3 層）"})
+            ev["drone"] = st.drone_name
+            await manager.broadcast({"type": "event", "event": ev})
+        except Exception:
+            log.exception("rc_link 事件寫入失敗")
 
     async def _identity_guard(self, st: LiveState, autopilot: int | None = None,
                               board_uid: str | None = None) -> bool:
@@ -673,17 +799,20 @@ class MavlinkRx:
             return
         now = time.monotonic()
         eid = d["event_id"]
+        await self._event_gap(st, ent, d["seq"], False, "410")
         # 人話翻譯（issue 014）：翻得出就補 text，**翻不出維持 raw、事件不丟**。
         # 前端 EventModal 讀 text/message 雙名，落地即自動顯示。
-        tr = px4_events.describe(eid, d["args_hex"])
+        # **把機上韌體版本傳進去**（2026-09-02）：`fw_match` 早就實作了三態，
+        # 但呼叫端一直沒傳版本，所以它恆為 `unknown`——**一個接了一半的守門**。
+        # 版本現在拿得到（issues/038 讓 command 服務問 AUTOPILOT_VERSION、
+        # backend 記進 `flight_sw_version`），那段阻塞已經不在了。
+        tr = px4_events.describe(eid, d["args_hex"], st.flight_sw_version)
         last = ent.get("evt_last")
         if last and last["event_id"] == eid and now - last["t"] < STX_FOLD_S:
             last["count"] += 1
             last["t"] = now
             detail = {"event_id": eid, "args": d["args_hex"], "count": last["count"],
-                      **({"text": tr["text"], "event_name": tr["event_name"],
-                          "dict_fw": tr["dict_fw"],
-                          "dict_fw_match": tr["dict_fw_match"]} if tr else {})}
+                      **(tr or {})}
             upd = await db.bump_event(last["id"], detail)
             if upd is not None:
                 await manager.broadcast({"type": "event", "fold": True, "event": {
@@ -693,9 +822,7 @@ class MavlinkRx:
                 return
         ev = await db.insert_event(st.drone_id, st.session_id, sev, "vehicle_event",
                                    {"event_id": eid, "args": d["args_hex"], "count": 1,
-                                    **({"text": tr["text"], "event_name": tr["event_name"],
-                                        "dict_fw": tr["dict_fw"],
-                                        "dict_fw_match": tr["dict_fw_match"]} if tr else {})},
+                                    **(tr or {})},
                                    source="vehicle")
         ev["drone"] = st.drone_name
         ent["evt_last"] = {"id": ev["id"], "event_id": eid, "count": 1, "t": now}

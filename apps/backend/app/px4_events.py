@@ -104,7 +104,14 @@ def _decode_args(comp: int, spec: list, blob: bytes) -> list:
 
 def describe(event_id: int, args_hex: str = "",
              vehicle_fw: str | None = None) -> dict | None:
-    """回 {'text', 'event_name', 'group', 'dict_fw'}；翻不出回 None。
+    """回 {'text', 'event_name', 'group', 'dict_fw', 'dict_fw_match'}；
+    翻不出回 None。
+
+    **版本不符時不給 `text`**（`reference/px4-events/README.md` 的規則）：
+    事件 id 是事件名稱的雜湊，跨韌體重編譯可能改變——拿 A 版字典翻 B 版韌體，
+    翻出來的是**看起來合理但完全錯誤**的句子，**比顯示原始 id 危險得多，
+    因為讀的人不會懷疑它**。所以回傳仍帶 `event_name`／`dict_fw_match`
+    讓 UI 說得出「為什麼沒有翻譯」，但不給那句可能是錯的話。
 
     呼叫端**必須保留原本的 event_id**——這裡回 None 時事件不能消失。
     """
@@ -135,28 +142,46 @@ def describe(event_id: int, args_hex: str = "",
             txt = _fmt_value(v)
         return txt + _UNITS.get(unit, "")
 
-    text = _TAG.sub("", _PLACEHOLDER.sub(_sub, msg)).strip()
-    return {"text": text, "event_name": ev.get("name"),
-            "group": ev.get("group"), "dict_fw": DICT_FW,
-            "dict_fw_match": fw_match(vehicle_fw)}
+    match = fw_match(vehicle_fw)
+    out = {"event_name": ev.get("name"), "group": ev.get("group"),
+           "dict_fw": DICT_FW, "dict_fw_match": match}
+    if match == "mismatch":
+        # **不翻**。理由見 docstring：錯翻譯比沒翻譯危險
+        out["no_text_reason"] = (
+            f"機上韌體 {vehicle_fw} 與字典 {DICT_FW} 不符——"
+            "事件 id 是名稱的雜湊，跨版本翻譯會給出看起來合理但錯誤的句子")
+        return out
+    out["text"] = _TAG.sub("", _PLACEHOLDER.sub(_sub, msg)).strip()
+    return out
+
+
+#: 從 `"4.7.0 (official)"` 這種顯示字串裡取出 `4.7.0`
+_VER = re.compile(r"(\d+\.\d+\.\d+)")
 
 
 def fw_match(vehicle_fw: str | None) -> str:
     """字典版本 vs 機上韌體版本，**三態**。
 
-    `unknown` 不等於 `match`——這正是設計師指出的重點：無法確認相符就顯示翻譯，
-    等於默認它是對的。而**錯翻譯比沒翻譯危險**（沒翻譯只是不知道；錯翻譯是被
-    誤導，且讀的人不會懷疑）。所以 UI 對 `unknown` 也該有提示，不能當成 `match`。
+    `unknown` 不等於 `match`：無法確認相符就顯示翻譯，等於默認它是對的。
+    而**錯翻譯比沒翻譯危險**——沒翻譯只是不知道；錯翻譯是被誤導，
+    而且讀的人不會懷疑。
 
-    目前恆為 `unknown`——**機上韌體版本我們拿不到**（實測：backend 收到的 24 種
-    訊息裡沒有 `AUTOPILOT_VERSION`，PX4 不主動送）。要拿到得靠
-    `MAV_CMD_REQUEST_MESSAGE`，而那是 `COMMAND_LONG`——**backend 的唯讀白名單
-    是「依訊息型別」擋的，放行 COMMAND_LONG 等於同時放行 arm 與切模式**，
-    不是加一個例外就好（見 scripts/test-readonly-boundary.py 的 FORBIDDEN）。
+    > **這個函式一度恆為 `unknown`**，因為當時「機上韌體版本我們拿不到」：
+    > backend 的唯讀白名單依訊息型別擋，而要版本得送 `COMMAND_LONG`
+    > （放行它等於同時放行 arm）。原註解裡建議的路是「由 command 服務要、
+    > 落 DB，backend 讀 DB」——**那條路已經被 issues/038 走完了**
+    > （`AUTOPILOT_VERSION` → `drones.flight_sw_version` →
+    > `load_board_identity` 回填）。2026-09-02 接上，它不再恆為 unknown。
+    >
+    > 記這一段是因為：**一個因為別的工作而消失的阻塞，不會自己去通知
+    > 被它擋住的那段程式碼。**
 
-    取得版本的路徑待定案（建議由 command 服務要、落 DB，backend 讀 DB——
-    不新增跨服務 HTTP 相依）。這個函式的形狀先定下來，屆時只補判斷。
+    比對只取 `x.y.z`：機上的字串帶著 `(official)`／`(dev)` 之類的後綴，
+    而**建置型別不改變事件 id**——拿它去比會把相符的判成不符。
     """
     if not vehicle_fw:
         return "unknown"
-    return "match" if vehicle_fw == DICT_FW else "mismatch"
+    m = _VER.search(vehicle_fw)
+    if not m:
+        return "unknown"
+    return "match" if m.group(1) == DICT_FW else "mismatch"

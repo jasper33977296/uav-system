@@ -56,9 +56,33 @@ JSON，QGC 那套）才翻得出——排 013-B 之後。前端先顯示「機�
 
 ## 待做：結構層剩餘
 
-1. ~~**PX4 新版 Events 協定解碼**（msgid 410）~~（2026-08-11 Phase A.2 done：
-   410 手工解、severity＋event id＋args 入流；見上）。**剩**：event metadata
-   文字翻譯（逐韌體 JSON）＋411 CURRENT_EVENT_SEQUENCE 掉包偵測／補請求——排 013-B 後
+1. ~~**PX4 新版 Events 協定解碼**（msgid 410）~~（Phase A.2）；
+   ~~**文字翻譯**~~、~~**411 掉包偵測**~~ → **2026-09-02 done**：
+
+   * **韌體版本比對接上了。** `fw_match` 的三態早就實作，但**呼叫端一直沒把
+     版本傳進去**，所以它恆為 `unknown`——**一個接了一半的守門**。
+     那段程式的註解寫著阻塞是「機上韌體版本我們拿不到」，而**那條阻塞已經被
+     [038](038-board-identity.md) 走完了**（command 服務問 `AUTOPILOT_VERSION`
+     → `drones.flight_sw_version` → 回填）。
+     > **一個因為別的工作而消失的阻塞，不會自己去通知被它擋住的那段程式碼。**
+   * 比對只取 `x.y.z`：機上字串帶 `(official)` 之類的後綴，而**建置型別不改變
+     事件 id**——拿它去比會把相符的判成不符。
+   * **版本不符時不給 `text`**（README 的規則）：事件 id 是名稱的雜湊，
+     跨版本翻出來的是**看起來合理但完全錯誤**的句子，比顯示原始 id 危險得多。
+     但事件本身不丟，且回傳 `no_text_reason` 讓 UI 說得出為什麼沒有翻譯。
+   * **411 `CURRENT_EVENT_SEQUENCE` 掉包偵測**：410 自己的序號與 411 機端主動
+     報的序號都餵進同一個判定。**「沒有事件」與「事件掉了」在畫面上完全同形**
+     ——一段安靜的事件流可能代表飛得很順，也可能代表我們瞎了那一段，
+     序號是唯一分得出來的東西。缺口記成 `vehicle_events_missed`（warning）。
+     處理了 u16 迴繞、序號倒退（不當掉包）、以及 `RESET` 旗標
+     （機端歸零不是我們漏了）。
+   * **只偵測不補請求**：補請求要送 `MAV_CMD_REQUEST_EVENT`＝`COMMAND_LONG`，
+     而 backend 的唯讀邊界是**依訊息型別**擋的——放行它等於同時放行 arm 與
+     切模式。要補請求該由 command 服務做，與 038 同一條路。
+
+   驗證 `scripts/test-px4-events.py`（17 項，容器內跑）。
+   **注意：真機是 ArduPilot，不走 EVENT 協定**（它用 STATUSTEXT），
+   所以這一批只在 PX4 上會被實際執行——實測近 10 分鐘真機 0 筆，符合預期。
 2. COMMAND_ACK/MISSION_ACK 入流（command 服務已留痕 command_log，
    backend 側可從 tlog 重放）
 3. ~~EKF／感測器健康旗標~~（2026-08-11 done）；~~MISSION_CURRENT~~（done）；
