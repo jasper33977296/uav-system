@@ -62,6 +62,64 @@ MAX_CHUNK = 8 * 1024 * 1024
 MAX_FILE = 1024 * 1024 * 1024
 
 
+class TlogScan:
+    """在算 sha256 的同一遍裡，順手取出這份錄製涵蓋的時間。
+
+    **零額外成本**：收尾驗章本來就要逐 byte 讀過整個檔案，這裡只是在那條
+    串流上多跑一台狀態機。分兩遍讀才是浪費。
+
+    為什麼要它：**「機上這份補上了地面站瞎掉的那一段」是一句可以被檢驗的話**
+    ——但要檢驗它，得先知道這份錄製涵蓋哪一段時間。沒有它，畫面只能說
+    「有一個檔案」，說不出「它蓋住了那個洞」。
+
+    tlog ＝ 每則訊息前綴 8-byte big-endian 微秒時間戳，接一個 MAVLink 框架。
+    **切不動就停手並回 None**：半套的時間範圍比沒有更糟——它看起來像個答案。
+    """
+
+    def __init__(self):
+        self.buf = b""
+        self.first = None
+        self.last = None
+        self.frames = 0
+        self.ok = True
+
+    def feed(self, block: bytes) -> None:
+        if not self.ok:
+            return
+        self.buf += block
+        while True:
+            n = len(self.buf)
+            if n < 9:
+                return
+            ts = int.from_bytes(self.buf[:8], "big") / 1e6
+            m = self.buf[8]
+            if m == 0xFD:                      # MAVLink 2
+                if n < 11:
+                    return
+                end = 8 + 12 + self.buf[9] + (13 if self.buf[10] & 1 else 0)
+            elif m == 0xFE:                    # MAVLink 1
+                if n < 10:
+                    return
+                end = 8 + 8 + self.buf[9]
+            else:
+                self.ok = False                # 對不上就別猜
+                return
+            if n < end:
+                return
+            if self.first is None:
+                self.first = ts
+            self.last = ts
+            self.frames += 1
+            self.buf = self.buf[end:]
+
+    def result(self) -> dict | None:
+        # **框架太少不回範圍**：一兩則訊息湊不出「涵蓋一段時間」這個意思
+        if not self.ok or self.first is None or self.frames < 2:
+            return None
+        return {"from": round(self.first, 3), "to": round(self.last, 3),
+                "frames": self.frames}
+
+
 def root() -> pathlib.Path:
     return pathlib.Path(settings.capture_dir) / "onboard"
 
@@ -179,11 +237,12 @@ def append(drone_id: str, stored_as: str, offset: int, data: bytes) -> dict:
     if have < meta["bytes"]:
         return {"have": have, "complete": False, "stored_as": stored_as}
 
-    # ── 收尾：驗章 ────────────────────────────────────────────
-    h = hashlib.sha256()
+    # ── 收尾：驗章（順手掃出時間範圍，見 TlogScan）────────────
+    h, scan = hashlib.sha256(), TlogScan()
     with open(part, "rb") as f:
         for blk in iter(lambda: f.read(1 << 20), b""):
             h.update(blk)
+            scan.feed(blk)
     if h.hexdigest() != meta["sha256"]:
         # **整份丟掉重來，不留半成品**：截斷或錯亂的 tlog 看起來完全正常，
         # 留著它比沒有它更糟——它會被當成證據
@@ -194,12 +253,50 @@ def append(drone_id: str, stored_as: str, offset: int, data: bytes) -> dict:
         raise ValueError("sha256 不符，整份作廢；請從 0 重傳")
 
     part.replace(d / stored_as)
-    meta.update(complete=True, received_at=time.time())
+    meta.update(complete=True, received_at=time.time(), covers=scan.result())
     _write_meta(mp, meta)
     log.info("機上錄製回傳完成：%s（%.1f MB，drone %s）",
              stored_as, meta["bytes"] / 1e6, drone_id)
     prune()
     return {"have": have, "complete": True, "stored_as": stored_as}
+
+
+def abandoned(drone_id: str, name: str, size: int, at: float) -> dict:
+    """機上把一份**從來沒有回傳成功**的錄製滾動刪掉了。留一塊墓碑。
+
+    **不是統計數字，是一列。** 那份東西不會再回來了，而「它曾經存在過」
+    這件事只剩下這一列——沒有它，事後看到的只是清單裡少了一趟，
+    而少了一趟與「那一趟沒有飛」在畫面上完全同形。
+
+    墓碑就是一個沒有資料檔的 `.meta`，所以清單、清理、保留期全部沿用同一套。
+    """
+    if not NAME_RE.match(name):
+        raise ValueError(f"檔名不合樣式：{name!r}")
+    d = _dir(drone_id)
+    d.mkdir(parents=True, exist_ok=True)
+    if (d / stored_name(d, name)).exists():
+        # **已經有完整的一份了**：機上刪的是它自己那一份，我們手上這份還在。
+        # 這不是損失，不立碑
+        return {"ok": True, "noted": False, "reason": "地面站已經有這一份了"}
+    mp = _meta_path(d, name)
+    prev = _read_meta(mp)
+    if prev and prev.get("lost"):
+        return {"ok": True, "noted": False, "reason": "已經記過了"}
+    _write_meta(mp, {"name": name, "stored_as": name, "drone_id": str(drone_id),
+                     "bytes": size, "sha256": None, "complete": False,
+                     "lost": True, "lost_at": at})
+    log.warning("機上錄製 %s（drone %s）未回傳即被滾動刪除——**這一趟的機上"
+                "紀錄已經不存在**", name, drone_id)
+    return {"ok": True, "noted": True}
+
+
+def stored_name(d: pathlib.Path, name: str) -> str:
+    """這個機上檔名在我們這裡實際存成什麼（撞名時會是 `..._2.tlog`）。"""
+    for m in sorted(d.glob("*.meta")):
+        meta = _read_meta(m)
+        if meta and meta.get("name") == name and meta.get("complete"):
+            return meta["stored_as"]
+    return name
 
 
 def prune() -> int:
@@ -212,7 +309,15 @@ def prune() -> int:
     n = 0
     for f in root().glob("*/*"):
         try:
-            if f.suffix == ".meta" or f.stat().st_mtime >= cutoff:
+            if f.stat().st_mtime >= cutoff:
+                continue
+            if f.suffix == ".meta":
+                # **墓碑也會過期。** 它沒有資料檔，所以不會被下面那條掃到——
+                # 不特別處理的話，「已遺失」那幾列會永遠留在清單上，
+                # 而其他同期的紀錄早就清掉了
+                if (_read_meta(f) or {}).get("lost"):
+                    f.unlink()
+                    n += 1
                 continue
             f.unlink()
             _meta_path(f.parent, f.name[:-len(".part")] if f.suffix == ".part"
@@ -239,8 +344,9 @@ def listing(names: dict[str, str] | None = None) -> dict:
         drone_id = m.parent.name
         stored_as = meta["stored_as"]
         done = bool(meta.get("complete"))
+        lost = bool(meta.get("lost"))
         f = m.parent / (stored_as if done else stored_as + ".part")
-        got = f.stat().st_size if f.exists() else 0
+        got = 0 if lost else (f.stat().st_size if f.exists() else 0)
         total += got
         out.append({
             "drone_id": drone_id,
@@ -249,11 +355,18 @@ def listing(names: dict[str, str] | None = None) -> dict:
             "onboard_name": meta.get("name"),
             "bytes": got,
             "expected_bytes": meta["bytes"],
+            # **三態，不是兩態**：已回傳／傳到一半／機上已刪且永遠拿不到了。
+            # 把最後一種混進「沒傳完」，就會有人一直等它自己傳完
+            "status": "lost" if lost else ("complete" if done else "partial"),
             "complete": done,
             "sha256": meta["sha256"],
+            "covers": meta.get("covers"),
             "received": (datetime.fromtimestamp(meta["received_at"],
                                                 tz=timezone.utc).isoformat()
                          if meta.get("received_at") else None),
+            "lost_at": (datetime.fromtimestamp(meta["lost_at"],
+                                               tz=timezone.utc).isoformat()
+                        if meta.get("lost_at") else None),
             "url": f"/api/onboard-captures/{drone_id}/{stored_as}" if done else None,
         })
     return {"dir": str(root()), "files": out, "total_bytes": total,

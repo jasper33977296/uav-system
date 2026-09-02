@@ -43,6 +43,21 @@ export interface AgentState {
   rc_link?: boolean | null;
   /** 失聯期間壓下來、等著補送的 intent 則數（039 複裁 G）。 */
   pending?: number;
+  /** 機上錄製的回傳現況（issues/014）。**null＝這台機不會自己回傳**——
+   * 代理太舊（v0.6.0 起才有）或自動回傳被關掉，兩者都不等於「沒有東西要傳」。
+   * `blocked` 是「為什麼沒在傳」那句話：**「沒有東西要傳」與「傳不動」
+   * 都是「沒在傳」，但一個是完成、一個是故障**，而處置完全相反。 */
+  record_upload?: RecordUpload | null;
+}
+
+/** 機上錄製回傳的現況（代理每秒推一次）。 */
+export interface RecordUpload {
+  pending: number;            // 關好了、還沒回傳成功的份數
+  pending_files: string[];    // 那幾份的檔名（最多 20）
+  blocked: string | null;     // 為什麼沒在傳；null＝沒有阻礙
+  current: string | null;     // 正在傳哪一份
+  progress: number | null;    // 0..1
+  abandoned: number;          // 滾動刪掉時還沒回傳成功的累計份數
 }
 
 /** 失聯期間按下的操作，恢復後系統重算的判決（039 複裁 G）。

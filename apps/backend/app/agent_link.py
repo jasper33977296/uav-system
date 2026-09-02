@@ -96,6 +96,11 @@ class AgentLink:
             # 不見了**。代理的通道在這段期間不會斷（重開的是飛控不是 Pi）
             "reassigning": p.get("reassigning"),
             "pending": len(self.pending),
+            # 014：機上錄製的回傳現況。**這裡是逐鍵挑的**，所以代理送上來的
+            # 新欄位不會自己出現在鏡像裡——`record_upload` 少了這一行就到不了
+            # 前端，而機端與 API 都是好的，症狀是「畫面永遠說 0 份待回傳」。
+            # （同一類的坑記在 issues/014：`fw_match` 接了一半、恆為 unknown。）
+            "record_upload": p.get("record_upload"),
             # B4-a（026 §9）：代理算出來的正規化值。**地面站認得的廠牌會自己
             # 再算一次並比對**（見 crosscheck）——這裡原樣帶出，不修正、不補值
             "derived_mode_name": (p.get("derived") or {}).get("mode_name"),

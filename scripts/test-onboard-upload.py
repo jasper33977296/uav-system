@@ -24,6 +24,7 @@ import os
 import subprocess
 import sys
 import tempfile
+import time
 import urllib.error
 import urllib.request
 
@@ -71,10 +72,24 @@ def req(method, path, body=None, raw=None, ctype="application/json"):
             return e.code, None
 
 
+def purge():
+    """把這支測試留下的東西全部清掉。
+
+    **`flight_sessions.drone_id` 沒有 ON DELETE CASCADE**（2026-09-02 實測），
+    所以刪機一定要先刪架次——不然 `DELETE` 靜靜失敗，測試機就永遠留在機隊
+    清單裡，**而且它會出現在「回傳狀態」那一區，看起來像一台真的、沒有代理
+    的機**。收拾失敗要看得見，所以結尾有一格斷言在盯它。
+    """
+    for t in ("blackouts", "telemetry", "events", "flight_sessions"):
+        psql(f"DELETE FROM {t} WHERE drone_id IN "
+             f"(SELECT id FROM drones WHERE board_uid = '{UID}')")
+    psql(f"DELETE FROM drones WHERE board_uid = '{UID}'")
+
+
 # ── 場景 ────────────────────────────────────────────────────────
 # **`board_uid` 上沒有唯一索引**（2026-09-02 實測），所以不能用
 # `ON CONFLICT (board_uid)`——先刪再建
-psql(f"DELETE FROM drones WHERE board_uid = '{UID}'")
+purge()
 drone_id = psql(f"INSERT INTO drones (name, mav_sysid, board_uid) VALUES "
                 f"('回傳測試機', 199, '{UID}') RETURNING id")
 print(f"場景：drone_id={drone_id}\n")
@@ -183,10 +198,106 @@ with urllib.request.urlopen(
     chk("**原來那份還在而且沒被動過**",
         hashlib.sha256(rr.read()).hexdigest() == SHA)
 
+print("\n── 9. 收尾驗章那一遍順手掃出時間範圍（TlogScan）────────")
+
+
+def tlog(n, t0=1788300000.0, step=0.25):
+    """合成一份 tlog：8-byte BE 微秒時間戳 ＋ MAVLink2 框架。"""
+    fr = bytes([0xFD, 4, 0, 0, 7, 1, 1, 0, 0, 0]) + b"\xde\xad\xbe\xef" + b"\x00\x00"
+    out = b""
+    for i in range(n):
+        out += int((t0 + i * step) * 1e6).to_bytes(8, "big") + fr
+    return out
+
+
+def push(name, blob):
+    """走完整條 offer → chunk 的路，回傳清單裡的那一列。"""
+    sha = hashlib.sha256(blob).hexdigest()
+    st, r = req("POST", "/api/onboard-captures/offer",
+                {"board_uid": UID, "name": name, "bytes": len(blob),
+                 "sha256": sha})
+    stored = r["stored_as"]
+    req("PUT", f"/api/onboard-captures/chunk?board_uid={UID}&name={stored}"
+               f"&offset=0", raw=blob, ctype="application/octet-stream")
+    st, lst = req("GET", "/api/onboard-captures")
+    return next((f for f in lst["files"] if f["name"] == stored), None)
+
+
+N4, T0 = "20260902-093000.tlog", 1788300000.0
+row = push(N4, tlog(400, T0))
+cov = (row or {}).get("covers")
+chk("時間範圍算出來了", cov is not None, cov)
+chk("**起點是第一則訊息的時間戳**", cov and abs(cov["from"] - T0) < 0.01, cov)
+chk("終點是最後一則", cov and abs(cov["to"] - (T0 + 399 * 0.25)) < 0.01, cov)
+chk("框架數對得上", cov and cov["frames"] == 400, cov)
+
+row = push("20260902-093500.tlog", os.urandom(4000))
+chk("**切不動就回 null，不是猜一個範圍**（半套的答案看起來像答案）",
+    (row or {}).get("covers") is None, (row or {}).get("covers"))
+
+print("\n── 10. 未回傳即被刪除：立碑並進事件流 ──────────────────")
+N5 = "20260830-120000.tlog"
+s_, r = req("POST", "/api/onboard-captures/abandoned",
+            {"board_uid": UID, "name": N5, "bytes": 3_500_000,
+             "at": time.time() - 3600})
+chk("收下了並記了一筆", s_ == 200 and r.get("noted"), r)
+s_, lst = req("GET", "/api/onboard-captures")
+tomb = next((f for f in lst["files"] if f["name"] == N5), None)
+chk("**清單裡看得到它**（少了一趟，與「那一趟沒飛」同形）", tomb is not None)
+chk("狀態是 lost，不是「沒傳完」", tomb and tomb["status"] == "lost", tomb)
+chk("而且沒有下載連結", tomb and tomb["url"] is None)
+ev = psql("SELECT type FROM events WHERE type = 'onboard_capture_lost' "
+          f"AND drone_id = '{drone_id}'::uuid ORDER BY time DESC LIMIT 1")
+chk("**進了事件流**（log 會被清掉，事件流才是留痕的地方）",
+    ev == "onboard_capture_lost", ev)
+s_, r = req("POST", "/api/onboard-captures/abandoned",
+            {"board_uid": UID, "name": N5, "bytes": 3_500_000})
+chk("重報不會多長一列", s_ == 200 and not r.get("noted"), r)
+s_, r = req("POST", "/api/onboard-captures/abandoned",
+            {"board_uid": UID, "name": N4, "bytes": 100})
+chk("**我方已經有完整的一份就不立碑**（那不是損失）",
+    s_ == 200 and not r.get("noted"), r)
+
+print("\n── 11. 兩層覆蓋：地面站瞎掉的那一段，機上補到了嗎 ───────")
+sid = psql(f"INSERT INTO flight_sessions (drone_id, started_at, ended_at) VALUES "
+           f"('{drone_id}'::uuid, to_timestamp({T0 - 30}), "
+           f"to_timestamp({T0 + 200})) RETURNING id")
+psql(f"INSERT INTO blackouts (drone_id, session_id, started_at, ended_at, reason) "
+     f"VALUES ('{drone_id}'::uuid, '{sid}'::uuid, to_timestamp({T0 + 20}), "
+     f"to_timestamp({T0 + 60}), 'telemetry_lost')")
+s_, cv = req("GET", f"/api/onboard-captures/coverage?session_id={sid}")
+chk("查得到這個架次", s_ == 200 and cv["session_id"] == sid, s_)
+chk("失明區間列出來了", len(cv["blackouts"]) == 1, cv.get("blackouts"))
+b = cv["blackouts"][0]
+chk("**那 40 秒機上補到了**（錄製涵蓋 0–99.75s，整段蓋住）",
+    b["covered_onboard"] is True, b)
+chk("機上那份也帶出來了", len(cv["onboard"]) >= 1,
+    [o["name"] for o in cv["onboard"]])
+
+psql(f"INSERT INTO blackouts (drone_id, session_id, started_at, ended_at, reason) "
+     f"VALUES ('{drone_id}'::uuid, '{sid}'::uuid, to_timestamp({T0 + 150}), "
+     f"to_timestamp({T0 + 190}), 'telemetry_lost')")
+s_, cv = req("GET", f"/api/onboard-captures/coverage?session_id={sid}")
+late = [x for x in cv["blackouts"] if x["from"] > T0 + 100][0]
+chk("**錄製結束之後那一段沒補到，而且說 false 不說 true**",
+    late["covered_onboard"] is False, late)
+
+sid2 = psql(f"INSERT INTO flight_sessions (drone_id, started_at, ended_at) VALUES "
+            f"('{drone_id}'::uuid, to_timestamp({T0 - 99999}), "
+            f"to_timestamp({T0 - 99000})) RETURNING id")
+psql(f"INSERT INTO blackouts (drone_id, session_id, started_at, ended_at, reason) "
+     f"VALUES ('{drone_id}'::uuid, '{sid2}'::uuid, to_timestamp({T0 - 99500}), "
+     f"to_timestamp({T0 - 99400}), 'telemetry_lost')")
+s_, cv2 = req("GET", f"/api/onboard-captures/coverage?session_id={sid2}")
+chk("**那個時候沒有任何機上錄製 → 回 false（我們確實有這台機的紀錄，"
+    "只是沒蓋到）**", cv2["blackouts"][0]["covered_onboard"] is False, cv2["blackouts"])
+
 # ── 收拾 ────────────────────────────────────────────────────────
 subprocess.run(["docker", "compose", "exec", "-T", "uav-backend", "rm", "-rf",
                 f"/data/mavcap/onboard/{drone_id}"], capture_output=True, cwd=CWD)
-psql(f"DELETE FROM drones WHERE board_uid = '{UID}'")
+purge()
+chk("**測試機收乾淨了**（留下來會出現在機隊清單裡，看起來像一台真的機）",
+    psql(f"SELECT count(*) FROM drones WHERE board_uid = '{UID}'") == "0")
 
 print("\n" + ("全部通過" if ok else "**有未通過項目**"))
 sys.exit(0 if ok else 1)

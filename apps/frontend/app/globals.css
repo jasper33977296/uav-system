@@ -1155,3 +1155,87 @@ details.card summary { cursor: pointer; font-size: 14px; font-weight: 600; }
   font-size: 12.5px; display: flex; flex-direction: column; gap: 4px;
 }
 .meta-dead { color: var(--status-danger); font-weight: 600; }
+
+/* ── 錄製與回傳頁（issues/014）────────────────────────────────
+   四條誠實規則的視覺落點：
+   1. 「沒有東西要傳」與「傳不動」不同形 → 狀態圓點四色 + 一定寫出理由
+   2. 「不知道」不畫成「沒有」        → .cap-stale 降調 + 空心圓點
+   3. 兩層不合併                     → 分頁籤，不是一個「來源」欄
+   4. 不可挽回的損失留在畫面上        → .cap-lost 橫幅 + 「已遺失」列
+   顏色全部走既有 token：珊瑚只在互動 chrome，資料區一律狀態語意色。 */
+.cap-stats { display: flex; gap: 20px; }
+.cap-stats .metric { text-align: right; }
+.cap-hint { font-size: 11px; color: var(--muted); font-weight: 400;
+  text-transform: none; letter-spacing: 0; margin-left: 10px; }
+
+.cap-fleet { display: grid; gap: 14px;
+  grid-template-columns: repeat(auto-fill, minmax(288px, 1fr)); }
+.cap-drone { display: flex; flex-direction: column; gap: 10px; background: var(--page); }
+.cap-stale { opacity: 0.72; }
+.cap-drow { display: flex; align-items: center; gap: 10px; }
+.cap-dname { font-size: 15px; font-weight: 600; }
+.cap-dstate { font-size: 13px; color: var(--ink); }
+.cap-dwhy { font-size: 12px; color: var(--ink-2); }
+.cap-dmeta { font-size: 11px; color: var(--muted); }
+.cap-dot-ok { background: var(--status-ok); }
+.cap-dot-warn { background: var(--status-warn); }
+.cap-dot-serious { background: var(--status-serious); }
+.cap-dot-danger { background: var(--status-danger); }
+/* 空心＝**不知道**。與「確定沒有」是兩件事，不能同形 */
+.cap-dot-unknown { background: none; border: 1.5px solid var(--muted); }
+.cap-prog { height: 6px; border-radius: 3px; background: var(--surface-2); overflow: hidden; }
+.cap-prog i { display: block; height: 100%; background: var(--status-ok); opacity: 0.8; }
+.cap-lost {
+  font-size: 12px; padding: 6px 10px; border-radius: 6px; color: var(--ink-2);
+  background: var(--status-danger-bg); border-left: 2px solid var(--status-danger);
+}
+.cap-lost b { color: var(--ink); }
+
+/* 兩層覆蓋帶 */
+.cap-cov { display: flex; flex-direction: column; gap: 10px; }
+.cap-track { display: grid; grid-template-columns: 124px 1fr; align-items: center; gap: 14px; }
+.cap-tname { font-size: 12px; color: var(--ink-2); text-align: right; }
+.cap-tname small { display: block; font-size: 11px; color: var(--muted); }
+.cap-bar { position: relative; height: 22px; border-radius: 6px;
+  background: var(--surface-2); overflow: hidden; }
+.cap-seg { position: absolute; top: 0; bottom: 0; }
+.cap-have { background: var(--status-ok); opacity: 0.75; }
+.cap-gap {
+  background: repeating-linear-gradient(-45deg,
+    var(--status-warn-bg) 0 6px, var(--surface-2) 6px 12px);
+  border-left: 1px solid var(--status-warn); border-right: 1px solid var(--status-warn);
+}
+.cap-none { position: absolute; inset: 0; display: grid; place-items: center;
+  font-size: 11px; color: var(--muted); }
+.cap-axis { display: flex; justify-content: space-between; font-size: 11px;
+  color: var(--muted); font-variant-numeric: tabular-nums;
+  margin-left: 138px; margin-top: -4px; }
+.cap-note { font-size: 12px; color: var(--ink-2); margin: 0; padding: 6px 10px;
+  border-radius: 0 6px 6px 0; }
+.cap-note b { color: var(--ink); }
+.cap-note-ok { background: var(--status-ok-bg); border-left: 2px solid var(--status-ok); }
+.cap-note-warn { background: var(--status-warn-bg); border-left: 2px solid var(--status-warn); }
+.cap-note-bad { background: var(--status-danger-bg); border-left: 2px solid var(--status-danger); }
+
+/* 檔案 */
+.cap-tabs { display: flex; gap: 6px; border-bottom: 1px solid var(--hairline);
+  margin-bottom: 14px; }
+.cap-tabs button {
+  font: inherit; font-size: 13px; background: none; border: 0; cursor: pointer;
+  color: var(--muted); padding: 10px 14px; border-bottom: 2px solid transparent;
+  margin-bottom: -1px;
+}
+.cap-tabs button:hover { color: var(--ink-2); }
+.cap-tabs button[aria-selected="true"] { color: var(--accent); border-bottom-color: var(--accent); }
+.cap-tablewrap { overflow-x: auto; }
+.cap-fname { color: var(--ink); font-weight: 500; }
+.cap-sub { display: block; font-size: 11px; color: var(--muted); font-weight: 400; }
+.cap-dim { color: var(--muted); }
+.cap-rlost .cap-fname { text-decoration: line-through; text-decoration-color: var(--muted); }
+.cap-chip-ok, .cap-chip-warn, .cap-chip-danger { gap: 5px; padding: 2px 9px; }
+
+@media (max-width: 720px) {
+  .cap-track { grid-template-columns: 1fr; }
+  .cap-tname { text-align: left; }
+  .cap-axis { margin-left: 0; }
+}

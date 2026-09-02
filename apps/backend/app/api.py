@@ -225,6 +225,111 @@ async def onboard_chunk(request: Request, board_uid: str, name: str,
         raise HTTPException(422, str(e))
 
 
+class OnboardAbandoned(BaseModel):
+    """機上把一份從來沒有回傳成功的錄製滾動刪掉了。"""
+    board_uid: str
+    name: str
+    bytes: int = 0
+    at: float | None = None
+
+
+@router.post("/onboard-captures/abandoned", tags=["原始層"])
+async def onboard_abandoned(body: OnboardAbandoned):
+    """立一塊墓碑，並讓它進事件流。
+
+    **機上的滾動優先於保住紀錄**（卡滿了會讓整台機出問題，包括代理自己），
+    所以這件事會發生、而且是對的。但**它是永久的**：那一趟的機上紀錄從此
+    不存在。只寫進機上的 log 等於沒說——journald 會被清掉，而**清單裡少了
+    一趟，與「那一趟沒有飛」在畫面上完全同形**。
+    """
+    drone_id = await _drone_of_board(body.board_uid)
+    at = body.at or time.time()
+    try:
+        res = onboard_capture.abandoned(drone_id, body.name, body.bytes, at)
+    except ValueError as e:
+        raise HTTPException(422, str(e))
+    if res.get("noted"):
+        try:
+            ev = await db.insert_event(
+                drone_id, None, "warn", "onboard_capture_lost",
+                {"name": body.name, "bytes": body.bytes,
+                 "msg": f"機上錄製 {body.name} 未回傳即被滾動刪除"})
+            await manager.broadcast({"type": "event", "event": ev})
+        except Exception:
+            log.exception("遺失事件寫入失敗（墓碑已經立了）")
+    return res
+
+
+@router.get("/onboard-captures/coverage", tags=["原始層"])
+async def onboard_coverage(session_id: str):
+    """一個架次的兩層覆蓋：地面站瞎掉的那幾段，機上補到了嗎。
+
+    **這是兩層並存的全部理由，所以它要能被檢驗**：地面站錄的是「送到地面站
+    的東西」、機上錄的是「飛控送出的東西」，而**兩者相差的正是 5G 斷線的那
+    一段**。這個端點把那句話變成可以核對的區間——失明區間來自 `blackouts`，
+    機上覆蓋來自每份 tlog 收尾驗章時順手掃出的頭尾時間戳。
+
+    `covered` 三態：`true`／`false`／**`null`＝不知道**（那份錄製切不動、
+    或還是舊版沒有時間範圍）。**「不知道」不寫成「沒補到」**——後者是一個
+    結論，而我們沒有做出它的依據。
+    """
+    row = await db.pool.fetchrow(
+        "SELECT s.id::text AS id, s.drone_id::text AS drone_id, d.name AS drone_name, "
+        "extract(epoch FROM s.started_at) AS t0, "
+        "extract(epoch FROM s.ended_at) AS t1 "
+        "FROM flight_sessions s JOIN drones d ON d.id = s.drone_id "
+        "WHERE s.id = $1::uuid", session_id)
+    if row is None:
+        raise HTTPException(404, "無此架次")
+    t0 = float(row["t0"])
+    t1 = float(row["t1"]) if row["t1"] is not None else time.time()
+
+    outs = await db.pool.fetch(
+        "SELECT extract(epoch FROM started_at) AS a, "
+        "extract(epoch FROM ended_at) AS b, reason, recovered_by "
+        "FROM blackouts WHERE drone_id = $1::uuid "
+        "AND started_at <= to_timestamp($3) "
+        "AND coalesce(ended_at, now()) >= to_timestamp($2) "
+        "ORDER BY started_at", row["drone_id"], t0, t1)
+
+    # **清單掃一次就好。** 原本每個失明區間都重掃一遍檔案系統
+    mine = [f for f in onboard_capture.listing()["files"]
+            if f["drone_id"] == row["drone_id"]]
+    spans = [f for f in mine if f.get("covers")
+             and f["covers"]["from"] <= t1 and f["covers"]["to"] >= t0]
+
+    def covered(a: float, b: float) -> bool | None:
+        if not spans:
+            # **沒有任何一份機上錄製 → 不知道，不是「沒補到」。**
+            # 這台機可能根本沒有代理、代理太舊、或那一份還在機上等著傳——
+            # 三種情況都不等於「我們確認過那一段沒有備份」
+            return None if not mine else False
+        # **要整段被蓋住才算補到。** 蓋一半就宣告「補到了」，等於把一個
+        # 仍然存在的洞說成已經填平
+        return any(f["covers"]["from"] <= a and f["covers"]["to"] >= b
+                   for f in spans)
+
+    blackouts = []
+    for o in outs:
+        a = max(float(o["a"]), t0)
+        b = min(float(o["b"]) if o["b"] is not None else t1, t1)
+        blackouts.append({"from": a, "to": b, "seconds": round(b - a, 1),
+                          "reason": o["reason"],
+                          "recovered_by": o["recovered_by"],
+                          "covered_onboard": covered(a, b)})
+    return {
+        "session_id": row["id"], "drone_id": row["drone_id"],
+        "drone_name": row["drone_name"],
+        "from": t0, "to": t1, "ended": row["t1"] is not None,
+        "blackouts": blackouts,
+        "onboard": [{"name": f["name"], "bytes": f["bytes"],
+                     "covers": f["covers"], "url": f["url"]} for f in spans],
+        # **機上有沒有覆蓋這一段，與「有沒有失明」是兩個問題。** 沒有失明時
+        # 這裡仍然要說得出機上那份在不在——不然畫面只能在有洞的時候才誠實
+        "onboard_known": bool(spans),
+    }
+
+
 @router.get("/onboard-captures", tags=["原始層"])
 async def list_onboard_captures():
     """已回傳的機上錄製一覽。
