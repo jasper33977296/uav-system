@@ -64,6 +64,12 @@ services:
               "--host", "0.0.0.0", "--port", "${BACKEND_PORT:-38000}"]
     volumes:
       - ./reference/px4-events:/srv/reference/px4-events:ro   # PX4 事件字典（014）
+      # 簽章金鑰（issues/040 A5-b）。**獨立 volume、不與位址表共用**：
+      # 一個是設定、一個是秘密，混在一起的下場是備份與除錯時一起被帶走。
+      # **不放映像**（映像會被推到 registry）、**不放資料庫**（DB 會被 dump）。
+      # 目前只有 backend 掛：command 與 heartbeat 要到 A5-d 真的開簽章才需要，
+      # **在那之前不把秘密送進用不到它的容器**
+      - signkeys:/state
       - mavcap:/data/mavcap          # 原始層錄製（MAVLink tlog，滾動 30 天）
       - videorec:/rec:ro             # 影像（022）：掃描錄影目錄入庫；唯讀＝寫入是 uav-video 的職責
     environment:
@@ -236,3 +242,4 @@ volumes:
   mavcap:
   videorec:
   gcsstate:      # command 寫、uav-heartbeat 讀的位址表（issues/033 §4.2.1）
+  signkeys:      # 簽章金鑰（issues/040 A5-b）。只有 backend 掛，權限 0600

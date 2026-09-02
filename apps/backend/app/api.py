@@ -12,7 +12,7 @@ import logging
 import mission_time        # libs/ 的共用實作（PYTHONPATH=/srv/libs）
 import plan_check
 
-from . import agent_link, db, groups, mavlink_rx
+from . import agent_link, db, groups, mavlink_rx, signing
 from .config import settings
 from .ws import manager
 
@@ -169,6 +169,9 @@ class AgentHello(BaseModel):
     #: 回應裡的 `assigned_sysid` 才是決定。舊代理不送＝None，此時只能配號
     #: 給它、無法判斷「它跑錯號碼了」
     sysid: int | None = None
+    #: 簽章金鑰的**指紋**（040 A5-c）。**永遠不是金鑰本身**——交換指紋是為了
+    #: 在開簽章之前就發現兩邊不同，而簽章不符是靜默丟棄（設計 §3）
+    signing_fp: str | None = None
 
 
 @router.post("/agent/hello")
@@ -233,7 +236,29 @@ async def agent_hello(h: AgentHello):
         # 等於為了修好號碼把整台機擋在門外
         log.exception("配號失敗（不影響註冊）board_uid=%s", uid)
 
-    out = {"drone_id": drone_id, "name": name, "created": created}
+    # ── A5-c：簽章金鑰的指紋自檢 ──────────────────────────────────
+    # **這一批還沒有在簽任何東西**，所以措辭一律是「尚未啟用」。先做偵測的
+    # 理由：簽章不符是**靜默丟棄**——金鑰一旦不對，畫面上一切正常而指令全部
+    # 消失。偵測要先於啟用，不能反過來。
+    sign = signing.check(uid, h.signing_fp)
+    if sign["state"] in ("mismatch", "agent_missing", "ground_missing"):
+        log.error("⚠ 簽章金鑰自檢：%s（board_uid=%s）——%s",
+                  sign["state"], uid, sign["reason"])
+        try:
+            ev = await db.insert_event(
+                drone_id, None, "warn", "signing_key_check",
+                {**sign, "board_uid": uid,
+                 "note": "線上尚未啟用簽章，所以現在不影響飛行；"
+                         "但在啟用之前必須修好，否則屆時是靜默丟棄"})
+            ev["drone"] = name
+            await manager.broadcast({"type": "event", "event": ev})
+        except Exception:
+            log.exception("簽章自檢事件寫入失敗")
+
+    out = {"drone_id": drone_id, "name": name, "created": created,
+           "signing": sign["state"], "signing_reason": sign["reason"],
+           # **只回指紋，永遠不回金鑰。** 代理用它確認自己手上那把對不對
+           "signing_fp": sign.get("ground_fp")}
     if assign:
         out["assigned_sysid"] = assign["sysid"]
         out["sysid_action"] = assign["action"]      # keep / change
