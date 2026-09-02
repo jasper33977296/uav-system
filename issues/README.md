@@ -22,6 +22,10 @@
 慣例：設計文件裡的「已知限制／暫緩項」要在本索引留一條 `deferred` 入口——
 只寫在設計文件裡，等於只有讀那份文件的人看得到。
 
+> **整份設計被裁定不做時同理**：狀態寫在該案的 issue 裡，
+> 而**文件開頭要有「不做」的橫幅與重啟觸發條件**——否則下一個讀到它的人
+> 會以為那是待辦。例：`doc/mavlink-signing-design.md`（040 A5，2026-09-02）。
+
 - 嚴重度：`high`（擋到主要研究流程／示範）、`medium`（資料正確性或體驗受損）、
   `low`（清理、體感問題）。
 
@@ -68,7 +72,7 @@
 | [037](037-plan-autopilot-mismatch.md) | `.plan` 自報的 firmwareType／vehicleType 被完全忽略：PX4 寫的航線靜默上到 ArduPilot 機 ✔三處對帳，示警放行 | **high** | **closed** | 匯入／入庫／上傳三處 |
 | [038](038-board-identity.md) | 系統不知道哪台是哪台：本階段請求並記錄飛控板 UID；**比對與告警 09-02 實作**（撞號的 PX4 SITL 曾寫 46 筆假事件進真機記錄）| medium | in-progress | `mavlink_rx.py`＋uav-agent |
 | [039](039-autonomous-flight-state-machine.md) | 全自動飛行的狀態機與安全守門：**飛行中上傳任務會立刻改道且無任何守門**（SITL 實測）。飛安裁定全數完成（08-31 複裁七條），A／C／E／G 待實作 | **high** | in-progress | `doc/autonomous-flight-state-machine.md` |
-| [040](040-sysid-must-be-assigned.md) | **sysid 由系統指派＋入列驗證協定**：驗證完成前不得指派任務或控制。唯一鍵值＝板號、撞號自動重新配號、代理強制；**A1–A4 完成**，A5 簽章設計已交付待裁範圍 | **high** | in-progress | `mavlink_rx.py`＋`command`＋`drones` 表＋uav-agent |
+| [040](040-sysid-must-be-assigned.md) | **sysid 由系統指派＋入列驗證協定**：驗證完成前不得指派任務或控制。唯一鍵值＝板號、撞號自動重新配號、代理強制；**A1–A4 完成**；A5 簽章**裁定不做**（設計留存，含重啟觸發條件）| **high** | in-progress | `mavlink_rx.py`＋`command`＋`drones` 表＋uav-agent |
 
 「✔實測確認」= 2026-08-03 首次實飛（SITL 起飛 → 進干擾區 → RTL）取得的實際資料佐證，
 不只是讀碼推論。詳見 [progress/log/2026-08-03.md](../progress/log/2026-08-03.md)。
