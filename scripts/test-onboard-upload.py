@@ -292,6 +292,42 @@ s_, cv2 = req("GET", f"/api/onboard-captures/coverage?session_id={sid2}")
 chk("**那個時候沒有任何機上錄製 → 回 false（我們確實有這台機的紀錄，"
     "只是沒蓋到）**", cv2["blackouts"][0]["covered_onboard"] is False, cv2["blackouts"])
 
+print("\n── 12. metadata 在 DB、內容在磁碟（使用者裁定的形狀）───────")
+row = psql("SELECT tier||'|'||status||'|'||bytes||'|'||path FROM captures "
+           f"WHERE drone_id = '{drone_id}'::uuid AND name = '{N4}'")
+tier, status, size, path = row.split("|")
+chk("**metadata 是一列 SQL**（不是磁碟上的 .meta 檔）",
+    tier == "onboard" and status == "complete" and int(size) == 9600, row)
+chk("**那一列記的是路徑，內容留在磁碟**", path.endswith(f"/{N4}"), path)
+inside = subprocess.run(["docker", "compose", "exec", "-T", "uav-backend",
+                         "stat", "-c", "%s", path], capture_output=True,
+                        text=True, cwd=CWD).stdout.strip()
+chk("照那個路徑真的找得到檔案，而且大小對得上", inside == size, (inside, size))
+chk("外鍵指回 drones（UID）", psql(
+    "SELECT count(*) FROM captures c JOIN drones d ON d.id = c.drone_id "
+    f"WHERE c.drone_id = '{drone_id}'::uuid") != "0")
+
+print("\n── 13. 地面站那一層也在同一張表，而且對帳是冪等的 ────────")
+n1 = psql("SELECT count(*) FROM captures WHERE tier = 'ground'")
+req("GET", "/api/captures")
+req("GET", "/api/captures")
+n2 = psql("SELECT count(*) FROM captures WHERE tier = 'ground'")
+chk("**對帳兩次不會長出重複列**（唯一鍵 NULLS NOT DISTINCT——"
+    "普通唯一約束裡 NULL≠NULL，ON CONFLICT 永遠不成立）", n1 == n2, (n1, n2))
+
+print("\n── 14. 刪機：外鍵連帶清列，程式負責清檔 ────────────────")
+before_rows = psql(f"SELECT count(*) FROM captures WHERE drone_id = '{drone_id}'::uuid")
+chk("刪之前這台機有錄製列", before_rows != "0", before_rows)
+s_, r = req("DELETE", f"/api/drones/{drone_id}")
+chk("刪除成功並回報清掉多少", s_ == 200 and "captures" in (r or {}).get("deleted", {}), r)
+chk("**列被外鍵連帶清光**（不再靠程式一張張刪）",
+    psql(f"SELECT count(*) FROM captures WHERE drone_id = '{drone_id}'::uuid") == "0")
+gone = subprocess.run(["docker", "compose", "exec", "-T", "uav-backend",
+                       "test", "-e", path], capture_output=True, cwd=CWD)
+chk("**檔案也刪了**（外鍵清的是列，不是磁碟上的東西）", gone.returncode != 0)
+chk("其他表也一起沒了（events）",
+    psql(f"SELECT count(*) FROM events WHERE drone_id = '{drone_id}'::uuid") == "0")
+
 # ── 收拾 ────────────────────────────────────────────────────────
 subprocess.run(["docker", "compose", "exec", "-T", "uav-backend", "rm", "-rf",
                 f"/data/mavcap/onboard/{drone_id}"], capture_output=True, cwd=CWD)

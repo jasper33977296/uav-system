@@ -268,6 +268,123 @@ async def migrate() -> None:
     for col in ("status", "geometry", "drone_id"):
         await pool.execute(f"ALTER TABLE missions DROP COLUMN IF EXISTS {col}")
 
+    # ══ 事實來源：drones 是那張 metadata 表，其他人用 FK 指回來 ══════════
+    # （2026-09-02 使用者裁定）**所有資料都要靠 DB 存；事實來源由一張 metadata
+    # 表記得，其他人透過 UID 外鍵指回去查。**
+    #
+    # 在這之前，一半的關聯是**沒有外鍵的裸 `drone_id` 欄**——資料庫不保證，
+    # 只靠 `delete_drone` 記得一張張刪。實測後果：**284 筆事件指向 22 台已經
+    # 不存在的機**（2026-09-02 清掉）。漏一張表就長孤兒，而孤兒不會叫。
+
+    # ① 板號是唯一鍵——**現在由資料庫保證，不再只是一句宣稱**。
+    # issues/040 從一開始就寫「唯一鍵值是板號」，但 schema 上從來沒有這個約束：
+    # 2026-09-02 實測 `ON CONFLICT (board_uid)` 直接報錯，因為根本沒有索引。
+    # 部分索引（board_uid IS NOT NULL）：**還沒問到板號的機不該被這條擋住**，
+    # 而它們可以有很多台。
+    await pool.execute(
+        "CREATE UNIQUE INDEX IF NOT EXISTS drones_board_uid_uniq "
+        "ON drones (board_uid) WHERE board_uid IS NOT NULL")
+
+    # ② 每一張帶 drone_id 的表都掛上外鍵，刪機由資料庫連帶清乾淨。
+    # telemetry／link_metrics 是 TimescaleDB hypertable——**hypertable 指出去的
+    # 外鍵是支援的**（2.29.1 實測），不支援的是反過來指進 hypertable。
+    #
+    # **掛不上就大聲說，不要自己刪資料。** 別人的資料庫可能有我們不知道的
+    # 孤兒列，而「啟動時安靜地刪掉一批列」是這個專案不能接受的行為。
+    for tbl in ("telemetry", "link_metrics", "events", "flight_sessions"):
+        try:
+            await pool.execute(f"""
+                DO $$ BEGIN
+                  IF NOT EXISTS (SELECT 1 FROM pg_constraint
+                                 WHERE conname = '{tbl}_drone_id_fkey'
+                                   AND confdeltype = 'c') THEN
+                    IF EXISTS (SELECT 1 FROM pg_constraint
+                               WHERE conname = '{tbl}_drone_id_fkey') THEN
+                      ALTER TABLE {tbl} DROP CONSTRAINT {tbl}_drone_id_fkey;
+                    END IF;
+                    ALTER TABLE {tbl} ADD CONSTRAINT {tbl}_drone_id_fkey
+                      FOREIGN KEY (drone_id) REFERENCES drones(id) ON DELETE CASCADE;
+                  END IF;
+                END $$;""")
+        except Exception as e:
+            # 幾乎一定是孤兒列。**把查法一起印出來**——「掛不上」這句話本身
+            # 沒有用，要說得出「哪幾列擋著、怎麼看」
+            log.error(
+                "⚠ %s.drone_id 的外鍵掛不上（%s）。多半是孤兒列——用這句查：\n"
+                "  SELECT count(*) FROM %s x WHERE x.drone_id IS NOT NULL AND NOT EXISTS "
+                "(SELECT 1 FROM drones d WHERE d.id = x.drone_id);\n"
+                "**在它掛上之前，刪機不會連帶清掉這張表**", tbl, e, tbl)
+
+    # ③ 指令紀錄的鍵原本只有 sysid——**而 sysid 是會被重新配號的**（issues/040）。
+    # 一旦某台機換過號碼，歷史指令就會指向**現在持有那個號碼的另一台機**。
+    # 補一個 drone_id 外鍵，往後由寫入端解析。
+    # **舊資料不回填**：拿今天的 sysid 去反推當時是誰，正是這個欄位要防的錯誤——
+    # 空著代表「不知道」，那是實話。
+    await pool.execute("ALTER TABLE command_log ADD COLUMN IF NOT EXISTS drone_id UUID")
+    await pool.execute("""
+        DO $$ BEGIN
+          IF NOT EXISTS (SELECT 1 FROM pg_constraint
+                         WHERE conname = 'command_log_drone_id_fkey') THEN
+            ALTER TABLE command_log ADD CONSTRAINT command_log_drone_id_fkey
+              FOREIGN KEY (drone_id) REFERENCES drones(id) ON DELETE SET NULL;
+          END IF;
+        END $$;""")
+
+    # ══ 大檔案：DB 記路徑，內容留在磁碟 ═══════════════════════════════
+    # （2026-09-02 使用者裁定）**資料本身很大的時候，SQL 欄位記路徑，
+    # 要內容再到那個路徑下去看。**
+    #
+    # 這張表管兩層錄製（issues/014）：`ground`＝地面站錄的「送到地面站的東西」、
+    # `onboard`＝機上錄的「飛控送出的東西」。**兩者相差的就是 5G 斷線那一段**，
+    # 所以 tier 是欄位不是兩張表——要能用一句 SQL 把兩層對起來。
+    #
+    # 原本機上那一層的 metadata 是**寫在磁碟上的 `.meta` JSON**，清單靠 glob。
+    # 那等於把事實來源放在檔案系統裡：查不了、關聯不了、刪機時也不會連帶清。
+    # 現在檔案還在原地（大），metadata 進 DB（小），彼此用 path 相連。
+    #
+    # `covers_from`／`covers_to`＝這份錄製涵蓋的時間，收尾驗 sha256 那一遍
+    # 順手掃出來的。有了它，「地面站瞎掉的那一段機上補到了沒有」才是一句
+    # 可以用 SQL 核對的話，而不是一句宣稱。
+    await pool.execute("""CREATE TABLE IF NOT EXISTS captures (
+        id          UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+        drone_id    UUID REFERENCES drones(id) ON DELETE CASCADE,
+        tier        TEXT NOT NULL,                    -- ground / onboard
+        name        TEXT NOT NULL,                    -- 存起來的檔名
+        onboard_name TEXT,                            -- 機上原本的檔名（撞名時不同）
+        path        TEXT NOT NULL,                    -- **內容在這裡，不在 DB 裡**
+        bytes       BIGINT NOT NULL DEFAULT 0,
+        expected_bytes BIGINT,                        -- 機端宣告的大小（續傳用）
+        sha256      TEXT,
+        status      TEXT NOT NULL DEFAULT 'partial',  -- partial / complete / lost
+        covers_from TIMESTAMPTZ,
+        covers_to   TIMESTAMPTZ,
+        frames      BIGINT,
+        received_at TIMESTAMPTZ,
+        lost_at     TIMESTAMPTZ,
+        created_at  TIMESTAMPTZ NOT NULL DEFAULT now())""")
+    # **唯一鍵要寫 `NULLS NOT DISTINCT`。** 地面站那一層的列沒有 drone_id
+    # （那是整台地面站錄的，不屬於任何一台機），而在一般的唯一約束裡
+    # **NULL 不等於 NULL**——於是 `ON CONFLICT` 永遠不成立，每對帳一次就
+    # 多一份重複的列。實測：開機一次、按一次 /api/captures，11 個檔案變成
+    # 22 列（PostgreSQL 15 起支援這個寫法，本機 16.14）。
+    # 舊版建出來的普通唯一約束先拆掉（它就是上面那個 NULL 陷阱的來源）
+    await pool.execute("ALTER TABLE captures DROP CONSTRAINT IF EXISTS "
+                       "captures_tier_drone_id_name_key")
+    # 先清掉舊約束造成的重複列（同 tier/name 只留最舊那一列）
+    await pool.execute("""
+        DELETE FROM captures a USING captures b
+         WHERE a.tier = b.tier AND a.name = b.name
+           AND a.drone_id IS NOT DISTINCT FROM b.drone_id
+           AND a.created_at > b.created_at""")
+    await pool.execute(
+        "CREATE UNIQUE INDEX IF NOT EXISTS captures_key "
+        "ON captures (tier, drone_id, name) NULLS NOT DISTINCT")
+    await pool.execute("CREATE INDEX IF NOT EXISTS idx_captures_drone_time "
+                       "ON captures (drone_id, covers_from DESC)")
+    # 續傳認的是 sha256 不是檔名（機上的 RTC 沒有電池，冷開機檔名會重複）
+    await pool.execute("CREATE INDEX IF NOT EXISTS idx_captures_sha "
+                       "ON captures (tier, drone_id, sha256)")
+
 
 async def ensure_drone_by_board(board_uid: str, *, autopilot: str | None = None,
                                 fw: str | None = None,

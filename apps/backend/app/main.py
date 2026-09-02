@@ -233,6 +233,16 @@ async def lifespan(app: FastAPI):
     # 路線 B（issues/011）：pymavlink 單迴圈＝原始層錄製＋解碼＋多機 demux，
     # mavsdk 退役、零副程序
     rx_task = await mavlink_rx.start()
+    # 地面站那一層的錄製檔登錄進 `captures`（issues/014）。**檔案是
+    # `capture.py` 每天換檔寫出來的，沒有一個「建檔時機」可以掛**，所以開機
+    # 對帳一次；`/api/captures` 進來時也會再對一次（那是人按的，不是熱路徑）
+    try:
+        from . import captures as _cap
+        n = await _cap.reconcile_ground()
+        if n:
+            log.info("地面站錄製檔登錄 %d 份新的", n)
+    except Exception:
+        log.exception("錄製檔對帳失敗（不影響資料路徑）")
     tasks = [
         rx_task,
         asyncio.create_task(_link_and_db_loop(), name="link-db-loop"),

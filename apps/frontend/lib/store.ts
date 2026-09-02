@@ -206,6 +206,9 @@ interface UavStore {
    * **少清一張表，它就會在那張表撐著半條命**——例如尾跡還在地圖上、
    * 或側欄鎖著一台已經不存在的機。 */
   removeDrone: (id: string) => void;
+  /** 記錄改名了。**執行期是快取，資料庫才是事實來源**——後端改完會推
+   * 一則，這裡把畫面上那幾張表一起更新，不必等重新整理。 */
+  renameDrone: (id: string, name: string) => void;
   setWsConnected: (v: boolean) => void;
   setRegistry: (droneId: string, r: DroneRegistry) => void;
   pushEvent: (e: UavEvent, fold?: boolean) => void;
@@ -311,6 +314,12 @@ export const useUavStore = create<UavStore>((set) => ({
         formationCfg: { ...st.formationCfg, assign },
       };
     }),
+  renameDrone: (id, name) =>
+    set((st) => ({
+      fleet: st.fleet[id]
+        ? { ...st.fleet, [id]: { ...st.fleet[id], drone_name: name } } : st.fleet,
+      live: st.live?.drone_id === id ? { ...st.live, drone_name: name } : st.live,
+    })),
   setWsConnected: (v) => set({ wsConnected: v }),
   setRegistry: (droneId, r) =>
     set((s) => ({ registry: { ...s.registry, [droneId]: r } })),

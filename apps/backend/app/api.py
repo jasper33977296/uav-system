@@ -13,8 +13,8 @@ import logging
 import mission_time        # libs/ 的共用實作（PYTHONPATH=/srv/libs）
 import plan_check
 
-from . import (agent_link, chainage, db, groups, mavlink_rx,
-               onboard_capture, signing)
+from . import (agent_link, captures, chainage, db, groups,
+               mavlink_rx, signing)
 from .config import settings
 from .ws import manager
 
@@ -103,58 +103,45 @@ ADMISSION_STATES = ("seen", "identifying", "reassigning", "admitted",
 
 @router.get("/captures", tags=["原始層"])
 async def list_captures():
-    """原始層錄製檔（tlog）一覽（issues/014 結構層 #5）。
+    """地面站自己錄的 tlog 一覽（issues/014）。
 
-    **「全數收集」如果拿不到，就只是一個宣稱。** 原始層從 2026-08-10 就在錄，
-    但**系統裡沒有任何地方看得到它**——要知道有沒有錄到、錄了多少、能不能取用，
-    得 ssh 進地面站 `ls` 一個容器裡的目錄。那等於資料只對知道路徑的人存在。
+    **事實來源是 `captures` 表，不是目錄。** 但這一層的檔案是 `capture.py`
+    每天換檔寫出來的，沒有一個「建檔時機」可以掛登錄——所以進來時先對帳一次
+    （目錄裡有什麼，表裡就有什麼）。**這個端點是人按出來的，不是熱路徑。**
 
     tlog 與 QGC 回放、`pymavlink` 的 `mavlogdump.py` 相容——所以「取得檔案」
     就是取得全部，不需要我們再做一套檢視器。
     """
-    import pathlib
-    d = pathlib.Path(settings.capture_dir)
-    if not d.is_dir():
-        return {"dir": str(d), "files": [], "total_bytes": 0,
-                "note": "錄製目錄不存在——原始層可能沒有在錄（檢查 CAPTURE_* 設定）"}
-    files = []
-    for f in sorted(d.glob("*.tlog"), reverse=True):
-        stat = f.stat()
-        files.append({"name": f.name, "bytes": stat.st_size,
-                      "modified": datetime.fromtimestamp(
-                          stat.st_mtime, tz=timezone.utc).isoformat(),
-                      "url": f"/api/captures/{f.name}"})
-    return {"dir": str(d), "files": files,
-            "total_bytes": sum(f["bytes"] for f in files),
-            "keep_days": settings.capture_keep_days,
-            "note": "tlog 可直接餵 QGC 回放或 pymavlink 的 mavlogdump.py"}
+    await captures.reconcile_ground()
+    out = await captures.listing("ground")
+    if not out["files"]:
+        out["note"] = "錄製目錄裡沒有檔案——原始層可能沒有在錄（檢查 CAPTURE_* 設定）"
+    return out
 
 
 @router.get("/captures/{name}", tags=["原始層"])
 async def get_capture(name: str):
-    """下載一份錄製檔。
+    """下載一份地面站錄製檔。
 
-    **檔名逐字比對既有清單，不做路徑拼接**：`../` 這種東西不該靠字串檢查擋，
-    該靠「它必須是我們列得出來的那些檔案之一」擋——**白名單而不是黑名單**。
+    **白名單是「它必須是 `captures` 表裡的一列」**，路徑從那一列讀出來
+    ——不是把使用者給的字串拼進路徑裡。`../` 這種東西不該靠字串檢查擋。
     """
-    import pathlib
-    d = pathlib.Path(settings.capture_dir)
-    match = next((f for f in d.glob("*.tlog") if f.name == name), None)
-    if match is None:
+    f = await captures.find("ground", name)
+    if f is None:
         raise HTTPException(404, f"沒有這份錄製檔：{name}")
-    return FileResponse(str(match), media_type="application/octet-stream",
-                        filename=match.name)
+    return FileResponse(str(f), media_type="application/octet-stream",
+                        filename=f.name)
 
 
 # ── 機上錄製的自動回傳（issues/014）──────────────────────────────
 #
 # **地面站錄的是「送到地面站的東西」，機上錄的是「飛控送出的東西」。**
-# 兩者相差的正是 5G 斷線的那一段——所以這一組端點與上面 `/captures` 那組
-# **刻意分開**，混成一個清單就把那個差抹掉了。
+# 兩者相差的正是 5G 斷線的那一段——所以清單刻意分開列（混成一張表就把那個
+# 差抹掉了），但**存在同一張 `captures` 表的兩個 tier**：要能用一句 SQL 把
+# 兩層對起來，它們就必須在同一張表裡。
 #
-# 守門在機上（uav-agent `uploader.py`：只在地面傳、一解鎖立刻停）：這裡
-# 收得下多少不是問題，**問題是它與遙測共用同一條 5G**，而現在正在飛的那台
-# 優先。地面站這一側只負責「收得住、驗得出、看得到」。
+# 守門在機上（uav-agent `uploader.py`：只在地面傳、一解鎖立刻停）：這裡收得下
+# 多少不是問題，**問題是它與遙測共用同一條 5G**，而現在正在飛的那台優先。
 
 
 class OnboardOffer(BaseModel):
@@ -163,6 +150,14 @@ class OnboardOffer(BaseModel):
     name: str
     bytes: int = Field(gt=0)
     sha256: str
+
+
+class OnboardAbandoned(BaseModel):
+    """機上把一份從來沒有回傳成功的錄製滾動刪掉了。"""
+    board_uid: str
+    name: str
+    bytes: int = 0
+    at: float | None = None
 
 
 async def _drone_of_board(board_uid: str) -> str:
@@ -191,8 +186,7 @@ async def onboard_offer(body: OnboardOffer):
     """
     drone_id = await _drone_of_board(body.board_uid)
     try:
-        return onboard_capture.offer(drone_id, body.name, body.bytes,
-                                     body.sha256)
+        return await captures.offer(drone_id, body.name, body.bytes, body.sha256)
     except ValueError as e:
         raise HTTPException(422, str(e))
 
@@ -209,28 +203,20 @@ async def onboard_chunk(request: Request, board_uid: str, name: str,
     data = await request.body()
     if not data:
         raise HTTPException(422, "空的塊")
-    if len(data) > onboard_capture.MAX_CHUNK:
-        raise HTTPException(413, f"一塊最多 {onboard_capture.MAX_CHUNK} bytes")
+    if len(data) > captures.MAX_CHUNK:
+        raise HTTPException(413, f"一塊最多 {captures.MAX_CHUNK} bytes")
     try:
-        return onboard_capture.append(drone_id, name, offset, data)
-    except onboard_capture.Conflict as e:
+        return await captures.append(drone_id, name, offset, data)
+    except captures.Conflict as e:
         raise HTTPException(409, {"code": "offset_mismatch", "have": e.have,
                                   "msg": str(e)})
-    except onboard_capture.NoSpace as e:
+    except captures.NoSpace as e:
         # 507＝地面站的問題，不是機端的。機端該做的是稍後再試，**不是放棄**
         raise HTTPException(507, {"code": "no_space", "msg": str(e)})
     except FileNotFoundError as e:
         raise HTTPException(404, str(e))
     except ValueError as e:
         raise HTTPException(422, str(e))
-
-
-class OnboardAbandoned(BaseModel):
-    """機上把一份從來沒有回傳成功的錄製滾動刪掉了。"""
-    board_uid: str
-    name: str
-    bytes: int = 0
-    at: float | None = None
 
 
 @router.post("/onboard-captures/abandoned", tags=["原始層"])
@@ -245,7 +231,7 @@ async def onboard_abandoned(body: OnboardAbandoned):
     drone_id = await _drone_of_board(body.board_uid)
     at = body.at or time.time()
     try:
-        res = onboard_capture.abandoned(drone_id, body.name, body.bytes, at)
+        res = await captures.abandoned(drone_id, body.name, body.bytes, at)
     except ValueError as e:
         raise HTTPException(422, str(e))
     if res.get("noted"):
@@ -264,14 +250,14 @@ async def onboard_abandoned(body: OnboardAbandoned):
 async def onboard_coverage(session_id: str):
     """一個架次的兩層覆蓋：地面站瞎掉的那幾段，機上補到了嗎。
 
-    **這是兩層並存的全部理由，所以它要能被檢驗**：地面站錄的是「送到地面站
-    的東西」、機上錄的是「飛控送出的東西」，而**兩者相差的正是 5G 斷線的那
-    一段**。這個端點把那句話變成可以核對的區間——失明區間來自 `blackouts`，
-    機上覆蓋來自每份 tlog 收尾驗章時順手掃出的頭尾時間戳。
+    **這是兩層並存的全部理由，所以它要能被檢驗。** 失明區間來自 `blackouts`
+    表，機上覆蓋來自 `captures.covers_from/to`（收尾驗章時順手掃出來的）
+    ——兩邊都是資料庫裡的列，所以這是一句 SQL 對得起來的事，
+    不是把一個目錄讀進記憶體才答得出來的事。
 
-    `covered` 三態：`true`／`false`／**`null`＝不知道**（那份錄製切不動、
-    或還是舊版沒有時間範圍）。**「不知道」不寫成「沒補到」**——後者是一個
-    結論，而我們沒有做出它的依據。
+    `covered` 三態：`true`／`false`／**`null`＝不知道**（這台機根本沒有任何
+    機上錄製）。**「不知道」不寫成「沒補到」**——後者是一個結論，而我們沒有
+    做出它的依據。
     """
     row = await db.pool.fetchrow(
         "SELECT s.id::text AS id, s.drone_id::text AS drone_id, d.name AS drone_name, "
@@ -292,22 +278,27 @@ async def onboard_coverage(session_id: str):
         "AND coalesce(ended_at, now()) >= to_timestamp($2) "
         "ORDER BY started_at", row["drone_id"], t0, t1)
 
-    # **清單掃一次就好。** 原本每個失明區間都重掃一遍檔案系統
-    mine = [f for f in onboard_capture.listing()["files"]
-            if f["drone_id"] == row["drone_id"]]
-    spans = [f for f in mine if f.get("covers")
-             and f["covers"]["from"] <= t1 and f["covers"]["to"] >= t0]
+    # 這台機、與這段時間有重疊的機上錄製
+    spans = await db.pool.fetch(
+        "SELECT name, bytes, extract(epoch FROM covers_from) AS a, "
+        "extract(epoch FROM covers_to) AS b FROM captures "
+        "WHERE tier = 'onboard' AND drone_id = $1::uuid AND status = 'complete' "
+        "AND covers_from IS NOT NULL AND covers_from <= to_timestamp($3) "
+        "AND covers_to >= to_timestamp($2) ORDER BY covers_from",
+        row["drone_id"], t0, t1)
+    any_mine = await db.pool.fetchval(
+        "SELECT count(*) FROM captures WHERE tier = 'onboard' "
+        "AND drone_id = $1::uuid", row["drone_id"])
 
     def covered(a: float, b: float) -> bool | None:
         if not spans:
-            # **沒有任何一份機上錄製 → 不知道，不是「沒補到」。**
-            # 這台機可能根本沒有代理、代理太舊、或那一份還在機上等著傳——
-            # 三種情況都不等於「我們確認過那一段沒有備份」
-            return None if not mine else False
+            # **一份機上錄製都沒有 → 不知道，不是「沒補到」。** 這台機可能
+            # 根本沒有代理、代理太舊、或那一份還在機上等著傳——三種情況都
+            # 不等於「我們確認過那一段沒有備份」
+            return None if not any_mine else False
         # **要整段被蓋住才算補到。** 蓋一半就宣告「補到了」，等於把一個
         # 仍然存在的洞說成已經填平
-        return any(f["covers"]["from"] <= a and f["covers"]["to"] >= b
-                   for f in spans)
+        return any(float(f["a"]) <= a and float(f["b"]) >= b for f in spans)
 
     blackouts = []
     for o in outs:
@@ -323,9 +314,9 @@ async def onboard_coverage(session_id: str):
         "from": t0, "to": t1, "ended": row["t1"] is not None,
         "blackouts": blackouts,
         "onboard": [{"name": f["name"], "bytes": f["bytes"],
-                     "covers": f["covers"], "url": f["url"]} for f in spans],
-        # **機上有沒有覆蓋這一段，與「有沒有失明」是兩個問題。** 沒有失明時
-        # 這裡仍然要說得出機上那份在不在——不然畫面只能在有洞的時候才誠實
+                     "covers": {"from": float(f["a"]), "to": float(f["b"])},
+                     "url": f"/api/onboard-captures/{row['drone_id']}/{f['name']}"}
+                    for f in spans],
         "onboard_known": bool(spans),
     }
 
@@ -335,20 +326,19 @@ async def list_onboard_captures():
     """已回傳的機上錄製一覽。
 
     **「自動回傳」如果看不到，就跟 scp 沒有兩樣**——差別只在誰按的。
-    半成品也列（`complete: false`）：「傳到一半」與「根本沒傳」在畫面上完全
-    同形，而兩者要做的事不同。
+    半成品與墓碑也列：「傳到一半」「根本沒傳」「已經永遠沒了」三者要做的事
+    完全不同，而在畫面上它們同形。
     """
-    rows = await db.pool.fetch("SELECT id::text AS id, name FROM drones")
-    return onboard_capture.listing({r["id"]: r["name"] for r in rows})
+    return await captures.listing("onboard")
 
 
 @router.get("/onboard-captures/{drone_id}/{name}", tags=["原始層"])
 async def get_onboard_capture(drone_id: str, name: str):
     """下載一份回傳回來的機上錄製。
 
-    **白名單而不是黑名單**：檔名逐字比對既有清單，與 `/captures` 同一條紀律。
+    **白名單是「它必須是 `captures` 表裡的一列」**，路徑從那一列讀出來。
     """
-    f = onboard_capture.find(drone_id, name)
+    f = await captures.find("onboard", name, drone_id)
     if f is None:
         raise HTTPException(404, f"沒有這份機上錄製：{drone_id}/{name}")
     return FileResponse(str(f), media_type="application/octet-stream",
@@ -845,8 +835,18 @@ async def patch_drone(drone_id: str, body: DronePatch):
         f"UPDATE drones SET {sets} WHERE id = $1", drone_id, *fields.values())
     if r.split()[-1] == "0":
         raise HTTPException(404, "無此無人機")
-    if live.drone_id == drone_id and "name" in fields:
-        live.drone_name = fields["name"]   # 主機改名即時反映（事件標籤、側欄）
+    if "name" in fields:
+        # **執行期是快取，資料庫才是事實來源。** 改完要把快取更新掉並通知畫面
+        # ——不然即時頁會一直顯示舊名字，直到 backend 重啟。
+        #
+        # 原本只更新 `live`（主機那一台），所以**改一台僚機的名字，即時頁
+        # 永遠不會變**。這是刪除那一格的同族問題：寫入端只動了資料庫。
+        from .state import fleet
+        st = fleet.get(drone_id)
+        if st is not None:
+            st.drone_name = fields["name"]
+        await manager.broadcast({"type": "drone_renamed", "drone_id": drone_id,
+                                 "name": fields["name"]})
     return {"ok": True}
 
 
@@ -883,18 +883,40 @@ async def delete_drone(drone_id: str):
     """
     if live.drone_id == drone_id:
         raise HTTPException(409, "此無人機目前連線中（模擬機由系統自動註冊），無法刪除")
+    # **磁碟上的檔案要自己刪**：外鍵連帶清掉的是 `captures` 那幾列，
+    # 不是那幾個檔案。順序也有講究——先讀出路徑，刪完機再刪檔，
+    # 這樣萬一刪機失敗，檔案還在，那幾列也還指得到它
+    files = [r["path"] for r in await db.pool.fetch(
+        "SELECT path FROM captures WHERE drone_id = $1::uuid", drone_id)]
     async with db.pool.acquire() as con:
         async with con.transaction():
+            # **刪之前先數**：外鍵是 ON DELETE CASCADE，刪完就查不到了，
+            # 而「刪掉了多少東西」是這個端點唯一的回執
             counts = {}
-            for table in ("telemetry", "link_metrics", "events", "flight_sessions"):
-                r = await con.execute(f"DELETE FROM {table} WHERE drone_id = $1", drone_id)
-                counts[table] = int(r.split()[-1])
+            for table in ("telemetry", "link_metrics", "events",
+                          "flight_sessions", "blackouts", "captures"):
+                counts[table] = await con.fetchval(
+                    f"SELECT count(*) FROM {table} WHERE drone_id = $1::uuid",
+                    drone_id)
             # 路徑不陪葬：missions 是「路徑快照」不綁機（issues/010、023）。
-            # 原本這裡要把 missions.drone_id 清 NULL 才不會踩 FK——該欄已於 023
-            # 移除（從建表至今無人寫入，唯一用途就是這行），故不再需要。
+            #
+            # **這一行現在會連帶清掉上面那六張表**（2026-09-02：全部掛上
+            # `ON DELETE CASCADE`）。在那之前是一張張手動刪的，而**漏一張
+            # 就長孤兒**——實測漏出過 284 筆指向 22 台已不存在的機的事件。
             r = await con.execute("DELETE FROM drones WHERE id = $1", drone_id)
     if r.split()[-1] == "0":
         raise HTTPException(404, "無此無人機")
+    import pathlib as _pl
+    for f in files:
+        try:
+            _pl.Path(f).unlink(missing_ok=True)
+            _pl.Path(f + ".part").unlink(missing_ok=True)
+        except OSError:
+            log.warning("刪不掉錄製檔 %s（那一列已經沒了）", f)
+    try:
+        _pl.Path(captures.root() / "onboard" / drone_id).rmdir()
+    except OSError:
+        pass
     # **刪掉資料庫那一列不會讓它從畫面上消失。** 執行期還握著三份：機隊
     # 註冊表（廣播迴圈每 0.2 秒送一次它的最後已知位置）、sysid 對照表、
     # 意圖通道。不清的話，即時頁會繼續顯示一台**已經不存在的機**，

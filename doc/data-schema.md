@@ -8,7 +8,7 @@
 
 ---
 
-## 1. 總覽：11 張表 ＋ 2 個彙總視圖
+## 1. 總覽：12 張表 ＋ 2 個彙總視圖
 
 | # | 表 | 一列代表 | 用途 | 保留 |
 |---|---|---|---|---|
@@ -23,6 +23,7 @@
 | 9 | `group_assignments` | 編隊中的一台機 | 該台的具體路徑與執行態 | 隨 group |
 | 10 | `video_segments` | 一段影片檔 | 飛行影像（022） | **7 天** |
 | 11 | `command_log` | 一筆指令 | command 服務指令留痕（含被拒／逾時） | 永久 |
+| 12 | `captures` | 一份錄製檔的 metadata | **內容在磁碟，這裡記路徑**（014，兩層 tier） | ground 30 天／onboard 90 天 |
 | — | `link_metrics_1m` | 1 分鐘桶 | continuous aggregate | 永久 |
 | — | `telemetry_1m` | 1 分鐘桶 | continuous aggregate | 永久 |
 
@@ -30,15 +31,22 @@
 
 ## 2. 關聯
 
+**`drones` 是事實來源那張 metadata 表**（2026-09-02 使用者裁定）：
+**所有資料都靠 DB 存，其他人透過 UID 外鍵指回去查。**
+
 ```
-drones ─┬─< flight_sessions ─┬─< telemetry        (無 FK)
-        │        │            ├─< link_metrics     (無 FK)
-        │        │            ├─< events           (無 FK)
+drones ─┬─< flight_sessions ─┬─< telemetry        (CASCADE)
+        │        │            ├─< link_metrics     (CASCADE)
+        │        │            ├─< events           (CASCADE)
         │        │            └─< video_segments   (CASCADE)
         │        ├── mission_id ──> missions       (SET NULL)
         │        └── group_id ────> mission_groups (無 FK)
         ├── current_mission_id ────> missions      (SET NULL)
-        └─< video_segments                         (CASCADE)
+        ├─< telemetry / link_metrics / events      (CASCADE)
+        ├─< blackouts                              (CASCADE)
+        ├─< captures                               (CASCADE)
+        ├─< video_segments                         (CASCADE)
+        └─< command_log.drone_id                   (SET NULL)
 
 missions ─┬─< waypoints                            (CASCADE)
           ├─< group_assignments.mission_id         (SET NULL)
@@ -60,17 +68,65 @@ mission_groups ─< group_assignments                (CASCADE)
 | `group_assignments.mission_id` | missions | SET NULL |
 | `video_segments.drone_id` | drones | CASCADE |
 | `video_segments.session_id` | flight_sessions | CASCADE |
+| `telemetry.drone_id` | drones | **CASCADE**（09-02 補） |
+| `link_metrics.drone_id` | drones | **CASCADE**（09-02 補） |
+| `events.drone_id` | drones | **CASCADE**（09-02 補） |
+| `blackouts.drone_id` | drones | CASCADE |
+| `captures.drone_id` | drones | **CASCADE**（09-02 新增） |
+| `command_log.drone_id` | drones | **SET NULL**（09-02 補） |
+
+`flight_sessions.drone_id` 09-02 由 `NO ACTION` 改成 `CASCADE`：原本刪一台機會被
+它擋下，而**擋下的方式是靜靜失敗**——用裸 SQL 收拾的腳本因此把測試機留在機隊裡
+好幾個星期，還出現在即時頁上（見 §5.6）。
 
 原本兩處為 NO ACTION，使「刪除被編隊引用過的路徑」直接 FK 違反（API 500，已實測
 復現）。**023 已改為 SET NULL**：路徑刪得掉，而 assignment／架次那一列**留著**
 （只是 mission_id 變 NULL）——對應定案「飛過的路徑可以刪、飛行紀錄永存」。
 刪除後仍能說出飛的是哪條，靠 `flight_sessions.mission_name` 快照（§3.4）。
 
-### 2.2 沒有外鍵的關聯（重要）
+### 2.2 `drone_id` 全數掛上外鍵（2026-09-02 改）
 
-`telemetry`／`link_metrics`／`events` 的 `drone_id`、`session_id` **無外鍵約束**
-（hypertable 與高頻事件流刻意不加，避免寫入成本）。**後果：刪架次不會連帶刪掉
-它的時序資料**，清理必須由應用層顯式執行。
+原本 `telemetry`／`link_metrics`／`events` 的 `drone_id` **沒有外鍵**，理由是
+「hypertable 不能加」與「避免寫入成本」。**兩個理由都不成立**：
+
+* **TimescaleDB 2.29 實測，hypertable 指出去的外鍵是支援的**（不支援的是反過來
+  指進 hypertable）。
+* 寫入成本是每列一次 PK 查找，而本專案的寫入是 1 Hz／機——量級差得太遠。
+
+而代價是真的：清理只能靠應用層記得，**漏一張就長孤兒，孤兒不會叫**。
+2026-09-02 實測清出 **284 筆指向 22 台已不存在的機的事件**。
+
+現在 `drone_id` 一律 `ON DELETE CASCADE`，`delete_drone` 只剩兩件事：
+**刪之前先數**（外鍵清完就查不到了，而「刪掉多少」是那個端點唯一的回執），
+以及**刪磁碟上的檔案**（外鍵清的是列，不是檔案）。
+
+> `session_id` 仍然無外鍵，**這一格是刻意的**：架次可以被刪掉而時序資料留著
+> （歸屬變成未知），與「飛過的路徑可以刪、飛行紀錄永存」同一條原則。
+
+### 2.3 `captures`：大東西記路徑，不進資料庫
+
+> **資料本身很大的時候，SQL 欄位記路徑，要內容再到那個路徑下去看。**
+> （2026-09-02 使用者裁定）
+
+`captures` 一列＝一份錄製檔的 metadata，`path` 指向磁碟上的內容。與
+`video_segments` 完全同一個形狀——影片一開始就是這樣做的，錄製檔則是
+**2026-09-02 才改過來**：在那之前它的 metadata 是寫在磁碟上的 `.meta` JSON，
+清單靠 glob 目錄。那等於把事實來源放在檔案系統裡：查不了、關聯不了、
+刪機時也不會連帶清。
+
+| 欄 | 意義 |
+|---|---|
+| `tier` | `ground`＝地面站錄的「送到地面站的東西」／`onboard`＝機上錄的「飛控送出的東西」 |
+| `path` | **內容在這裡。** `status='partial'` 時內容住在 `path + '.part'`（路徑是這一列的身分，不因傳到一半而變） |
+| `status` | `partial`／`complete`／**`lost`**（機上未回傳即被滾動刪除的墓碑） |
+| `covers_from/to` | 這份錄製涵蓋的時間，收尾驗 sha256 那一遍順手掃出來的 |
+
+**兩層放同一張表而不是兩張**：兩者相差的正是 5G 斷線那一段，要能用一句 SQL
+把兩層對起來（`/api/onboard-captures/coverage`）。畫面上仍分開列。
+
+> **唯一鍵是 `(tier, drone_id, name) NULLS NOT DISTINCT`。** 地面站那一層沒有
+> `drone_id`，而普通唯一約束裡 **NULL ≠ NULL**——`ON CONFLICT` 永遠不成立，
+> 對帳一次就多一份重複列（實測 11 個檔案兩次對帳變 22 列）。
 
 ---
 

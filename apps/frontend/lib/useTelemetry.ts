@@ -60,6 +60,8 @@ export function useTelemetry() {
         // 的真機完全同形
         else if (msg.type === "drone_removed" && msg.drone_id)
           useUavStore.getState().removeDrone(msg.drone_id);
+        else if (msg.type === "drone_renamed" && msg.drone_id)
+          useUavStore.getState().renameDrone(msg.drone_id, msg.name);
         else if (msg.type === "msg_registry" && msg.drone_id)
           setRegistry(msg.drone_id,
             { sensors: msg.sensors ?? [], messages: msg.messages ?? [] });

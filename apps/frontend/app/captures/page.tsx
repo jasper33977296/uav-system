@@ -33,7 +33,7 @@ interface OnboardList {
   dir: string; files: OnboardFile[]; total_bytes: number;
   keep_days: number; free_mb: number;
 }
-interface GroundFile { name: string; bytes: number; modified: string; url: string }
+interface GroundFile { name: string; bytes: number; received: string | null; url: string }
 interface GroundList { dir: string; files: GroundFile[]; total_bytes: number; keep_days: number }
 interface Drone { id: string; name: string; agent?: AgentState | null }
 interface Session { id: string; drone_name: string; started_at: string; ended_at: string | null }
@@ -402,7 +402,7 @@ function GroundTable({ list, err }: { list: GroundList | null; err: string | nul
             <tr key={f.name}>
               <td><span className="cap-fname">{f.name}</span></td>
               <td className="num">{mb(f.bytes)}</td>
-              <td>{clock(f.modified)}</td>
+              <td>{clock(f.received)}</td>
               <td className="num">
                 <a className="btn-plain btn-sm" href={`${API}${f.url}`}>下載</a>
               </td>
