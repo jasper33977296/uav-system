@@ -437,7 +437,22 @@ export default function CommandPanel() {
   // ── 任務區要用的三個判斷（2026-08-26）───────────────────────
   // **「在空中」全檔案共用同一個判準**（landed_state 或高度）——兩套判準
   // 會在邊界上互相矛盾，而這裡決定的是「顯示哪一組按鈕」
-  const airborne = live?.landed_state === "in_air" || (live?.alt_rel ?? 0) > 2;
+  // **在空中：優先信飛控自己說的 `landed_state`**，高度只是它不回報時的退路。
+  //
+  // 2026-09-02 實測到的反例：一台**已上鎖、飛控回報 `on_ground`** 的機，
+  // 因為沒有 GPS 定位（fix=1、0 顆衛星）而 `alt_rel` 漂到 4.4 m——舊的判準
+  // `landed_state === "in_air" || alt_rel > 2` 因此判成「在天上」，
+  // 於是畫面長出「更換任務」按鈕與「飛手可能拿著遙控器」那句，
+  // **而飛控自己明明說它在地上**。
+  //
+  // 兩條規則：
+  // 1. `landed_state` 有值就聽它——**推導值不該蓋過飛控直接說的話**。
+  // 2. 退回高度時，**沒有定位就不用那個高度**：沒有位置解時 `alt_rel` 是漂的，
+  //    不是高度。與 036 對 `0,0` 座標的處理是同一條規則——
+  //    **不知道的東西不要畫成知道的東西**。
+  const airborne = live?.landed_state
+    ? live.landed_state === "in_air"
+    : live?.lat != null && (live?.alt_rel ?? 0) > 2;
   // 模式判斷一律用 mode_verb（廠牌無關），不比對原廠模式名
   const inMission = live?.mode_verb === "mission";
   const holding = live?.mode_verb === "hold";
@@ -622,7 +637,10 @@ export default function CommandPanel() {
         {health.enabled && !routerDead && !formation && sid && dh && !observeOnly && (
           <span onPointerDown={(e) => e.stopPropagation()}
             onPointerUp={(e) => e.stopPropagation()}>
-            {(live?.landed_state === "in_air" || (live?.alt_rel ?? 0) > 2)
+            {/* **用同一個 `airborne`**：原本這裡各寫一份判準，而
+                「在空中」的判斷在邊界上分歧會讓標頭顯示返航、
+                本體顯示起飛——同一個畫面上兩個互相矛盾的答案 */}
+            {airborne
               ? btn("RTL", "⌂ 返航", "/mode/rtl", { danger: true, cap: "rtl" })
               : btn("起飛", "↑ 起飛", "/takeoff",
                     { confirm: true, body: { alt }, cap: "takeoff", accent: true,
@@ -1054,7 +1072,15 @@ export default function CommandPanel() {
           {airborne && !inMission && !holding && (
             <div className="hint-line">
               目前不在任務模式（{live?.flight_mode ?? "模式未知"}）——
-              飛手可能拿著遙控器。系統此時只觀察不介入。
+              {/* **不要在 `rc_link === false` 時說「飛手可能拿著遙控器」**：
+                  我們**知道**沒有人拿著（039 複裁 A 的同一個事實來源）。
+                  說一句已知為假的話，比不說更糟——它會讓人以為有人接得了手 */}
+              {agentHere?.rc_link === false
+                ? "而且遙控器未連線：此刻沒有人接得了手。"
+                : agentHere?.rc_link
+                  ? "飛手可能拿著遙控器。"
+                  : "遙控器狀態不明。"}
+              系統此時只觀察不介入。
             </div>
           )}
           {capHints(["mission_upload", "mission_fly", "mission_start", "hold"])}
