@@ -12,7 +12,7 @@ import logging
 import mission_time        # libs/ 的共用實作（PYTHONPATH=/srv/libs）
 import plan_check
 
-from . import agent_link, db, groups, mavlink_rx, signing
+from . import agent_link, chainage, db, groups, mavlink_rx, signing
 from .config import settings
 from .ws import manager
 
@@ -97,6 +97,52 @@ class DronePatch(BaseModel):
 #: **只有 `admitted` 可以被指揮。**
 ADMISSION_STATES = ("seen", "identifying", "reassigning", "admitted",
                    "quarantined", "unmanaged")
+
+
+@router.get("/compare/chainage")
+async def compare_chainage(a: str, b: str, mission_id: str | None = None,
+                           grid_size: float | None = None,
+                           max_offset_m: float = chainage.DEFAULT_MAX_OFFSET_M):
+    """兩個架次沿路徑的訊號對照（issues/027）。
+
+    **與前端 `lib/chainage.ts` 是同一套演算法**——搬到後端是為了讓 UI 與未來的
+    `compare_flights` 共用一份邏輯，不養兩份（issues/019）。
+
+    * `a`／`b`：兩個 `flight_sessions.id`
+    * `mission_id`：**參考路徑用的計畫航點**。省略就退回用 A 那趟的軌跡，
+      而回應的 `reference` 會說是 `trip_a`——**那讓 A 的偏航變成零誤差**，
+      比較的意義因此打折，所以它必須看得見。
+    * `grid_size`：省略＝依較稀那趟的樣本密度自適應（回應帶 `grid_size_used`）
+    * `max_offset_m`：離參考路徑超過就捨棄並計數（不硬塞）
+
+    **回應一律帶方法參數**（`grid_size_used`／`grid_size_source`／`reference`／
+    `max_offset_m`／`dropped`／`paired_cells`）：
+    **方法參數必須可見，否則結論無法被檢驗。**
+    """
+    async def samples(sid: str) -> list[dict]:
+        rows = await db.pool.fetch(
+            "SELECT lat, lon, sinr, rsrp FROM link_metrics "
+            "WHERE session_id = $1::uuid AND lat IS NOT NULL AND lon IS NOT NULL "
+            "ORDER BY time", sid)
+        return [dict(r) for r in rows]
+
+    ref = None
+    if mission_id:
+        rows = await db.pool.fetch(
+            "SELECT lat, lon FROM waypoints WHERE mission_id = $1::uuid "
+            "AND (lat <> 0 OR lon <> 0) ORDER BY seq", mission_id)
+        ref = [dict(r) for r in rows]
+    try:
+        sa, sb = await samples(a), await samples(b)
+    except Exception as e:
+        raise HTTPException(422, f"架次 id 不合法或查詢失敗：{e}")
+    out = chainage.compare_along_path(sa, sb, ref, grid_size, max_offset_m)
+    out["sessions"] = {"a": a, "b": b}
+    # **樣本數 0 要說得出是哪一邊**：兩邊都空與只有一邊空，要查的地方不同
+    if not sa or not sb:
+        out["note"] = (f"樣本數 a={len(sa)} b={len(sb)}——"
+                       "有一邊沒有帶座標的訊號樣本，對照不會有內容")
+    return out
 
 
 @router.get("/admission/{sysid}")
