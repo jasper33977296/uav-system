@@ -46,7 +46,7 @@
 | [011](011-register-drone-not-wired.md) | 「註冊無人機」表單未接線 → 單埠多機自動註冊取代；多機實測過 | low | **closed** | `apps/frontend/app/drones/page.tsx` |
 | [012](012-command-service.md) | command 服務：自製 GCS 指令能力——已為系統核心，階段交付完成（真機 failsafe 實測列部署清單）| medium | **closed** | `doc/gcs-replacement.md` §1 |
 | [013](013-group-missions.md) | 群組任務：V1 全案收官（skew/RTL 實測）；V2/V3 自動指派歸 019 目標層 | medium | **closed** | `doc/gcs-replacement.md` §3 |
-| [014](014-two-tier-collection.md) | 兩層收集：機上傳出資訊全數收集（原始層已實作）| medium | in-progress | `apps/backend/app/capture.py` |
+| [014](014-two-tier-collection.md) | 兩層收集：原始層＋結構層。事件翻譯／411 掉包／ACK 入流／錄製檔可見性完成；**ulog 回收算術上做不成**（57600 上 5 MB 要 29 分鐘），剩 modem 擴充與 companion 健康 | medium | in-progress | `capture.py`＋`mavlink_rx.py` |
 | [015](015-multi-autopilot-support.md) | 跨自駕儀支援：硬編碼 PX4 方言，非 PX4 機不可控（部分指令有飛安風險）| high | open | `reference/gap-analysis.md` |
 | [016](016-rb5-platform-connectivity.md) | RB5 平台連線層：三條病因全是 RB5 專屬，而現役是 Pi 5＋ArduPilot——**前提已不成立**；部署文件已改寫（含重啟觸發條件）| high | deferred | `doc/deployment.md` 附錄 A |
 | [017](017-live-3d-visual-quality.md) | 即時頁 3D 品質：P1 join／P2 deck.gl／P3 底圖＋圖示全數收官（3D 機模另案）| medium | **closed** | `apps/frontend/lib/geo.ts` |

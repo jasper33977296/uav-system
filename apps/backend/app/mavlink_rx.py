@@ -115,6 +115,15 @@ def _decode_event_seq(msgbuf) -> dict | None:
 #: 411 flags 的 bit0：機端序號歸零
 _EVT_SEQ_RESET = 0x01
 
+
+def _enum_name(enum: str, value) -> str:
+    """MAVLink 枚舉值 → 名字。**認不得就回原值的字串**，不猜、不留空——
+    「MAV_CMD_400」比空白有用：它至少查得到，而空白只是消失。"""
+    if value is None:
+        return "（未提供）"
+    e = M.enums.get(enum, {}).get(value)
+    return e.name if e is not None else f"{enum}_{value}"
+
 # 飛行就緒訊號（QGC「Ready To Fly」同源；docs.px4.io pre_flight_checks）
 _MAV_STATE = {0: "UNINIT", 1: "BOOT", 2: "CALIBRATING", 3: "STANDBY",
               4: "ACTIVE", 5: "CRITICAL", 6: "EMERGENCY", 7: "POWEROFF",
@@ -573,6 +582,8 @@ class MavlinkRx:
             st.landed_state = _LANDED.get(msg.landed_state)
         elif t == "STATUSTEXT":
             await self._statustext(ent, st, msg)
+        elif t in ("COMMAND_ACK", "MISSION_ACK"):
+            await self._ack_event(ent, st, msg, t)
         elif t == "UNKNOWN_410":         # MAVLink EVENT（PX4 vehicle 通知，Phase A.2）
             await self._vehicle_event(ent, st, msg)
         elif t == "UNKNOWN_411":         # CURRENT_EVENT_SEQUENCE（掉包偵測）
@@ -638,6 +649,63 @@ class MavlinkRx:
         ev["drone"] = st.drone_name
         ent["stx_last"] = {"id": ev["id"], "text": text, "sev": sev,
                            "count": 1, "t": now}
+        await manager.broadcast({"type": "event", "event": ev})
+
+    async def _ack_event(self, ent: dict, st: LiveState, msg, kind: str) -> None:
+        """飛控對指令的回應 → 事件流（issues/014 結構層 #2）。
+
+        **為什麼 command 服務已經留痕了還要收這個**：`command_log` 記的是
+        **我們送出去的**指令與它拿到的回應。而飛控會回應**任何人**送的指令
+        ——QGC、機上代理（失聯處置的 RTL）、驗收 rig、直接打端點的腳本。
+        那些回應現在完全看不到，於是事後查「這台機為什麼突然回家」時，
+        證據鏈斷在「誰下的令」這一格。
+
+        **`IN_PROGRESS` 不入流**：長時間動作（校正、任務上傳）會每秒重複回報，
+        而它不帶新資訊——事件流被它淹掉的話，真正的失敗就沒有人看得見。
+
+        > 老規矩：**ACK 是「我收到了」，不是「我做到了」。** 所以這裡記的是
+        > 「飛控說它收到並接受了」，不是「那件事發生了」——文案照這個寫。
+        """
+        if kind == "COMMAND_ACK":
+            res = getattr(msg, "result", None)
+            if res == M.MAV_RESULT_IN_PROGRESS:
+                return
+            cmd = getattr(msg, "command", None)
+            cmd_name = _enum_name("MAV_CMD", cmd)
+            res_name = _enum_name("MAV_RESULT", res)
+            okay = res == M.MAV_RESULT_ACCEPTED
+            detail = {"kind": "command", "command": cmd, "command_name": cmd_name,
+                      "result": res, "result_name": res_name,
+                      "text": (f"飛控**收下**了 {cmd_name}" if okay
+                               else f"飛控拒絕 {cmd_name}：{res_name}"),
+                      "note": "ACK 是「我收到了」，不是「我做到了」"}
+            key = ("command", cmd, res)
+        else:
+            typ = getattr(msg, "type", None)
+            okay = typ == M.MAV_MISSION_ACCEPTED
+            name = _enum_name("MAV_MISSION_RESULT", typ)
+            detail = {"kind": "mission", "result": typ, "result_name": name,
+                      "mission_type": getattr(msg, "mission_type", None),
+                      "text": ("飛控**收下**了任務傳輸" if okay
+                               else f"任務傳輸被拒：{name}")}
+            key = ("mission", typ, None)
+        sev = "info" if okay else "warning"
+        now = time.monotonic()
+        last = ent.get("ack_last")
+        if last and last["key"] == key and now - last["t"] < STX_FOLD_S:
+            last["count"] += 1
+            last["t"] = now
+            upd = await db.bump_event(last["id"], {**detail, "count": last["count"]})
+            if upd is not None:
+                await manager.broadcast({"type": "event", "fold": True, "event": {
+                    "id": last["id"], "time": upd["time"], "severity": sev,
+                    "type": "vehicle_ack", "detail": {**detail, "count": last["count"]},
+                    "source": "vehicle", "drone": st.drone_name}})
+                return
+        ev = await db.insert_event(st.drone_id, st.session_id, sev, "vehicle_ack",
+                                   {**detail, "count": 1}, source="vehicle")
+        ev["drone"] = st.drone_name
+        ent["ack_last"] = {"key": key, "id": ev["id"], "count": 1, "t": now}
         await manager.broadcast({"type": "event", "event": ev})
 
     async def _event_gap(self, st: LiveState, ent: dict, seq: int,

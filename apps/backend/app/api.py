@@ -1,10 +1,11 @@
 import asyncio
 import json
 import time
-from datetime import datetime
+from datetime import datetime, timezone
 from uuid import UUID
 
 from fastapi import APIRouter, HTTPException, Response
+from fastapi.responses import FileResponse
 from pydantic import BaseModel, Field, field_validator
 
 import logging
@@ -97,6 +98,51 @@ class DronePatch(BaseModel):
 #: **只有 `admitted` 可以被指揮。**
 ADMISSION_STATES = ("seen", "identifying", "reassigning", "admitted",
                    "quarantined", "unmanaged")
+
+
+@router.get("/captures", tags=["原始層"])
+async def list_captures():
+    """原始層錄製檔（tlog）一覽（issues/014 結構層 #5）。
+
+    **「全數收集」如果拿不到，就只是一個宣稱。** 原始層從 2026-08-10 就在錄，
+    但**系統裡沒有任何地方看得到它**——要知道有沒有錄到、錄了多少、能不能取用，
+    得 ssh 進地面站 `ls` 一個容器裡的目錄。那等於資料只對知道路徑的人存在。
+
+    tlog 與 QGC 回放、`pymavlink` 的 `mavlogdump.py` 相容——所以「取得檔案」
+    就是取得全部，不需要我們再做一套檢視器。
+    """
+    import pathlib
+    d = pathlib.Path(settings.capture_dir)
+    if not d.is_dir():
+        return {"dir": str(d), "files": [], "total_bytes": 0,
+                "note": "錄製目錄不存在——原始層可能沒有在錄（檢查 CAPTURE_* 設定）"}
+    files = []
+    for f in sorted(d.glob("*.tlog"), reverse=True):
+        stat = f.stat()
+        files.append({"name": f.name, "bytes": stat.st_size,
+                      "modified": datetime.fromtimestamp(
+                          stat.st_mtime, tz=timezone.utc).isoformat(),
+                      "url": f"/api/captures/{f.name}"})
+    return {"dir": str(d), "files": files,
+            "total_bytes": sum(f["bytes"] for f in files),
+            "keep_days": settings.capture_keep_days,
+            "note": "tlog 可直接餵 QGC 回放或 pymavlink 的 mavlogdump.py"}
+
+
+@router.get("/captures/{name}", tags=["原始層"])
+async def get_capture(name: str):
+    """下載一份錄製檔。
+
+    **檔名逐字比對既有清單，不做路徑拼接**：`../` 這種東西不該靠字串檢查擋，
+    該靠「它必須是我們列得出來的那些檔案之一」擋——**白名單而不是黑名單**。
+    """
+    import pathlib
+    d = pathlib.Path(settings.capture_dir)
+    match = next((f for f in d.glob("*.tlog") if f.name == name), None)
+    if match is None:
+        raise HTTPException(404, f"沒有這份錄製檔：{name}")
+    return FileResponse(str(match), media_type="application/octet-stream",
+                        filename=match.name)
 
 
 @router.get("/compare/chainage")
