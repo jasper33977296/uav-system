@@ -229,7 +229,7 @@ export default function SimpleHud() {
   const events = useUavStore((s) => s.events);
   const setPanelOpen = useUavStore((s) => s.setPanelOpen);
   // 起飛被拒通知來自任務控制面板（主按鈕已併回面板首行，ui-spec §2）
-  const takeoffDeniedAt = useUavStore((s) => s.takeoffDeniedAt);
+  const denial = useUavStore((s) => s.denial);
 
   // 異常 toast（ui-spec §0.2/§0.3）：同時多事只顯最嚴重一則；
   // 一律 10s 或點擊即消（✕）——toast 是通知不是狀態的家，持續性危險由
@@ -270,17 +270,41 @@ export default function SimpleHud() {
   // 候選句（優先序）：key 用於「同一事件只通知一次」——條件解除後
   // key 歸零，下次再發生才會再跳
   const now = Date.now();
+  /** toast 放得下的長度。**超過就截斷並留展開**——一句讀不完的通知
+   * 與一句沒有內容的通知一樣沒用。 */
+  const brief = (t: string, n = 64) =>
+    t.length > n ? t.slice(0, n - 1) + "…" : t;
+  /** 「為什麼現在不能飛」的第一條。後端已經會說出是哪一項預檢
+   * （`ArduPilot 預檢未過：Throttle (RC3) is not neutral`），
+   * **原本這句話只活在面板裡**，HUD 只說「點這裡看原因」。 */
+  const why = (live?.not_ready_reasons ?? [])[0];
+  const moreWhy = Math.max(0, (live?.not_ready_reasons ?? []).length - 1);
+
   const candidate =
     !wsConnected
       ? { key: "ws", t: "與系統失去連線——畫面可能不是最新", sev: "err" as const }
     : droneLost
       ? { key: "lost", t: "無人機失聯——顯示的是最後已知位置", sev: "err" as const }
     : fsActive
-      ? { key: `fs:${fsEvent!.id}`, t: "無人機進入緊急狀態——正在自動處置", sev: "err" as const }
+      // **說得出是哪一種 failsafe。** 事件本來就帶著那句話（機上的
+      // STATUSTEXT 或 backend 推導的型別），只說「進入緊急狀態」等於
+      // 把唯一有用的那一格丟掉
+      ? { key: `fs:${fsEvent!.id}`,
+          t: brief(`無人機進入緊急狀態：${evText(fsEvent!)}——正在自動處置`),
+          sev: "err" as const, expand: true }
     : clsKey === "critical"
       ? { key: "critical", t: "訊號快斷了", sev: "err" as const }
-    : now - takeoffDeniedAt < 10000
-      ? { key: `takeoff:${takeoffDeniedAt}`, t: "現在還不能起飛——點這裡看原因",
+    : denial && now - denial.at < 10000
+      // **說出被拒的是哪個動作、原因是什麼。** 原本一律是「現在還不能起飛
+      // ——點這裡看原因」：三件不同的事（油門桿沒推到底／GCS failsafe／
+      // 入列未通過）在畫面上完全同形，而要知道是哪一件得自己去展開面板
+      ? { key: `deny:${denial.at}`,
+          t: brief(`無法${denial.action}：${denial.text}`),
+          sev: "warn" as const, expand: true }
+    : live && live.ready === false && why
+      // 還沒按就先說。**「為什麼不能飛」不必等到按下去被拒才出現**
+      ? { key: `notready:${why}`,
+          t: brief(`現在還不能飛：${why}${moreWhy ? `（另有 ${moreWhy} 項）` : ""}`),
           sev: "warn" as const, expand: true }
     : vidFailActive
       ? { key: `vid:${vidFail!.id}`, t: "影像錄製中斷——遙測與紀錄不受影響",

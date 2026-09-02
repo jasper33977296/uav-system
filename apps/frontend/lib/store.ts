@@ -160,9 +160,17 @@ interface UavStore {
   // simple-first：專業數值面板是抽屜（預設關、點訊號格/▤ 開）
   panelOpen: boolean;
   setPanelOpen: (v: boolean) => void;
-  // 起飛被拒（CommandPanel 判定 → HUD toast「點這裡看原因」）
-  takeoffDeniedAt: number;
-  noticeTakeoffDenied: () => void;
+  /** 最近一次指令被拒。**存的是那句話，不只是時間戳。**
+   *
+   * 原本只存 `takeoffDeniedAt`，所以 HUD 只說得出「現在還不能起飛——點這裡
+   * 看原因」。2026-09-02 現場實測：操作員被三件事同時擋著（油門桿沒推到底、
+   * GCS failsafe、入列未通過），而畫面上那一句話對三者一視同仁——**要知道
+   * 是哪一件，得自己去展開面板、或去翻事件流**。
+   *
+   * 而原因後端一直都有給（`detail.msg`／`not_ready_reasons`），
+   * 只是被前端在這一格丟掉了。 */
+  denial: { at: number; action: string; text: string } | null;
+  noticeDenied: (action: string, text: string) => void;
   // 喚起任務控制面板（toast 點擊展開原因用；計數器遞增觸發）
   cmdOpenReq: number;
   requestCmdPanel: () => void;
@@ -246,8 +254,9 @@ export const useUavStore = create<UavStore>((set) => ({
   sinrHistories: {},
   panelOpen: false,
   setPanelOpen: (v) => set({ panelOpen: v }),
-  takeoffDeniedAt: 0,
-  noticeTakeoffDenied: () => set({ takeoffDeniedAt: Date.now() }),
+  denial: null,
+  noticeDenied: (action, text) =>
+    set({ denial: { at: Date.now(), action, text } }),
   cmdOpenReq: 0,
   requestCmdPanel: () => set((s) => ({ cmdOpenReq: s.cmdOpenReq + 1 })),
   planReq: 0,

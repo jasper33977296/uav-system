@@ -556,9 +556,6 @@ export default function CommandPanel() {
         body: payload ? JSON.stringify(payload) : undefined,
       });
       const body = await res.json().catch(() => ({}));
-      if (!res.ok && path === "/takeoff") {
-        useUavStore.getState().noticeTakeoffDenied();   // HUD toast 用
-      }
       if (!res.ok) {
         // detail 可能是字串或結構化報告（預檢 problems／機端拒絕＋自駕儀原因
         // 文字／非 PX4 機的 501 飛安 guard {msg, autopilot, hint}）。
@@ -576,6 +573,10 @@ export default function CommandPanel() {
           : d?.msg ? `${d.msg}${d.hint ? `——${d.hint}` : ""}${notes}${how}`
           : JSON.stringify(d ?? `失敗（HTTP ${res.status}）`);
         setResult({ ok: false, text });
+        // **每一次被拒都要浮出來，不只起飛。** 原本只有 `/takeoff` 會通知 HUD，
+        // 所以按「解鎖」「切模式」被 403 擋下時，面板收起來的人什麼都看不到。
+        // 而且送的是**那句話本身**，不是一個時間戳——理由後端一直都有給
+        useUavStore.getState().noticeDenied(action, text);
       } else {
         setResult({
           ok: true,
