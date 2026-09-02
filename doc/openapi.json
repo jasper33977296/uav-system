@@ -1,0 +1,1039 @@
+{
+  "components": {
+    "schemas": {
+      "ChangeRouteIn": {
+        "properties": {
+          "hold_alt": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Hold Alt"
+          },
+          "intent_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Intent Id"
+          },
+          "mission_id": {
+            "title": "Mission Id",
+            "type": "string"
+          },
+          "proposal": {
+            "anyOf": [
+              {
+                "additionalProperties": true,
+                "type": "object"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Proposal"
+          }
+        },
+        "required": [
+          "mission_id"
+        ],
+        "title": "ChangeRouteIn",
+        "type": "object"
+      },
+      "FlyIn": {
+        "properties": {
+          "alt_timeout_s": {
+            "default": 60.0,
+            "title": "Alt Timeout S",
+            "type": "number"
+          },
+          "mission_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Mission Id"
+          },
+          "takeoff_alt": {
+            "default": 10.0,
+            "title": "Takeoff Alt",
+            "type": "number"
+          }
+        },
+        "title": "FlyIn",
+        "type": "object"
+      },
+      "GotoIn": {
+        "properties": {
+          "index": {
+            "title": "Index",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "index"
+        ],
+        "title": "GotoIn",
+        "type": "object"
+      },
+      "HTTPValidationError": {
+        "properties": {
+          "detail": {
+            "items": {
+              "$ref": "#/components/schemas/ValidationError"
+            },
+            "title": "Detail",
+            "type": "array"
+          }
+        },
+        "title": "HTTPValidationError",
+        "type": "object"
+      },
+      "StartIn": {
+        "properties": {
+          "mission": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Mission"
+          },
+          "plan": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Plan"
+          },
+          "store": {
+            "default": true,
+            "title": "Store",
+            "type": "boolean"
+          },
+          "sysid": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Sysid"
+          },
+          "takeoff_alt": {
+            "default": 10.0,
+            "title": "Takeoff Alt",
+            "type": "number"
+          }
+        },
+        "title": "StartIn",
+        "type": "object"
+      },
+      "TakeoffIn": {
+        "properties": {
+          "alt": {
+            "default": 10.0,
+            "title": "Alt",
+            "type": "number"
+          }
+        },
+        "title": "TakeoffIn",
+        "type": "object"
+      },
+      "UploadIn": {
+        "properties": {
+          "mission_id": {
+            "title": "Mission Id",
+            "type": "string"
+          }
+        },
+        "required": [
+          "mission_id"
+        ],
+        "title": "UploadIn",
+        "type": "object"
+      },
+      "ValidationError": {
+        "properties": {
+          "ctx": {
+            "title": "Context",
+            "type": "object"
+          },
+          "input": {
+            "title": "Input"
+          },
+          "loc": {
+            "items": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "integer"
+                }
+              ]
+            },
+            "title": "Location",
+            "type": "array"
+          },
+          "msg": {
+            "title": "Message",
+            "type": "string"
+          },
+          "type": {
+            "title": "Error Type",
+            "type": "string"
+          }
+        },
+        "required": [
+          "loc",
+          "msg",
+          "type"
+        ],
+        "title": "ValidationError",
+        "type": "object"
+      }
+    }
+  },
+  "info": {
+    "description": "無人機指令服務。**外部整合請看「任務」那一組的三個端點。**\n\n> 匯出 OpenAPI：`python3 scripts/export-openapi.py`",
+    "title": "UAV Command Service",
+    "version": "0.1.0"
+  },
+  "openapi": "3.1.0",
+  "paths": {
+    "/api/command/group/{group_id}/abort": {
+      "post": {
+        "description": "操作員主動全撤（緊急全撤鈕）。冪等、依當前 phase 自動選動作：\n起飛前→disarm 已解鎖者；已起飛→RTL。與序列偵測失敗自動全撤同終態。",
+        "operationId": "group_abort_api_command_group__group_id__abort_post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "group_id",
+            "required": true,
+            "schema": {
+              "title": "Group Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Group Abort"
+      }
+    },
+    "/api/command/group/{group_id}/execute": {
+      "post": {
+        "description": "兩階段提交（§3）。**非同步啟動**：嚴格 gate 通過→立即回 202＋群組 handle，\n背景序列跑逐台 upload→arm→start，即時態逐步寫 DB（前端輪詢 backend GET）。\ngate 失敗→同步 409＋逐台原因（未啟動序列）。中止只能透過 abort，不是斷 HTTP。",
+        "operationId": "group_execute_api_command_group__group_id__execute_post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "group_id",
+            "required": true,
+            "schema": {
+              "title": "Group Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "202": {
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Group Execute"
+      }
+    },
+    "/api/command/group/{group_id}/rtl": {
+      "post": {
+        "description": "群組 RTL-all（空中緊急）。冪等。",
+        "operationId": "group_rtl_api_command_group__group_id__rtl_post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "group_id",
+            "required": true,
+            "schema": {
+              "title": "Group Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Group Rtl"
+      }
+    },
+    "/api/command/{sysid}/arm": {
+      "post": {
+        "operationId": "arm_api_command__sysid__arm_post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "sysid",
+            "required": true,
+            "schema": {
+              "title": "Sysid",
+              "type": "integer"
+            }
+          },
+          {
+            "in": "query",
+            "name": "intent",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Intent"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Arm",
+        "tags": [
+          "操作"
+        ]
+      }
+    },
+    "/api/command/{sysid}/disarm": {
+      "post": {
+        "operationId": "disarm_api_command__sysid__disarm_post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "sysid",
+            "required": true,
+            "schema": {
+              "title": "Sysid",
+              "type": "integer"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Disarm",
+        "tags": [
+          "操作"
+        ]
+      }
+    },
+    "/api/command/{sysid}/mission/change-route": {
+      "post": {
+        "description": "**第二步：執行三步序列。** 每一步都讀回機端確認，任何一步沒過就停在\n安全狀態（懸停），不會繼續往一個沒人確認過的方向飛。\n\n**執行當下重算提案**（協定 §5.1）：人確認的是**那一份**提案，而飛機在\n人看提案的那段時間裡一直在動。續飛航點換了、或距離變化超過門檻，就中止\n並回新的提案要人重看——不照著過期的提案做。",
+        "operationId": "change_route_exec_api_command__sysid__mission_change_route_post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "sysid",
+            "required": true,
+            "schema": {
+              "title": "Sysid",
+              "type": "integer"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ChangeRouteIn"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Change Route Exec"
+      }
+    },
+    "/api/command/{sysid}/mission/change-route/proposal": {
+      "post": {
+        "description": "**飛行中改航線的第一步：提案。這個端點不動飛機。**\n\n回傳「會怎麼調整」——狀態機文件 §6.3 要求確認畫面不得只問「確定嗎？」，\n因為那種確認框沒有資訊，人只會照按。所以這裡算得出：續飛到哪一點、\n離現在多遠、往哪個方向、會不會先爬升或下降、以及這是可中止的三步序列。\n\n**在地上不需要走這條路**：地面上傳是存檔，直接用 mission/upload。\n確認要保持稀有才有意義——每次上傳都跳確認框，會訓練人閉著眼睛按，\n然後空中那次也照按（§6.3 明文禁止把它做成 upload 的預設行為）。",
+        "operationId": "change_route_proposal_api_command__sysid__mission_change_route_proposal_post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "sysid",
+            "required": true,
+            "schema": {
+              "title": "Sysid",
+              "type": "integer"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ChangeRouteIn"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Change Route Proposal"
+      }
+    },
+    "/api/command/{sysid}/mission/fly": {
+      "post": {
+        "description": "起飛→任務自動序列（實戰教訓 2026-08-11：地面直接 MISSION_START\n在實機上會失敗，須先到高度）：\n\n  （上傳＋回讀比對）→ 解鎖 → NAV_TAKEOFF → **等實際到達目標高度**\n  → 切 AUTO.MISSION（已在空中，PX4 跳過任務內的 takeoff 項續飛）\n\n高度沒到就不切任務——序列在任何一步失敗都停在安全狀態\n（PX4 起飛後自動懸停），並回報卡在哪一步。",
+        "operationId": "mission_fly_api_command__sysid__mission_fly_post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "sysid",
+            "required": true,
+            "schema": {
+              "title": "Sysid",
+              "type": "integer"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/FlyIn"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Mission Fly",
+        "tags": [
+          "一鍵"
+        ]
+      }
+    },
+    "/api/command/{sysid}/mission/goto": {
+      "post": {
+        "description": "從指定的航點續飛（issues/039 的「續飛」）。\n\n參數是**我方索引**而不是機端 seq：機端 seq 的慣例因廠牌而異\n（ArduPilot 的 home 佔 0），讓呼叫端算＝把方言洩漏到每一個呼叫點。",
+        "operationId": "mission_goto_api_command__sysid__mission_goto_post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "sysid",
+            "required": true,
+            "schema": {
+              "title": "Sysid",
+              "type": "integer"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/GotoIn"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Mission Goto"
+      }
+    },
+    "/api/command/{sysid}/mission/start": {
+      "post": {
+        "description": "讓飛控開始執行**它機上現有**的那份任務（不帶任務內容——那是上一步的事）。\n\n**機必須已經解鎖並在空中**：對停在地面的機切自動任務模式，等於叫它自己起飛。\n要從地面一路到飛，用 `/api/command/{sysid}/mission/fly` 或 `/api/start`。",
+        "operationId": "mission_start_api_command__sysid__mission_start_post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "sysid",
+            "required": true,
+            "schema": {
+              "title": "Sysid",
+              "type": "integer"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "③ 開始執行機上的任務",
+        "tags": [
+          "任務"
+        ]
+      }
+    },
+    "/api/command/{sysid}/mission/upload": {
+      "post": {
+        "description": "把任務庫的一份航線寫進飛控，**並逐項讀回比對**——ACK 是「我收到了」，\n不是「我做到了」。\n\n⚠ **上傳在地面是存檔，在空中是立即生效的航線變更**：飛控收到新任務的那一刻\n就會照它飛。飛行中要換航線請走 `change-route`（暫停→上傳→從最近的航點續飛，\n每步讀回確認），不要直接呼叫本端點。",
+        "operationId": "mission_upload_api_command__sysid__mission_upload_post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "sysid",
+            "required": true,
+            "schema": {
+              "title": "Sysid",
+              "type": "integer"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/UploadIn"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "② 上傳任務到無人機（會逐項讀回比對）",
+        "tags": [
+          "任務"
+        ]
+      }
+    },
+    "/api/command/{sysid}/mode/{mode}": {
+      "post": {
+        "operationId": "set_mode_api_command__sysid__mode__mode__post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "sysid",
+            "required": true,
+            "schema": {
+              "title": "Sysid",
+              "type": "integer"
+            }
+          },
+          {
+            "in": "path",
+            "name": "mode",
+            "required": true,
+            "schema": {
+              "title": "Mode",
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "skip_guard",
+            "required": false,
+            "schema": {
+              "default": false,
+              "title": "Skip Guard",
+              "type": "boolean"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Set Mode",
+        "tags": [
+          "操作"
+        ]
+      }
+    },
+    "/api/command/{sysid}/takeoff": {
+      "post": {
+        "description": "監督式起飛：解鎖＋爬升到指定高度後自動懸停（PX4 自主執行）。\n取代「用 RC 手動飛到高度」的操作——連續操縱仍是 RC 的職權。",
+        "operationId": "takeoff_api_command__sysid__takeoff_post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "sysid",
+            "required": true,
+            "schema": {
+              "title": "Sysid",
+              "type": "integer"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/TakeoffIn"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Takeoff",
+        "tags": [
+          "操作"
+        ]
+      }
+    },
+    "/api/missions": {
+      "get": {
+        "description": "任務庫總表。**唯讀、不吃 `ENABLE_COMMANDS`**——只是看有哪些航線，\n不動飛機，所以指令能力關著也查得到。\n\n回傳的 `id` 與 `name` 都可以餵給下一步（上傳）與 `/api/start`。\n`waypoint_count` 含無座標項（RTL 之類），`nav_count` 只算導航航點。",
+        "operationId": "ext_list_missions_api_missions_get",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            },
+            "description": "Successful Response"
+          }
+        },
+        "summary": "① 選任務：列出任務庫",
+        "tags": [
+          "任務"
+        ]
+      }
+    },
+    "/api/missions/{ref}": {
+      "get": {
+        "description": "外部：單一航線內容（保真航點）＋幾何預檢。ref＝id 或名稱。",
+        "operationId": "ext_get_mission_api_missions__ref__get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "ref",
+            "required": true,
+            "schema": {
+              "title": "Ref",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Ext Get Mission"
+      }
+    },
+    "/api/plans": {
+      "get": {
+        "description": "外部：missions/ 目錄的 .plan 檔一覽（含解析失敗的，帶 error）。",
+        "operationId": "ext_list_plans_api_plans_get",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            },
+            "description": "Successful Response"
+          }
+        },
+        "summary": "Ext List Plans"
+      }
+    },
+    "/api/plans/{name}": {
+      "get": {
+        "description": "外部：單一 .plan——預設回解析航點＋預檢；raw=true 回 QGC 原始 JSON。",
+        "operationId": "ext_get_plan_api_plans__name__get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "name",
+            "required": true,
+            "schema": {
+              "title": "Name",
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "raw",
+            "required": false,
+            "schema": {
+              "default": false,
+              "title": "Raw",
+              "type": "boolean"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Ext Get Plan"
+      }
+    },
+    "/api/start": {
+      "post": {
+        "description": "**一鍵起飛**：取航線（任務庫 id/名稱 或 .plan 檔）→ 幾何預檢 → 委派 mission/fly\n（上傳回讀→arm→起飛→到高度→AUTO.MISSION）。航線來源二選一：\n  {\"mission\": \"<id 或名稱>\"}   任務庫（主要）\n  {\"plan\": \"xxx.plan\"}         missions/ 目錄（會先入庫再飛）\n失敗帶 mission/fly 的 step 與 PX4 原因。成功回 {source, mission_id, name, sysid, ok, steps}。",
+        "operationId": "start_api_start_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/StartIn"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "一鍵：上傳→解鎖→起飛→切任務",
+        "tags": [
+          "一鍵"
+        ]
+      }
+    },
+    "/healthz": {
+      "get": {
+        "description": "服務與各機連線狀態。**`ok` 講的是「還能不能指揮飛機」**，不是\n「HTTP 層還活著」——issue 034：2026-08-11 router 執行緒被網路瞬斷殺死後，\n心跳停發、指令全逾時，而這裡照回 `{\"ok\": true}`，於是沒有任何人與腳本\n看得出異常，拖了近一小時才發現。失效不得冒充合法狀態（ui-spec §0.2e）。\n\n**2026-08-31 語意變窄了**：GCS 心跳已搬到獨立行程（issues/033 §4.2.1），\n所以 router 卡住**不再等於心跳停發**。`ok` 仍然是 false（指令送不出去仍然\n是「指不動飛機」），但下面的 detail 不能再說「GCS 心跳已停發」——\n那句話現在是假的，而**一句假的診斷會把人帶去查錯的地方**。",
+        "operationId": "healthz_healthz_get",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            },
+            "description": "Successful Response"
+          }
+        },
+        "summary": "Healthz",
+        "tags": [
+          "健康"
+        ]
+      }
+    }
+  },
+  "tags": [
+    {
+      "description": "**外部呼叫端只需要這三個**：選任務 → 上傳到無人機 → 開始執行。\n\n每一步都會先過三道門，被擋下時回的是 4xx 與**說得出下一步的理由**：\n1. **入列**（403 `not_admitted`）——這台機是不是我們的。沒有機上代理的機**看得到但指不動**。\n2. **能力**（501）——這個廠牌的這個動作驗過了沒。\n3. **機上守門**（409 `guard_refused`）——當下這個狀態允不允許。理由一定說得出「那現在能做什麼」。",
+      "name": "任務"
+    },
+    {
+      "description": "把三步併成一次呼叫（上傳→解鎖→起飛→切任務），每步讀回確認。**適合自動化流程**；互動操作建議走三步，因為中途出錯時看得出停在哪一步。",
+      "name": "一鍵"
+    },
+    {
+      "description": "解鎖／模式／起飛等操作層動作。",
+      "name": "操作"
+    },
+    {
+      "description": "編隊執行。",
+      "name": "群組"
+    },
+    {
+      "description": "服務與各機連線狀態。",
+      "name": "健康"
+    }
+  ]
+}

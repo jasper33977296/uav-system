@@ -195,7 +195,32 @@ async def lifespan(app):
     await pool.close()
 
 
-app = FastAPI(title="UAV Command Service", lifespan=lifespan)
+#: OpenAPI 的分組。**只有三個標籤**是給外部呼叫端看的（`任務`），其餘是
+#: 內部操作面——分開是為了讓「外面該用哪些」一眼看得出來，而不是把 20 個
+#: 端點倒給對方自己挑
+TAGS = [
+    {"name": "任務", "description":
+        "**外部呼叫端只需要這三個**：選任務 → 上傳到無人機 → 開始執行。\n\n"
+        "每一步都會先過三道門，被擋下時回的是 4xx 與**說得出下一步的理由**：\n"
+        "1. **入列**（403 `not_admitted`）——這台機是不是我們的。"
+        "沒有機上代理的機**看得到但指不動**。\n"
+        "2. **能力**（501）——這個廠牌的這個動作驗過了沒。\n"
+        "3. **機上守門**（409 `guard_refused`）——當下這個狀態允不允許。"
+        "理由一定說得出「那現在能做什麼」。"},
+    {"name": "一鍵", "description":
+        "把三步併成一次呼叫（上傳→解鎖→起飛→切任務），每步讀回確認。"
+        "**適合自動化流程**；互動操作建議走三步，因為中途出錯時看得出停在哪一步。"},
+    {"name": "操作", "description": "解鎖／模式／起飛等操作層動作。"},
+    {"name": "群組", "description": "編隊執行。"},
+    {"name": "健康", "description": "服務與各機連線狀態。"},
+]
+
+app = FastAPI(
+    title="UAV Command Service",
+    description=(
+        "無人機指令服務。**外部整合請看「任務」那一組的三個端點。**\n\n"
+        "> 匯出 OpenAPI：`python3 scripts/export-openapi.py`"),
+    openapi_tags=TAGS, lifespan=lifespan)
 app.add_middleware(CORSMiddleware, allow_origins=["*"],
                    allow_methods=["*"], allow_headers=["*"])
 
@@ -207,7 +232,7 @@ async def _capture_client(request, call_next):
     return await call_next(request)
 
 
-@app.get("/healthz")
+@app.get("/healthz", tags=["健康"])
 async def healthz():
     """服務與各機連線狀態。**`ok` 講的是「還能不能指揮飛機」**，不是
     「HTTP 層還活著」——issue 034：2026-08-11 router 執行緒被網路瞬斷殺死後，
@@ -277,7 +302,7 @@ def _guard_bare_arm(sysid: int) -> None:
     })
 
 
-@app.post("/api/command/{sysid}/arm")
+@app.post("/api/command/{sysid}/arm", tags=["操作"])
 async def arm(sysid: int, intent: str | None = None):
     _require_enabled(); await _require_capability(sysid, "arm")
     if intent != "start_mission":
@@ -289,7 +314,7 @@ async def arm(sysid: int, intent: str | None = None):
     return await _run(sysid, "arm", mav.job_command, 400, [1.0])
 
 
-@app.post("/api/command/{sysid}/disarm")
+@app.post("/api/command/{sysid}/disarm", tags=["操作"])
 async def disarm(sysid: int):
     _require_enabled(); await _require_capability(sysid, "disarm")
     # **空中上鎖＝馬達停轉、飛機直接掉下來**——那不是「停止」，是墜毀。
@@ -299,7 +324,7 @@ async def disarm(sysid: int):
     return await _run(sysid, "disarm", mav.job_command, 400, [0.0])
 
 
-@app.post("/api/command/{sysid}/mode/{mode}")
+@app.post("/api/command/{sysid}/mode/{mode}", tags=["操作"])
 async def set_mode(sysid: int, mode: str, skip_guard: bool = False):
     if mode not in mav.PX4_MODES:
         raise HTTPException(422, f"mode 須為 {sorted(mav.PX4_MODES)}")
@@ -311,8 +336,14 @@ async def set_mode(sysid: int, mode: str, skip_guard: bool = False):
     return await _run(sysid, f"mode:{mode}", mav.job_set_mode, mode)
 
 
-@app.post("/api/command/{sysid}/mission/start")
+@app.post("/api/command/{sysid}/mission/start", tags=["任務"],
+          summary="③ 開始執行機上的任務")
 async def mission_start(sysid: int):
+    """讓飛控開始執行**它機上現有**的那份任務（不帶任務內容——那是上一步的事）。
+
+    **機必須已經解鎖並在空中**：對停在地面的機切自動任務模式，等於叫它自己起飛。
+    要從地面一路到飛，用 `/api/command/{sysid}/mission/fly` 或 `/api/start`。
+    """
     _require_enabled(); await _require_capability(sysid, "mission_start")
     await guard_client.ask_guard(sysid, "mission_start")
     res = await _run(sysid, "mission_start", mav.job_command, 300, [0.0])
@@ -368,7 +399,7 @@ class UploadIn(BaseModel):
     mission_id: str
 
 
-@app.post("/api/command/{sysid}/takeoff")
+@app.post("/api/command/{sysid}/takeoff", tags=["操作"])
 async def takeoff(sysid: int, body: TakeoffIn):
     """監督式起飛：解鎖＋爬升到指定高度後自動懸停（PX4 自主執行）。
     取代「用 RC 手動飛到高度」的操作——連續操縱仍是 RC 的職權。"""
@@ -382,7 +413,7 @@ class FlyIn(BaseModel):
     alt_timeout_s: float = 60.0
 
 
-@app.post("/api/command/{sysid}/mission/fly")
+@app.post("/api/command/{sysid}/mission/fly", tags=["一鍵"])
 async def mission_fly(sysid: int, body: FlyIn):
     """起飛→任務自動序列（實戰教訓 2026-08-11：地面直接 MISSION_START
     在實機上會失敗，須先到高度）：
@@ -688,8 +719,16 @@ async def change_route_exec(sysid: int, body: ChangeRouteIn):
     return {"ok": True, "steps": steps, "proposal": fresh}
 
 
-@app.post("/api/command/{sysid}/mission/upload")
+@app.post("/api/command/{sysid}/mission/upload", tags=["任務"],
+          summary="② 上傳任務到無人機（會逐項讀回比對）")
 async def mission_upload(sysid: int, body: UploadIn):
+    """把任務庫的一份航線寫進飛控，**並逐項讀回比對**——ACK 是「我收到了」，
+    不是「我做到了」。
+
+    ⚠ **上傳在地面是存檔，在空中是立即生效的航線變更**：飛控收到新任務的那一刻
+    就會照它飛。飛行中要換航線請走 `change-route`（暫停→上傳→從最近的航點續飛，
+    每步讀回確認），不要直接呼叫本端點。
+    """
     _require_enabled(); await _require_capability(sysid, "mission_upload")
     rows = await pool.fetch(
         "SELECT seq, lat, lon, alt, action, params FROM waypoints "
@@ -914,9 +953,14 @@ async def _store_plan(name: str, wps: list[dict],
     return str(row["id"])
 
 
-@app.get("/api/missions")
+@app.get("/api/missions", tags=["任務"], summary="① 選任務：列出任務庫")
 async def ext_list_missions():
-    """外部：任務庫總表（唯讀、不吃 ENABLE_COMMANDS）。name/id 都可餵給 /api/start。"""
+    """任務庫總表。**唯讀、不吃 `ENABLE_COMMANDS`**——只是看有哪些航線，
+    不動飛機，所以指令能力關著也查得到。
+
+    回傳的 `id` 與 `name` 都可以餵給下一步（上傳）與 `/api/start`。
+    `waypoint_count` 含無座標項（RTL 之類），`nav_count` 只算導航航點。
+    """
     rows = await pool.fetch("""
         SELECT m.id::text AS id, m.name, m.created_by AS source, m.created_at,
                m.is_active, count(w.seq) AS waypoint_count,
@@ -961,7 +1005,7 @@ class StartIn(BaseModel):
     takeoff_alt: float = 10.0        # 起飛相對高度（現版先起飛才切任務）
 
 
-@app.post("/api/start")
+@app.post("/api/start", tags=["一鍵"], summary="一鍵：上傳→解鎖→起飛→切任務")
 async def start(body: StartIn):
     """**一鍵起飛**：取航線（任務庫 id/名稱 或 .plan 檔）→ 幾何預檢 → 委派 mission/fly
     （上傳回讀→arm→起飛→到高度→AUTO.MISSION）。航線來源二選一：

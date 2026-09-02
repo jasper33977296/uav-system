@@ -51,7 +51,7 @@
 | [016](016-rb5-platform-connectivity.md) | RB5 平台連線層：三條病因全是 RB5 專屬，而現役是 Pi 5＋ArduPilot——**前提已不成立**；部署文件已改寫（含重啟觸發條件）| high | deferred | `doc/deployment.md` 附錄 A |
 | [017](017-live-3d-visual-quality.md) | 即時頁 3D 品質：P1 join／P2 deck.gl／P3 底圖＋圖示全數收官（3D 機模另案）| medium | **closed** | `apps/frontend/lib/geo.ts` |
 | [018](018-event-detail-plain-language.md) | 事件 detail 人話化＋新增 serving cell 變更事件 | low | open | 前端事件流＋backend 事件結構 |
-| [019](019-agent-mcp-interface.md) | MCP agent 介面：任務層工具＋因果鏈紀錄＋分析 API（終局目標定案）| medium | open | `doc/agent-mcp-goals.md` |
+| [019](019-agent-mcp-interface.md) | MCP agent 介面：**MCP 先不做**（2026-09-02），改提供三個任務層 API＋OpenAPI（已交付）；因果鏈與分析 API 仍 open | medium | open | `doc/mission-api.md`＋`doc/agent-mcp-goals.md` |
 | [020](020-session-mission-association-broken.md) | 架次未綁任務：新飛資料比較頁用不了 ✔回填驗證 | high | **closed** | `db.py:create_session` |
 | [021](021-vehicle-data-suite.md) | 機上資料：QGC 式全量即時資訊（Inspector/參數快照/ulog 回收，分四期）| medium | open | `issues/021` PM scope 定案 |
 | [022](022-flight-video.md) | 飛行影像：即時畫面＋架次錄影 mp4＋回放同步播放（地面錄製定案）| medium | open | `issues/022` |
