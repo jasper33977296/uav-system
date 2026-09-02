@@ -105,6 +105,10 @@ class AgentHello(BaseModel):
     fw: str | None = None                # 已解碼的韌體版本
     vehicle_type: int | None = None      # MAV_TYPE
     agent_version: str | None = None
+    #: 這台機**現在**用的 sysid（040 A1）。**與配號是兩件事**：這是觀察，
+    #: 回應裡的 `assigned_sysid` 才是決定。舊代理不送＝None，此時只能配號
+    #: 給它、無法判斷「它跑錯號碼了」
+    sysid: int | None = None
 
 
 @router.post("/agent/hello")
@@ -134,7 +138,44 @@ async def agent_hello(h: AgentHello):
         await manager.broadcast({"type": "event", "event": ev})
         log.info("代理自動註冊：%s（board_uid=%s agent_uid=%s）",
                  name, uid, h.agent_uid)
-    return {"drone_id": drone_id, "name": name, "created": created}
+    # ── 040 A1：配號（本階段只回答，不執法、不下發）─────────────────
+    # **識別的唯一鍵值是板號**，sysid 只是地址——所以撞號不是「要隔離誰」的
+    # 兩難，是換一個號碼。這裡把答案算出來回給代理；要不要照做、怎麼落到飛控，
+    # 是 A3。A2 之前拿到 `change` 只用於顯示與留痕。
+    assign = None
+    try:
+        assign = await db.allocate_sysid(uid, h.sysid)
+        if assign["sysid"] is not None:
+            # **`keep` 與 `change` 都要登錄。** 一度只在 keep 時寫，理由是
+            # 「機端還沒改過來，登錄與實況會對不上」——但實測立刻打臉：兩塊
+            # 板子先後連上、都被告知「改用 2」，因為第一次的 change 沒有登錄，
+            # 2 仍然是空的。**配號不登錄就不是配號，只是建議。**
+            #
+            # 而「登錄與實況對不上」根本不是問題，是**設計**：`assigned_sysid`
+            # 是我們的決定、`mav_sysid` 是觀察到的事實，**兩欄分開的全部理由
+            # 就是讓它們能夠不一致**——那個不一致正是「它還沒改過來」。
+            await db.record_assignment(uid, assign["sysid"], drone_id)
+        if assign["action"] == "change":
+            log.warning("配號不符：%s（board_uid=%s）→ %s",
+                        assign["reason"], uid, assign["sysid"])
+            ev = await db.insert_event(
+                drone_id, None, "warn", "sysid_reassign_needed",
+                {"board_uid": uid, "claimed": h.sysid,
+                 "assigned": assign["sysid"], "reason": assign["reason"],
+                 "note": "本階段只通知不下發——改號要重開飛控，屬 issues/040 A3"})
+            ev["drone"] = name
+            await manager.broadcast({"type": "event", "event": ev})
+    except Exception:
+        # **配號失敗不擋註冊**：註冊本身是身分的地基，讓它因為配號出錯而失敗，
+        # 等於為了修好號碼把整台機擋在門外
+        log.exception("配號失敗（不影響註冊）board_uid=%s", uid)
+
+    out = {"drone_id": drone_id, "name": name, "created": created}
+    if assign:
+        out["assigned_sysid"] = assign["sysid"]
+        out["sysid_action"] = assign["action"]      # keep / change
+        out["sysid_reason"] = assign["reason"]
+    return out
 
 
 class GuardIn(BaseModel):
