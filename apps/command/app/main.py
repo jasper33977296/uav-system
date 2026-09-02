@@ -99,6 +99,29 @@ async def _audit(sysid: int, action: str, params, result: str, detail: str = "")
         _client_var.get())
 
 
+async def _refused(sysid: int, action: str, gate: str, reason: str, extra=None):
+    """**我們自己擋下的**要留痕，然後才丟出去。
+
+    2026-09-02 使用者問「為什麼系統一直不讓我操作」，而我答不出來——
+    因為三道門（入列 403／能力 501／機上守門 409）**在寫紀錄之前就 raise 了**，
+    一次都沒有進 `command_log`。
+
+    同一天的八小時裡：**飛控擋了 1395 次，每一次都有紀錄；我們系統擋了 N 次，
+    一次都沒有。** 那正好是反的——自己家的門不記帳，別人家的門記得清清楚楚。
+
+    `result='refused'` 與既有三種分得開：
+      * `failed`   飛控收到了但拒絕（帶 MAV_RESULT）
+      * `error`    例外／逾時（送不到）
+      * `rejected` 送到了、做了，但讀回比對不過
+      * `refused`  **我們沒有送出去**——被自己的門擋下
+    """
+    try:
+        await _audit(sysid, action, {"gate": gate, **(extra or {})},
+                     "refused", f"{gate}：{reason}")
+    except Exception:
+        log.exception("擋下的留痕寫入失敗（不影響擋下本身）")
+
+
 def _require_enabled():
     if not settings.enable_commands:
         raise HTTPException(403, "指令能力未啟用（ENABLE_COMMANDS=false，預設關閉）"
@@ -116,6 +139,9 @@ async def _require_capability(sysid: int, endpoint_key: str):
     # 比「這台機做不做得到」更根本——對一台身分不明的機談能力沒有意義。
     info = await admission.state_of(sysid)
     if info.get("state") not in admission.COMMANDABLE:
+        await _refused(sysid, endpoint_key, "入列", admission.why_blocked(info),
+                       {"admission": info.get("state"),
+                        "stale": info.get("stale", False)})
         raise HTTPException(403, {
             "msg": admission.why_blocked(info),
             "code": "not_admitted", "admission": info.get("state"),
@@ -129,6 +155,9 @@ async def _require_capability(sysid: int, endpoint_key: str):
     cap, reasons = mav.caps.capabilities_for(ap, (router.drones.get(sysid) or {}))
     state = cap.get(cap_key, "unsupported")
     if state != "ok":
+        await _refused(sysid, endpoint_key, "能力",
+                       f"{cap_key} 目前是 {state}：{reasons.get(cap_key, '')}",
+                       {"autopilot": ap, "capability": cap_key, "state": state})
         raise HTTPException(501, {
             "msg": f"{cap_key} 目前不可用（{state}）",
             "hint": reasons.get(cap_key, ""),   # 前端 msg＋hint 解析直接顯示

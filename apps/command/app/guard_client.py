@@ -85,6 +85,15 @@ async def ask_guard(sysid: int, action: str, intent_id: str | None = None,
     v = res.get("verdict")
     if v in ("cleared", "no_agent", None):
         return res
+    # **守門擋下的也要留痕。** 這是三道門裡最有資訊量的一道——它知道
+    # 當下的飛行狀態，而那正是「為什麼現在不能做」的答案（見 main._refused）
+    from .main import _refused
+    # `refused` 那一格不重複講「refused」——判決值本身就是那個字
+    await _refused(sysid, action, "機上守門",
+                   (res.get("reason") or v) if v == "refused"
+                   else f"{v}：{res.get('reason') or ''}",
+                   {"intent": intent, "state": res.get("state"),
+                    "intent_id": res.get("intent_id")})
     if v == "queued":
         raise HTTPException(409, {
             "msg": res.get("reason") or "這台機失聯中，操作已記下、尚未送出",

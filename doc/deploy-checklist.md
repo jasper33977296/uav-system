@@ -125,6 +125,21 @@
       GCS 心跳已從 command 服務搬出。**它沒起來的話飛控會在 `FS_GCS_TIMEOUT`
       之後判定 GCS 失聯，而 command 的 `/healthz` 仍然顯示一切正常**
 
+## 2c. 「為什麼不能操作」查得到嗎
+
+- [ ] **系統擋下的也要留痕**：`command_log` 的 `result='refused'`。
+      三道門（入列 403／能力 501／機上守門 409）各自留一筆，`detail` 帶著
+      是哪一道門與完整理由。
+      ```sql
+      SELECT time, sysid, action, detail FROM command_log
+      WHERE result = 'refused' ORDER BY time DESC LIMIT 20;
+      ```
+      > **2026-09-02 之前這三道門一次都沒有留痕**（在寫紀錄之前就 raise 了）。
+      > 同一天八小時內：飛控擋了 1395 次、每次都有紀錄；我們系統擋了 N 次、
+      > 一次都沒有——**自己家的門不記帳，別人家的門記得清清楚楚**。
+- [ ] `result` 的四種分得開：`refused`（我們沒送出去）／`failed`（飛控拒絕）／
+      `error`（送不到／例外）／`rejected`（做了但讀回不符）
+
 ## 3b. RB5（備查，已非現役）
 
 > 2026-09-02 從 §3 移到這裡。RB5 不是現役平台，但下面是**實測過的坑**——
