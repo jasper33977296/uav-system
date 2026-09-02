@@ -1,6 +1,6 @@
 # 地面站部署前檢查清單（現場照著走）
 
-> 用途：把系統從開發（SITL）搬到地面站接真機（RB5）之前／到現場後，**逐項打勾**。
+> 用途：把系統從開發（SITL）搬到地面站接真機之前／到現場後，**逐項打勾**。
 > 每步附指令與預期結果。卡住看 §6 故障排除。完整背景見 `doc/deployment.md`。
 > 埠約定：**14540＝資料唯讀通道（backend）／14541＝指令雙向通道（command）**／
 > 14550＝QGC。API：backend 38000、command 38001、前端 33000。
@@ -74,7 +74,41 @@
 - [ ] command 健康：`curl http://localhost:38001/healthz` → 200、`drones` 空（未接機）
 - [ ] 前端可開：瀏覽器 `http://<地面站IP>:33000`
 
-## 3. 機上設定（每一台 RB5，逐台做）
+## 3. 機上設定（每一台，逐台做）
+
+> **2026-09-02 改寫**：本節原本寫的是 RB5（voxl-mavlink-server、
+> `configure-mavlink.sh`、獨立的 5G 量測節點）。**現役機上平台是
+> Raspberry Pi 5 ＋ ArduPilot 飛控 ＋ uav-agent**，那些步驟不適用。
+> 舊版移到 [§3b](#3b-rb5-備查已非現役)，沒有刪除。
+
+- [ ] **飛控接線**：UART → Pi 的 GPIO14/15，**57600**。Pi 這側的序列埠 console
+      要關掉，否則系統會跟飛控搶那條線
+- [ ] **飛控參數**逐項核定並填表：見 `verification-checklist.md`。
+      **兩項與本系統直接相關**：
+      | 參數 | 值 | 現值 |
+      |---|---|---|
+      | `SYSID_MYGCS` | **255**（＝ArduPilot 出廠預設，正常不用動）| |
+      | `FS_GCS_ENABLE` / `FS_GCS_TIMEOUT` | **1 / 45** | |
+      > 勾的是**關係成立**：45 必須 > 代理的 `LINK_LOSS_MAX_SOLO_S`（30s），
+      > 否則飛控會搶在代理的分狀態處置之前動作。代理開機會自己比對並在
+      > 不成立時大聲說——**現場看 `journalctl -u uav-agent` 有沒有那行警告**
+- [ ] **飛控拿得出板號**：`AUTOPILOT_VERSION.uid2` 不是全 0。
+      **沒有板號就沒有身分，也就不可被指揮**（issues/040）
+- [ ] **裝 uav-agent 並設為開機自啟**：`systemctl enable --now uav-agent`。
+      **本系統只指揮有代理的機**——沒裝＝看得到、指不動
+- [ ] **代理的 `.env`**：`GS_HOST`（地面站固定 IP）、`FC_DEV`／`FC_BAUD`、
+      `MODEM_PORT`（5G 模組 AT 埠）。**5G 量測已併進代理**，不必再裝一個節點
+- [ ] **sysid 不用手動配**：由地面站配號，代理收到 `change` 會自己
+      `PARAM_SET MAV_SYS_ID` ＋ 重開飛控（**只在地面、只試一次**）。
+      現場只要確認最後 `curl :38000/api/admission/<sysid>` 回 **`admitted`**
+- [ ] **`uav-heartbeat` 容器有在跑**（`docker compose ps uav-heartbeat`）：
+      GCS 心跳已從 command 服務搬出。**它沒起來的話飛控會在 `FS_GCS_TIMEOUT`
+      之後判定 GCS 失聯，而 command 的 `/healthz` 仍然顯示一切正常**
+
+## 3b. RB5（備查，已非現役）
+
+> 2026-09-02 從 §3 移到這裡。RB5 不是現役平台，但下面是**實測過的坑**——
+> 若日後回頭用它，這些仍然成立。
 
 背景與病因見 `issues/016-rb5-platform-connectivity.md`、範本在 `onboard/rb5-setup/`。
 

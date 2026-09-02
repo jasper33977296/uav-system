@@ -48,7 +48,7 @@
 | [013](013-group-missions.md) | 群組任務：V1 全案收官（skew/RTL 實測）；V2/V3 自動指派歸 019 目標層 | medium | **closed** | `doc/gcs-replacement.md` §3 |
 | [014](014-two-tier-collection.md) | 兩層收集：機上傳出資訊全數收集（原始層已實作）| medium | in-progress | `apps/backend/app/capture.py` |
 | [015](015-multi-autopilot-support.md) | 跨自駕儀支援：硬編碼 PX4 方言，非 PX4 機不可控（部分指令有飛安風險）| high | open | `reference/gap-analysis.md` |
-| [016](016-rb5-platform-connectivity.md) | RB5 平台連線層：廣播 :14550／埠寫死／sysid bug，兩通道設計不會自動成立 | high | open | `reference/gap-analysis.md` §0 |
+| [016](016-rb5-platform-connectivity.md) | RB5 平台連線層：三條病因全是 RB5 專屬，而現役是 Pi 5＋ArduPilot——**前提已不成立**；部署文件已改寫（含重啟觸發條件）| high | deferred | `doc/deployment.md` 附錄 A |
 | [017](017-live-3d-visual-quality.md) | 即時頁 3D 品質：P1 join／P2 deck.gl／P3 底圖＋圖示全數收官（3D 機模另案）| medium | **closed** | `apps/frontend/lib/geo.ts` |
 | [018](018-event-detail-plain-language.md) | 事件 detail 人話化＋新增 serving cell 變更事件 | low | open | 前端事件流＋backend 事件結構 |
 | [019](019-agent-mcp-interface.md) | MCP agent 介面：任務層工具＋因果鏈紀錄＋分析 API（終局目標定案）| medium | open | `doc/agent-mcp-goals.md` |

@@ -1,22 +1,48 @@
 # 部署文件：地面站安裝與完整設定
 
-本文是**真機部署**（RB5 無人機 ＋ 地面站）的完整操作手冊，含所有設定項。
+本文是**真機部署**（伴飛電腦 ＋ 飛控 ＋ 地面站）的完整操作手冊，含所有設定項。
 模擬環境（SITL 開發）見文末附錄。設計依據：
 [onboard-telemetry.md](onboard-telemetry.md)（部署拓撲）、
 [architecture.md](architecture.md)（系統定位）。
 
+> ## ⚠️ 2026-09-02 改寫：本文原本寫的是 **RB5 平台**，那與現況不符
+>
+> 舊版的 §2 描述的是「RB5 跑 PX4、用 UDP 開多個 mavlink 實例、5G 量測由獨立的
+> `onboard/` node 負責」。**現役機上平台完全不是那個形狀**：
+>
+> | | 舊文件（RB5） | 現況 |
+> |---|---|---|
+> | 伴飛電腦 | Qualcomm RB5 | **Raspberry Pi 5** |
+> | 飛控 | PX4（機上同一塊板）| **ArduPilot 4.7**，獨立飛控板 |
+> | 飛控↔伴飛 | UDP（同機內） | **UART 57600（GPIO14/15）** |
+> | 對地通道 | PX4 開三個 mavlink 實例 | **uav-agent** 轉發 |
+> | 5G 量測 | 獨立的 `onboard/` node | **併進 uav-agent**（`modem.py`）|
+>
+> **照舊版做會做出一台不存在的機。** 這正是 [issues/016](../issues/016-rb5-platform-connectivity.md)
+> 記的那些 RB5 平台問題（廣播 14550、廣播不過 5G、voxl 的 sysid=1 bug）
+> **不再適用的原因——它們是 RB5 專屬的**。
+>
+> RB5 時代的內容移到 [附錄 A](#附錄-a-rb5-平台備查已非現役)，**沒有刪除**：
+> 若日後回頭用 RB5，那些實測過的坑仍然成立。
+
 ```
-  無人機（RB5：PX4 + ROS 2 + RM500Q-GL modem）
-  │ ① MAVLink/UDP  → 地面站:14550（QGC）＋ 地面站:14540（本系統，只讀）
-  │ ② HTTP over 5G → 地面站:38000 /api/link-metrics/live 與 /batch
-  ▼
-  地面站（Ubuntu + Docker：本系統四容器 ＋ QGC 桌面程式）
+  無人機
+  ├─ 飛控（ArduPilot 4.7）
+  │    ↕ UART 57600（GPIO14/15）
+  └─ 伴飛電腦（Raspberry Pi 5）跑 uav-agent
+       │ ① MAVLink/UDP  → 地面站:14540（遙測，唯讀）＋ :14541（指令，雙向）
+       │ ② WebSocket    → 地面站:38000 /ws/agent（意圖通道）
+       │ ③ HTTP over 5G → 地面站:38000 /api/link-metrics/live（5G 量測）
+       ▼
+  地面站（Ubuntu + Docker：本系統五容器）
 ```
 
-三條流全部由**機上主動外連**——SSH 只在安裝日用一次，運行期間零人為連線。
+全部由**機上主動外連**——SSH 只在安裝日用一次，運行期間零人為連線。
+（代理主動撥出是刻意的：換到電信商 APN 後飛機在 carrier NAT 後面，
+地面站連不進去；撥出在兩種拓撲都成立。）
 
 > 🚀 **到現場照著打勾的精簡版**見 [`deploy-checklist.md`](deploy-checklist.md)——env／埠、
-> 服務起法、每台 RB5 機上設定驗證、5G 可達性、首飛驗收順序（單機先→編隊後）、安全注意
+> 服務起法、每台機的機上設定驗證、5G 可達性、首飛驗收順序（單機先→編隊後）、安全注意
 > 事項。本文是完整手冊與背景；清單是現場操作面。
 
 ---
@@ -28,7 +54,8 @@
 | 地面站 | Ubuntu 22.04+，4 核 8GB RAM 起，磁碟 ≥ 100GB（原始資料 30 天約數 GB，餘量給匯出檔）|
 | 網路 | 地面站與無人機的 5G 網路互通（私有 5G 直達；公網電信見 §3.3）|
 | 地面站 IP | **必須固定**（DHCP 保留或靜態）——機上兩條流都寫死這個位址 |
-| 無人機 | RB5 平台，PX4 與 ROS 2 可開機自啟，modem 已能上網 |
+| 無人機 | 伴飛電腦（Raspberry Pi 5）＋ 飛控（ArduPilot 4.7，UART 相接）；modem 已能上網。**飛控必須拿得出 `AUTOPILOT_VERSION.uid2`**——沒有板號就沒有身分，也就不可被指揮（issues/040）|
+| 機上代理 | `uav-agent` 已安裝並設為開機自啟。**本系統只指揮有代理的機**（2026-09-02 裁定）|
 | 本文佔位符 | `<GS_IP>`＝地面站固定 IP（下文範例用 `192.168.55.10`）|
 
 ---
@@ -146,95 +173,80 @@ curl http://localhost:38000/healthz
 
 ---
 
-## 2. 機上（RB5）一次性安裝
+## 2. 機上一次性安裝（伴飛電腦 ＋ 飛控）
 
 > SSH 進機上只做這一節，做完之後運行期間不再需要任何人為連線。
-
-### 2.1 MAVLink 路由（流 ①）
-
-> **為什麼 QGC 連上了還不夠**：需求不是「QGC 能連」，是「同一條 MAVLink
-> 流要餵兩個消費者」——QGC（控制）與本系統 backend（14540，只讀記錄）。
 >
-> **快速路徑（不動機上）**：QGC 設定 → MAVLink → 啟用 Forwarding，
-> 目標 `localhost:14540`（QGC 與本系統同一台地面站）。立即可用，
-> 適合驗證期。代價：**記錄依賴 QGC 存活**——QGC 關閉或當掉，
-> 本系統即斷流停錄。
->
-> **正式部署（2026-08-10 定案：PX4 多實例，不裝 router）**：
-> RB5 上 PX4 走 UDP，原生就能開多個 mavlink 實例——通道固定為兩條
-> （資料/指令）時不需要額外路由軟體，符合原廠映像零改動原則。
+> **RB5 時代的做法見 [附錄 A](#附錄-a-rb5-平台備查已非現役)。**
 
-PX4 的 MAVLink 輸出共三個消費者（前兩條對地、第三條機內），
-在 PX4 啟動設定裡各開一個實例：
+### 2.1 接線與飛控參數
 
-```
-mavlink start -x -u <空埠1> -o 14540 -t <GS_IP>   -m onboard   # 資料（ingest，唯讀）
-mavlink start -x -u <空埠2> -o 14541 -t <GS_IP>   -m normal    # 指令（ENABLE_COMMANDS 時）
-mavlink start -x -u <空埠3> -o 14540 -t 127.0.0.1 -m onboard   # 機內：onboard node 綁座標用
-```
+飛控用 **UART 接到 Pi 的 GPIO14/15，57600**。Pi 這一側要先關掉序列埠的
+console，否則系統會跟飛控搶那條線。
 
-驗證：地面站 `curl :38000/healthz` 的 `mavlink_connected` 轉 `true`（資料）、
-`curl :38001/healthz` 的 `drones` 出現 sysid（指令）、
-`scripts/check-onboard.py` 第 4 項樣本帶座標（機內）。
+飛控參數逐項核定見 [`verification-checklist.md`](verification-checklist.md)，
+其中兩項與本系統直接相關、**現場一定要對**：
 
-> mavlink-router 何時才值得裝：PX4 走**串列埠**（單程序獨佔，必須有人
-> 分流）、消費者常變動、或需要動態 TCP 口讓 QGC 臨時接入。
-> 目前部署皆不適用；日後需要時把上述實例目標改回本機、由 router 分流即可。
+| 參數 | 值 | 為什麼 |
+|---|---|---|
+| `SYSID_MYGCS` | **255** | 飛控用它決定「誰的心跳算 GCS 心跳」，那是 `FS_GCS` 的判準。我方 GCS sysid 是 255（＝ArduPilot 出廠預設，所以正常不用動）|
+| `FS_GCS_ENABLE` / `FS_GCS_TIMEOUT` | **1 / 45** | 飛控的失聯處置當代理的**後備**。45 必須大於代理的 `LINK_LOSS_MAX_SOLO_S`（30s），否則飛控會搶在代理的分狀態處置之前動作（issues/039） |
 
-### 2.2 5G 量測 node（流 ②）
+> **勾的是「關係成立」不是那兩個數字**：`FS_GCS_TIMEOUT` 在飛控、
+> `LINK_LOSS_MAX_SOLO_S` 在代理——**分屬兩邊的關係正是最會漂移的那種**。
+> 代理開機時會自己讀回來比對並在不成立時大聲說。
 
-機上程式在主 repo 的 **`onboard/`**，並鏡像為獨立 repo 供機上 clone：
-`git@github.com:jasper33977296/uav-onboard.git`（主 repo 的 onboard/ 為
-單一事實來源，修正後同步過去）。安裝與設定見其 README。摘要：
+### 2.2 安裝 uav-agent
 
-- RF 指標：`AT+QENG="servingcell"`（SINR/RSRP/PCI），**第一步必為
-  `--probe`**——印出 modem 原始回應貼回校準解析，勿假設一次就對
-- 位置與時間：機上 PX4（MAVSDK 連 localhost）＋ GPS 時間，採樣當下綁定
-- RTT／丟包：`ping <GS_IP>` 實測
-- SQLite 緩衝先落盤再送、雙通道、斷點補傳（沿用已實測的原型邏輯）
+代理是**飛控與地面站之間的橋**，也是本系統的入列前提：**沒有代理的機只能看，
+不能指揮**（2026-09-02 裁定）。它同時承擔了舊架構裡 `onboard/` 那個 5G 量測
+node 的工作（`modem.py`），所以**不需要再另外裝一個量測程式**。
 
-設定項（環境變數）：
+安裝與設定見 uav-agent 的 README。與地面站有關的設定項：
 
 | 變數 | 範例 | 說明 |
 |---|---|---|
-| `GROUND_API` | `http://192.168.55.10:38000` | 地面站 API |
-| `SAMPLE_HZ` | `1.0` | 採樣頻率（AT 查詢延遲 100–500ms，1Hz 是務實上限）|
-| `BUFFER_PATH` | `/data/uav-link-buffer.sqlite3` | 持久緩衝（要落在斷電保留的分割區）|
+| `GS_HOST` | `10.141.2.21` | 地面站固定 IP。**三條流都寫死這個位址** |
+| `FC_DEV` / `FC_BAUD` | `/dev/ttyAMA0` / `57600` | 飛控的序列埠 |
+| `TELEMETRY_PORT` / `COMMAND_PORT` | `14540` / `14541` | 遙測（唯讀）／指令（雙向）|
+| `BACKEND_PORT` | `38000` | 5G 量測與註冊走的 HTTP |
+| `MODEM_PORT` | `/dev/ttyUSB2` | 5G 模組的 AT 埠 |
 
-systemd unit（`/etc/systemd/system/uav-link-node.service`）：
+systemd：`uav-agent.service`（repo 內附）。`systemctl enable --now uav-agent`。
 
-```ini
-[Unit]
-Description=UAV 5G link telemetry node
-After=network-online.target
+> **改代理的程式要重啟服務才生效**，而重啟會中斷意圖通道幾秒。
+> 機在地面且已上鎖時無害（失聯處置只在 armed 時介入）；**飛行中不要做**。
 
-[Service]
-ExecStart=/usr/bin/python3 /opt/uav-system/onboard_node.py
-Environment=GROUND_API=http://192.168.55.10:38000
-Restart=always
-RestartSec=5
+### 2.3 5G 量測（流 ③）
 
-[Install]
-WantedBy=multi-user.target
-```
+由代理的 `modem.py` 負責，不需要另外安裝。要點：
 
-```bash
-systemctl enable --now uav-link-node
-```
+- RF 指標走 `AT+QENG="servingcell"`（SINR/RSRP/PCI）。**第一次接一顆新模組時
+  先用 `tools/modem-probe.py` 印出原始回應**再校準解析——不要假設一次就對。
+- 位置與時間由代理從飛控遙測綁定（**沒有定位就不填位置**：`0,0` 是哨兵不是座標）。
+- 斷線期間的樣本**留在機上環形緩衝**，恢復後補傳（issues/039 C 層）。
 
-### 2.3 上機首驗（第一個里程碑）
+### 2.4 上機首驗（第一個里程碑）
 
-在已知干擾源附近做一次可控測試，確認 `AT+QENG` 的 **SINR 會隨干擾下降**
-——Quectel 論壇有 RM500Q SINR 回報異常的前例，不要假設數值正確。
-這一測同時驗證整條鏈路：modem → node → HTTP → DB → 前端。
+在已知干擾源附近做一次可控測試，確認 SINR 會隨干擾下降——Quectel 論壇有
+RM500Q SINR 回報異常的前例，**不要假設數值正確**。這一測同時驗證整條鏈路：
+modem → 代理 → HTTP → DB → 前端。
 
-### 2.4 即時影像（選配）
+同時要看到的三件事：
+
+1. `curl :38000/healthz` 的 `mavlink_connected` 轉 `true`
+2. `curl :38001/healthz` 的 `drones` 出現 sysid
+3. `curl :38000/api/admission/<sysid>` 回 **`admitted`**——**這一項是新的**：
+   板號、配號、代理連線三者相符才算數，前兩項通過但這項不過的話，
+   **看得到但指不動**（issues/040）
+
+### 2.5 即時影像（選配）
 
 前端地圖點擊機體會開啟即時畫面 modal，來源是每台機的影像串流位址
 （無人機頁 →「影像」設定，存在系統端，換瀏覽器不用重設）。
 
 瀏覽器不支援 RTSP，機上相機串流需先轉成瀏覽器吃的格式。建議機上跑
-[MediaMTX](https://github.com/bluenviron/mediamtx)（單一執行檔）把 RTSP 轉 WHEP（WebRTC，延遲最低，適合 FPV）：
+[MediaMTX](https://github.com/bluenviron/mediamtx)（單一執行檔）把 RTSP 轉 WHEP：
 
 ```bash
 # 機上：mediamtx.yml 指定 source: rtsp://<相機>，跑起來後
@@ -349,7 +361,10 @@ build；開發加 `docker-compose.dev.yml` 覆寫＝bind mount + 熱重載。
 前端程式碼變更後，部署環境要 `docker compose up -d --build` 重建映像
 （build 產物在映像內）；開發環境改檔即生效。
 
-## 接 ArduPilot 機的機端前提（與 RB5 兩 port 設定同一類）
+## 接 ArduPilot 機的機端前提
+
+> **標題原本是「與 RB5 兩 port 設定同一類」**（2026-09-02 拿掉）：ArduPilot
+> 現在是**主要平台**，不是需要對照 RB5 才說得清楚的特例。
 
 2026-08-12 以 ArduCopter SITL 實測（見 [issues/015](../issues/015-multi-autopilot-support.md)）。
 接 ArduPilot 機時**必須**先處理下面三件，否則會遇到「看起來連上了但不對勁」：
@@ -459,3 +474,117 @@ docker exec -w /srv uav-backend python3 -c "import os; print(os.environ.get('VID
 ```
 
 **驗收要看容器內的實際狀態，不要只看程式印出來的值**——預設值會假裝一切正常。
+
+---
+
+## 附錄 A：RB5 平台（備查，已非現役）
+
+> **2026-09-02 從本文 §2 移到這裡。** RB5 不是現役平台（見文首的對照表），
+> 但下面這些是**實測過的坑**——若日後回頭用 RB5，它們仍然成立，
+> 重新查一次要花的時間比留著這段多得多。
+>
+> 相關的平台層問題記在
+> [issues/016](../issues/016-rb5-platform-connectivity.md)：出廠廣播 `:14550`、
+> 廣播不過 5G 網段、voxl-mavlink-server < 1.4.12 把全部機重設為 sysid 1。
+
+### A.1 機上（RB5）一次性安裝
+
+> SSH 進機上只做這一節，做完之後運行期間不再需要任何人為連線。
+
+#### A.1.1 MAVLink 路由（流 ①）
+
+> **為什麼 QGC 連上了還不夠**：需求不是「QGC 能連」，是「同一條 MAVLink
+> 流要餵兩個消費者」——QGC（控制）與本系統 backend（14540，只讀記錄）。
+>
+> **快速路徑（不動機上）**：QGC 設定 → MAVLink → 啟用 Forwarding，
+> 目標 `localhost:14540`（QGC 與本系統同一台地面站）。立即可用，
+> 適合驗證期。代價：**記錄依賴 QGC 存活**——QGC 關閉或當掉，
+> 本系統即斷流停錄。
+>
+> **正式部署（2026-08-10 定案：PX4 多實例，不裝 router）**：
+> RB5 上 PX4 走 UDP，原生就能開多個 mavlink 實例——通道固定為兩條
+> （資料/指令）時不需要額外路由軟體，符合原廠映像零改動原則。
+
+PX4 的 MAVLink 輸出共三個消費者（前兩條對地、第三條機內），
+在 PX4 啟動設定裡各開一個實例：
+
+```
+mavlink start -x -u <空埠1> -o 14540 -t <GS_IP>   -m onboard   # 資料（ingest，唯讀）
+mavlink start -x -u <空埠2> -o 14541 -t <GS_IP>   -m normal    # 指令（ENABLE_COMMANDS 時）
+mavlink start -x -u <空埠3> -o 14540 -t 127.0.0.1 -m onboard   # 機內：onboard node 綁座標用
+```
+
+驗證：地面站 `curl :38000/healthz` 的 `mavlink_connected` 轉 `true`（資料）、
+`curl :38001/healthz` 的 `drones` 出現 sysid（指令）、
+`scripts/check-onboard.py` 第 4 項樣本帶座標（機內）。
+
+> mavlink-router 何時才值得裝：PX4 走**串列埠**（單程序獨佔，必須有人
+> 分流）、消費者常變動、或需要動態 TCP 口讓 QGC 臨時接入。
+> 目前部署皆不適用；日後需要時把上述實例目標改回本機、由 router 分流即可。
+
+#### A.1.2 5G 量測 node（流 ②）
+
+機上程式在主 repo 的 **`onboard/`**，並鏡像為獨立 repo 供機上 clone：
+`git@github.com:jasper33977296/uav-onboard.git`（主 repo 的 onboard/ 為
+單一事實來源，修正後同步過去）。安裝與設定見其 README。摘要：
+
+- RF 指標：`AT+QENG="servingcell"`（SINR/RSRP/PCI），**第一步必為
+  `--probe`**——印出 modem 原始回應貼回校準解析，勿假設一次就對
+- 位置與時間：機上 PX4（MAVSDK 連 localhost）＋ GPS 時間，採樣當下綁定
+- RTT／丟包：`ping <GS_IP>` 實測
+- SQLite 緩衝先落盤再送、雙通道、斷點補傳（沿用已實測的原型邏輯）
+
+設定項（環境變數）：
+
+| 變數 | 範例 | 說明 |
+|---|---|---|
+| `GROUND_API` | `http://192.168.55.10:38000` | 地面站 API |
+| `SAMPLE_HZ` | `1.0` | 採樣頻率（AT 查詢延遲 100–500ms，1Hz 是務實上限）|
+| `BUFFER_PATH` | `/data/uav-link-buffer.sqlite3` | 持久緩衝（要落在斷電保留的分割區）|
+
+systemd unit（`/etc/systemd/system/uav-link-node.service`）：
+
+```ini
+[Unit]
+Description=UAV 5G link telemetry node
+After=network-online.target
+
+[Service]
+ExecStart=/usr/bin/python3 /opt/uav-system/onboard_node.py
+Environment=GROUND_API=http://192.168.55.10:38000
+Restart=always
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target
+```
+
+```bash
+systemctl enable --now uav-link-node
+```
+
+#### A.1.3 上機首驗（第一個里程碑）
+
+在已知干擾源附近做一次可控測試，確認 `AT+QENG` 的 **SINR 會隨干擾下降**
+——Quectel 論壇有 RM500Q SINR 回報異常的前例，不要假設數值正確。
+這一測同時驗證整條鏈路：modem → node → HTTP → DB → 前端。
+
+#### A.1.4 即時影像（選配）
+
+前端地圖點擊機體會開啟即時畫面 modal，來源是每台機的影像串流位址
+（無人機頁 →「影像」設定，存在系統端，換瀏覽器不用重設）。
+
+瀏覽器不支援 RTSP，機上相機串流需先轉成瀏覽器吃的格式。建議機上跑
+[MediaMTX](https://github.com/bluenviron/mediamtx)（單一執行檔）把 RTSP 轉 WHEP（WebRTC，延遲最低，適合 FPV）：
+
+```bash
+# 機上：mediamtx.yml 指定 source: rtsp://<相機>，跑起來後
+# 無人機頁「影像」填：http://<機IP>:8889/<路徑名>/whep
+```
+
+MJPEG（IP cam 常見）與 MP4/WebM 位址也可直接填，前端依 URL 自動選播放器。
+注意：影像走 5G 會與量測流量搶頻寬——研究量測時建議降碼率或只在需要時開啟。
+
+---
+
+

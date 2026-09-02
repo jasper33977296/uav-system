@@ -13,7 +13,7 @@
 
 | 項目 | 型號 | 對本設計的意義 |
 |---|---|---|
-| 機上運算 | Qualcomm Flight RB5 5G Platform（QRB5165，ModalAI 參考設計）| — |
+| 機上運算 | **Raspberry Pi 5**（2026-09-02 起；舊文寫的 Qualcomm RB5 已非現役，見 `deployment.md` 文首對照表）| — |
 | 5G modem | **Quectel RM500Q-GL**（Snapdragon X55）| 我們的量測儀器 |
 | 作業系統 | Ubuntu 18.04（Yocto Dunfell）、kernel 4.19 | 版本偏舊，見下方注意事項 |
 | 中介軟體 | **ROS 2**（平台預裝）| 機上 node 用 ROS 2 撰寫 |
