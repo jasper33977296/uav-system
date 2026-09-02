@@ -51,6 +51,25 @@ async def migrate() -> None:
     # 沒有它就沒有「期望值」可比：sysid 撞號時新來的機會直接繼承舊記錄，
     # 而廠牌從 ArduPilot 變成 PX4 這種明顯矛盾也沒有任何人看得出來。
     await pool.execute("ALTER TABLE drones ADD COLUMN IF NOT EXISTS autopilot INT")
+    # ── 040 A1：sysid 由系統指派（2026-09-02 使用者裁定）────────────────
+    # **`mav_sysid` 與 `assigned_sysid` 是兩件事，刻意分開兩欄**：
+    # 前者是「這台機現在自報的號碼」（觀察到的事實），後者是「我們配給這塊板子
+    # 的號碼」（我們的決定）。合成一欄就再也分不出「它跑錯號碼了」這件事。
+    await pool.execute("ALTER TABLE drones ADD COLUMN IF NOT EXISTS assigned_sysid INT")
+    # 一個號碼只能配給一塊板子。**用 partial unique index 而不是 UNIQUE 欄位**：
+    # 還沒配號的機是 NULL，而 NULL 在 UNIQUE 下雖然可以重複，寫成部分索引更
+    # 明確——它宣告的是「有配號的那些之間唯一」，正是我們要的規則
+    await pool.execute(
+        "CREATE UNIQUE INDEX IF NOT EXISTS drones_assigned_sysid_uniq "
+        "ON drones (assigned_sysid) WHERE assigned_sysid IS NOT NULL")
+    # 一次性回填：既有記錄若同時有板號與觀察到的號碼，那組配對是既成事實，
+    # 直接登錄。**只回填不衝突的**——衝突的留給人處理，不要在遷移裡自動改號
+    await pool.execute("""
+        UPDATE drones d SET assigned_sysid = d.mav_sysid
+        WHERE d.assigned_sysid IS NULL AND d.board_uid IS NOT NULL
+          AND d.mav_sysid IS NOT NULL
+          AND NOT EXISTS (SELECT 1 FROM drones o
+                          WHERE o.assigned_sysid = d.mav_sysid)""")
     # 航線自帶的圍欄（QGC .plan 的 geoFence）。**圍欄是每份航線自己的事**，
     # 不是系統的全域設定——測繪任務與定點巡檢的合理範圍可以差一個數量級。
     # NULL＝這份 .plan 沒畫圍欄（退回系統預設，而且報告會說出用的是哪一個）
@@ -317,6 +336,97 @@ async def set_autopilot(drone_id: str | None, raw: int) -> None:
     await pool.execute(
         "UPDATE drones SET autopilot = $2 WHERE id = $1::uuid AND autopilot IS NULL",
         drone_id, raw)
+
+
+#: 號碼池：MAVLink 的 sysid 值域是 1–255，而 **255 是我方地面站**
+#: （`command/app/mav.py` 的 `GCS_SYSID`）。0 是廣播位址，不是誰的號碼。
+SYSID_MIN, SYSID_MAX, SYSID_GCS = 1, 254, 255
+
+
+async def allocate_sysid(board_uid: str,
+                         claimed: int | None) -> dict:
+    """配號（issues/040 A1，2026-09-02 使用者裁定）。
+
+    **識別的唯一鍵值是板號**；`sysid` 只是地址。所以撞號不是「要隔離誰」的
+    兩難——**地址撞了就換一個**。四種情況：
+
+    | 板號 | 它現在用的號碼 | 回傳的 action |
+    |---|---|---|
+    | 已登錄 | 就是配給它的 | `keep` |
+    | 已登錄 | 不是配給它的 | `change`（改回登錄上那個）|
+    | 沒見過 | 沒人用 | `keep`，並把這個號碼登錄給它 |
+    | 沒見過 | **已被別的板號佔用** | `change`（配一個新的）|
+
+    **本函式只決定號碼，不下發、不寫飛控**——下發是 A3、由代理執行。
+    A1 階段呼叫端拿到 `change` 只需要顯示與留痕。
+
+    號碼不自動回收：釋放（把 `assigned_sysid` 設回 NULL）必須是明確的動作。
+    **一個剛釋放又立刻被配給別台機的號碼，會讓歷史資料的歸屬無法回溯**——
+    同一個號碼在時間軸上指過兩台不同的飛機，而遙測只記得號碼。
+    """
+    row = await pool.fetchrow(
+        "SELECT id::text AS id, name, assigned_sysid FROM drones "
+        "WHERE board_uid = $1", board_uid)
+    if row and row["assigned_sysid"] is not None:
+        want = row["assigned_sysid"]
+        return {"sysid": want, "action": "keep" if claimed == want else "change",
+                "drone_id": row["id"], "drone": row["name"],
+                "reason": ("號碼與登錄相符" if claimed == want else
+                           f"這塊板子登錄的號碼是 {want}，但它現在用 {claimed}")}
+
+    # 板號沒登錄過（或登錄了但還沒配號）
+    if claimed is not None and SYSID_MIN <= claimed <= SYSID_MAX:
+        taken_by = await pool.fetchrow(
+            "SELECT board_uid FROM drones WHERE assigned_sysid = $1", claimed)
+        if taken_by is None:
+            # 它現在用的號碼沒人要 → 就配這個，機端完全不用動
+            return {"sysid": claimed, "action": "keep",
+                    "drone_id": row["id"] if row else None,
+                    "drone": row["name"] if row else None,
+                    "reason": "這個號碼沒有配給任何板子，直接登錄給它"}
+        conflict = taken_by["board_uid"]
+    else:
+        conflict = None
+
+    free = await _next_free_sysid()
+    if free is None:
+        # **號碼用完要明說，不要靜默給一個重複的**。254 台機是很大的機隊，
+        # 走到這裡幾乎一定是號碼沒回收，而不是真的養了那麼多台
+        raise RuntimeError(
+            f"sysid 號碼池已用盡（{SYSID_MIN}–{SYSID_MAX} 全數配出）。"
+            "退役的機請明確釋放號碼（assigned_sysid 設回 NULL）")
+    why = (f"它現在用的 {claimed} 已經配給板號 {conflict}" if conflict
+           else f"它沒有自報有效號碼（claimed={claimed}）")
+    return {"sysid": free, "action": "change",
+            "drone_id": row["id"] if row else None,
+            "drone": row["name"] if row else None,
+            "reason": f"{why}，改配 {free}"}
+
+
+async def _next_free_sysid() -> int | None:
+    """取一個沒被登錄的號碼。**由小往大取**：可預測比隨機好——
+    現場報號碼、翻查核表都靠人眼，而人眼對連號比對亂數在行。"""
+    rows = await pool.fetch(
+        "SELECT assigned_sysid FROM drones WHERE assigned_sysid IS NOT NULL")
+    taken = {r["assigned_sysid"] for r in rows} | {SYSID_GCS}
+    for n in range(SYSID_MIN, SYSID_MAX + 1):
+        if n not in taken:
+            return n
+    return None
+
+
+async def record_assignment(board_uid: str, sysid: int,
+                            drone_id: str | None = None) -> None:
+    """把配號寫進登錄。**同一塊板子改號時要先把舊的空出來**，否則部分唯一索引
+    會擋住——而那個擋是對的：兩塊板子不能共用一個號碼。"""
+    if drone_id:
+        await pool.execute(
+            "UPDATE drones SET assigned_sysid = $2 WHERE id = $1::uuid",
+            drone_id, sysid)
+    else:
+        await pool.execute(
+            "UPDATE drones SET assigned_sysid = $2 WHERE board_uid = $1",
+            board_uid, sysid)
 
 
 async def set_board_uid(drone_id: str | None, uid: str,
