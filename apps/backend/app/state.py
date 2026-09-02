@@ -20,6 +20,11 @@ _IMU_KEYS = (
     "clipping_0", "clipping_1", "clipping_2",           # VIBRATION 計數
 )
 
+#: 預檢失敗原因多久沒再聽到就當它已經解決（秒）。ArduPilot 實測約每分鐘
+#: 重講一次，取 3 分鐘＝漏掉兩次也還算數。**判準是「沒有再聽到」而不是
+#: 「時間到了」**：只要它還在講，那一項就還在。
+PREARM_TTL_S = 180.0
+
 
 @dataclass
 class LiveState:
@@ -44,6 +49,12 @@ class LiveState:
     ground_speed: float | None = None
     vertical_speed: float | None = None
     battery_pct: float | None = None
+    #: 機上自己說的預檢失敗原因（`PreArm: …` STATUSTEXT）→ 最後聽到的時刻
+    #: （單調時鐘）。**`prearm_ok is False` 只說得出「有一項沒過」**，說不出
+    #: 是哪一項——而那一句話飛控本來就在講，只是原本只進了事件流。
+    #: 2026-09-02 實測：真機每分鐘噴一則 `PreArm: Battery 1 low voltage
+    #: failsafe`，而畫面上只寫「預檢未過」，操作員得自己去事件流裡翻。
+    prearm_msgs: dict = field(default_factory=dict)
     battery_voltage: float | None = None
     gps_fix: int | None = None
     satellites: int | None = None
@@ -177,6 +188,18 @@ class LiveState:
             return None
         return round(_time.monotonic() - self.link_seen_mono, 2)
 
+    def prearm_said(self) -> list[str]:
+        """機上此刻還在講的預檢失敗原因。
+
+        **要過期。** ArduPilot 只在被擋住時週期性重講（實測約每分鐘一次），
+        所以「很久沒再聽到」多半代表那一項已經解決了——把它繼續掛在畫面上，
+        就是拿一個已經不成立的理由擋人。過期的判準是**沒有再聽到**，
+        不是「時間到了」：只要它還在講，這一項就還在。
+        """
+        now = _time.monotonic()
+        return [t for t, at in sorted(self.prearm_msgs.items(), key=lambda kv: -kv[1])
+                if now - at < PREARM_TTL_S]
+
     def readiness(self) -> tuple[bool | None, list]:
         """就緒判定＋不就緒原因（給前端顯示；權威訊號是 prearm_ok）。
 
@@ -193,7 +216,16 @@ class LiveState:
 
         reasons = []
         if self.prearm_ok is False:
-            reasons.append(f"{prearm_label(self.autopilot_raw)} 預檢未過（arming checks）")
+            label = prearm_label(self.autopilot_raw)
+            said = self.prearm_said()
+            if said:
+                # **說得出是哪一項就說**——「預檢未過」是一句不可行動的話，
+                # 而「Battery 1 low voltage failsafe」是一句可以去處理的話
+                reasons += [f"{label} 預檢未過：{t}" for t in said]
+            else:
+                # 沒聽到機上說（韌體不講、或它講過而我們是之後才連上的）。
+                # **要說出「不知道是哪一項」**，不要讓它看起來像一句完整的原因
+                reasons.append(f"{label} 預檢未過（機上還沒說是哪一項）")
         reasons += [f"感測器異常：{s}" for s in self.sensors_unhealthy]
         if self.ekf_ok is False:
             reasons.append("EKF 未就緒")

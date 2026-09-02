@@ -651,6 +651,15 @@ class MavlinkRx:
         if not text:
             return
         now = time.monotonic()
+        # **預檢失敗的原因，飛控本來就在講**——原本只進事件流，於是畫面上
+        # 只寫得出「預檢未過」，操作員得自己去事件流裡翻。記到 state 上，
+        # 就緒判定就說得出是哪一項（見 state.readiness）。
+        # `PreArm:` 是被擋在解鎖之前，`Arm:` 是解鎖當下被拒——兩者都是同一個
+        # 問題的答案：「為什麼現在不能飛」
+        for pfx in ("PreArm:", "Arm:"):
+            if text.startswith(pfx):
+                st.prearm_msgs[text[len(pfx):].strip()] = now
+                break
         last = ent.get("stx_last")
         if (last and last["text"] == text and last["sev"] == sev
                 and now - last["t"] < STX_FOLD_S):

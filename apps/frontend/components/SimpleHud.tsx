@@ -43,10 +43,29 @@ export function SignalBars({ sinr, lost = false, onOpen }: {
 }
 
 /** 電池圖形（填充＝存量、<20% 轉紅）；無資料不畫、不放「—」。 */
+/** 電量。
+ *
+ * **`null` 與 `undefined` 不是同一件事**，所以畫出來的東西也不一樣：
+ *
+ * * `undefined`＝**呼叫端說不要畫**（例如數值已經太舊，HUD 刻意收掉）→ 不畫。
+ * * `null`＝**機上沒給這個數字**（`SYS_STATUS.battery_remaining == -1`，
+ *   後端據此不寫入）→ 畫出來並寫「不知道」。
+ *
+ * 原本兩者都回 `null`，於是「機上沒回報電量」在畫面上長得跟
+ * **「這台機沒有電量指示器」**一模一樣——整個元件消失，沒有人會去問它去哪了。
+ * 而同一件事在指令面板上是 `電量 —%`：**同一個事實兩個地方兩種樣子**，
+ * 那是 ui-spec §0.2e 要防的「兩種沒有不得同形」的另一面。
+ */
 export function Battery({ pct, plain = false }: {
   pct: number | null | undefined; plain?: boolean;
 }) {
-  if (pct == null) return null;
+  if (pct === undefined) return null;
+  if (pct === null) {
+    const unknown = <span className="hud-num" style={{ color: "var(--muted)" }}>電量 不知道</span>;
+    return plain
+      ? <span className="batt-plain" title="機上沒有回報電量">{unknown}</span>
+      : <span className="hud-item" title="機上沒有回報電量">{unknown}</span>;
+  }
   const p = Math.max(0, Math.min(100, pct));
   const body = (
     <>

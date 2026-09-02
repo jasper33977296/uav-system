@@ -963,7 +963,10 @@ export default function CommandPanel() {
                 flight_mode 字串**——比字串在混機環境必錯 */}
             <span>{modeLabel(live?.flight_mode, live?.mode_verb, mixedFleet)}</span>
             <span>GPS {live?.gps_fix ?? "—"} · {live?.satellites ?? "—"}顆</span>
-            <span>電量 {live?.battery_pct != null ? Math.round(live.battery_pct) : "—"}%</span>
+            {/* **「不知道」與「0%」不得同形**，而 `—%` 讀起來像一個壞掉的數字。
+                與 HUD 的電池元件用同一句話（見 SimpleHud.Battery） */}
+            <span>{live?.battery_pct != null
+              ? `電量 ${Math.round(live.battery_pct)}%` : "電量 不知道"}</span>
             {/* 編隊入口（§2.5 漸進顯示）：≥2 機連線才出現，單機永遠看不到 */}
             {Object.values(fleet).filter((t) => t.connected).length >= 2 && (
               <button className="btn-plain btn-sm" title="進入編隊（多機）模式"
