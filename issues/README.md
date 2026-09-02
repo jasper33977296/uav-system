@@ -53,7 +53,7 @@
 | [018](018-event-detail-plain-language.md) | 事件 detail 人話化＋新增 serving cell 變更事件 | low | open | 前端事件流＋backend 事件結構 |
 | [019](019-agent-mcp-interface.md) | MCP agent 介面：**MCP 先不做**（2026-09-02），改提供三個任務層 API＋OpenAPI（已交付）；因果鏈與分析 API 仍 open | medium | open | `doc/mission-api.md`＋`doc/agent-mcp-goals.md` |
 | [020](020-session-mission-association-broken.md) | 架次未綁任務：新飛資料比較頁用不了 ✔回填驗證 | high | **closed** | `db.py:create_session` |
-| [021](021-vehicle-data-suite.md) | 機上資料：QGC 式全量即時資訊（Inspector/參數快照/ulog 回收，分四期）| medium | open | `issues/021` PM scope 定案 |
+| [021](021-vehicle-data-suite.md) | 機上資料：QGC 式全量即時資訊（Inspector/參數快照/ulog 回收，分四期）；**09-02 發現訊號記錄通道機上那半從來沒實作**——`link_metrics` 真機一筆都沒存過，已接上 | medium | open | `issues/021` PM scope 定案 |
 | [022](022-flight-video.md) | 飛行影像：即時畫面＋架次錄影 mp4＋回放同步播放（地面錄製定案）| medium | open | `issues/022` |
 | [023](023-missions-table-role-cleanup.md) | missions 表正名瘦身：死欄位＋生成物污染＋刪除語意（含 010）| medium | **closed** | `db/init/01_schema.sql` |
 | [024](024-video-anchor-offset.md) | 影像時間錨點早 0.41s：暫緩修正，待真機實測（含重啟觸發條件）| low | deferred | `doc/flight-video-design.md` §9 |
