@@ -4,7 +4,7 @@ import time
 from datetime import datetime, timezone
 from uuid import UUID
 
-from fastapi import APIRouter, HTTPException, Response
+from fastapi import APIRouter, HTTPException, Request, Response
 from fastapi.responses import FileResponse
 from pydantic import BaseModel, Field, field_validator
 
@@ -13,7 +13,8 @@ import logging
 import mission_time        # libs/ 的共用實作（PYTHONPATH=/srv/libs）
 import plan_check
 
-from . import agent_link, chainage, db, groups, mavlink_rx, signing
+from . import (agent_link, chainage, db, groups, mavlink_rx,
+               onboard_capture, signing)
 from .config import settings
 from .ws import manager
 
@@ -143,6 +144,110 @@ async def get_capture(name: str):
         raise HTTPException(404, f"沒有這份錄製檔：{name}")
     return FileResponse(str(match), media_type="application/octet-stream",
                         filename=match.name)
+
+
+# ── 機上錄製的自動回傳（issues/014）──────────────────────────────
+#
+# **地面站錄的是「送到地面站的東西」，機上錄的是「飛控送出的東西」。**
+# 兩者相差的正是 5G 斷線的那一段——所以這一組端點與上面 `/captures` 那組
+# **刻意分開**，混成一個清單就把那個差抹掉了。
+#
+# 守門在機上（uav-agent `uploader.py`：只在地面傳、一解鎖立刻停）：這裡
+# 收得下多少不是問題，**問題是它與遙測共用同一條 5G**，而現在正在飛的那台
+# 優先。地面站這一側只負責「收得住、驗得出、看得到」。
+
+
+class OnboardOffer(BaseModel):
+    """機上宣告「我有這個檔案要回傳」。"""
+    board_uid: str
+    name: str
+    bytes: int = Field(gt=0)
+    sha256: str
+
+
+async def _drone_of_board(board_uid: str) -> str:
+    """board_uid → drone_id。**鍵是板號不是 sysid**（issues/038／040）。
+
+    找不到就 404：**沒有身分的東西不該在我們的磁碟上長出目錄**。
+    """
+    link = agent_link.links.get(board_uid)
+    drone_id = link.drone_id if link else None
+    if drone_id is None:
+        row = await db.pool.fetchrow(
+            "SELECT id::text AS id FROM drones WHERE board_uid = $1", board_uid)
+        drone_id = row["id"] if row else None
+    if drone_id is None:
+        raise HTTPException(404, f"不認得的 board_uid {board_uid}")
+    return drone_id
+
+
+@router.post("/onboard-captures/offer", tags=["原始層"])
+async def onboard_offer(body: OnboardOffer):
+    """宣告一份要回傳的機上錄製，回覆「我已經有幾個 byte」。
+
+    **這一步就是續傳的全部機制。** 機端不必記得自己傳到哪裡——重開機、
+    換行程、狀態檔掉了，重新宣告一次就知道從哪裡接。**認「同一份」用
+    sha256 不是檔名**：機上的 RTC 沒有電池，冷開機的檔名真的會重複。
+    """
+    drone_id = await _drone_of_board(body.board_uid)
+    try:
+        return onboard_capture.offer(drone_id, body.name, body.bytes,
+                                     body.sha256)
+    except ValueError as e:
+        raise HTTPException(422, str(e))
+
+
+@router.put("/onboard-captures/chunk", tags=["原始層"])
+async def onboard_chunk(request: Request, board_uid: str, name: str,
+                        offset: int):
+    """收一塊（body 是原始位元組）。滿了就驗 sha256 並收尾。
+
+    **位移不符回 409 並帶上我方的真值**，讓機端自己對回來——比起「重傳整份」，
+    這條路在 5G 抖動時便宜得多，而抖動在本場域是常態。
+    """
+    drone_id = await _drone_of_board(board_uid)
+    data = await request.body()
+    if not data:
+        raise HTTPException(422, "空的塊")
+    if len(data) > onboard_capture.MAX_CHUNK:
+        raise HTTPException(413, f"一塊最多 {onboard_capture.MAX_CHUNK} bytes")
+    try:
+        return onboard_capture.append(drone_id, name, offset, data)
+    except onboard_capture.Conflict as e:
+        raise HTTPException(409, {"code": "offset_mismatch", "have": e.have,
+                                  "msg": str(e)})
+    except onboard_capture.NoSpace as e:
+        # 507＝地面站的問題，不是機端的。機端該做的是稍後再試，**不是放棄**
+        raise HTTPException(507, {"code": "no_space", "msg": str(e)})
+    except FileNotFoundError as e:
+        raise HTTPException(404, str(e))
+    except ValueError as e:
+        raise HTTPException(422, str(e))
+
+
+@router.get("/onboard-captures", tags=["原始層"])
+async def list_onboard_captures():
+    """已回傳的機上錄製一覽。
+
+    **「自動回傳」如果看不到，就跟 scp 沒有兩樣**——差別只在誰按的。
+    半成品也列（`complete: false`）：「傳到一半」與「根本沒傳」在畫面上完全
+    同形，而兩者要做的事不同。
+    """
+    rows = await db.pool.fetch("SELECT id::text AS id, name FROM drones")
+    return onboard_capture.listing({r["id"]: r["name"] for r in rows})
+
+
+@router.get("/onboard-captures/{drone_id}/{name}", tags=["原始層"])
+async def get_onboard_capture(drone_id: str, name: str):
+    """下載一份回傳回來的機上錄製。
+
+    **白名單而不是黑名單**：檔名逐字比對既有清單，與 `/captures` 同一條紀律。
+    """
+    f = onboard_capture.find(drone_id, name)
+    if f is None:
+        raise HTTPException(404, f"沒有這份機上錄製：{drone_id}/{name}")
+    return FileResponse(str(f), media_type="application/octet-stream",
+                        filename=f.name)
 
 
 @router.get("/compare/chainage")

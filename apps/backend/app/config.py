@@ -31,6 +31,15 @@ class Settings(BaseSettings):
     capture_enabled: bool = True
     capture_dir: str = "/data/mavcap"
     capture_keep_days: int = 30
+    # 機上錄製的自動回傳（issues/014）。存在 capture_dir/onboard/<drone_id>/，
+    # **與地面站自己錄的那份分開列**——兩者相差的正是 5G 斷線的那一段，
+    # 混成一個清單就把那個差抹掉了。
+    # 保留期不跟著 capture_keep_days 走：機上那份小兩個數量級（一趟約 4 MB，
+    # 對比地面站的 61 MB/hr），而且它是斷線那段的**唯一副本**。
+    onboard_keep_days: int = 90
+    # 低於這個剩餘空間就拒收新的塊。**地面站磁碟滿了會拖垮資料庫**，而機上
+    # 那份還在原地——現在收不下不等於資料沒了，硬收才會兩邊都出事。
+    onboard_min_free_mb: int = 2048
     broadcast_hz: float = 5.0        # WebSocket 推送頻率
     db_write_hz: float = 1.0         # telemetry / link_metrics 入庫頻率
     msg_registry_hz: float = 2.0     # 014-B 泛型訊息登錄表廣播頻率（低於遙測 5Hz）
