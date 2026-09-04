@@ -138,13 +138,24 @@ async def _require_capability(sysid: int, endpoint_key: str):
     # **入列檢查排在能力檢查之前**（issues/040 A2）：「這台機是不是我們的」
     # 比「這台機做不做得到」更根本——對一台身分不明的機談能力沒有意義。
     info = await admission.state_of(sysid)
-    if info.get("state") not in admission.COMMANDABLE:
-        await _refused(sysid, endpoint_key, "入列", admission.why_blocked(info),
-                       {"admission": info.get("state"),
-                        "stale": info.get("stale", False)})
+    st_ = info.get("state")
+    # **通道斷了但身分還在**：只放行把飛機帶回地面的動作（2026-09-04 裁定）。
+    # 那兩個動作在任何飛行狀態下的意思都一樣，所以問不到機上守門也不影響
+    # 判斷；其餘的都需要「當下狀態允不允許」，而那正是問不到的東西。
+    offline_ok = (st_ in admission.OFFLINE_COMMANDABLE
+                  and endpoint_key in admission.OFFLINE_ACTIONS)
+    if st_ not in admission.COMMANDABLE and not offline_ok:
+        why = admission.why_blocked(info)
+        if st_ in admission.OFFLINE_COMMANDABLE:
+            why = ("機上代理的意圖通道斷了——問不到機上守門，"
+                   f"所以只放行 {sorted(admission.OFFLINE_ACTIONS)}。"
+                   "**身分沒有問題**（板號與配號都對得上），"
+                   "要恢復完整指揮先讓通道連回來")
+        await _refused(sysid, endpoint_key, "入列", why,
+                       {"admission": st_, "stale": info.get("stale", False)})
         raise HTTPException(403, {
-            "msg": admission.why_blocked(info),
-            "code": "not_admitted", "admission": info.get("state"),
+            "msg": why,
+            "code": "not_admitted", "admission": st_,
             "sysid": sysid, "drone": info.get("drone"),
             # 用的是舊答案時要說——「幾秒前的答案」與「現在的答案」
             # 是不同的可信度

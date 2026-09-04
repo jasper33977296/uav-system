@@ -38,6 +38,10 @@ _INTENT_OF = {
     "takeoff": "start_mission",
     "arm": "start_mission",
     "mode:rtl": "rtl",
+    # **`mode:land` 原本漏了**（2026-09-04 補）。這張表的註解自己寫著
+    # 「名字不同就等於沒守到」，而降落正是那樣安靜地跳過守門的——
+    # `intent is None` → `ask_guard` 直接回 None → 不問、不擋、不留痕。
+    "mode:land": "land",
     # **空中上鎖＝馬達停轉、飛機直接掉下來。** 守門只在地上放行
     "disarm": "disarm",
 }
@@ -62,6 +66,20 @@ async def ask_guard(sysid: int, action: str, intent_id: str | None = None,
     intent = _INTENT_OF.get(action)
     if intent is None:
         return None                       # 這個動作不在守門範圍（如 arm/upload）
+    # **通道斷了就問不到守門，而 rtl／land 不需要那個判斷**（2026-09-04 裁定）：
+    # 它們在任何飛行狀態下的意思都一樣——把飛機帶回地面。這裡明確跳過，
+    # 而不是讓它走到下面的 `unknown` 分支被擋下。
+    #
+    # **這不是繞過守門**：入列那一關已經確認過身分，而且只有這兩個動作走得到
+    # 這裡（`OFFLINE_ACTIONS`）。留痕照樣有。
+    from . import admission as _adm
+    if action in _adm.OFFLINE_ACTIONS:
+        info = await _adm.state_of(sysid)
+        if info.get("state") in _adm.OFFLINE_COMMANDABLE:
+            log.warning("通道斷線中放行 %s（sysid %d）——**問不到機上守門**，"
+                        "但這個動作在任何狀態下的意思都一樣", action, sysid)
+            return {"verdict": "offline_allowed",
+                    "reason": "意圖通道斷線中，只放行把飛機帶回地面的動作"}
     uid = (router.drones.get(sysid) or {}).get("board_uid") if router else None
     body = json.dumps({"kind": kind, "action": intent,
                        "intent_id": intent_id,
@@ -83,7 +101,7 @@ async def ask_guard(sysid: int, action: str, intent_id: str | None = None,
         log.warning("問不到守門（%s），沿用本地檢查", e)
         return None
     v = res.get("verdict")
-    if v in ("cleared", "no_agent", None):
+    if v in ("cleared", "no_agent", "offline_allowed", None):
         return res
     # **守門擋下的也要留痕。** 這是三道門裡最有資訊量的一道——它知道
     # 當下的飛行狀態，而那正是「為什麼現在不能做」的答案（見 main._refused）

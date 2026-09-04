@@ -98,7 +98,7 @@ class DronePatch(BaseModel):
 #: 入列狀態（issues/040 A2／`doc/drone-admission-protocol.md` §3）。
 #: **只有 `admitted` 可以被指揮。**
 ADMISSION_STATES = ("seen", "identifying", "reassigning", "admitted",
-                   "quarantined", "unmanaged")
+                   "admitted_offline", "quarantined", "unmanaged")
 
 
 @router.get("/captures", tags=["原始層"])
@@ -413,17 +413,25 @@ async def admission_state(sysid: int):
     if not st.identity_ok:
         return {**base, "state": "quarantined",
                 "reason": st.identity_reason or "身分與記錄矛盾"}
+    # **「連線中的代理」與「這台機有沒有代理」是兩件事。**（2026-09-04 裁定）
+    # 意圖通道是 WebSocket，需要回程；而指令走 UDP，是另一條路——今天實測
+    # 通道斷著的同時指令仍然送得到。原本兩者一律判 `unmanaged`（＝身分不明），
+    # 於是**一條 TCP 斷掉就等於這台機失去了身分**，而它的板號、配號都還在。
     link = next((l for l in agent_link.links.values()
                  if l.drone_id and l.drone_id == st.drone_id and l.connected),
                 None)
-    if link is None:
+    #: 最後已知的那條（可能已斷）。`agent_link` 斷線時**不清空**這筆記錄，
+    #: 所以它就是「這台機曾經有過代理」的證據
+    last = link or next((l for l in agent_link.links.values()
+                         if l.drone_id and l.drone_id == st.drone_id), None)
+    if last is None:
         return {**base, "state": "unmanaged",
                 "reason": "這台機沒有連線中的機上代理——本系統只指揮有代理的機"}
     # 換號中（A3）：**這不是失聯也不是身分矛盾，是我們自己叫它去換的**。
     # 排在 board_uid 檢查之前——重開飛控期間代理收不到 AUTOPILOT_VERSION，
     # 若先判 identifying，畫面會說「身分未定」而不是「換號中」，
     # 那會讓一個我們主動發起的動作看起來像故障
-    re = (link.payload or {}).get("reassigning")
+    re = (last.payload or {}).get("reassigning")
     if re:
         return {**base, "state": "reassigning", "reassigning": re,
                 "reason": f"正在把號碼從 {re.get('from')} 換成 {re.get('to')}"
@@ -441,6 +449,18 @@ async def admission_state(sysid: int):
         # 換號屬 A3，本階段只是不放行
         return {**base, "state": "identifying", "assigned_sysid": assigned,
                 "reason": f"配給這塊板子的號碼是 {assigned}，它現在用 {sysid}"}
+    if link is None:
+        # **身分驗過了，只是現在問不到守門。** 板號、配號都對得上，變的只有
+        # 那條 WebSocket。這一格與 `unmanaged`（從來沒有代理）刻意分開——
+        # 前者該保留「把飛機帶回來」的能力，後者不該有任何能力。
+        return {**base, "state": "admitted_offline", "assigned_sysid": assigned,
+                "agent_version": last.agent_version,
+                "last_state": last.state,
+                "reason": "板號與配號都對得上，但**機上代理的意圖通道斷了**"
+                          "——問不到機上守門，所以只放行把飛機帶回來的動作"
+                          f"（最後已知狀態：{last.state or '不明'}）",
+                "hint": "指令走的是另一條路（UDP），通道斷了不代表指令送不到。"
+                        "要恢復完整指揮，先讓代理的意圖通道連回來"}
     return {**base, "state": "admitted", "assigned_sysid": assigned,
             "reason": "板號、配號、代理連線三者相符"}
 

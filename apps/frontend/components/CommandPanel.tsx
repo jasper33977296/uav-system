@@ -433,7 +433,11 @@ export default function CommandPanel() {
   const rcDown = agentHere?.rc_link === false;
   // 040 A2：入列沒過就指不動。**`null` 不擋**——那是「還沒問到」，
   // 與「問到了、沒過」是兩件事（同 rc_link 的三態紀律）
-  const notAdmitted = adm !== null && adm.state !== "admitted";
+  // **通道斷了不等於失去身分**（2026-09-04 裁定）。`admitted_offline` 是
+  // 「板號與配號都對得上，只是問不到機上守門」——那時該保留把飛機帶回來的
+  // 能力，而不是整片鎖掉。與 `unmanaged`（從來沒有代理）刻意分開。
+  const admOffline = adm?.state === "admitted_offline";
+  const notAdmitted = adm !== null && adm.state !== "admitted" && !admOffline;
   const replayList = focusId ? replays[focusId] ?? [] : [];
   // ── 任務區要用的三個判斷（2026-08-26）───────────────────────
   // **「在空中」全檔案共用同一個判準**（landed_state 或高度）——兩套判準
@@ -687,6 +691,30 @@ export default function CommandPanel() {
           條款 6）——而且原因要可行動：「未驗證」不是原因，「這台機沒有代理」
           才是。緊急退路（實體遙控器）不受影響，這句話要出現在畫面上，
           否則「指不動」會被讀成「沒救了」 */}
+      {/* 通道斷線但身分還在：**不整片鎖掉**，只保留「把飛機帶回地面」。
+          那兩個動作在任何飛行狀態下的意思都一樣，所以問不到守門也不影響判斷；
+          其餘的都需要「當下狀態允不允許」，而那正是問不到的東西 */}
+      {open && health.enabled && !routerDead && admOffline && (
+        <div className="cmd-body">
+          <div className="cmd-ready lock">
+            <b>機上代理的意圖通道斷了——只剩「把飛機帶回來」。</b>
+            <div className="hint-line">
+              · <b>身分沒有問題</b>：板號與配號都對得上。斷的是那條通道，
+              而指令走的是另一條路。
+            </div>
+            <div className="hint-line">
+              · 問不到機上守門，所以暫停／續飛／開始任務都擋著——
+              那些需要知道「當下狀態允不允許」。
+            </div>
+            <div className="hint-line">· <b>實體遙控器不受影響</b></div>
+          </div>
+          <div className="cmd-row">
+            {btn("RTL", "⌂ 返航", "/mode/rtl", { danger: true, cap: "rtl" })}
+            {btn("降落", "降落", "/mode/land",
+                 { confirm: true, danger: true, cap: "land" })}
+          </div>
+        </div>
+      )}
       {open && health.enabled && !routerDead && notAdmitted && (
         <div className="cmd-body">
           <div className="cmd-dead">
@@ -695,7 +723,7 @@ export default function CommandPanel() {
             <div className="hint-line">
               · 本系統只指揮通過入列的機——身分不明時指令可能送到錯的飛機
             </div>
-            <div className="hint-line">· **實體遙控器不受影響**</div>
+            <div className="hint-line">· <b>實體遙控器不受影響</b></div>
           </div>
         </div>
       )}
@@ -1026,7 +1054,7 @@ export default function CommandPanel() {
             </div>
           )}
 
-          {!observeOnly && !noChannel && !unseen && !!dh && (<>
+          {!observeOnly && !noChannel && !unseen && !admOffline && !!dh && (<>
           {/* ── 任務區（2026-08-26 重排）─────────────────────────────
               **按操作員想做的事分組，不是按端點分組。** 原本一排是
               上傳／起飛→任務／啟動任務、另一排是解鎖／懸停／降落——那是

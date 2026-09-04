@@ -41,6 +41,21 @@ FRESH_S = 3.0
 STALE_OK_S = 900.0
 #: 可以被指揮的狀態。**只有一個**——這是刻意的，多一個就要說得出為什麼
 COMMANDABLE = {"admitted"}
+#: **身分驗過了，只是意圖通道斷了**（2026-09-04 裁定）。這一格與 `unmanaged`
+#: （從來沒有代理）刻意分開：板號與配號都還在，變的只有一條 WebSocket。
+#:
+#: 只放行**把飛機帶回地面**的動作。理由有兩層：
+#: 1. **問不到機上守門**（那一問也走同一條通道），所以放行任何需要判斷當下
+#:    狀態的動作都是在猜。
+#: 2. 而 `rtl`／`land` 是唯二**不需要那個判斷**的——它們在任何飛行狀態下的
+#:    意思都一樣：把它帶回來。
+#:
+#: 指令本身走 UDP，是另一條路——通道斷了不代表指令送不到（2026-09-02 實測：
+#: 通道 flapping 期間 `mission_clear` 照樣 accepted）。
+OFFLINE_COMMANDABLE = {"admitted_offline"}
+#: `admitted_offline` 時放行的端點鍵。**不是意圖名**——這裡比對的是
+#: `_require_capability` 收到的 endpoint_key
+OFFLINE_ACTIONS = {"mode:rtl", "mode:land", "rtl", "land"}
 
 _cache: dict[int, tuple[dict, float]] = {}
 
