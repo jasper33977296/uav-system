@@ -1,0 +1,1015 @@
+<title>UAV 即時監控 v2</title>
+<style>
+/* ── tokens：沿用 doc/design-tokens.md（深色為預設與設計基準）。
+   淺色仍是手動 opt-in（<html data-theme="light">），不跟隨 OS——
+   跟隨 OS 會讓亮色系統的操作員拿到亮面板配深地圖的拼裝畫面。 */
+:root{
+  color-scheme:dark;
+  --page:#1b1a17; --surface:#262624; --surface-2:#30302c;
+  --ink:#f0eee6; --ink-2:#c2bfb3; --muted:#8f8b80; --hairline:#3a3833;
+  --border:rgba(240,238,230,.1);
+  --accent:#d97757; --accent-bg:rgba(217,119,87,.12);
+  --series-1:#3987e5; --series-2:#d95926; --series-3:#199e70;
+  --ok:#0ca30c; --warn:#fab219; --serious:#e05e0e; --danger:#a01818;
+  --danger-ink:#e05e5e;
+  --sinr-good:#0ca30c; --sinr-fair:#fab219; --sinr-bad:#e05e0e; --sinr-crit:#a01818;
+  --mono:ui-monospace,"SF Mono","JetBrains Mono",Menlo,Consolas,monospace;
+}
+:root[data-theme="light"]{
+  color-scheme:light;
+  --page:#faf9f5; --surface:#fff; --surface-2:#f0eee6;
+  --ink:#1a1915; --ink-2:#57544a; --muted:#8f8b80; --hairline:#e6e3da;
+  --border:rgba(26,25,21,.1); --accent:#cc785c; --series-1:#2a78d6;
+}
+*{margin:0;padding:0;box-sizing:border-box}
+html,body{height:100%}
+body{
+  font-family:system-ui,-apple-system,"Noto Sans TC","Segoe UI",sans-serif;
+  background:var(--page); color:var(--ink); font-size:13px; line-height:1.5;
+  -webkit-font-smoothing:antialiased;
+}
+button,input,select{font:inherit;color:inherit}
+button{background:none;border:none;cursor:pointer}
+:focus-visible{outline:2px solid var(--accent);outline-offset:1px}
+.num,.tnum{font-variant-numeric:tabular-nums}
+
+/* ── shell ─────────────────────────────────────────────── */
+.shell{height:100dvh;display:flex;flex-direction:column;background:var(--page)}
+.nav{
+  flex:none;height:46px;display:flex;align-items:center;gap:14px;padding:0 14px;
+  background:var(--surface);border-bottom:1px solid var(--hairline);
+}
+.brand{font-size:13px;font-weight:700;letter-spacing:.02em}
+.navtabs{display:flex;gap:2px}
+.navtabs button{
+  padding:5px 9px;border-radius:6px;color:var(--muted);display:grid;place-items:center;
+}
+.navtabs button[aria-current="true"]{color:var(--accent);background:var(--accent-bg)}
+.navtabs button:hover{color:var(--ink)}
+.spacer{flex:1}
+.reclight{display:inline-flex;align-items:center;gap:6px}
+.recdot{width:11px;height:11px;border-radius:50%;background:var(--muted)}
+.recdot.on{background:#d03b3b;animation:breath 1.6s ease-in-out infinite}
+.rectxt{font-size:12px;color:var(--muted)}
+.rectxt.on{color:#d03b3b;font-weight:600}
+@keyframes breath{0%,100%{opacity:1}50%{opacity:.35}}
+@media (prefers-reduced-motion:reduce){.recdot.on{animation:none}}
+
+
+/* ── 主版面 ─────────────────────────────────────────────── */
+.app{flex:1;min-height:0;display:grid;grid-template-columns:minmax(0,1fr) clamp(320px,27vw,392px)}
+@media (max-width:900px){.app{grid-template-columns:1fr;grid-template-rows:minmax(260px,46%) minmax(0,1fr)}}
+.mapwrap{position:relative;min-height:0;background:#14181c;overflow:hidden}
+#map{position:absolute;inset:0;width:100%;height:100%;display:block}
+
+/* 機隊：色點永遠配文字（ui-spec 硬規則——顏色不單獨傳達身分） */
+.fleet{position:absolute;left:12px;top:12px;display:flex;flex-direction:column;gap:1px;
+  background:var(--surface);border:1px solid var(--border);border-radius:10px;padding:4px;
+  box-shadow:0 4px 16px rgba(0,0,0,.35);max-width:290px}
+.fleetrow{display:flex;align-items:center;gap:8px;padding:5px 8px;border-radius:7px;
+  color:var(--ink-2);width:100%;text-align:left}
+.fleetrow:hover{background:var(--surface-2)}
+.fleetrow[aria-pressed="true"]{background:var(--surface-2);color:var(--ink)}
+.fleetrow .dot{width:9px;height:9px;border-radius:50%;flex:none}
+.fleetrow .dot.hollow{background:none!important;border:1.5px solid var(--muted)}
+.fleetrow .nm{font-size:12px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;flex:1}
+.fleetrow .st{font-size:11px;color:var(--muted);white-space:nowrap}
+
+.legend{position:absolute;left:12px;bottom:52px;background:var(--surface);
+  border:1px solid var(--border);border-radius:10px;padding:7px 10px;
+  box-shadow:0 4px 16px rgba(0,0,0,.35);display:flex;align-items:center;gap:10px;font-size:11px}
+.legend .lab{color:var(--muted)}
+.legend .seg{display:flex;align-items:center;gap:5px;color:var(--ink-2)}
+.legend .sw{width:14px;height:6px;border-radius:2px}
+
+.hud{position:absolute;left:50%;transform:translateX(-50%);bottom:12px;
+  display:flex;align-items:center;gap:16px;padding:7px 15px;border-radius:12px;
+  background:rgba(38,38,36,.92);border:1px solid var(--border);
+  box-shadow:0 4px 16px rgba(0,0,0,.4)}
+.hud .item{display:inline-flex;align-items:center;gap:5px;color:var(--ink-2);font-size:12px}
+.hud .v{font-family:var(--mono);font-size:15px;color:var(--ink);font-variant-numeric:tabular-nums}
+.hud.stale .v{color:var(--muted)}
+.sigbars{display:inline-flex;align-items:flex-end;gap:2px;height:15px;position:relative}
+.sigbars i{width:3px;border-radius:1px;display:block}
+.sigslash{position:absolute;left:-2px;right:-2px;top:50%;height:1.5px;background:var(--muted);transform:rotate(-32deg)}
+.batt{width:26px;height:12px;border:1.5px solid var(--ink-2);border-radius:3px;padding:1px;position:relative}
+.batt::after{content:"";position:absolute;right:-4px;top:3px;width:2px;height:4px;background:var(--ink-2);border-radius:0 1px 1px 0}
+.batt i{display:block;height:100%;border-radius:1px}
+.stalebar{position:absolute;left:50%;transform:translateX(-50%);bottom:58px;
+  background:rgba(160,24,24,.92);color:#fff;padding:5px 12px;border-radius:8px;font-size:12px;
+  border:1px solid rgba(255,255,255,.15);white-space:nowrap}
+.scalebar{position:absolute;right:12px;bottom:14px;font-size:11px;color:var(--ink-2);
+  display:flex;align-items:center;gap:6px}
+.scalebar .bar{height:6px;border:1px solid var(--ink-2);border-top:none}
+
+/* ── 側欄 ───────────────────────────────────────────────── */
+.panel{background:var(--page);border-left:1px solid var(--hairline);
+  padding:10px;display:flex;flex-direction:column;gap:9px;overflow-y:auto;min-height:0}
+@media (max-width:900px){.panel{border-left:none;border-top:1px solid var(--hairline)}}
+.card{background:var(--surface);border:1px solid var(--border);border-radius:12px;padding:11px 12px}
+.card.grow{flex:1;min-height:190px;display:flex;flex-direction:column}
+.card h3{font-size:12px;font-weight:600;color:var(--ink-2);display:flex;align-items:center;gap:7px;margin-bottom:8px}
+.card h3 .spacer{flex:1}
+
+/* ⓘ：常駐版面上不再有解說句，解釋住這裡 */
+.info{width:15px;height:15px;border-radius:50%;border:1px solid var(--hairline);
+  color:var(--muted);font-size:10px;display:grid;place-items:center;position:relative;flex:none;cursor:help}
+.info:hover,.info:focus-visible{color:var(--ink);border-color:var(--border)}
+.info::after{
+  content:attr(data-tip);position:absolute;right:0;top:19px;width:250px;z-index:40;
+  background:var(--surface-2);color:var(--ink-2);border:1px solid var(--border);
+  border-radius:8px;padding:8px 10px;font-size:11px;line-height:1.6;text-align:left;
+  box-shadow:0 8px 24px rgba(0,0,0,.45);opacity:0;visibility:hidden;transition:opacity .12s}
+.info:hover::after,.info:focus-visible::after{opacity:1;visibility:visible}
+
+/* 機況：一行密度，label 弱、值強 */
+.conflict{display:flex;align-items:center;gap:8px;margin-top:9px;padding:6px 9px;border-radius:8px;
+  background:rgba(250,178,25,.09);border:1px solid rgba(250,178,25,.3);font-size:11.5px;color:var(--ink-2)}
+.conflict b{color:var(--warn);font-weight:600}
+.conflict span{color:var(--muted)}
+.conflict .info{margin-left:auto}
+.facts{display:flex;flex-wrap:wrap;gap:4px 14px}
+.fact{display:flex;align-items:baseline;gap:5px}
+.fact .k{font-size:11px;color:var(--muted)}
+.fact .v{font-size:12px;color:var(--ink);font-variant-numeric:tabular-nums}
+.fact .v.dim{color:var(--muted)}
+
+/* 訊號 */
+.hero{display:flex;align-items:baseline;gap:8px;margin-bottom:2px}
+.hero .n{font-family:var(--mono);font-size:34px;font-weight:600;letter-spacing:-.02em;line-height:1.1}
+.hero .u{font-size:12px;color:var(--ink-2)}
+.chip{display:inline-flex;align-items:center;gap:5px;padding:2px 8px;border-radius:999px;
+  background:var(--surface-2);font-size:11px;color:var(--ink-2)}
+.chip .dot{width:7px;height:7px;border-radius:50%}
+.spark{width:100%;height:46px;display:block;margin:6px 0 2px}
+.sparkfoot{display:flex;justify-content:space-between;font-size:10px;color:var(--muted)}
+.metrics{display:grid;grid-template-columns:repeat(3,1fr);gap:8px;margin-top:9px}
+.metric .k{font-size:10px;color:var(--muted);letter-spacing:.03em}
+.metric .v{font-family:var(--mono);font-size:14px;color:var(--ink-2)}
+.metric .v small{font-size:10px;color:var(--muted);margin-left:2px}
+details.sub{margin-top:9px;border-top:1px solid var(--hairline);padding-top:8px}
+details.sub summary{font-size:11px;color:var(--muted);cursor:pointer;list-style:none;display:flex;align-items:center;gap:6px}
+details.sub summary::-webkit-details-marker{display:none}
+details.sub summary::before{content:"▸";font-size:9px;color:var(--muted)}
+details.sub[open] summary::before{content:"▾"}
+details.sub summary:hover{color:var(--ink-2)}
+.kv{display:grid;grid-template-columns:auto 1fr;gap:3px 10px;margin-top:8px;font-size:11px}
+.kv .k{color:var(--muted)}
+.kv .v{color:var(--ink-2);font-family:var(--mono);word-break:break-all}
+pre.raw{margin-top:7px;background:var(--page);border:1px solid var(--hairline);border-radius:7px;
+  padding:8px;font-family:var(--mono);font-size:10.5px;color:var(--ink-2);
+  white-space:pre-wrap;word-break:break-all;max-height:190px;overflow:auto}
+
+/* 事件流 */
+.evtools{display:flex;gap:4px;align-items:center;flex-wrap:wrap;margin-bottom:6px}
+.pill{padding:2px 8px;border-radius:6px;border:1px solid transparent;color:var(--muted);font-size:11px}
+.pill:hover{color:var(--ink-2)}
+.pill[aria-pressed="true"]{color:var(--ink);background:var(--surface-2);border-color:var(--border)}
+.evlist{flex:1;overflow-y:auto;min-height:0;margin:0 -4px;padding:0 4px}
+.evrow{width:100%;display:grid;grid-template-columns:9px 46px 1fr auto;gap:8px;align-items:start;
+  padding:5px 4px;border-radius:7px;text-align:left;border-bottom:1px solid rgba(58,56,51,.5)}
+.evrow:hover{background:var(--surface-2)}
+.evrow .dot{width:7px;height:7px;border-radius:50%;margin-top:5px}
+.evrow time{font-family:var(--mono);font-size:11px;color:var(--muted);white-space:nowrap;margin-top:1px}
+.evrow .tx{font-size:12px;color:var(--ink-2);word-break:break-word}
+.evrow.crit .tx{color:#f0a5a5}
+.evrow .tx .src{font-size:10px;color:var(--muted);margin-right:5px}
+.evrow .tx .cmd{color:var(--accent);font-weight:600;margin-right:5px}
+.evrow .agg{display:flex;flex-direction:column;align-items:flex-end;gap:2px;margin-top:1px}
+.count{font-size:10.5px;color:var(--ink);background:var(--surface-2);border:1px solid var(--border);
+  border-radius:999px;padding:0 6px;font-variant-numeric:tabular-nums;white-space:nowrap}
+.density{height:9px;width:64px;display:block}
+.evdetail{padding:2px 4px 10px 63px}
+.evdetail .kv{margin-top:2px}
+.steps{display:flex;gap:5px;flex-wrap:wrap;margin-top:4px}
+.step{font-size:10.5px;padding:1px 7px;border-radius:999px;border:1px solid var(--border);color:var(--ink-2)}
+.step b{font-family:var(--mono);font-weight:600}
+.empty{color:var(--muted);font-size:12px;padding:12px 2px}
+
+/* 紀錄卡 */
+.logline{display:flex;align-items:baseline;gap:8px;flex-wrap:wrap;font-size:12px;color:var(--ink-2)}
+.logline .f{font-family:var(--mono);color:var(--ink)}
+.logline .sep{color:var(--hairline)}
+.btn{padding:4px 11px;border:1px solid var(--hairline);border-radius:7px;color:var(--ink-2);
+  background:var(--surface-2);font-size:12px}
+.btn:hover{color:var(--ink);border-color:var(--border)}
+.btn.primary{color:var(--accent);border-color:var(--accent);background:var(--accent-bg)}
+.logactions{display:flex;gap:7px;margin-top:9px;align-items:center}
+
+.evsheet{width:min(680px,94vw)}
+.evsheet .sheethead h2{font-size:14px;line-height:1.55;word-break:break-word;max-width:100%}
+.evsheet .evdetail{padding:0}
+.evsheet pre.raw{max-height:340px}
+.evsheet .kv{grid-template-columns:auto 1fr;gap:5px 14px;font-size:12px}
+.evsheet .steps{margin-top:0;margin-bottom:10px}
+
+/* ── log 索引 sheet ─────────────────────────────────────── */
+.mask[hidden]{display:none}
+.mask{position:fixed;inset:0;background:rgba(12,11,9,.62);z-index:50;display:grid;place-items:center;padding:22px}
+.sheet{background:var(--surface);border:1px solid var(--border);border-radius:14px;
+  width:min(1040px,96vw);max-height:92dvh;display:flex;flex-direction:column;
+  box-shadow:0 24px 64px rgba(0,0,0,.55);overflow:hidden}
+.sheethead{display:flex;align-items:center;gap:12px;padding:13px 16px;border-bottom:1px solid var(--hairline);flex-wrap:wrap}
+.sheethead h2{font-size:14px;font-weight:600}
+.sheethead .meta{font-size:11.5px;color:var(--muted);font-family:var(--mono)}
+.tabs{display:flex;gap:3px;padding:8px 16px 0;border-bottom:1px solid var(--hairline)}
+.tabs button{padding:6px 12px;font-size:12px;color:var(--muted);border-bottom:2px solid transparent;margin-bottom:-1px}
+.tabs button[aria-selected="true"]{color:var(--accent);border-bottom-color:var(--accent)}
+.tabs button:hover{color:var(--ink-2)}
+.sheetbody{overflow:auto;padding:14px 16px 18px;min-height:0}
+.searchrow{display:flex;gap:9px;align-items:center;margin-bottom:10px;flex-wrap:wrap}
+.searchrow input{background:var(--page);border:1px solid var(--hairline);border-radius:7px;
+  padding:5px 9px;font-size:12px;min-width:190px;flex:1;max-width:280px}
+.searchrow .hint{font-size:11px;color:var(--muted)}
+table.tbl{width:100%;border-collapse:collapse;font-size:12px}
+table.tbl th{text-align:left;font-size:10.5px;font-weight:600;color:var(--muted);letter-spacing:.04em;
+  padding:0 8px 6px;border-bottom:1px solid var(--hairline);white-space:nowrap}
+table.tbl td{padding:5px 8px;border-bottom:1px solid rgba(58,56,51,.55);color:var(--ink-2);vertical-align:top}
+table.tbl td.n{font-family:var(--mono);text-align:right;font-variant-numeric:tabular-nums;white-space:nowrap}
+table.tbl tr.tap{cursor:pointer}
+table.tbl tr.tap:hover td{background:var(--surface-2)}
+.tname{font-family:var(--mono);color:var(--ink);font-size:12px}
+.arrow{color:var(--muted);font-size:10px}
+.fieldsbox{background:var(--page);border:1px solid var(--hairline);border-radius:8px;padding:9px 11px;margin:2px 0 8px}
+.fieldsbox .kv{grid-template-columns:auto 1fr;font-size:11px}
+.stlist{display:flex;flex-direction:column;gap:1px}
+.strow{display:grid;grid-template-columns:9px 66px 1fr;gap:9px;align-items:start;padding:6px 4px;
+  border-bottom:1px solid rgba(58,56,51,.55)}
+.strow time{font-family:var(--mono);font-size:11px;color:var(--muted)}
+.strow .t{font-size:12.5px;color:var(--ink-2);font-family:var(--mono)}
+.strow .dot{width:7px;height:7px;border-radius:50%;margin-top:5px}
+.chartblock{margin-bottom:16px}
+.chartblock h4{font-size:11.5px;color:var(--ink-2);font-weight:600;margin-bottom:2px;display:flex;gap:8px;align-items:baseline}
+.chartblock h4 span{color:var(--muted);font-weight:400;font-size:11px}
+.chartblock svg{width:100%;height:104px;display:block}
+.modeband{width:100%;height:38px;display:block}
+.note code{font-family:var(--mono);font-size:10.5px;background:var(--page);border:1px solid var(--hairline);border-radius:4px;padding:0 4px}
+.note{font-size:11px;color:var(--muted);line-height:1.7;margin-top:10px;border-top:1px solid var(--hairline);padding-top:9px}
+</style>
+
+<div class="shell">
+  <nav class="nav">
+    <span class="brand">UAV 監控</span>
+    <div class="navtabs">
+      <button aria-current="true" title="即時監控">
+        <svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><circle cx="12" cy="12" r="3.2"/><path d="M12 2.5v4M12 17.5v4M2.5 12h4M17.5 12h4"/></svg>
+      </button>
+      <button title="無人機">
+        <svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><circle cx="5.5" cy="5.5" r="2.4"/><circle cx="18.5" cy="5.5" r="2.4"/><circle cx="5.5" cy="18.5" r="2.4"/><circle cx="18.5" cy="18.5" r="2.4"/><rect x="10" y="10" width="4" height="4" rx="1.4"/></svg>
+      </button>
+      <button title="路徑管理">
+        <svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M4 19c6 0 2-10 8-10 5 0 3 7 8 5"/></svg>
+      </button>
+      <button title="資訊">
+        <svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M3 7.5l9-4.5 9 4.5-9 4.5-9-4.5z"/><path d="M3 12l9 4.5 9-4.5"/><path d="M3 16.5l9 4.5 9-4.5"/></svg>
+      </button>
+    </div>
+    <span class="spacer"></span>
+    <span class="reclight" id="reclight">
+      <span class="recdot"></span><span class="rectxt">未記錄</span>
+    </span>
+  </nav>
+
+  <main class="app">
+    <section class="mapwrap">
+      <svg id="map" viewBox="0 0 1000 700" preserveAspectRatio="xMidYMid meet"></svg>
+      <div class="fleet" id="fleet"></div>
+      <div class="legend">
+        <span class="lab">鏈路</span>
+        <span class="seg"><i class="sw" style="background:var(--sinr-good)"></i>良好</span>
+        <span class="seg"><i class="sw" style="background:var(--sinr-fair)"></i>尚可</span>
+        <span class="seg"><i class="sw" style="background:var(--sinr-bad)"></i>劣化</span>
+        <span class="seg"><i class="sw" style="background:var(--sinr-crit)"></i>瀕斷</span>
+        <span class="seg" style="margin-left:4px"><i class="sw" style="background:repeating-linear-gradient(90deg,var(--ink-2) 0 3px,transparent 3px 6px)"></i>補傳</span>
+        <span class="info" tabindex="0" data-tip="彩帶＝即時遙測，依當時 SINR 上色（門檻同 backend：良好 ≥13、尚可 5–13、劣化 −2–5、瀕斷 −2 dB 以下）。虛線＝機上補傳的樣本，另一個來源，所以不與彩帶相連。顏色永不單獨傳達語意。">ⓘ</span>
+      </div>
+      <div class="hud" id="hud"></div>
+      <div class="stalebar" id="stalebar" hidden></div>
+      <div class="scalebar" id="scalebar"></div>
+    </section>
+
+    <aside class="panel">
+      <article class="card">
+        <h3>pi5-sdmodelh7v2-ardu<span class="spacer"></span>
+          <span class="info" tabindex="0" data-tip="這一列只放「會變、且看一眼就要知道」的事實。機型、板號、韌體版本這類幾乎不變的欄位在無人機頁，不佔即時畫面。">ⓘ</span>
+        </h3>
+        <div class="facts" id="facts"></div>
+      </article>
+
+      <article class="card">
+        <h3>訊號<span class="spacer"></span>
+          <span class="info" tabindex="0" data-tip="粗線＝2 秒滑動平均，細線＝原始樣本，虛線＝良好門檻 13 dB。誠實原則禁止只畫平滑線——平滑只影響繪製，不產生量測點之間的假值。">ⓘ</span>
+        </h3>
+        <div id="sigbody"></div>
+      </article>
+
+      <article class="card grow">
+        <h3>事件<span id="evcount" class="spacer" style="color:var(--muted);font-weight:400"></span>
+          <span class="info" tabindex="0" data-tip="同一句話重複出現時折成一列：×N、起訖時間、間隔，右邊的細條是每一次發生的時刻。展開看逐則原文。關掉折疊即可看到今天畫面上的樣子。">ⓘ</span>
+        </h3>
+        <div class="evtools" id="evtools"></div>
+        <div class="evlist" id="evlist"></div>
+      </article>
+
+      <article class="card">
+        <h3>紀錄<span class="spacer"></span>
+          <span class="info" tabindex="0" data-tip="機上錄的是飛控送出的東西，地面站錄的是送到地面站的東西——兩者相差的就是斷線那一段。這裡列的是機上那一份。">ⓘ</span>
+        </h3>
+        <div id="logbody"></div>
+      </article>
+    </aside>
+  </main>
+</div>
+
+<div class="mask" id="evmask" hidden>
+  <div class="sheet evsheet" role="dialog" aria-modal="true" aria-label="事件詳細">
+    <div class="sheethead">
+      <h2 id="evTitle">事件</h2>
+      <span class="meta" id="evMeta"></span>
+      <span class="spacer"></span>
+      <button class="btn" id="evClose" aria-label="關閉">✕</button>
+    </div>
+    <div class="sheetbody" id="evBody"></div>
+  </div>
+</div>
+
+<div class="mask" id="mask" hidden>
+  <div class="sheet" role="dialog" aria-modal="true" aria-label="紀錄索引">
+    <div class="sheethead">
+      <h2 id="sheetTitle">紀錄索引</h2>
+      <span class="meta" id="sheetMeta"></span>
+      <span class="spacer"></span>
+      <button class="btn" id="sheetClose" aria-label="關閉">✕</button>
+    </div>
+    <div class="tabs" id="sheetTabs"></div>
+    <div class="sheetbody" id="sheetBody"></div>
+  </div>
+</div>
+
+<script>window.PROTO={"gen":"2026-09-07T22:41:26+08:00","window":{"t0":1788769680.124932,"t1":1788770460.124932,"clock0":"16:28:00","clock1":"16:41:00","len":780.0},"flight":{"id":"eeb4e6de-3793-418b-b636-f6688757b5e0","mission":"lowspeed-test-260907-v4","drone":"pi5-sdmodelh7v2-ardu","start":21.0,"end":110.03,"start_clock":"16:28:21","end_clock":"16:29:50","summary":{"avg_sinr":21.006493506493506,"min_sinr":11.5,"avg_rtt_ms":28.546753103082832,"max_alt_rel":3.6659998893737793,"samples_total":77,"samples_in_zone":0},"end_reason":"disarmed"},"fleet":[{"id":"9b4c4ca0-2491-4b0b-afad-fc407c75e940","name":"ai-model-rb5 [啪 沒了]","primary":false,"sysid":null,"fw":null,"board":null},{"id":"1d2f19b1-a979-4f90-ad63-3d50a9ebad11","name":"pi5-sdmodelh7v2-ardu","primary":true,"sysid":1,"fw":"4.7.0 (official)","board":"2a0020001151333139383538"},{"id":"1ed3fc09-c44f-4152-bffc-c4b0a850073c","name":"uav-s2","primary":false,"sysid":2,"fw":null,"board":null}],"tele":[{"t":21.33,"lat":24.7735248,"lon":121.0459077,"alt":0.014000000432133675,"gs":0.02127564325928688,"vs":-0.005838245619088411,"hdg":129.88999938964844,"batt":99.0,"volt":15.553000450134277,"mode":"LOITER","armed":true,"bf":false,"fix":4,"sats":27},{"t":22.34,"lat":24.7735253,"lon":121.0459077,"alt":0.017999999225139618,"gs":0.01386473048478365,"vs":-0.005513282492756844,"hdg":129.8800048828125,"batt":99.0,"volt":15.552000045776367,"mode":"LOITER","armed":true,"bf":false,"fix":4,"sats":27},{"t":23.35,"lat":24.7735257,"lon":121.0459082,"alt":0.03200000151991844,"gs":0.02258821204304695,"vs":-0.0017901345854625106,"hdg":129.8699951171875,"batt":99.0,"volt":15.538000106811523,"mode":"LOITER","armed":true,"bf":false,"fix":4,"sats":27},{"t":24.36,"lat":24.7735262,"lon":121.0459084,"alt":0.01899999938905239,"gs":0.024083536118268967,"vs":-0.01177956536412239,"hdg":129.8800048828125,"batt":99.0,"volt":15.538000106811523,"mode":"LOITER","armed":true,"bf":false,"fix":4,"sats":27},{"t":25.37,"lat":24.7735269,"lon":121.0459083,"alt":-0.023000000044703484,"gs":0.029980121180415154,"vs":-0.023804226890206337,"hdg":129.8699951171875,"batt":99.0,"volt":15.538999557495117,"mode":"LOITER","armed":true,"bf":false,"fix":4,"sats":27},{"t":26.39,"lat":24.7735276,"lon":121.0459084,"alt":-0.04100000113248825,"gs":0.03597276285290718,"vs":-0.030651483684778214,"hdg":129.8699951171875,"batt":99.0,"volt":15.538000106811523,"mode":"LOITER","armed":true,"bf":false,"fix":4,"sats":27},{"t":27.4,"lat":24.7735282,"lon":121.0459084,"alt":-0.052000001072883606,"gs":0.03880539536476135,"vs":-0.027616074308753014,"hdg":129.9199981689453,"batt":99.0,"volt":15.536999702453613,"mode":"LOITER","armed":true,"bf":false,"fix":4,"sats":27},{"t":28.4,"lat":24.7735286,"lon":121.0459083,"alt":-0.050999999046325684,"gs":0.03414376452565193,"vs":-0.02736012451350689,"hdg":129.91000366210938,"batt":99.0,"volt":15.53600025177002,"mode":"LOITER","armed":true,"bf":false,"fix":4,"sats":27},{"t":29.41,"lat":24.7735289,"lon":121.045908,"alt":-0.0430000014603138,"gs":0.024328181520104408,"vs":-0.019422346726059914,"hdg":129.9199981689453,"batt":99.0,"volt":15.37600040435791,"mode":"GUIDED","armed":true,"bf":false,"fix":4,"sats":27},{"t":30.42,"lat":24.7735295,"lon":121.0459091,"alt":0.1809999942779541,"gs":0.27756595611572266,"vs":0.6855419874191284,"hdg":132.27000427246094,"batt":98.0,"volt":15.215999603271484,"mode":"GUIDED","armed":true,"bf":false,"fix":4,"sats":27},{"t":31.43,"lat":24.7735284,"lon":121.0459106,"alt":1.5260000228881836,"gs":0.1566963791847229,"vs":1.2151505947113037,"hdg":132.1999969482422,"batt":98.0,"volt":15.28499984741211,"mode":"GUIDED","armed":true,"bf":false,"fix":4,"sats":27},{"t":32.44,"lat":24.7735281,"lon":121.0459081,"alt":2.186000108718872,"gs":0.3252595067024231,"vs":-0.08122415840625763,"hdg":131.3699951171875,"batt":98.0,"volt":15.258999824523926,"mode":"GUIDED","armed":true,"bf":false,"fix":4,"sats":27},{"t":33.45,"lat":24.7735286,"lon":121.0459059,"alt":2.0179998874664307,"gs":0.0664042979478836,"vs":-0.1509493887424469,"hdg":131.41000366210938,"batt":98.0,"volt":15.208999633789062,"mode":"AUTO","armed":true,"bf":false,"fix":4,"sats":27},{"t":34.47,"lat":24.7735279,"lon":121.0459054,"alt":1.9730000495910645,"gs":0.4994666278362274,"vs":-0.08060643821954727,"hdg":131.83999633789062,"batt":98.0,"volt":15.199000358581543,"mode":"AUTO","armed":true,"bf":false,"fix":4,"sats":27},{"t":35.47,"lat":24.7735208,"lon":121.0459027,"alt":1.9450000524520874,"gs":1.2743459939956665,"vs":0.008288883604109287,"hdg":181.57000732421875,"batt":98.0,"volt":15.180000305175781,"mode":"AUTO","armed":true,"bf":false,"fix":4,"sats":27},{"t":36.48,"lat":24.7735059,"lon":121.0458933,"alt":1.9600000381469727,"gs":2.6204957962036133,"vs":0.18186843395233154,"hdg":206.10000610351562,"batt":98.0,"volt":15.156999588012695,"mode":"AUTO","armed":true,"bf":false,"fix":4,"sats":27},{"t":37.49,"lat":24.7734766,"lon":121.0458773,"alt":2.1659998893737793,"gs":4.385043144226074,"vs":0.2853424549102783,"hdg":205.25,"batt":97.0,"volt":15.166999816894531,"mode":"AUTO","armed":true,"bf":false,"fix":4,"sats":27},{"t":38.5,"lat":24.7734365,"lon":121.0458584,"alt":2.4800000190734863,"gs":5.181584358215332,"vs":0.26634615659713745,"hdg":205.57000732421875,"batt":97.0,"volt":15.177000045776367,"mode":"AUTO","armed":true,"bf":false,"fix":4,"sats":27},{"t":39.51,"lat":24.7733904,"lon":121.0458382,"alt":2.7809998989105225,"gs":5.744979381561279,"vs":0.22337721288204193,"hdg":205.5800018310547,"batt":97.0,"volt":15.170999526977539,"mode":"AUTO","armed":true,"bf":false,"fix":4,"sats":27},{"t":40.52,"lat":24.7733436,"lon":121.0458156,"alt":2.937999963760376,"gs":5.552950382232666,"vs":0.28467220067977905,"hdg":205.82000732421875,"batt":97.0,"volt":15.168000221252441,"mode":"AUTO","armed":true,"bf":false,"fix":4,"sats":27},{"t":41.52,"lat":24.7733015,"lon":121.0457948,"alt":3.0920000076293945,"gs":4.44534969329834,"vs":0.33477288484573364,"hdg":205.08999633789062,"batt":97.0,"volt":15.166000366210938,"mode":"AUTO","armed":true,"bf":false,"fix":4,"sats":27},{"t":42.53,"lat":24.773275,"lon":121.0457822,"alt":3.260999917984009,"gs":1.8720096349716187,"vs":0.21276681125164032,"hdg":185.22000122070312,"batt":97.0,"volt":15.131999969482422,"mode":"AUTO","armed":true,"bf":false,"fix":4,"sats":27},{"t":43.54,"lat":24.7732673,"lon":121.0457938,"alt":3.4119999408721924,"gs":2.6894211769104004,"vs":0.1651856005191803,"hdg":126.52999877929688,"batt":97.0,"volt":15.119999885559082,"mode":"AUTO","armed":true,"bf":false,"fix":4,"sats":27},{"t":44.55,"lat":24.7732792,"lon":121.0458316,"alt":3.484999895095825,"gs":5.249829292297363,"vs":0.0714629739522934,"hdg":69.5199966430664,"batt":96.0,"volt":15.138999938964844,"mode":"AUTO","armed":true,"bf":false,"fix":4,"sats":27},{"t":45.56,"lat":24.7733004,"lon":121.0458839,"alt":3.315000057220459,"gs":6.162201881408691,"vs":0.10499551892280579,"hdg":66.06999969482422,"batt":96.0,"volt":15.145000457763672,"mode":"AUTO","armed":true,"bf":false,"fix":4,"sats":27},{"t":46.57,"lat":24.773324,"lon":121.0459424,"alt":3.3269999027252197,"gs":6.542102813720703,"vs":0.31453412771224976,"hdg":65.7699966430664,"batt":96.0,"volt":15.168999671936035,"mode":"AUTO","armed":true,"bf":false,"fix":4,"sats":27},{"t":47.57,"lat":24.7733473,"lon":121.0460018,"alt":3.299999952316284,"gs":6.196652889251709,"vs":0.167613223195076,"hdg":65.8499984741211,"batt":96.0,"volt":15.154999732971191,"mode":"AUTO","armed":true,"bf":false,"fix":4,"sats":27},{"t":48.58,"lat":24.7733674,"lon":121.0460516,"alt":3.178999900817871,"gs":4.4058074951171875,"vs":0.3088105022907257,"hdg":66.12999725341797,"batt":96.0,"volt":15.145000457763672,"mode":"AUTO","armed":true,"bf":false,"fix":4,"sats":27},{"t":49.59,"lat":24.773381,"lon":121.0460824,"alt":3.3910000324249268,"gs":2.341545820236206,"vs":0.18916141986846924,"hdg":66.6500015258789,"batt":96.0,"volt":15.147000312805176,"mode":"AUTO","armed":true,"bf":false,"fix":4,"sats":27},{"t":50.6,"lat":24.7733882,"lon":121.0460958,"alt":3.6659998893737793,"gs":0.763355016708374,"vs":-0.17642171680927277,"hdg":66.5199966430664,"batt":96.0,"volt":15.126999855041504,"mode":"AUTO","armed":true,"bf":false,"fix":4,"sats":27},{"t":51.61,"lat":24.7733887,"lon":121.0460994,"alt":3.624000072479248,"gs":0.4389724135398865,"vs":-0.14288540184497833,"hdg":103.75,"batt":95.0,"volt":15.116000175476074,"mode":"AUTO","armed":true,"bf":false,"fix":4,"sats":27},{"t":52.62,"lat":24.7733827,"lon":121.0460966,"alt":3.513000011444092,"gs":0.7466858625411987,"vs":-0.07714378833770752,"hdg":179.57000732421875,"batt":95.0,"volt":15.119999885559082,"mode":"AUTO","armed":true,"bf":false,"fix":4,"sats":27},{"t":53.63,"lat":24.7733814,"lon":121.0460909,"alt":3.3889999389648438,"gs":0.4328745901584625,"vs":0.05572059750556946,"hdg":209.97000122070312,"batt":95.0,"volt":15.10099983215332,"mode":"AUTO","armed":true,"bf":false,"fix":4,"sats":27},{"t":54.64,"lat":24.7733792,"lon":121.0460895,"alt":3.321000099182129,"gs":0.4824090898036957,"vs":0.1611599326133728,"hdg":209.6199951171875,"batt":95.0,"volt":15.10200023651123,"mode":"AUTO","armed":true,"bf":false,"fix":4,"sats":27},{"t":55.65,"lat":24.7733758,"lon":121.0460901,"alt":3.2799999713897705,"gs":0.3943689167499542,"vs":0.19124703109264374,"hdg":209.69000244140625,"batt":95.0,"volt":15.111000061035156,"mode":"AUTO","armed":true,"bf":false,"fix":4,"sats":27},{"t":56.66,"lat":24.773373,"lon":121.0460891,"alt":3.2200000286102295,"gs":0.32428181171417236,"vs":0.24172914028167725,"hdg":209.4199981689453,"batt":95.0,"volt":15.097999572753906,"mode":"AUTO","armed":true,"bf":false,"fix":4,"sats":27},{"t":57.67,"lat":24.7733705,"lon":121.0460876,"alt":3.1570000648498535,"gs":0.2804766595363617,"vs":0.3197977840900421,"hdg":208.8800048828125,"batt":95.0,"volt":15.098999977111816,"mode":"AUTO","armed":true,"bf":false,"fix":4,"sats":27},{"t":58.68,"lat":24.7733683,"lon":121.0460869,"alt":3.121999979019165,"gs":0.195817232131958,"vs":0.34017497301101685,"hdg":210.0500030517578,"batt":94.0,"volt":15.086999893188477,"mode":"AUTO","armed":true,"bf":false,"fix":4,"sats":27},{"t":59.69,"lat":24.7733664,"lon":121.0460853,"alt":3.111999988555908,"gs":0.3514435291290283,"vs":0.36339619755744934,"hdg":211.08999633789062,"batt":94.0,"volt":15.088000297546387,"mode":"AUTO","armed":true,"bf":false,"fix":4,"sats":27},{"t":60.39,"lat":null,"lon":null,"alt":null,"gs":null,"vs":null,"hdg":null,"batt":null,"volt":null,"mode":"LOITER","armed":null,"bf":true,"fix":null,"sats":null},{"t":60.7,"lat":24.7733638,"lon":121.0460829,"alt":3.0959999561309814,"gs":0.3229731619358063,"vs":0.38347750902175903,"hdg":209.42999267578125,"batt":94.0,"volt":15.083000183105469,"mode":"AUTO","armed":true,"bf":false,"fix":4,"sats":27},{"t":61.39,"lat":24.7735837,"lon":121.0459137,"alt":-0.009999999776482582,"gs":0.009999999776482582,"vs":null,"hdg":133.0,"batt":99.0,"volt":15.36400032043457,"mode":"LOITER","armed":null,"bf":true,"fix":null,"sats":28},{"t":61.71,"lat":24.7733614,"lon":121.0460822,"alt":3.1070001125335693,"gs":0.24395084381103516,"vs":0.37949255108833313,"hdg":208.97000122070312,"batt":94.0,"volt":15.085000038146973,"mode":"AUTO","armed":true,"bf":false,"fix":4,"sats":27},{"t":62.39,"lat":24.7735833,"lon":121.0459136,"alt":-0.09000000357627869,"gs":0.009999999776482582,"vs":null,"hdg":133.0,"batt":99.0,"volt":15.36400032043457,"mode":"LOITER","armed":null,"bf":true,"fix":null,"sats":28},{"t":62.72,"lat":24.7733592,"lon":121.0460812,"alt":3.1089999675750732,"gs":0.24768196046352386,"vs":0.3660426139831543,"hdg":208.77000427246094,"batt":94.0,"volt":15.083000183105469,"mode":"AUTO","armed":true,"bf":false,"fix":4,"sats":27},{"t":63.39,"lat":24.773583,"lon":121.0459136,"alt":-0.18000000715255737,"gs":0.019999999552965164,"vs":null,"hdg":133.0,"batt":99.0,"volt":15.36400032043457,"mode":"LOITER","armed":null,"bf":true,"fix":null,"sats":28},{"t":63.73,"lat":24.7733572,"lon":121.0460799,"alt":3.11299991607666,"gs":0.3797990679740906,"vs":0.36071452498435974,"hdg":210.8300018310547,"batt":94.0,"volt":15.074000358581543,"mode":"AUTO","armed":true,"bf":false,"fix":4,"sats":27},{"t":64.39,"lat":24.7735827,"lon":121.0459136,"alt":-0.25,"gs":0.029999999329447746,"vs":null,"hdg":133.0,"batt":99.0,"volt":15.36299991607666,"mode":"LOITER","armed":null,"bf":true,"fix":null,"sats":28},{"t":64.74,"lat":24.7733546,"lon":121.0460775,"alt":3.140000104904175,"gs":0.26712995767593384,"vs":0.3530971109867096,"hdg":212.39999389648438,"batt":94.0,"volt":15.07800006866455,"mode":"AUTO","armed":true,"bf":false,"fix":4,"sats":27},{"t":65.39,"lat":24.7735824,"lon":121.0459137,"alt":-0.3199999928474426,"gs":0.03999999910593033,"vs":null,"hdg":133.0,"batt":99.0,"volt":15.364999771118164,"mode":"LOITER","armed":null,"bf":true,"fix":null,"sats":28},{"t":65.75,"lat":24.7733534,"lon":121.0460759,"alt":3.125,"gs":0.28336453437805176,"vs":0.3677155077457428,"hdg":210.4199981689453,"batt":93.0,"volt":15.074000358581543,"mode":"AUTO","armed":true,"bf":false,"fix":4,"sats":27},{"t":66.39,"lat":24.7735821,"lon":121.0459138,"alt":-0.4000000059604645,"gs":0.05000000074505806,"vs":null,"hdg":133.0,"batt":99.0,"volt":15.36400032043457,"mode":"LOITER","armed":null,"bf":true,"fix":null,"sats":28},{"t":66.76,"lat":24.7733501,"lon":121.0460756,"alt":3.1740000247955322,"gs":0.307625949382782,"vs":0.32212308049201965,"hdg":212.27000427246094,"batt":93.0,"volt":15.074000358581543,"mode":"AUTO","armed":true,"bf":false,"fix":4,"sats":27},{"t":67.39,"lat":24.7735819,"lon":121.045914,"alt":-0.4399999976158142,"gs":0.05000000074505806,"vs":null,"hdg":133.0,"batt":99.0,"volt":15.362000465393066,"mode":"LOITER","armed":null,"bf":true,"fix":null,"sats":28},{"t":67.77,"lat":24.7733485,"lon":121.046074,"alt":3.200000047683716,"gs":0.21347661316394806,"vs":0.2929076552391052,"hdg":210.3699951171875,"batt":93.0,"volt":15.07699966430664,"mode":"AUTO","armed":true,"bf":false,"fix":4,"sats":27},{"t":68.39,"lat":24.7735817,"lon":121.0459142,"alt":-0.5199999809265137,"gs":0.05999999865889549,"vs":null,"hdg":133.0,"batt":99.0,"volt":15.361000061035156,"mode":"LOITER","armed":null,"bf":true,"fix":null,"sats":28},{"t":68.78,"lat":24.7733468,"lon":121.0460728,"alt":3.2160000801086426,"gs":0.30129140615463257,"vs":0.2756374776363373,"hdg":208.83999633789062,"batt":93.0,"volt":15.071999549865723,"mode":"AUTO","armed":true,"bf":false,"fix":4,"sats":27},{"t":69.39,"lat":24.7735816,"lon":121.0459146,"alt":-0.5699999928474426,"gs":0.05999999865889549,"vs":null,"hdg":133.0,"batt":99.0,"volt":15.362000465393066,"mode":"LOITER","armed":null,"bf":true,"fix":null,"sats":28},{"t":69.79,"lat":24.7733446,"lon":121.0460713,"alt":3.2239999771118164,"gs":0.31643110513687134,"vs":0.26398077607154846,"hdg":209.05999755859375,"batt":93.0,"volt":15.067000389099121,"mode":"AUTO","armed":true,"bf":false,"fix":4,"sats":27},{"t":70.39,"lat":24.7735816,"lon":121.0459152,"alt":-0.6100000143051147,"gs":0.05999999865889549,"vs":null,"hdg":133.0,"batt":99.0,"volt":15.361000061035156,"mode":"LOITER","armed":null,"bf":true,"fix":null,"sats":27},{"t":70.8,"lat":24.7733418,"lon":121.0460699,"alt":3.190000057220459,"gs":0.43141308426856995,"vs":0.2681547999382019,"hdg":210.3300018310547,"batt":93.0,"volt":15.053000450134277,"mode":"AUTO","armed":true,"bf":false,"fix":4,"sats":27},{"t":71.39,"lat":24.7735816,"lon":121.0459158,"alt":-0.6299999952316284,"gs":0.05999999865889549,"vs":null,"hdg":133.0,"batt":99.0,"volt":15.359999656677246,"mode":"LOITER","armed":null,"bf":true,"fix":null,"sats":28},{"t":71.8,"lat":24.7733386,"lon":121.0460693,"alt":3.2209999561309814,"gs":0.27480342984199524,"vs":0.2948518395423889,"hdg":212.1699981689453,"batt":93.0,"volt":15.059000015258789,"mode":"AUTO","armed":true,"bf":false,"fix":4,"sats":27},{"t":72.39,"lat":24.7735815,"lon":121.0459164,"alt":-0.6200000047683716,"gs":0.05999999865889549,"vs":null,"hdg":133.0,"batt":99.0,"volt":15.359999656677246,"mode":"LOITER","armed":null,"bf":true,"fix":null,"sats":28},{"t":72.81,"lat":24.7733374,"lon":121.0460664,"alt":3.250999927520752,"gs":0.42085909843444824,"vs":0.2437489777803421,"hdg":210.77999877929688,"batt":92.0,"volt":15.053999900817871,"mode":"AUTO","armed":true,"bf":false,"fix":4,"sats":27},{"t":73.39,"lat":24.7735813,"lon":121.045917,"alt":-0.6000000238418579,"gs":0.05999999865889549,"vs":null,"hdg":133.0,"batt":99.0,"volt":15.359999656677246,"mode":"LOITER","armed":null,"bf":true,"fix":null,"sats":28},{"t":73.82,"lat":24.7733361,"lon":121.0460643,"alt":3.259000062942505,"gs":0.25516679883003235,"vs":0.23578721284866333,"hdg":210.3800048828125,"batt":92.0,"volt":15.053000450134277,"mode":"AUTO","armed":true,"bf":false,"fix":4,"sats":27},{"t":74.39,"lat":24.7735812,"lon":121.0459177,"alt":-0.5699999928474426,"gs":0.05999999865889549,"vs":null,"hdg":133.0,"batt":99.0,"volt":15.354000091552734,"mode":"LOITER","armed":null,"bf":true,"fix":null,"sats":28},{"t":74.83,"lat":24.7733334,"lon":121.0460644,"alt":3.2880001068115234,"gs":0.3397495448589325,"vs":0.2102275937795639,"hdg":209.9199981689453,"batt":92.0,"volt":15.050999641418457,"mode":"AUTO","armed":true,"bf":false,"fix":4,"sats":27},{"t":75.39,"lat":24.773581,"lon":121.0459182,"alt":-0.5199999809265137,"gs":0.05000000074505806,"vs":null,"hdg":133.0,"batt":99.0,"volt":15.35200023651123,"mode":"LOITER","armed":null,"bf":true,"fix":null,"sats":28},{"t":75.84,"lat":24.7733308,"lon":121.0460632,"alt":3.305999994277954,"gs":0.3325739800930023,"vs":0.20305442810058594,"hdg":210.92999267578125,"batt":92.0,"volt":15.052000045776367,"mode":"AUTO","armed":true,"bf":false,"fix":4,"sats":27},{"t":76.39,"lat":24.7735808,"lon":121.0459188,"alt":-0.46000000834465027,"gs":0.03999999910593033,"vs":null,"hdg":133.0,"batt":99.0,"volt":15.355999946594238,"mode":"LOITER","armed":null,"bf":true,"fix":null,"sats":28},{"t":76.85,"lat":24.7733291,"lon":121.0460609,"alt":3.303999900817871,"gs":0.30518579483032227,"vs":0.1894986629486084,"hdg":209.1999969482422,"batt":92.0,"volt":15.04699993133545,"mode":"AUTO","armed":true,"bf":false,"fix":4,"sats":27},{"t":77.4,"lat":24.7735806,"lon":121.0459195,"alt":-0.4000000059604645,"gs":0.03999999910593033,"vs":null,"hdg":133.0,"batt":99.0,"volt":15.354999542236328,"mode":"LOITER","armed":null,"bf":true,"fix":null,"sats":29},{"t":77.86,"lat":24.7733265,"lon":121.0460595,"alt":3.3420000076293945,"gs":0.2618734836578369,"vs":0.1431995928287506,"hdg":211.50999450683594,"batt":92.0,"volt":15.045000076293945,"mode":"AUTO","armed":true,"bf":false,"fix":4,"sats":28},{"t":78.4,"lat":24.7735804,"lon":121.04592,"alt":-0.38999998569488525,"gs":0.029999999329447746,"vs":null,"hdg":133.0,"batt":99.0,"volt":15.354999542236328,"mode":"LOITER","armed":null,"bf":true,"fix":null,"sats":28},{"t":78.87,"lat":24.7733244,"lon":121.0460582,"alt":3.3399999141693115,"gs":0.27483999729156494,"vs":0.15822696685791016,"hdg":213.1699981689453,"batt":92.0,"volt":15.039999961853027,"mode":"AUTO","armed":true,"bf":false,"fix":4,"sats":28},{"t":79.4,"lat":24.7735804,"lon":121.0459205,"alt":-0.4000000059604645,"gs":0.03999999910593033,"vs":null,"hdg":133.0,"batt":99.0,"volt":15.354999542236328,"mode":"LOITER","armed":null,"bf":true,"fix":null,"sats":29},{"t":79.88,"lat":24.7733229,"lon":121.0460555,"alt":3.3559999465942383,"gs":0.28923559188842773,"vs":0.1453063189983368,"hdg":209.55999755859375,"batt":91.0,"volt":15.038000106811523,"mode":"AUTO","armed":true,"bf":false,"fix":4,"sats":28},{"t":80.4,"lat":24.7735803,"lon":121.0459211,"alt":-0.4300000071525574,"gs":0.03999999910593033,"vs":null,"hdg":133.0,"batt":99.0,"volt":15.354000091552734,"mode":"LOITER","armed":null,"bf":true,"fix":null,"sats":26},{"t":80.89,"lat":24.7733191,"lon":121.046055,"alt":3.377000093460083,"gs":0.4120927155017853,"vs":0.11316967755556107,"hdg":210.3000030517578,"batt":91.0,"volt":15.038000106811523,"mode":"AUTO","armed":true,"bf":false,"fix":4,"sats":28},{"t":81.4,"lat":24.7735802,"lon":121.0459216,"alt":-0.4399999976158142,"gs":0.05000000074505806,"vs":null,"hdg":133.0,"batt":99.0,"volt":15.354000091552734,"mode":"LOITER","armed":null,"bf":true,"fix":null,"sats":28},{"t":81.9,"lat":24.7733163,"lon":121.0460537,"alt":3.388000011444092,"gs":0.2833636999130249,"vs":0.1350054293870926,"hdg":210.16000366210938,"batt":91.0,"volt":15.039999961853027,"mode":"AUTO","armed":true,"bf":false,"fix":4,"sats":28},{"t":82.4,"lat":24.7735802,"lon":121.045922,"alt":-0.4099999964237213,"gs":0.05000000074505806,"vs":null,"hdg":133.0,"batt":99.0,"volt":15.354000091552734,"mode":"LOITER","armed":null,"bf":true,"fix":null,"sats":28},{"t":82.91,"lat":24.7733145,"lon":121.0460526,"alt":3.3910000324249268,"gs":0.18315976858139038,"vs":0.08995058387517929,"hdg":211.57000732421875,"batt":91.0,"volt":15.034000396728516,"mode":"AUTO","armed":true,"bf":false,"fix":4,"sats":28},{"t":83.4,"lat":24.7735801,"lon":121.0459223,"alt":-0.3100000023841858,"gs":0.019999999552965164,"vs":null,"hdg":133.0,"batt":99.0,"volt":15.354000091552734,"mode":"LOITER","armed":null,"bf":true,"fix":null,"sats":26},{"t":83.92,"lat":24.7733124,"lon":121.0460519,"alt":3.38100004196167,"gs":0.2364998459815979,"vs":0.12352421879768372,"hdg":209.52999877929688,"batt":91.0,"volt":15.03600025177002,"mode":"AUTO","armed":true,"bf":false,"fix":4,"sats":28},{"t":84.4,"lat":24.7735801,"lon":121.0459227,"alt":-0.27000001072883606,"gs":0.029999999329447746,"vs":null,"hdg":133.0,"batt":99.0,"volt":15.352999687194824,"mode":"LOITER","armed":null,"bf":true,"fix":null,"sats":28},{"t":84.93,"lat":24.7733108,"lon":121.0460505,"alt":3.380000114440918,"gs":0.3214043378829956,"vs":0.1203673854470253,"hdg":211.17999267578125,"batt":91.0,"volt":15.027999877929688,"mode":"AUTO","armed":true,"bf":false,"fix":4,"sats":28},{"t":85.4,"lat":24.7735801,"lon":121.0459228,"alt":-0.27000001072883606,"gs":0.029999999329447746,"vs":null,"hdg":133.0,"batt":99.0,"volt":15.35099983215332,"mode":"LOITER","armed":null,"bf":true,"fix":null,"sats":27},{"t":85.93,"lat":24.773308,"lon":121.0460483,"alt":3.4079999923706055,"gs":0.3427380919456482,"vs":0.09377361834049225,"hdg":211.1199951171875,"batt":90.0,"volt":15.02299976348877,"mode":"AUTO","armed":true,"bf":false,"fix":4,"sats":28},{"t":86.4,"lat":24.7735801,"lon":121.0459232,"alt":-0.2800000011920929,"gs":0.029999999329447746,"vs":null,"hdg":133.0,"batt":99.0,"volt":15.352999687194824,"mode":"LOITER","armed":null,"bf":true,"fix":null,"sats":28},{"t":86.94,"lat":24.7733063,"lon":121.0460466,"alt":3.4260001182556152,"gs":0.23413734138011932,"vs":0.10289381444454193,"hdg":209.2100067138672,"batt":90.0,"volt":15.03600025177002,"mode":"AUTO","armed":true,"bf":false,"fix":4,"sats":28},{"t":87.95,"lat":24.7733045,"lon":121.0460457,"alt":3.4079999923706055,"gs":0.307319700717926,"vs":0.07528391480445862,"hdg":207.67999267578125,"batt":90.0,"volt":15.024999618530273,"mode":"AUTO","armed":true,"bf":false,"fix":4,"sats":28},{"t":88.96,"lat":24.7733014,"lon":121.0460452,"alt":3.427000045776367,"gs":0.2982611656188965,"vs":0.08389048278331757,"hdg":207.60000610351562,"batt":90.0,"volt":15.02299976348877,"mode":"AUTO","armed":true,"bf":false,"fix":4,"sats":28},{"t":89.97,"lat":24.7732994,"lon":121.0460437,"alt":3.427000045776367,"gs":0.2686842679977417,"vs":0.049578506499528885,"hdg":209.24000549316406,"batt":90.0,"volt":15.015999794006348,"mode":"AUTO","armed":true,"bf":false,"fix":4,"sats":28},{"t":90.98,"lat":24.773297,"lon":121.046042,"alt":3.4210000038146973,"gs":0.32504740357398987,"vs":0.08240194618701935,"hdg":208.4199981689453,"batt":90.0,"volt":15.020000457763672,"mode":"AUTO","armed":true,"bf":false,"fix":4,"sats":29},{"t":91.99,"lat":24.7732947,"lon":121.0460403,"alt":3.444999933242798,"gs":0.27383068203926086,"vs":0.04158669710159302,"hdg":209.3300018310547,"batt":90.0,"volt":15.01099967956543,"mode":"AUTO","armed":true,"bf":false,"fix":4,"sats":29},{"t":93.0,"lat":24.7732931,"lon":121.0460391,"alt":3.430000066757202,"gs":0.16966183483600616,"vs":0.06661524623632431,"hdg":210.3800048828125,"batt":89.0,"volt":15.008999824523926,"mode":"AUTO","armed":true,"bf":false,"fix":4,"sats":29},{"t":94.01,"lat":24.7732916,"lon":121.0460378,"alt":3.4700000286102295,"gs":0.3039538264274597,"vs":0.03708057105541229,"hdg":210.19000244140625,"batt":89.0,"volt":15.013999938964844,"mode":"AUTO","armed":true,"bf":false,"fix":4,"sats":29},{"t":95.01,"lat":24.7732888,"lon":121.0460362,"alt":3.4709999561309814,"gs":0.3877392113208771,"vs":0.027613909915089607,"hdg":210.52999877929688,"batt":89.0,"volt":15.008000373840332,"mode":"AUTO","armed":true,"bf":false,"fix":4,"sats":29},{"t":96.02,"lat":24.7732859,"lon":121.0460352,"alt":3.5139999389648438,"gs":0.2668111324310303,"vs":-0.005780641455203295,"hdg":209.3800048828125,"batt":89.0,"volt":15.006999969482422,"mode":"AUTO","armed":true,"bf":false,"fix":4,"sats":29},{"t":97.03,"lat":24.7732841,"lon":121.0460338,"alt":3.5299999713897705,"gs":0.24128109216690063,"vs":-0.04566800966858864,"hdg":209.80999755859375,"batt":89.0,"volt":15.001999855041504,"mode":"AUTO","armed":true,"bf":false,"fix":4,"sats":29},{"t":98.04,"lat":24.7732826,"lon":121.0460324,"alt":3.5429999828338623,"gs":0.2066679298877716,"vs":-0.04177141189575195,"hdg":210.25999450683594,"batt":89.0,"volt":15.00100040435791,"mode":"AUTO","armed":true,"bf":false,"fix":4,"sats":29},{"t":99.05,"lat":24.7732809,"lon":121.0460312,"alt":3.51200008392334,"gs":0.2506369352340698,"vs":-0.1638324111700058,"hdg":209.88999938964844,"batt":89.0,"volt":15.039999961853027,"mode":"LAND","armed":true,"bf":false,"fix":4,"sats":29},{"t":100.05,"lat":24.7732798,"lon":121.0460306,"alt":3.194999933242798,"gs":0.05011429265141487,"vs":-0.32051485776901245,"hdg":210.8800048828125,"batt":88.0,"volt":14.996000289916992,"mode":"LAND","armed":true,"bf":false,"fix":4,"sats":29},{"t":101.06,"lat":24.7732803,"lon":121.0460306,"alt":2.9179999828338623,"gs":0.044905610382556915,"vs":-0.33719247579574585,"hdg":209.49000549316406,"batt":88.0,"volt":14.996000289916992,"mode":"LAND","armed":true,"bf":false,"fix":4,"sats":29},{"t":102.07,"lat":24.7732799,"lon":121.0460304,"alt":2.61299991607666,"gs":0.02217879705131054,"vs":-0.32613980770111084,"hdg":209.64999389648438,"batt":88.0,"volt":14.994999885559082,"mode":"LAND","armed":true,"bf":false,"fix":4,"sats":29},{"t":103.08,"lat":24.7732802,"lon":121.0460304,"alt":2.305999994277954,"gs":0.09121391922235489,"vs":-0.3206622898578644,"hdg":209.66000366210938,"batt":88.0,"volt":14.991999626159668,"mode":"LAND","armed":true,"bf":false,"fix":4,"sats":29},{"t":104.09,"lat":24.7732807,"lon":121.0460304,"alt":2.013000011444092,"gs":0.05905890092253685,"vs":-0.312472403049469,"hdg":209.88999938964844,"batt":88.0,"volt":14.993000030517578,"mode":"LAND","armed":true,"bf":false,"fix":4,"sats":29},{"t":105.1,"lat":24.7732805,"lon":121.0460301,"alt":1.7029999494552612,"gs":0.05471011623740196,"vs":-0.30196815729141235,"hdg":210.8699951171875,"batt":88.0,"volt":14.994000434875488,"mode":"LAND","armed":true,"bf":false,"fix":4,"sats":29},{"t":106.11,"lat":24.7732805,"lon":121.0460303,"alt":1.4140000343322754,"gs":0.10210100561380386,"vs":-0.26570242643356323,"hdg":210.24000549316406,"batt":88.0,"volt":14.996999740600586,"mode":"LAND","armed":true,"bf":false,"fix":4,"sats":29},{"t":107.12,"lat":24.7732804,"lon":121.0460298,"alt":1.2400000095367432,"gs":0.014272511936724186,"vs":0.006522587966173887,"hdg":208.27999877929688,"batt":87.0,"volt":15.168999671936035,"mode":"LAND","armed":true,"bf":false,"fix":4,"sats":29},{"t":108.13,"lat":24.7732801,"lon":121.0460295,"alt":1.1030000448226929,"gs":0.02198966220021248,"vs":0.008310925215482712,"hdg":207.74000549316406,"batt":87.0,"volt":15.152999877929688,"mode":"LAND","armed":true,"bf":false,"fix":4,"sats":29},{"t":109.14,"lat":24.7732799,"lon":121.0460293,"alt":1.0709999799728394,"gs":0.02080291323363781,"vs":0.01300870906561613,"hdg":207.1699981689453,"batt":87.0,"volt":15.154999732971191,"mode":"LAND","armed":true,"bf":false,"fix":4,"sats":29}],"link":[{"t":29.96,"sinr":11.5,"rtt":94.0999984741211,"rsrp":-105.0,"rsrq":-10.5,"mode":"SA","src":"modem","lat":24.7735292,"lon":121.045908,"dec":{"plmn":"999 66","tac":141,"nci":2310145,"narfcn":720288,"pci_hex":"8D","pci":141,"band":"n79","bw":100,"idx_sinr":69,"idx_rxlev":50,"idx_rsrp":50,"idx_rsrq":64,"narfcn_mhz":4804.3,"cesq":"99,99,255,255,255,255,65,51,69"},"raw":"{\"CESQ\": \"AT+CESQ\\r\\r\\n+CESQ: 99,99,255,255,255,255,65,51,69\\r\\n\\r\\nOK\", \"COPS\": \"AT+COPS?\\r\\r\\n+COPS: 0,0,\\\"999 66\\\",11\\r\\n\\r\\nOK\", \"plmn\": \"999 66\", \"GTCCINFO\": \"AT+GTCCINFO?\\r\\r\\n+GTCCINFO: \\r\\nNR service cell: \\r\\n1,9,999,66,8D,234001,AFDA0,8D,5079,100,69,50,50,64\\r\\n\\r\\nOK\"}"},{"t":30.96,"sinr":11.5,"rtt":94.0999984741211,"rsrp":-105.0,"rsrq":-10.5,"mode":"SA","src":"modem","lat":24.773529,"lon":121.0459104,"dec":{"plmn":"999 66","tac":141,"nci":2310145,"narfcn":720288,"pci_hex":"8D","pci":141,"band":"n79","bw":100,"idx_sinr":69,"idx_rxlev":50,"idx_rsrp":50,"idx_rsrq":64,"narfcn_mhz":4804.3,"cesq":"99,99,255,255,255,255,65,51,69"},"raw":"{\"CESQ\": \"AT+CESQ\\r\\r\\n+CESQ: 99,99,255,255,255,255,65,51,69\\r\\n\\r\\nOK\", \"COPS\": \"AT+COPS?\\r\\r\\n+COPS: 0,0,\\\"999 66\\\",11\\r\\n\\r\\nOK\", \"plmn\": \"999 66\", \"GTCCINFO\": \"AT+GTCCINFO?\\r\\r\\n+GTCCINFO: \\r\\nNR service cell: \\r\\n1,9,999,66,8D,234001,AFDA0,8D,5079,100,69,50,50,64\\r\\n\\r\\nOK\"}"},{"t":31.96,"sinr":11.5,"rtt":94.0999984741211,"rsrp":-105.0,"rsrq":-10.5,"mode":"SA","src":"modem","lat":24.7735281,"lon":121.0459099,"dec":{"plmn":"999 66","tac":141,"nci":2310145,"narfcn":720288,"pci_hex":"8D","pci":141,"band":"n79","bw":100,"idx_sinr":69,"idx_rxlev":50,"idx_rsrp":50,"idx_rsrq":64,"narfcn_mhz":4804.3,"cesq":"99,99,255,255,255,255,65,51,69"},"raw":"{\"CESQ\": \"AT+CESQ\\r\\r\\n+CESQ: 99,99,255,255,255,255,65,51,69\\r\\n\\r\\nOK\", \"COPS\": \"AT+COPS?\\r\\r\\n+COPS: 0,0,\\\"999 66\\\",11\\r\\n\\r\\nOK\", \"plmn\": \"999 66\", \"GTCCINFO\": \"AT+GTCCINFO?\\r\\r\\n+GTCCINFO: \\r\\nNR service cell: \\r\\n1,9,999,66,8D,234001,AFDA0,8D,5079,100,69,50,50,64\\r\\n\\r\\nOK\"}"},{"t":32.96,"sinr":11.5,"rtt":94.0999984741211,"rsrp":-105.0,"rsrq":-10.5,"mode":"SA","src":"modem","lat":24.7735282,"lon":121.0459065,"dec":{"plmn":"999 66","tac":141,"nci":2310145,"narfcn":720288,"pci_hex":"8D","pci":141,"band":"n79","bw":100,"idx_sinr":69,"idx_rxlev":50,"idx_rsrp":50,"idx_rsrq":64,"narfcn_mhz":4804.3,"cesq":"99,99,255,255,255,255,65,51,69"},"raw":"{\"CESQ\": \"AT+CESQ\\r\\r\\n+CESQ: 99,99,255,255,255,255,65,51,69\\r\\n\\r\\nOK\", \"COPS\": \"AT+COPS?\\r\\r\\n+COPS: 0,0,\\\"999 66\\\",11\\r\\n\\r\\nOK\", \"plmn\": \"999 66\", \"GTCCINFO\": \"AT+GTCCINFO?\\r\\r\\n+GTCCINFO: \\r\\nNR service cell: \\r\\n1,9,999,66,8D,234001,AFDA0,8D,5079,100,69,50,50,64\\r\\n\\r\\nOK\"}"},{"t":33.99,"sinr":11.5,"rtt":24.0,"rsrp":-105.0,"rsrq":-10.5,"mode":"SA","src":"modem","lat":24.7735289,"lon":121.0459058,"dec":{"plmn":"999 66","tac":141,"nci":2310145,"narfcn":720288,"pci_hex":"8D","pci":141,"band":"n79","bw":100,"idx_sinr":69,"idx_rxlev":50,"idx_rsrp":50,"idx_rsrq":64,"narfcn_mhz":4804.3,"cesq":"99,99,255,255,255,255,65,51,69"},"raw":"{\"CESQ\": \"AT+CESQ\\r\\r\\n+CESQ: 99,99,255,255,255,255,65,51,69\\r\\n\\r\\nOK\", \"COPS\": \"AT+COPS?\\r\\r\\n+COPS: 0,0,\\\"999 66\\\",11\\r\\n\\r\\nOK\", \"plmn\": \"999 66\", \"GTCCINFO\": \"AT+GTCCINFO?\\r\\r\\n+GTCCINFO: \\r\\nNR service cell: \\r\\n1,9,999,66,8D,234001,AFDA0,8D,5079,100,69,50,50,64\\r\\n\\r\\nOK\"}"},{"t":34.95,"sinr":19.5,"rtt":24.0,"rsrp":-101.0,"rsrq":-10.5,"mode":"SA","src":"modem","lat":24.773525,"lon":121.0459045,"dec":{"plmn":"999 66","tac":141,"nci":2310145,"narfcn":720288,"pci_hex":"8D","pci":141,"band":"n79","bw":100,"idx_sinr":85,"idx_rxlev":54,"idx_rsrp":54,"idx_rsrq":64,"narfcn_mhz":4804.3,"cesq":"99,99,255,255,255,255,65,55,85"},"raw":"{\"CESQ\": \"AT+CESQ\\r\\r\\n+CESQ: 99,99,255,255,255,255,65,55,85\\r\\n\\r\\nOK\", \"COPS\": \"AT+COPS?\\r\\r\\n+COPS: 0,0,\\\"999 66\\\",11\\r\\n\\r\\nOK\", \"plmn\": \"999 66\", \"GTCCINFO\": \"AT+GTCCINFO?\\r\\r\\n+GTCCINFO: \\r\\nNR service cell: \\r\\n1,9,999,66,8D,234001,AFDA0,8D,5079,100,85,54,54,64\\r\\n\\r\\nOK\"}"},{"t":35.96,"sinr":19.5,"rtt":24.0,"rsrp":-101.0,"rsrq":-10.5,"mode":"SA","src":"modem","lat":24.7735147,"lon":121.0458989,"dec":{"plmn":"999 66","tac":141,"nci":2310145,"narfcn":720288,"pci_hex":"8D","pci":141,"band":"n79","bw":100,"idx_sinr":85,"idx_rxlev":54,"idx_rsrp":54,"idx_rsrq":64,"narfcn_mhz":4804.3,"cesq":"99,99,255,255,255,255,65,55,85"},"raw":"{\"CESQ\": \"AT+CESQ\\r\\r\\n+CESQ: 99,99,255,255,255,255,65,55,85\\r\\n\\r\\nOK\", \"COPS\": \"AT+COPS?\\r\\r\\n+COPS: 0,0,\\\"999 66\\\",11\\r\\n\\r\\nOK\", \"plmn\": \"999 66\", \"GTCCINFO\": \"AT+GTCCINFO?\\r\\r\\n+GTCCINFO: \\r\\nNR service cell: \\r\\n1,9,999,66,8D,234001,AFDA0,8D,5079,100,85,54,54,64\\r\\n\\r\\nOK\"}"},{"t":36.96,"sinr":19.5,"rtt":24.0,"rsrp":-101.0,"rsrq":-10.5,"mode":"SA","src":"modem","lat":24.773493,"lon":121.0458862,"dec":{"plmn":"999 66","tac":141,"nci":2310145,"narfcn":720288,"pci_hex":"8D","pci":141,"band":"n79","bw":100,"idx_sinr":85,"idx_rxlev":54,"idx_rsrp":54,"idx_rsrq":64,"narfcn_mhz":4804.3,"cesq":"99,99,255,255,255,255,65,55,85"},"raw":"{\"CESQ\": \"AT+CESQ\\r\\r\\n+CESQ: 99,99,255,255,255,255,65,55,85\\r\\n\\r\\nOK\", \"COPS\": \"AT+COPS?\\r\\r\\n+COPS: 0,0,\\\"999 66\\\",11\\r\\n\\r\\nOK\", \"plmn\": \"999 66\", \"GTCCINFO\": \"AT+GTCCINFO?\\r\\r\\n+GTCCINFO: \\r\\nNR service cell: \\r\\n1,9,999,66,8D,234001,AFDA0,8D,5079,100,85,54,54,64\\r\\n\\r\\nOK\"}"},{"t":37.96,"sinr":19.5,"rtt":24.0,"rsrp":-101.0,"rsrq":-10.5,"mode":"SA","src":"modem","lat":24.7734574,"lon":121.0458676,"dec":{"plmn":"999 66","tac":141,"nci":2310145,"narfcn":720288,"pci_hex":"8D","pci":141,"band":"n79","bw":100,"idx_sinr":85,"idx_rxlev":54,"idx_rsrp":54,"idx_rsrq":64,"narfcn_mhz":4804.3,"cesq":"99,99,255,255,255,255,65,55,85"},"raw":"{\"CESQ\": \"AT+CESQ\\r\\r\\n+CESQ: 99,99,255,255,255,255,65,55,85\\r\\n\\r\\nOK\", \"COPS\": \"AT+COPS?\\r\\r\\n+COPS: 0,0,\\\"999 66\\\",11\\r\\n\\r\\nOK\", \"plmn\": \"999 66\", \"GTCCINFO\": \"AT+GTCCINFO?\\r\\r\\n+GTCCINFO: \\r\\nNR service cell: \\r\\n1,9,999,66,8D,234001,AFDA0,8D,5079,100,85,54,54,64\\r\\n\\r\\nOK\"}"},{"t":38.96,"sinr":19.5,"rtt":24.0,"rsrp":-101.0,"rsrq":-10.5,"mode":"SA","src":"modem","lat":24.773414,"lon":121.0458484,"dec":{"plmn":"999 66","tac":141,"nci":2310145,"narfcn":720288,"pci_hex":"8D","pci":141,"band":"n79","bw":100,"idx_sinr":85,"idx_rxlev":54,"idx_rsrp":54,"idx_rsrq":64,"narfcn_mhz":4804.3,"cesq":"99,99,255,255,255,255,65,55,85"},"raw":"{\"CESQ\": \"AT+CESQ\\r\\r\\n+CESQ: 99,99,255,255,255,255,65,55,85\\r\\n\\r\\nOK\", \"COPS\": \"AT+COPS?\\r\\r\\n+COPS: 0,0,\\\"999 66\\\",11\\r\\n\\r\\nOK\", \"plmn\": \"999 66\", \"GTCCINFO\": \"AT+GTCCINFO?\\r\\r\\n+GTCCINFO: \\r\\nNR service cell: \\r\\n1,9,999,66,8D,234001,AFDA0,8D,5079,100,85,54,54,64\\r\\n\\r\\nOK\"}"},{"t":39.98,"sinr":19.5,"rtt":25.700000762939453,"rsrp":-101.0,"rsrq":-10.5,"mode":"SA","src":"modem","lat":24.7733665,"lon":121.0458272,"dec":{"plmn":"999 66","tac":141,"nci":2310145,"narfcn":720288,"pci_hex":"8D","pci":141,"band":"n79","bw":100,"idx_sinr":85,"idx_rxlev":54,"idx_rsrp":54,"idx_rsrq":64,"narfcn_mhz":4804.3,"cesq":"99,99,255,255,255,255,65,55,85"},"raw":"{\"CESQ\": \"AT+CESQ\\r\\r\\n+CESQ: 99,99,255,255,255,255,65,55,85\\r\\n\\r\\nOK\", \"COPS\": \"AT+COPS?\\r\\r\\n+COPS: 0,0,\\\"999 66\\\",11\\r\\n\\r\\nOK\", \"plmn\": \"999 66\", \"GTCCINFO\": \"AT+GTCCINFO?\\r\\r\\n+GTCCINFO: \\r\\nNR service cell: \\r\\n1,9,999,66,8D,234001,AFDA0,8D,5079,100,85,54,54,64\\r\\n\\r\\nOK\"}"},{"t":40.95,"sinr":19.5,"rtt":25.700000762939453,"rsrp":-99.0,"rsrq":-10.5,"mode":"SA","src":"modem","lat":24.7733215,"lon":121.0458046,"dec":{"plmn":"999 66","tac":141,"nci":2310145,"narfcn":720288,"pci_hex":"8D","pci":141,"band":"n79","bw":100,"idx_sinr":85,"idx_rxlev":56,"idx_rsrp":56,"idx_rsrq":64,"narfcn_mhz":4804.3,"cesq":"99,99,255,255,255,255,65,57,85"},"raw":"{\"CESQ\": \"AT+CESQ\\r\\r\\n+CESQ: 99,99,255,255,255,255,65,57,85\\r\\n\\r\\nOK\", \"COPS\": \"AT+COPS?\\r\\r\\n+COPS: 0,0,\\\"999 66\\\",11\\r\\n\\r\\nOK\", \"plmn\": \"999 66\", \"GTCCINFO\": \"AT+GTCCINFO?\\r\\r\\n+GTCCINFO: \\r\\nNR service cell: \\r\\n1,9,999,66,8D,234001,AFDA0,8D,5079,100,85,56,56,64\\r\\n\\r\\nOK\"}"},{"t":41.96,"sinr":19.5,"rtt":25.700000762939453,"rsrp":-99.0,"rsrq":-10.5,"mode":"SA","src":"modem","lat":24.7732854,"lon":121.0457868,"dec":{"plmn":"999 66","tac":141,"nci":2310145,"narfcn":720288,"pci_hex":"8D","pci":141,"band":"n79","bw":100,"idx_sinr":85,"idx_rxlev":56,"idx_rsrp":56,"idx_rsrq":64,"narfcn_mhz":4804.3,"cesq":"99,99,255,255,255,255,65,57,85"},"raw":"{\"CESQ\": \"AT+CESQ\\r\\r\\n+CESQ: 99,99,255,255,255,255,65,57,85\\r\\n\\r\\nOK\", \"COPS\": \"AT+COPS?\\r\\r\\n+COPS: 0,0,\\\"999 66\\\",11\\r\\n\\r\\nOK\", \"plmn\": \"999 66\", \"GTCCINFO\": \"AT+GTCCINFO?\\r\\r\\n+GTCCINFO: \\r\\nNR service cell: \\r\\n1,9,999,66,8D,234001,AFDA0,8D,5079,100,85,56,56,64\\r\\n\\r\\nOK\"}"},{"t":42.97,"sinr":19.5,"rtt":25.700000762939453,"rsrp":-99.0,"rsrq":-10.5,"mode":"SA","src":"modem","lat":24.7732688,"lon":121.0457839,"dec":{"plmn":"999 66","tac":141,"nci":2310145,"narfcn":720288,"pci_hex":"8D","pci":141,"band":"n79","bw":100,"idx_sinr":85,"idx_rxlev":56,"idx_rsrp":56,"idx_rsrq":64,"narfcn_mhz":4804.3,"cesq":"99,99,255,255,255,255,65,57,85"},"raw":"{\"CESQ\": \"AT+CESQ\\r\\r\\n+CESQ: 99,99,255,255,255,255,65,57,85\\r\\n\\r\\nOK\", \"COPS\": \"AT+COPS?\\r\\r\\n+COPS: 0,0,\\\"999 66\\\",11\\r\\n\\r\\nOK\", \"plmn\": \"999 66\", \"GTCCINFO\": \"AT+GTCCINFO?\\r\\r\\n+GTCCINFO: \\r\\nNR service cell: \\r\\n1,9,999,66,8D,234001,AFDA0,8D,5079,100,85,56,56,64\\r\\n\\r\\nOK\"}"},{"t":43.95,"sinr":19.5,"rtt":25.700000762939453,"rsrp":-99.0,"rsrq":-10.5,"mode":"SA","src":"modem","lat":24.7732712,"lon":121.04581,"dec":{"plmn":"999 66","tac":141,"nci":2310145,"narfcn":720288,"pci_hex":"8D","pci":141,"band":"n79","bw":100,"idx_sinr":85,"idx_rxlev":56,"idx_rsrp":56,"idx_rsrq":64,"narfcn_mhz":4804.3,"cesq":"99,99,255,255,255,255,65,57,85"},"raw":"{\"CESQ\": \"AT+CESQ\\r\\r\\n+CESQ: 99,99,255,255,255,255,65,57,85\\r\\n\\r\\nOK\", \"COPS\": \"AT+COPS?\\r\\r\\n+COPS: 0,0,\\\"999 66\\\",11\\r\\n\\r\\nOK\", \"plmn\": \"999 66\", \"GTCCINFO\": \"AT+GTCCINFO?\\r\\r\\n+GTCCINFO: \\r\\nNR service cell: \\r\\n1,9,999,66,8D,234001,AFDA0,8D,5079,100,85,56,56,64\\r\\n\\r\\nOK\"}"},{"t":44.98,"sinr":19.5,"rtt":21.899999618530273,"rsrp":-99.0,"rsrq":-10.5,"mode":"SA","src":"modem","lat":24.7732894,"lon":121.0458569,"dec":{"plmn":"999 66","tac":141,"nci":2310145,"narfcn":720288,"pci_hex":"8D","pci":141,"band":"n79","bw":100,"idx_sinr":85,"idx_rxlev":56,"idx_rsrp":56,"idx_rsrq":64,"narfcn_mhz":4804.3,"cesq":"99,99,255,255,255,255,65,57,85"},"raw":"{\"CESQ\": \"AT+CESQ\\r\\r\\n+CESQ: 99,99,255,255,255,255,65,57,85\\r\\n\\r\\nOK\", \"COPS\": \"AT+COPS?\\r\\r\\n+COPS: 0,0,\\\"999 66\\\",11\\r\\n\\r\\nOK\", \"plmn\": \"999 66\", \"GTCCINFO\": \"AT+GTCCINFO?\\r\\r\\n+GTCCINFO: \\r\\nNR service cell: \\r\\n1,9,999,66,8D,234001,AFDA0,8D,5079,100,85,56,56,64\\r\\n\\r\\nOK\"}"},{"t":45.96,"sinr":19.5,"rtt":21.899999618530273,"rsrp":-99.0,"rsrq":-10.5,"mode":"SA","src":"modem","lat":24.7733123,"lon":121.0459126,"dec":{"plmn":"999 66","tac":141,"nci":2310145,"narfcn":720288,"pci_hex":"8D","pci":141,"band":"n79","bw":100,"idx_sinr":85,"idx_rxlev":56,"idx_rsrp":56,"idx_rsrq":64,"narfcn_mhz":4804.3,"cesq":"99,99,255,255,255,255,65,57,85"},"raw":"{\"CESQ\": \"AT+CESQ\\r\\r\\n+CESQ: 99,99,255,255,255,255,65,57,85\\r\\n\\r\\nOK\", \"COPS\": \"AT+COPS?\\r\\r\\n+COPS: 0,0,\\\"999 66\\\",11\\r\\n\\r\\nOK\", \"plmn\": \"999 66\", \"GTCCINFO\": \"AT+GTCCINFO?\\r\\r\\n+GTCCINFO: \\r\\nNR service cell: \\r\\n1,9,999,66,8D,234001,AFDA0,8D,5079,100,85,56,56,64\\r\\n\\r\\nOK\"}"},{"t":46.96,"sinr":14.5,"rtt":21.899999618530273,"rsrp":-100.0,"rsrq":-10.5,"mode":"SA","src":"modem","lat":24.7733357,"lon":121.0459724,"dec":{"plmn":"999 66","tac":141,"nci":2310145,"narfcn":720288,"pci_hex":"8D","pci":141,"band":"n79","bw":100,"idx_sinr":75,"idx_rxlev":55,"idx_rsrp":55,"idx_rsrq":64,"narfcn_mhz":4804.3,"cesq":"99,99,255,255,255,255,65,56,75"},"raw":"{\"CESQ\": \"AT+CESQ\\r\\r\\n+CESQ: 99,99,255,255,255,255,65,56,75\\r\\n\\r\\nOK\", \"COPS\": \"AT+COPS?\\r\\r\\n+COPS: 0,0,\\\"999 66\\\",11\\r\\n\\r\\nOK\", \"plmn\": \"999 66\", \"GTCCINFO\": \"AT+GTCCINFO?\\r\\r\\n+GTCCINFO: \\r\\nNR service cell: \\r\\n1,9,999,66,8D,234001,AFDA0,8D,5079,100,75,55,55,64\\r\\n\\r\\nOK\"}"},{"t":47.96,"sinr":14.5,"rtt":21.899999618530273,"rsrp":-100.0,"rsrq":-10.5,"mode":"SA","src":"modem","lat":24.7733583,"lon":121.0460288,"dec":{"plmn":"999 66","tac":141,"nci":2310145,"narfcn":720288,"pci_hex":"8D","pci":141,"band":"n79","bw":100,"idx_sinr":75,"idx_rxlev":55,"idx_rsrp":55,"idx_rsrq":64,"narfcn_mhz":4804.3,"cesq":"99,99,255,255,255,255,65,56,75"},"raw":"{\"CESQ\": \"AT+CESQ\\r\\r\\n+CESQ: 99,99,255,255,255,255,65,56,75\\r\\n\\r\\nOK\", \"COPS\": \"AT+COPS?\\r\\r\\n+COPS: 0,0,\\\"999 66\\\",11\\r\\n\\r\\nOK\", \"plmn\": \"999 66\", \"GTCCINFO\": \"AT+GTCCINFO?\\r\\r\\n+GTCCINFO: \\r\\nNR service cell: \\r\\n1,9,999,66,8D,234001,AFDA0,8D,5079,100,75,55,55,64\\r\\n\\r\\nOK\"}"},{"t":48.96,"sinr":14.5,"rtt":21.899999618530273,"rsrp":-100.0,"rsrq":-10.5,"mode":"SA","src":"modem","lat":24.773375,"lon":121.0460696,"dec":{"plmn":"999 66","tac":141,"nci":2310145,"narfcn":720288,"pci_hex":"8D","pci":141,"band":"n79","bw":100,"idx_sinr":75,"idx_rxlev":55,"idx_rsrp":55,"idx_rsrq":64,"narfcn_mhz":4804.3,"cesq":"99,99,255,255,255,255,65,56,75"},"raw":"{\"CESQ\": \"AT+CESQ\\r\\r\\n+CESQ: 99,99,255,255,255,255,65,56,75\\r\\n\\r\\nOK\", \"COPS\": \"AT+COPS?\\r\\r\\n+COPS: 0,0,\\\"999 66\\\",11\\r\\n\\r\\nOK\", \"plmn\": \"999 66\", \"GTCCINFO\": \"AT+GTCCINFO?\\r\\r\\n+GTCCINFO: \\r\\nNR service cell: \\r\\n1,9,999,66,8D,234001,AFDA0,8D,5079,100,75,55,55,64\\r\\n\\r\\nOK\"}"},{"t":49.99,"sinr":21.5,"rtt":21.200000762939453,"rsrp":-91.0,"rsrq":-10.5,"mode":"SA","src":"modem","lat":24.7733856,"lon":121.0460907,"dec":{"plmn":"999 66","tac":141,"nci":2310145,"narfcn":720288,"pci_hex":"8D","pci":141,"band":"n79","bw":100,"idx_sinr":89,"idx_rxlev":64,"idx_rsrp":64,"idx_rsrq":64,"narfcn_mhz":4804.3,"cesq":"99,99,255,255,255,255,65,65,89"},"raw":"{\"CESQ\": \"AT+CESQ\\r\\r\\n+CESQ: 99,99,255,255,255,255,65,65,89\\r\\n\\r\\nOK\", \"COPS\": \"AT+COPS?\\r\\r\\n+COPS: 0,0,\\\"999 66\\\",11\\r\\n\\r\\nOK\", \"plmn\": \"999 66\", \"GTCCINFO\": \"AT+GTCCINFO?\\r\\r\\n+GTCCINFO: \\r\\nNR service cell: \\r\\n1,9,999,66,8D,234001,AFDA0,8D,5079,100,89,64,64,64\\r\\n\\r\\nOK\"}"},{"t":50.96,"sinr":21.5,"rtt":21.200000762939453,"rsrp":-91.0,"rsrq":-10.5,"mode":"SA","src":"modem","lat":24.7733892,"lon":121.0460985,"dec":{"plmn":"999 66","tac":141,"nci":2310145,"narfcn":720288,"pci_hex":"8D","pci":141,"band":"n79","bw":100,"idx_sinr":89,"idx_rxlev":64,"idx_rsrp":64,"idx_rsrq":64,"narfcn_mhz":4804.3,"cesq":"99,99,255,255,255,255,65,65,89"},"raw":"{\"CESQ\": \"AT+CESQ\\r\\r\\n+CESQ: 99,99,255,255,255,255,65,65,89\\r\\n\\r\\nOK\", \"COPS\": \"AT+COPS?\\r\\r\\n+COPS: 0,0,\\\"999 66\\\",11\\r\\n\\r\\nOK\", \"plmn\": \"999 66\", \"GTCCINFO\": \"AT+GTCCINFO?\\r\\r\\n+GTCCINFO: \\r\\nNR service cell: \\r\\n1,9,999,66,8D,234001,AFDA0,8D,5079,100,89,64,64,64\\r\\n\\r\\nOK\"}"},{"t":51.95,"sinr":21.5,"rtt":21.200000762939453,"rsrp":-91.0,"rsrq":-10.5,"mode":"SA","src":"modem","lat":24.7733863,"lon":121.0460992,"dec":{"plmn":"999 66","tac":141,"nci":2310145,"narfcn":720288,"pci_hex":"8D","pci":141,"band":"n79","bw":100,"idx_sinr":89,"idx_rxlev":64,"idx_rsrp":64,"idx_rsrq":64,"narfcn_mhz":4804.3,"cesq":"99,99,255,255,255,255,65,65,89"},"raw":"{\"CESQ\": \"AT+CESQ\\r\\r\\n+CESQ: 99,99,255,255,255,255,65,65,89\\r\\n\\r\\nOK\", \"COPS\": \"AT+COPS?\\r\\r\\n+COPS: 0,0,\\\"999 66\\\",11\\r\\n\\r\\nOK\", \"plmn\": \"999 66\", \"GTCCINFO\": \"AT+GTCCINFO?\\r\\r\\n+GTCCINFO: \\r\\nNR service cell: \\r\\n1,9,999,66,8D,234001,AFDA0,8D,5079,100,89,64,64,64\\r\\n\\r\\nOK\"}"},{"t":52.95,"sinr":21.5,"rtt":21.200000762939453,"rsrp":-91.0,"rsrq":-10.5,"mode":"SA","src":"modem","lat":24.7733821,"lon":121.0460952,"dec":{"plmn":"999 66","tac":141,"nci":2310145,"narfcn":720288,"pci_hex":"8D","pci":141,"band":"n79","bw":100,"idx_sinr":89,"idx_rxlev":64,"idx_rsrp":64,"idx_rsrq":64,"narfcn_mhz":4804.3,"cesq":"99,99,255,255,255,255,65,65,89"},"raw":"{\"CESQ\": \"AT+CESQ\\r\\r\\n+CESQ: 99,99,255,255,255,255,65,65,89\\r\\n\\r\\nOK\", \"COPS\": \"AT+COPS?\\r\\r\\n+COPS: 0,0,\\\"999 66\\\",11\\r\\n\\r\\nOK\", \"plmn\": \"999 66\", \"GTCCINFO\": \"AT+GTCCINFO?\\r\\r\\n+GTCCINFO: \\r\\nNR service cell: \\r\\n1,9,999,66,8D,234001,AFDA0,8D,5079,100,89,64,64,64\\r\\n\\r\\nOK\"}"},{"t":53.95,"sinr":21.5,"rtt":21.200000762939453,"rsrp":-91.0,"rsrq":-10.5,"mode":"SA","src":"modem","lat":24.7733811,"lon":121.04609,"dec":{"plmn":"999 66","tac":141,"nci":2310145,"narfcn":720288,"pci_hex":"8D","pci":141,"band":"n79","bw":100,"idx_sinr":89,"idx_rxlev":64,"idx_rsrp":64,"idx_rsrq":64,"narfcn_mhz":4804.3,"cesq":"99,99,255,255,255,255,65,65,89"},"raw":"{\"CESQ\": \"AT+CESQ\\r\\r\\n+CESQ: 99,99,255,255,255,255,65,65,89\\r\\n\\r\\nOK\", \"COPS\": \"AT+COPS?\\r\\r\\n+COPS: 0,0,\\\"999 66\\\",11\\r\\n\\r\\nOK\", \"plmn\": \"999 66\", \"GTCCINFO\": \"AT+GTCCINFO?\\r\\r\\n+GTCCINFO: \\r\\nNR service cell: \\r\\n1,9,999,66,8D,234001,AFDA0,8D,5079,100,89,64,64,64\\r\\n\\r\\nOK\"}"},{"t":54.96,"sinr":21.5,"rtt":21.200000762939453,"rsrp":-91.0,"rsrq":-10.5,"mode":"SA","src":"modem","lat":24.7733783,"lon":121.0460898,"dec":{"plmn":"999 66","tac":141,"nci":2310145,"narfcn":720288,"pci_hex":"8D","pci":141,"band":"n79","bw":100,"idx_sinr":89,"idx_rxlev":64,"idx_rsrp":64,"idx_rsrq":64,"narfcn_mhz":4804.3,"cesq":"99,99,255,255,255,255,65,65,89"},"raw":"{\"CESQ\": \"AT+CESQ\\r\\r\\n+CESQ: 99,99,255,255,255,255,65,65,89\\r\\n\\r\\nOK\", \"COPS\": \"AT+COPS?\\r\\r\\n+COPS: 0,0,\\\"999 66\\\",11\\r\\n\\r\\nOK\", \"plmn\": \"999 66\", \"GTCCINFO\": \"AT+GTCCINFO?\\r\\r\\n+GTCCINFO: \\r\\nNR service cell: \\r\\n1,9,999,66,8D,234001,AFDA0,8D,5079,100,89,64,64,64\\r\\n\\r\\nOK\"}"},{"t":55.99,"sinr":20.5,"rtt":30.399999618530273,"rsrp":-97.0,"rsrq":-10.5,"mode":"SA","src":"modem","lat":24.773375,"lon":121.0460899,"dec":{"plmn":"999 66","tac":141,"nci":2310145,"narfcn":720288,"pci_hex":"8D","pci":141,"band":"n79","bw":100,"idx_sinr":87,"idx_rxlev":58,"idx_rsrp":58,"idx_rsrq":64,"narfcn_mhz":4804.3,"cesq":"99,99,255,255,255,255,65,59,87"},"raw":"{\"CESQ\": \"AT+CESQ\\r\\r\\n+CESQ: 99,99,255,255,255,255,65,59,87\\r\\n\\r\\nOK\", \"COPS\": \"AT+COPS?\\r\\r\\n+COPS: 0,0,\\\"999 66\\\",11\\r\\n\\r\\nOK\", \"plmn\": \"999 66\", \"GTCCINFO\": \"AT+GTCCINFO?\\r\\r\\n+GTCCINFO: \\r\\nNR service cell: \\r\\n1,9,999,66,8D,234001,AFDA0,8D,5079,100,87,58,58,64\\r\\n\\r\\nOK\"}"},{"t":56.95,"sinr":20.5,"rtt":30.399999618530273,"rsrp":-97.0,"rsrq":-10.5,"mode":"SA","src":"modem","lat":24.7733724,"lon":121.0460887,"dec":{"plmn":"999 66","tac":141,"nci":2310145,"narfcn":720288,"pci_hex":"8D","pci":141,"band":"n79","bw":100,"idx_sinr":87,"idx_rxlev":58,"idx_rsrp":58,"idx_rsrq":64,"narfcn_mhz":4804.3,"cesq":"99,99,255,255,255,255,65,59,87"},"raw":"{\"CESQ\": \"AT+CESQ\\r\\r\\n+CESQ: 99,99,255,255,255,255,65,59,87\\r\\n\\r\\nOK\", \"COPS\": \"AT+COPS?\\r\\r\\n+COPS: 0,0,\\\"999 66\\\",11\\r\\n\\r\\nOK\", \"plmn\": \"999 66\", \"GTCCINFO\": \"AT+GTCCINFO?\\r\\r\\n+GTCCINFO: \\r\\nNR service cell: \\r\\n1,9,999,66,8D,234001,AFDA0,8D,5079,100,87,58,58,64\\r\\n\\r\\nOK\"}"},{"t":57.95,"sinr":20.5,"rtt":30.399999618530273,"rsrp":-97.0,"rsrq":-10.5,"mode":"SA","src":"modem","lat":24.7733698,"lon":121.0460874,"dec":{"plmn":"999 66","tac":141,"nci":2310145,"narfcn":720288,"pci_hex":"8D","pci":141,"band":"n79","bw":100,"idx_sinr":87,"idx_rxlev":58,"idx_rsrp":58,"idx_rsrq":64,"narfcn_mhz":4804.3,"cesq":"99,99,255,255,255,255,65,59,87"},"raw":"{\"CESQ\": \"AT+CESQ\\r\\r\\n+CESQ: 99,99,255,255,255,255,65,59,87\\r\\n\\r\\nOK\", \"COPS\": \"AT+COPS?\\r\\r\\n+COPS: 0,0,\\\"999 66\\\",11\\r\\n\\r\\nOK\", \"plmn\": \"999 66\", \"GTCCINFO\": \"AT+GTCCINFO?\\r\\r\\n+GTCCINFO: \\r\\nNR service cell: \\r\\n1,9,999,66,8D,234001,AFDA0,8D,5079,100,87,58,58,64\\r\\n\\r\\nOK\"}"},{"t":58.95,"sinr":20.5,"rtt":30.399999618530273,"rsrp":-97.0,"rsrq":-10.5,"mode":"SA","src":"modem","lat":24.773368,"lon":121.0460865,"dec":{"plmn":"999 66","tac":141,"nci":2310145,"narfcn":720288,"pci_hex":"8D","pci":141,"band":"n79","bw":100,"idx_sinr":87,"idx_rxlev":58,"idx_rsrp":58,"idx_rsrq":64,"narfcn_mhz":4804.3,"cesq":"99,99,255,255,255,255,65,59,87"},"raw":"{\"CESQ\": \"AT+CESQ\\r\\r\\n+CESQ: 99,99,255,255,255,255,65,59,87\\r\\n\\r\\nOK\", \"COPS\": \"AT+COPS?\\r\\r\\n+COPS: 0,0,\\\"999 66\\\",11\\r\\n\\r\\nOK\", \"plmn\": \"999 66\", \"GTCCINFO\": \"AT+GTCCINFO?\\r\\r\\n+GTCCINFO: \\r\\nNR service cell: \\r\\n1,9,999,66,8D,234001,AFDA0,8D,5079,100,87,58,58,64\\r\\n\\r\\nOK\"}"},{"t":59.96,"sinr":20.5,"rtt":30.399999618530273,"rsrp":-97.0,"rsrq":-10.5,"mode":"SA","src":"modem","lat":24.7733657,"lon":121.0460847,"dec":{"plmn":"999 66","tac":141,"nci":2310145,"narfcn":720288,"pci_hex":"8D","pci":141,"band":"n79","bw":100,"idx_sinr":87,"idx_rxlev":58,"idx_rsrp":58,"idx_rsrq":64,"narfcn_mhz":4804.3,"cesq":"99,99,255,255,255,255,65,59,87"},"raw":"{\"CESQ\": \"AT+CESQ\\r\\r\\n+CESQ: 99,99,255,255,255,255,65,59,87\\r\\n\\r\\nOK\", \"COPS\": \"AT+COPS?\\r\\r\\n+COPS: 0,0,\\\"999 66\\\",11\\r\\n\\r\\nOK\", \"plmn\": \"999 66\", \"GTCCINFO\": \"AT+GTCCINFO?\\r\\r\\n+GTCCINFO: \\r\\nNR service cell: \\r\\n1,9,999,66,8D,234001,AFDA0,8D,5079,100,87,58,58,64\\r\\n\\r\\nOK\"}"},{"t":60.95,"sinr":20.5,"rtt":30.399999618530273,"rsrp":-97.0,"rsrq":-10.5,"mode":"SA","src":"modem","lat":24.7733633,"lon":121.0460826,"dec":{"plmn":"999 66","tac":141,"nci":2310145,"narfcn":720288,"pci_hex":"8D","pci":141,"band":"n79","bw":100,"idx_sinr":87,"idx_rxlev":58,"idx_rsrp":58,"idx_rsrq":64,"narfcn_mhz":4804.3,"cesq":"99,99,255,255,255,255,65,59,87"},"raw":"{\"CESQ\": \"AT+CESQ\\r\\r\\n+CESQ: 99,99,255,255,255,255,65,59,87\\r\\n\\r\\nOK\", \"COPS\": \"AT+COPS?\\r\\r\\n+COPS: 0,0,\\\"999 66\\\",11\\r\\n\\r\\nOK\", \"plmn\": \"999 66\", \"GTCCINFO\": \"AT+GTCCINFO?\\r\\r\\n+GTCCINFO: \\r\\nNR service cell: \\r\\n1,9,999,66,8D,234001,AFDA0,8D,5079,100,87,58,58,64\\r\\n\\r\\nOK\"}"},{"t":62.01,"sinr":25.5,"rtt":30.799999237060547,"rsrp":-96.0,"rsrq":-10.5,"mode":"SA","src":"modem","lat":24.7733608,"lon":121.046082,"dec":{"plmn":"999 66","tac":141,"nci":2310145,"narfcn":720288,"pci_hex":"8D","pci":141,"band":"n79","bw":100,"idx_sinr":97,"idx_rxlev":59,"idx_rsrp":59,"idx_rsrq":64,"narfcn_mhz":4804.3,"cesq":"99,99,255,255,255,255,65,60,97"},"raw":"{\"CESQ\": \"AT+CESQ\\r\\r\\n+CESQ: 99,99,255,255,255,255,65,60,97\\r\\n\\r\\nOK\", \"COPS\": \"AT+COPS?\\r\\r\\n+COPS: 0,0,\\\"999 66\\\",11\\r\\n\\r\\nOK\", \"plmn\": \"999 66\", \"GTCCINFO\": \"AT+GTCCINFO?\\r\\r\\n+GTCCINFO: \\r\\nNR service cell: \\r\\n1,9,999,66,8D,234001,AFDA0,8D,5079,100,97,59,59,64\\r\\n\\r\\nOK\"}"},{"t":62.96,"sinr":25.5,"rtt":30.799999237060547,"rsrp":-96.0,"rsrq":-10.5,"mode":"SA","src":"modem","lat":24.7733587,"lon":121.046081,"dec":{"plmn":"999 66","tac":141,"nci":2310145,"narfcn":720288,"pci_hex":"8D","pci":141,"band":"n79","bw":100,"idx_sinr":97,"idx_rxlev":59,"idx_rsrp":59,"idx_rsrq":64,"narfcn_mhz":4804.3,"cesq":"99,99,255,255,255,255,65,60,97"},"raw":"{\"CESQ\": \"AT+CESQ\\r\\r\\n+CESQ: 99,99,255,255,255,255,65,60,97\\r\\n\\r\\nOK\", \"COPS\": \"AT+COPS?\\r\\r\\n+COPS: 0,0,\\\"999 66\\\",11\\r\\n\\r\\nOK\", \"plmn\": \"999 66\", \"GTCCINFO\": \"AT+GTCCINFO?\\r\\r\\n+GTCCINFO: \\r\\nNR service cell: \\r\\n1,9,999,66,8D,234001,AFDA0,8D,5079,100,97,59,59,64\\r\\n\\r\\nOK\"}"},{"t":63.97,"sinr":25.5,"rtt":30.799999237060547,"rsrp":-96.0,"rsrq":-10.5,"mode":"SA","src":"modem","lat":24.7733564,"lon":121.0460793,"dec":{"plmn":"999 66","tac":141,"nci":2310145,"narfcn":720288,"pci_hex":"8D","pci":141,"band":"n79","bw":100,"idx_sinr":97,"idx_rxlev":59,"idx_rsrp":59,"idx_rsrq":64,"narfcn_mhz":4804.3,"cesq":"99,99,255,255,255,255,65,60,97"},"raw":"{\"CESQ\": \"AT+CESQ\\r\\r\\n+CESQ: 99,99,255,255,255,255,65,60,97\\r\\n\\r\\nOK\", \"COPS\": \"AT+COPS?\\r\\r\\n+COPS: 0,0,\\\"999 66\\\",11\\r\\n\\r\\nOK\", \"plmn\": \"999 66\", \"GTCCINFO\": \"AT+GTCCINFO?\\r\\r\\n+GTCCINFO: \\r\\nNR service cell: \\r\\n1,9,999,66,8D,234001,AFDA0,8D,5079,100,97,59,59,64\\r\\n\\r\\nOK\"}"},{"t":64.96,"sinr":27.5,"rtt":30.799999237060547,"rsrp":-90.0,"rsrq":-10.5,"mode":"SA","src":"modem","lat":24.7733544,"lon":121.046077,"dec":{"plmn":"999 66","tac":141,"nci":2310145,"narfcn":720288,"pci_hex":"8D","pci":141,"band":"n79","bw":100,"idx_sinr":101,"idx_rxlev":65,"idx_rsrp":65,"idx_rsrq":64,"narfcn_mhz":4804.3,"cesq":"99,99,255,255,255,255,65,66,101"},"raw":"{\"CESQ\": \"AT+CESQ\\r\\r\\n+CESQ: 99,99,255,255,255,255,65,66,101\\r\\n\\r\\nOK\", \"COPS\": \"AT+COPS?\\r\\r\\n+COPS: 0,0,\\\"999 66\\\",11\\r\\n\\r\\nOK\", \"plmn\": \"999 66\", \"GTCCINFO\": \"AT+GTCCINFO?\\r\\r\\n+GTCCINFO: \\r\\nNR service cell: \\r\\n1,9,999,66,8D,234001,AFDA0,8D,5079,100,101,65,65,64\\r\\n\\r\\nOK\"}"},{"t":65.95,"sinr":27.5,"rtt":30.799999237060547,"rsrp":-90.0,"rsrq":-10.5,"mode":"SA","src":"modem","lat":24.7733526,"lon":121.0460759,"dec":{"plmn":"999 66","tac":141,"nci":2310145,"narfcn":720288,"pci_hex":"8D","pci":141,"band":"n79","bw":100,"idx_sinr":101,"idx_rxlev":65,"idx_rsrp":65,"idx_rsrq":64,"narfcn_mhz":4804.3,"cesq":"99,99,255,255,255,255,65,66,101"},"raw":"{\"CESQ\": \"AT+CESQ\\r\\r\\n+CESQ: 99,99,255,255,255,255,65,66,101\\r\\n\\r\\nOK\", \"COPS\": \"AT+COPS?\\r\\r\\n+COPS: 0,0,\\\"999 66\\\",11\\r\\n\\r\\nOK\", \"plmn\": \"999 66\", \"GTCCINFO\": \"AT+GTCCINFO?\\r\\r\\n+GTCCINFO: \\r\\nNR service cell: \\r\\n1,9,999,66,8D,234001,AFDA0,8D,5079,100,101,65,65,64\\r\\n\\r\\nOK\"}"},{"t":67.01,"sinr":27.5,"rtt":24.299999237060547,"rsrp":-90.0,"rsrq":-10.5,"mode":"SA","src":"modem","lat":24.7733496,"lon":121.0460752,"dec":{"plmn":"999 66","tac":141,"nci":2310145,"narfcn":720288,"pci_hex":"8D","pci":141,"band":"n79","bw":100,"idx_sinr":101,"idx_rxlev":65,"idx_rsrp":65,"idx_rsrq":64,"narfcn_mhz":4804.3,"cesq":"99,99,255,255,255,255,65,66,101"},"raw":"{\"CESQ\": \"AT+CESQ\\r\\r\\n+CESQ: 99,99,255,255,255,255,65,66,101\\r\\n\\r\\nOK\", \"COPS\": \"AT+COPS?\\r\\r\\n+COPS: 0,0,\\\"999 66\\\",11\\r\\n\\r\\nOK\", \"plmn\": \"999 66\", \"GTCCINFO\": \"AT+GTCCINFO?\\r\\r\\n+GTCCINFO: \\r\\nNR service cell: \\r\\n1,9,999,66,8D,234001,AFDA0,8D,5079,100,101,65,65,64\\r\\n\\r\\nOK\"}"},{"t":67.97,"sinr":27.5,"rtt":24.299999237060547,"rsrp":-90.0,"rsrq":-10.5,"mode":"SA","src":"modem","lat":24.7733481,"lon":121.0460737,"dec":{"plmn":"999 66","tac":141,"nci":2310145,"narfcn":720288,"pci_hex":"8D","pci":141,"band":"n79","bw":100,"idx_sinr":101,"idx_rxlev":65,"idx_rsrp":65,"idx_rsrq":64,"narfcn_mhz":4804.3,"cesq":"99,99,255,255,255,255,65,66,101"},"raw":"{\"CESQ\": \"AT+CESQ\\r\\r\\n+CESQ: 99,99,255,255,255,255,65,66,101\\r\\n\\r\\nOK\", \"COPS\": \"AT+COPS?\\r\\r\\n+COPS: 0,0,\\\"999 66\\\",11\\r\\n\\r\\nOK\", \"plmn\": \"999 66\", \"GTCCINFO\": \"AT+GTCCINFO?\\r\\r\\n+GTCCINFO: \\r\\nNR service cell: \\r\\n1,9,999,66,8D,234001,AFDA0,8D,5079,100,101,65,65,64\\r\\n\\r\\nOK\"}"},{"t":68.96,"sinr":27.5,"rtt":24.299999237060547,"rsrp":-90.0,"rsrq":-10.5,"mode":"SA","src":"modem","lat":24.7733463,"lon":121.0460724,"dec":{"plmn":"999 66","tac":141,"nci":2310145,"narfcn":720288,"pci_hex":"8D","pci":141,"band":"n79","bw":100,"idx_sinr":101,"idx_rxlev":65,"idx_rsrp":65,"idx_rsrq":64,"narfcn_mhz":4804.3,"cesq":"99,99,255,255,255,255,65,66,101"},"raw":"{\"CESQ\": \"AT+CESQ\\r\\r\\n+CESQ: 99,99,255,255,255,255,65,66,101\\r\\n\\r\\nOK\", \"COPS\": \"AT+COPS?\\r\\r\\n+COPS: 0,0,\\\"999 66\\\",11\\r\\n\\r\\nOK\", \"plmn\": \"999 66\", \"GTCCINFO\": \"AT+GTCCINFO?\\r\\r\\n+GTCCINFO: \\r\\nNR service cell: \\r\\n1,9,999,66,8D,234001,AFDA0,8D,5079,100,101,65,65,64\\r\\n\\r\\nOK\"}"},{"t":69.96,"sinr":27.5,"rtt":24.299999237060547,"rsrp":-90.0,"rsrq":-10.5,"mode":"SA","src":"modem","lat":24.773344,"lon":121.0460709,"dec":{"plmn":"999 66","tac":141,"nci":2310145,"narfcn":720288,"pci_hex":"8D","pci":141,"band":"n79","bw":100,"idx_sinr":101,"idx_rxlev":65,"idx_rsrp":65,"idx_rsrq":64,"narfcn_mhz":4804.3,"cesq":"99,99,255,255,255,255,65,66,101"},"raw":"{\"CESQ\": \"AT+CESQ\\r\\r\\n+CESQ: 99,99,255,255,255,255,65,66,101\\r\\n\\r\\nOK\", \"COPS\": \"AT+COPS?\\r\\r\\n+COPS: 0,0,\\\"999 66\\\",11\\r\\n\\r\\nOK\", \"plmn\": \"999 66\", \"GTCCINFO\": \"AT+GTCCINFO?\\r\\r\\n+GTCCINFO: \\r\\nNR service cell: \\r\\n1,9,999,66,8D,234001,AFDA0,8D,5079,100,101,65,65,64\\r\\n\\r\\nOK\"}"},{"t":70.97,"sinr":25.5,"rtt":24.299999237060547,"rsrp":-91.0,"rsrq":-10.5,"mode":"SA","src":"modem","lat":24.7733408,"lon":121.0460697,"dec":{"plmn":"999 66","tac":141,"nci":2310145,"narfcn":720288,"pci_hex":"8D","pci":141,"band":"n79","bw":100,"idx_sinr":97,"idx_rxlev":64,"idx_rsrp":64,"idx_rsrq":64,"narfcn_mhz":4804.3,"cesq":"99,99,255,255,255,255,65,65,97"},"raw":"{\"CESQ\": \"AT+CESQ\\r\\r\\n+CESQ: 99,99,255,255,255,255,65,65,97\\r\\n\\r\\nOK\", \"COPS\": \"AT+COPS?\\r\\r\\n+COPS: 0,0,\\\"999 66\\\",11\\r\\n\\r\\nOK\", \"plmn\": \"999 66\", \"GTCCINFO\": \"AT+GTCCINFO?\\r\\r\\n+GTCCINFO: \\r\\nNR service cell: \\r\\n1,9,999,66,8D,234001,AFDA0,8D,5079,100,97,64,64,64\\r\\n\\r\\nOK\"}"},{"t":71.97,"sinr":25.5,"rtt":24.299999237060547,"rsrp":-91.0,"rsrq":-10.5,"mode":"SA","src":"modem","lat":24.7733382,"lon":121.0460688,"dec":{"plmn":"999 66","tac":141,"nci":2310145,"narfcn":720288,"pci_hex":"8D","pci":141,"band":"n79","bw":100,"idx_sinr":97,"idx_rxlev":64,"idx_rsrp":64,"idx_rsrq":64,"narfcn_mhz":4804.3,"cesq":"99,99,255,255,255,255,65,65,97"},"raw":"{\"CESQ\": \"AT+CESQ\\r\\r\\n+CESQ: 99,99,255,255,255,255,65,65,97\\r\\n\\r\\nOK\", \"COPS\": \"AT+COPS?\\r\\r\\n+COPS: 0,0,\\\"999 66\\\",11\\r\\n\\r\\nOK\", \"plmn\": \"999 66\", \"GTCCINFO\": \"AT+GTCCINFO?\\r\\r\\n+GTCCINFO: \\r\\nNR service cell: \\r\\n1,9,999,66,8D,234001,AFDA0,8D,5079,100,97,64,64,64\\r\\n\\r\\nOK\"}"},{"t":72.99,"sinr":25.5,"rtt":30.200000762939453,"rsrp":-91.0,"rsrq":-10.5,"mode":"SA","src":"modem","lat":24.7733371,"lon":121.0460656,"dec":{"plmn":"999 66","tac":141,"nci":2310145,"narfcn":720288,"pci_hex":"8D","pci":141,"band":"n79","bw":100,"idx_sinr":97,"idx_rxlev":64,"idx_rsrp":64,"idx_rsrq":64,"narfcn_mhz":4804.3,"cesq":"99,99,255,255,255,255,65,65,97"},"raw":"{\"CESQ\": \"AT+CESQ\\r\\r\\n+CESQ: 99,99,255,255,255,255,65,65,97\\r\\n\\r\\nOK\", \"COPS\": \"AT+COPS?\\r\\r\\n+COPS: 0,0,\\\"999 66\\\",11\\r\\n\\r\\nOK\", \"plmn\": \"999 66\", \"GTCCINFO\": \"AT+GTCCINFO?\\r\\r\\n+GTCCINFO: \\r\\nNR service cell: \\r\\n1,9,999,66,8D,234001,AFDA0,8D,5079,100,97,64,64,64\\r\\n\\r\\nOK\"}"},{"t":73.95,"sinr":25.5,"rtt":30.200000762939453,"rsrp":-91.0,"rsrq":-10.5,"mode":"SA","src":"modem","lat":24.7733355,"lon":121.0460643,"dec":{"plmn":"999 66","tac":141,"nci":2310145,"narfcn":720288,"pci_hex":"8D","pci":141,"band":"n79","bw":100,"idx_sinr":97,"idx_rxlev":64,"idx_rsrp":64,"idx_rsrq":64,"narfcn_mhz":4804.3,"cesq":"99,99,255,255,255,255,65,65,97"},"raw":"{\"CESQ\": \"AT+CESQ\\r\\r\\n+CESQ: 99,99,255,255,255,255,65,65,97\\r\\n\\r\\nOK\", \"COPS\": \"AT+COPS?\\r\\r\\n+COPS: 0,0,\\\"999 66\\\",11\\r\\n\\r\\nOK\", \"plmn\": \"999 66\", \"GTCCINFO\": \"AT+GTCCINFO?\\r\\r\\n+GTCCINFO: \\r\\nNR service cell: \\r\\n1,9,999,66,8D,234001,AFDA0,8D,5079,100,97,64,64,64\\r\\n\\r\\nOK\"}"},{"t":74.95,"sinr":25.5,"rtt":30.200000762939453,"rsrp":-91.0,"rsrq":-10.5,"mode":"SA","src":"modem","lat":24.7733326,"lon":121.0460643,"dec":{"plmn":"999 66","tac":141,"nci":2310145,"narfcn":720288,"pci_hex":"8D","pci":141,"band":"n79","bw":100,"idx_sinr":97,"idx_rxlev":64,"idx_rsrp":64,"idx_rsrq":64,"narfcn_mhz":4804.3,"cesq":"99,99,255,255,255,255,65,65,97"},"raw":"{\"CESQ\": \"AT+CESQ\\r\\r\\n+CESQ: 99,99,255,255,255,255,65,65,97\\r\\n\\r\\nOK\", \"COPS\": \"AT+COPS?\\r\\r\\n+COPS: 0,0,\\\"999 66\\\",11\\r\\n\\r\\nOK\", \"plmn\": \"999 66\", \"GTCCINFO\": \"AT+GTCCINFO?\\r\\r\\n+GTCCINFO: \\r\\nNR service cell: \\r\\n1,9,999,66,8D,234001,AFDA0,8D,5079,100,97,64,64,64\\r\\n\\r\\nOK\"}"},{"t":75.96,"sinr":25.5,"rtt":30.200000762939453,"rsrp":-91.0,"rsrq":-10.5,"mode":"SA","src":"modem","lat":24.7733304,"lon":121.0460626,"dec":{"plmn":"999 66","tac":141,"nci":2310145,"narfcn":720288,"pci_hex":"8D","pci":141,"band":"n79","bw":100,"idx_sinr":97,"idx_rxlev":64,"idx_rsrp":64,"idx_rsrq":64,"narfcn_mhz":4804.3,"cesq":"99,99,255,255,255,255,65,65,97"},"raw":"{\"CESQ\": \"AT+CESQ\\r\\r\\n+CESQ: 99,99,255,255,255,255,65,65,97\\r\\n\\r\\nOK\", \"COPS\": \"AT+COPS?\\r\\r\\n+COPS: 0,0,\\\"999 66\\\",11\\r\\n\\r\\nOK\", \"plmn\": \"999 66\", \"GTCCINFO\": \"AT+GTCCINFO?\\r\\r\\n+GTCCINFO: \\r\\nNR service cell: \\r\\n1,9,999,66,8D,234001,AFDA0,8D,5079,100,97,64,64,64\\r\\n\\r\\nOK\"}"},{"t":76.97,"sinr":23.5,"rtt":30.200000762939453,"rsrp":-98.0,"rsrq":-10.5,"mode":"SA","src":"modem","lat":24.7733285,"lon":121.0460604,"dec":{"plmn":"999 66","tac":141,"nci":2310145,"narfcn":720288,"pci_hex":"8D","pci":141,"band":"n79","bw":100,"idx_sinr":93,"idx_rxlev":57,"idx_rsrp":57,"idx_rsrq":64,"narfcn_mhz":4804.3,"cesq":"99,99,255,255,255,255,65,58,93"},"raw":"{\"CESQ\": \"AT+CESQ\\r\\r\\n+CESQ: 99,99,255,255,255,255,65,58,93\\r\\n\\r\\nOK\", \"COPS\": \"AT+COPS?\\r\\r\\n+COPS: 0,0,\\\"999 66\\\",11\\r\\n\\r\\nOK\", \"plmn\": \"999 66\", \"GTCCINFO\": \"AT+GTCCINFO?\\r\\r\\n+GTCCINFO: \\r\\nNR service cell: \\r\\n1,9,999,66,8D,234001,AFDA0,8D,5079,100,93,57,57,64\\r\\n\\r\\nOK\"}"},{"t":77.99,"sinr":23.5,"rtt":21.5,"rsrp":-98.0,"rsrq":-10.5,"mode":"SA","src":"modem","lat":24.7733259,"lon":121.0460593,"dec":{"plmn":"999 66","tac":141,"nci":2310145,"narfcn":720288,"pci_hex":"8D","pci":141,"band":"n79","bw":100,"idx_sinr":93,"idx_rxlev":57,"idx_rsrp":57,"idx_rsrq":64,"narfcn_mhz":4804.3,"cesq":"99,99,255,255,255,255,65,58,93"},"raw":"{\"CESQ\": \"AT+CESQ\\r\\r\\n+CESQ: 99,99,255,255,255,255,65,58,93\\r\\n\\r\\nOK\", \"COPS\": \"AT+COPS?\\r\\r\\n+COPS: 0,0,\\\"999 66\\\",11\\r\\n\\r\\nOK\", \"plmn\": \"999 66\", \"GTCCINFO\": \"AT+GTCCINFO?\\r\\r\\n+GTCCINFO: \\r\\nNR service cell: \\r\\n1,9,999,66,8D,234001,AFDA0,8D,5079,100,93,57,57,64\\r\\n\\r\\nOK\"}"},{"t":78.95,"sinr":23.5,"rtt":21.5,"rsrp":-98.0,"rsrq":-10.5,"mode":"SA","src":"modem","lat":24.7733241,"lon":121.0460577,"dec":{"plmn":"999 66","tac":141,"nci":2310145,"narfcn":720288,"pci_hex":"8D","pci":141,"band":"n79","bw":100,"idx_sinr":93,"idx_rxlev":57,"idx_rsrp":57,"idx_rsrq":64,"narfcn_mhz":4804.3,"cesq":"99,99,255,255,255,255,65,58,93"},"raw":"{\"CESQ\": \"AT+CESQ\\r\\r\\n+CESQ: 99,99,255,255,255,255,65,58,93\\r\\n\\r\\nOK\", \"COPS\": \"AT+COPS?\\r\\r\\n+COPS: 0,0,\\\"999 66\\\",11\\r\\n\\r\\nOK\", \"plmn\": \"999 66\", \"GTCCINFO\": \"AT+GTCCINFO?\\r\\r\\n+GTCCINFO: \\r\\nNR service cell: \\r\\n1,9,999,66,8D,234001,AFDA0,8D,5079,100,93,57,57,64\\r\\n\\r\\nOK\"}"},{"t":79.95,"sinr":22.5,"rtt":21.5,"rsrp":-99.0,"rsrq":-10.5,"mode":"SA","src":"modem","lat":24.7733229,"lon":121.0460555,"dec":{"plmn":"999 66","tac":141,"nci":2310145,"narfcn":720288,"pci_hex":"8D","pci":141,"band":"n79","bw":100,"idx_sinr":91,"idx_rxlev":56,"idx_rsrp":56,"idx_rsrq":64,"narfcn_mhz":4804.3,"cesq":"99,99,255,255,255,255,65,57,91"},"raw":"{\"CESQ\": \"AT+CESQ\\r\\r\\n+CESQ: 99,99,255,255,255,255,65,57,91\\r\\n\\r\\nOK\", \"COPS\": \"AT+COPS?\\r\\r\\n+COPS: 0,0,\\\"999 66\\\",11\\r\\n\\r\\nOK\", \"plmn\": \"999 66\", \"GTCCINFO\": \"AT+GTCCINFO?\\r\\r\\n+GTCCINFO: \\r\\nNR service cell: \\r\\n1,9,999,66,8D,234001,AFDA0,8D,5079,100,91,56,56,64\\r\\n\\r\\nOK\"}"},{"t":80.97,"sinr":22.5,"rtt":21.5,"rsrp":-99.0,"rsrq":-10.5,"mode":"SA","src":"modem","lat":24.7733191,"lon":121.046055,"dec":{"plmn":"999 66","tac":141,"nci":2310145,"narfcn":720288,"pci_hex":"8D","pci":141,"band":"n79","bw":100,"idx_sinr":91,"idx_rxlev":56,"idx_rsrp":56,"idx_rsrq":64,"narfcn_mhz":4804.3,"cesq":"99,99,255,255,255,255,65,57,91"},"raw":"{\"CESQ\": \"AT+CESQ\\r\\r\\n+CESQ: 99,99,255,255,255,255,65,57,91\\r\\n\\r\\nOK\", \"COPS\": \"AT+COPS?\\r\\r\\n+COPS: 0,0,\\\"999 66\\\",11\\r\\n\\r\\nOK\", \"plmn\": \"999 66\", \"GTCCINFO\": \"AT+GTCCINFO?\\r\\r\\n+GTCCINFO: \\r\\nNR service cell: \\r\\n1,9,999,66,8D,234001,AFDA0,8D,5079,100,91,56,56,64\\r\\n\\r\\nOK\"}"},{"t":81.96,"sinr":22.5,"rtt":21.5,"rsrp":-99.0,"rsrq":-10.5,"mode":"SA","src":"modem","lat":24.7733163,"lon":121.0460537,"dec":{"plmn":"999 66","tac":141,"nci":2310145,"narfcn":720288,"pci_hex":"8D","pci":141,"band":"n79","bw":100,"idx_sinr":91,"idx_rxlev":56,"idx_rsrp":56,"idx_rsrq":64,"narfcn_mhz":4804.3,"cesq":"99,99,255,255,255,255,65,57,91"},"raw":"{\"CESQ\": \"AT+CESQ\\r\\r\\n+CESQ: 99,99,255,255,255,255,65,57,91\\r\\n\\r\\nOK\", \"COPS\": \"AT+COPS?\\r\\r\\n+COPS: 0,0,\\\"999 66\\\",11\\r\\n\\r\\nOK\", \"plmn\": \"999 66\", \"GTCCINFO\": \"AT+GTCCINFO?\\r\\r\\n+GTCCINFO: \\r\\nNR service cell: \\r\\n1,9,999,66,8D,234001,AFDA0,8D,5079,100,91,56,56,64\\r\\n\\r\\nOK\"}"},{"t":82.96,"sinr":22.5,"rtt":21.5,"rsrp":-99.0,"rsrq":-10.5,"mode":"SA","src":"modem","lat":24.7733145,"lon":121.0460526,"dec":{"plmn":"999 66","tac":141,"nci":2310145,"narfcn":720288,"pci_hex":"8D","pci":141,"band":"n79","bw":100,"idx_sinr":91,"idx_rxlev":56,"idx_rsrp":56,"idx_rsrq":64,"narfcn_mhz":4804.3,"cesq":"99,99,255,255,255,255,65,57,91"},"raw":"{\"CESQ\": \"AT+CESQ\\r\\r\\n+CESQ: 99,99,255,255,255,255,65,57,91\\r\\n\\r\\nOK\", \"COPS\": \"AT+COPS?\\r\\r\\n+COPS: 0,0,\\\"999 66\\\",11\\r\\n\\r\\nOK\", \"plmn\": \"999 66\", \"GTCCINFO\": \"AT+GTCCINFO?\\r\\r\\n+GTCCINFO: \\r\\nNR service cell: \\r\\n1,9,999,66,8D,234001,AFDA0,8D,5079,100,91,56,56,64\\r\\n\\r\\nOK\"}"},{"t":83.97,"sinr":22.5,"rtt":21.5,"rsrp":-99.0,"rsrq":-10.5,"mode":"SA","src":"modem","lat":24.7733124,"lon":121.0460519,"dec":{"plmn":"999 66","tac":141,"nci":2310145,"narfcn":720288,"pci_hex":"8D","pci":141,"band":"n79","bw":100,"idx_sinr":91,"idx_rxlev":56,"idx_rsrp":56,"idx_rsrq":64,"narfcn_mhz":4804.3,"cesq":"99,99,255,255,255,255,65,57,91"},"raw":"{\"CESQ\": \"AT+CESQ\\r\\r\\n+CESQ: 99,99,255,255,255,255,65,57,91\\r\\n\\r\\nOK\", \"COPS\": \"AT+COPS?\\r\\r\\n+COPS: 0,0,\\\"999 66\\\",11\\r\\n\\r\\nOK\", \"plmn\": \"999 66\", \"GTCCINFO\": \"AT+GTCCINFO?\\r\\r\\n+GTCCINFO: \\r\\nNR service cell: \\r\\n1,9,999,66,8D,234001,AFDA0,8D,5079,100,91,56,56,64\\r\\n\\r\\nOK\"}"},{"t":84.97,"sinr":22.5,"rtt":21.5,"rsrp":-99.0,"rsrq":-10.5,"mode":"SA","src":"modem","lat":24.7733108,"lon":121.0460505,"dec":{"plmn":"999 66","tac":141,"nci":2310145,"narfcn":720288,"pci_hex":"8D","pci":141,"band":"n79","bw":100,"idx_sinr":91,"idx_rxlev":56,"idx_rsrp":56,"idx_rsrq":64,"narfcn_mhz":4804.3,"cesq":"99,99,255,255,255,255,65,57,91"},"raw":"{\"CESQ\": \"AT+CESQ\\r\\r\\n+CESQ: 99,99,255,255,255,255,65,57,91\\r\\n\\r\\nOK\", \"COPS\": \"AT+COPS?\\r\\r\\n+COPS: 0,0,\\\"999 66\\\",11\\r\\n\\r\\nOK\", \"plmn\": \"999 66\", \"GTCCINFO\": \"AT+GTCCINFO?\\r\\r\\n+GTCCINFO: \\r\\nNR service cell: \\r\\n1,9,999,66,8D,234001,AFDA0,8D,5079,100,91,56,56,64\\r\\n\\r\\nOK\"}"},{"t":85.95,"sinr":18.5,"rtt":21.5,"rsrp":-102.0,"rsrq":-10.5,"mode":"SA","src":"modem","lat":24.773308,"lon":121.0460483,"dec":{"plmn":"999 66","tac":141,"nci":2310145,"narfcn":720288,"pci_hex":"8D","pci":141,"band":"n79","bw":100,"idx_sinr":83,"idx_rxlev":53,"idx_rsrp":53,"idx_rsrq":64,"narfcn_mhz":4804.3,"cesq":"99,99,255,255,255,255,65,54,83"},"raw":"{\"CESQ\": \"AT+CESQ\\r\\r\\n+CESQ: 99,99,255,255,255,255,65,54,83\\r\\n\\r\\nOK\", \"COPS\": \"AT+COPS?\\r\\r\\n+COPS: 0,0,\\\"999 66\\\",11\\r\\n\\r\\nOK\", \"plmn\": \"999 66\", \"GTCCINFO\": \"AT+GTCCINFO?\\r\\r\\n+GTCCINFO: \\r\\nNR service cell: \\r\\n1,9,999,66,8D,234001,AFDA0,8D,5079,100,83,53,53,64\\r\\n\\r\\nOK\"}"},{"t":86.96,"sinr":18.5,"rtt":21.5,"rsrp":-102.0,"rsrq":-10.5,"mode":"SA","src":"modem","lat":24.7733063,"lon":121.0460466,"dec":{"plmn":"999 66","tac":141,"nci":2310145,"narfcn":720288,"pci_hex":"8D","pci":141,"band":"n79","bw":100,"idx_sinr":83,"idx_rxlev":53,"idx_rsrp":53,"idx_rsrq":64,"narfcn_mhz":4804.3,"cesq":"99,99,255,255,255,255,65,54,83"},"raw":"{\"CESQ\": \"AT+CESQ\\r\\r\\n+CESQ: 99,99,255,255,255,255,65,54,83\\r\\n\\r\\nOK\", \"COPS\": \"AT+COPS?\\r\\r\\n+COPS: 0,0,\\\"999 66\\\",11\\r\\n\\r\\nOK\", \"plmn\": \"999 66\", \"GTCCINFO\": \"AT+GTCCINFO?\\r\\r\\n+GTCCINFO: \\r\\nNR service cell: \\r\\n1,9,999,66,8D,234001,AFDA0,8D,5079,100,83,53,53,64\\r\\n\\r\\nOK\"}"},{"t":87.97,"sinr":18.5,"rtt":21.5,"rsrp":-102.0,"rsrq":-10.5,"mode":"SA","src":"modem","lat":24.7733045,"lon":121.0460457,"dec":{"plmn":"999 66","tac":141,"nci":2310145,"narfcn":720288,"pci_hex":"8D","pci":141,"band":"n79","bw":100,"idx_sinr":83,"idx_rxlev":53,"idx_rsrp":53,"idx_rsrq":64,"narfcn_mhz":4804.3,"cesq":"99,99,255,255,255,255,65,54,83"},"raw":"{\"CESQ\": \"AT+CESQ\\r\\r\\n+CESQ: 99,99,255,255,255,255,65,54,83\\r\\n\\r\\nOK\", \"COPS\": \"AT+COPS?\\r\\r\\n+COPS: 0,0,\\\"999 66\\\",11\\r\\n\\r\\nOK\", \"plmn\": \"999 66\", \"GTCCINFO\": \"AT+GTCCINFO?\\r\\r\\n+GTCCINFO: \\r\\nNR service cell: \\r\\n1,9,999,66,8D,234001,AFDA0,8D,5079,100,83,53,53,64\\r\\n\\r\\nOK\"}"},{"t":89.01,"sinr":18.5,"rtt":34.599998474121094,"rsrp":-102.0,"rsrq":-10.5,"mode":"SA","src":"modem","lat":24.7733014,"lon":121.0460452,"dec":{"plmn":"999 66","tac":141,"nci":2310145,"narfcn":720288,"pci_hex":"8D","pci":141,"band":"n79","bw":100,"idx_sinr":83,"idx_rxlev":53,"idx_rsrp":53,"idx_rsrq":64,"narfcn_mhz":4804.3,"cesq":"99,99,255,255,255,255,65,54,83"},"raw":"{\"CESQ\": \"AT+CESQ\\r\\r\\n+CESQ: 99,99,255,255,255,255,65,54,83\\r\\n\\r\\nOK\", \"COPS\": \"AT+COPS?\\r\\r\\n+COPS: 0,0,\\\"999 66\\\",11\\r\\n\\r\\nOK\", \"plmn\": \"999 66\", \"GTCCINFO\": \"AT+GTCCINFO?\\r\\r\\n+GTCCINFO: \\r\\nNR service cell: \\r\\n1,9,999,66,8D,234001,AFDA0,8D,5079,100,83,53,53,64\\r\\n\\r\\nOK\"}"},{"t":89.96,"sinr":18.5,"rtt":34.599998474121094,"rsrp":-102.0,"rsrq":-10.5,"mode":"SA","src":"modem","lat":24.7732994,"lon":121.0460437,"dec":{"plmn":"999 66","tac":141,"nci":2310145,"narfcn":720288,"pci_hex":"8D","pci":141,"band":"n79","bw":100,"idx_sinr":83,"idx_rxlev":53,"idx_rsrp":53,"idx_rsrq":64,"narfcn_mhz":4804.3,"cesq":"99,99,255,255,255,255,65,54,83"},"raw":"{\"CESQ\": \"AT+CESQ\\r\\r\\n+CESQ: 99,99,255,255,255,255,65,54,83\\r\\n\\r\\nOK\", \"COPS\": \"AT+COPS?\\r\\r\\n+COPS: 0,0,\\\"999 66\\\",11\\r\\n\\r\\nOK\", \"plmn\": \"999 66\", \"GTCCINFO\": \"AT+GTCCINFO?\\r\\r\\n+GTCCINFO: \\r\\nNR service cell: \\r\\n1,9,999,66,8D,234001,AFDA0,8D,5079,100,83,53,53,64\\r\\n\\r\\nOK\"}"},{"t":90.99,"sinr":18.5,"rtt":34.599998474121094,"rsrp":-102.0,"rsrq":-10.5,"mode":"SA","src":"modem","lat":24.773297,"lon":121.046042,"dec":{"plmn":"999 66","tac":141,"nci":2310145,"narfcn":720288,"pci_hex":"8D","pci":141,"band":"n79","bw":100,"idx_sinr":83,"idx_rxlev":53,"idx_rsrp":53,"idx_rsrq":64,"narfcn_mhz":4804.3,"cesq":"99,99,255,255,255,255,65,54,83"},"raw":"{\"CESQ\": \"AT+CESQ\\r\\r\\n+CESQ: 99,99,255,255,255,255,65,54,83\\r\\n\\r\\nOK\", \"COPS\": \"AT+COPS?\\r\\r\\n+COPS: 0,0,\\\"999 66\\\",11\\r\\n\\r\\nOK\", \"plmn\": \"999 66\", \"GTCCINFO\": \"AT+GTCCINFO?\\r\\r\\n+GTCCINFO: \\r\\nNR service cell: \\r\\n1,9,999,66,8D,234001,AFDA0,8D,5079,100,83,53,53,64\\r\\n\\r\\nOK\"}"},{"t":91.95,"sinr":18.5,"rtt":34.599998474121094,"rsrp":-101.0,"rsrq":-10.5,"mode":"SA","src":"modem","lat":24.7732947,"lon":121.0460403,"dec":{"plmn":"999 66","tac":141,"nci":2310145,"narfcn":720288,"pci_hex":"8D","pci":141,"band":"n79","bw":100,"idx_sinr":83,"idx_rxlev":54,"idx_rsrp":54,"idx_rsrq":64,"narfcn_mhz":4804.3,"cesq":"99,99,255,255,255,255,65,55,83"},"raw":"{\"CESQ\": \"AT+CESQ\\r\\r\\n+CESQ: 99,99,255,255,255,255,65,55,83\\r\\n\\r\\nOK\", \"COPS\": \"AT+COPS?\\r\\r\\n+COPS: 0,0,\\\"999 66\\\",11\\r\\n\\r\\nOK\", \"plmn\": \"999 66\", \"GTCCINFO\": \"AT+GTCCINFO?\\r\\r\\n+GTCCINFO: \\r\\nNR service cell: \\r\\n1,9,999,66,8D,234001,AFDA0,8D,5079,100,83,54,54,64\\r\\n\\r\\nOK\"}"},{"t":92.97,"sinr":18.5,"rtt":34.599998474121094,"rsrp":-101.0,"rsrq":-10.5,"mode":"SA","src":"modem","lat":24.7732931,"lon":121.0460391,"dec":{"plmn":"999 66","tac":141,"nci":2310145,"narfcn":720288,"pci_hex":"8D","pci":141,"band":"n79","bw":100,"idx_sinr":83,"idx_rxlev":54,"idx_rsrp":54,"idx_rsrq":64,"narfcn_mhz":4804.3,"cesq":"99,99,255,255,255,255,65,55,83"},"raw":"{\"CESQ\": \"AT+CESQ\\r\\r\\n+CESQ: 99,99,255,255,255,255,65,55,83\\r\\n\\r\\nOK\", \"COPS\": \"AT+COPS?\\r\\r\\n+COPS: 0,0,\\\"999 66\\\",11\\r\\n\\r\\nOK\", \"plmn\": \"999 66\", \"GTCCINFO\": \"AT+GTCCINFO?\\r\\r\\n+GTCCINFO: \\r\\nNR service cell: \\r\\n1,9,999,66,8D,234001,AFDA0,8D,5079,100,83,54,54,64\\r\\n\\r\\nOK\"}"},{"t":93.96,"sinr":18.5,"rtt":34.599998474121094,"rsrp":-101.0,"rsrq":-10.5,"mode":"SA","src":"modem","lat":24.7732916,"lon":121.0460378,"dec":{"plmn":"999 66","tac":141,"nci":2310145,"narfcn":720288,"pci_hex":"8D","pci":141,"band":"n79","bw":100,"idx_sinr":83,"idx_rxlev":54,"idx_rsrp":54,"idx_rsrq":64,"narfcn_mhz":4804.3,"cesq":"99,99,255,255,255,255,65,55,83"},"raw":"{\"CESQ\": \"AT+CESQ\\r\\r\\n+CESQ: 99,99,255,255,255,255,65,55,83\\r\\n\\r\\nOK\", \"COPS\": \"AT+COPS?\\r\\r\\n+COPS: 0,0,\\\"999 66\\\",11\\r\\n\\r\\nOK\", \"plmn\": \"999 66\", \"GTCCINFO\": \"AT+GTCCINFO?\\r\\r\\n+GTCCINFO: \\r\\nNR service cell: \\r\\n1,9,999,66,8D,234001,AFDA0,8D,5079,100,83,54,54,64\\r\\n\\r\\nOK\"}"},{"t":94.98,"sinr":21.5,"rtt":19.5,"rsrp":-99.0,"rsrq":-10.5,"mode":"SA","src":"modem","lat":24.7732888,"lon":121.0460362,"dec":{"plmn":"999 66","tac":141,"nci":2310145,"narfcn":720288,"pci_hex":"8D","pci":141,"band":"n79","bw":100,"idx_sinr":89,"idx_rxlev":56,"idx_rsrp":56,"idx_rsrq":64,"narfcn_mhz":4804.3,"cesq":"99,99,255,255,255,255,65,57,89"},"raw":"{\"CESQ\": \"AT+CESQ\\r\\r\\n+CESQ: 99,99,255,255,255,255,65,57,89\\r\\n\\r\\nOK\", \"COPS\": \"AT+COPS?\\r\\r\\n+COPS: 0,0,\\\"999 66\\\",11\\r\\n\\r\\nOK\", \"plmn\": \"999 66\", \"GTCCINFO\": \"AT+GTCCINFO?\\r\\r\\n+GTCCINFO: \\r\\nNR service cell: \\r\\n1,9,999,66,8D,234001,AFDA0,8D,5079,100,89,56,56,64\\r\\n\\r\\nOK\"}"},{"t":95.96,"sinr":21.5,"rtt":19.5,"rsrp":-99.0,"rsrq":-10.5,"mode":"SA","src":"modem","lat":24.7732859,"lon":121.0460352,"dec":{"plmn":"999 66","tac":141,"nci":2310145,"narfcn":720288,"pci_hex":"8D","pci":141,"band":"n79","bw":100,"idx_sinr":89,"idx_rxlev":56,"idx_rsrp":56,"idx_rsrq":64,"narfcn_mhz":4804.3,"cesq":"99,99,255,255,255,255,65,57,89"},"raw":"{\"CESQ\": \"AT+CESQ\\r\\r\\n+CESQ: 99,99,255,255,255,255,65,57,89\\r\\n\\r\\nOK\", \"COPS\": \"AT+COPS?\\r\\r\\n+COPS: 0,0,\\\"999 66\\\",11\\r\\n\\r\\nOK\", \"plmn\": \"999 66\", \"GTCCINFO\": \"AT+GTCCINFO?\\r\\r\\n+GTCCINFO: \\r\\nNR service cell: \\r\\n1,9,999,66,8D,234001,AFDA0,8D,5079,100,89,56,56,64\\r\\n\\r\\nOK\"}"},{"t":96.96,"sinr":21.5,"rtt":19.5,"rsrp":-99.0,"rsrq":-10.5,"mode":"SA","src":"modem","lat":24.7732841,"lon":121.0460338,"dec":{"plmn":"999 66","tac":141,"nci":2310145,"narfcn":720288,"pci_hex":"8D","pci":141,"band":"n79","bw":100,"idx_sinr":89,"idx_rxlev":56,"idx_rsrp":56,"idx_rsrq":64,"narfcn_mhz":4804.3,"cesq":"99,99,255,255,255,255,65,57,89"},"raw":"{\"CESQ\": \"AT+CESQ\\r\\r\\n+CESQ: 99,99,255,255,255,255,65,57,89\\r\\n\\r\\nOK\", \"COPS\": \"AT+COPS?\\r\\r\\n+COPS: 0,0,\\\"999 66\\\",11\\r\\n\\r\\nOK\", \"plmn\": \"999 66\", \"GTCCINFO\": \"AT+GTCCINFO?\\r\\r\\n+GTCCINFO: \\r\\nNR service cell: \\r\\n1,9,999,66,8D,234001,AFDA0,8D,5079,100,89,56,56,64\\r\\n\\r\\nOK\"}"},{"t":97.95,"sinr":21.5,"rtt":19.5,"rsrp":-99.0,"rsrq":-10.5,"mode":"SA","src":"modem","lat":24.7732826,"lon":121.0460324,"dec":{"plmn":"999 66","tac":141,"nci":2310145,"narfcn":720288,"pci_hex":"8D","pci":141,"band":"n79","bw":100,"idx_sinr":89,"idx_rxlev":56,"idx_rsrp":56,"idx_rsrq":64,"narfcn_mhz":4804.3,"cesq":"99,99,255,255,255,255,65,57,89"},"raw":"{\"CESQ\": \"AT+CESQ\\r\\r\\n+CESQ: 99,99,255,255,255,255,65,57,89\\r\\n\\r\\nOK\", \"COPS\": \"AT+COPS?\\r\\r\\n+COPS: 0,0,\\\"999 66\\\",11\\r\\n\\r\\nOK\", \"plmn\": \"999 66\", \"GTCCINFO\": \"AT+GTCCINFO?\\r\\r\\n+GTCCINFO: \\r\\nNR service cell: \\r\\n1,9,999,66,8D,234001,AFDA0,8D,5079,100,89,56,56,64\\r\\n\\r\\nOK\"}"},{"t":98.96,"sinr":21.5,"rtt":19.5,"rsrp":-99.0,"rsrq":-10.5,"mode":"SA","src":"modem","lat":24.7732809,"lon":121.0460312,"dec":{"plmn":"999 66","tac":141,"nci":2310145,"narfcn":720288,"pci_hex":"8D","pci":141,"band":"n79","bw":100,"idx_sinr":89,"idx_rxlev":56,"idx_rsrp":56,"idx_rsrq":64,"narfcn_mhz":4804.3,"cesq":"99,99,255,255,255,255,65,57,89"},"raw":"{\"CESQ\": \"AT+CESQ\\r\\r\\n+CESQ: 99,99,255,255,255,255,65,57,89\\r\\n\\r\\nOK\", \"COPS\": \"AT+COPS?\\r\\r\\n+COPS: 0,0,\\\"999 66\\\",11\\r\\n\\r\\nOK\", \"plmn\": \"999 66\", \"GTCCINFO\": \"AT+GTCCINFO?\\r\\r\\n+GTCCINFO: \\r\\nNR service cell: \\r\\n1,9,999,66,8D,234001,AFDA0,8D,5079,100,89,56,56,64\\r\\n\\r\\nOK\"}"},{"t":99.95,"sinr":21.5,"rtt":19.5,"rsrp":-99.0,"rsrq":-10.5,"mode":"SA","src":"modem","lat":24.7732798,"lon":121.0460306,"dec":{"plmn":"999 66","tac":141,"nci":2310145,"narfcn":720288,"pci_hex":"8D","pci":141,"band":"n79","bw":100,"idx_sinr":89,"idx_rxlev":56,"idx_rsrp":56,"idx_rsrq":64,"narfcn_mhz":4804.3,"cesq":"99,99,255,255,255,255,65,57,89"},"raw":"{\"CESQ\": \"AT+CESQ\\r\\r\\n+CESQ: 99,99,255,255,255,255,65,57,89\\r\\n\\r\\nOK\", \"COPS\": \"AT+COPS?\\r\\r\\n+COPS: 0,0,\\\"999 66\\\",11\\r\\n\\r\\nOK\", \"plmn\": \"999 66\", \"GTCCINFO\": \"AT+GTCCINFO?\\r\\r\\n+GTCCINFO: \\r\\nNR service cell: \\r\\n1,9,999,66,8D,234001,AFDA0,8D,5079,100,89,56,56,64\\r\\n\\r\\nOK\"}"},{"t":100.98,"sinr":22.5,"rtt":19.700000762939453,"rsrp":-97.0,"rsrq":-10.5,"mode":"SA","src":"modem","lat":24.7732803,"lon":121.0460306,"dec":{"plmn":"999 66","tac":141,"nci":2310145,"narfcn":720288,"pci_hex":"8D","pci":141,"band":"n79","bw":100,"idx_sinr":91,"idx_rxlev":58,"idx_rsrp":58,"idx_rsrq":64,"narfcn_mhz":4804.3,"cesq":"99,99,255,255,255,255,65,59,91"},"raw":"{\"CESQ\": \"AT+CESQ\\r\\r\\n+CESQ: 99,99,255,255,255,255,65,59,91\\r\\n\\r\\nOK\", \"COPS\": \"AT+COPS?\\r\\r\\n+COPS: 0,0,\\\"999 66\\\",11\\r\\n\\r\\nOK\", \"plmn\": \"999 66\", \"GTCCINFO\": \"AT+GTCCINFO?\\r\\r\\n+GTCCINFO: \\r\\nNR service cell: \\r\\n1,9,999,66,8D,234001,AFDA0,8D,5079,100,91,58,58,64\\r\\n\\r\\nOK\"}"},{"t":101.96,"sinr":22.5,"rtt":19.700000762939453,"rsrp":-97.0,"rsrq":-10.5,"mode":"SA","src":"modem","lat":24.7732799,"lon":121.0460304,"dec":{"plmn":"999 66","tac":141,"nci":2310145,"narfcn":720288,"pci_hex":"8D","pci":141,"band":"n79","bw":100,"idx_sinr":91,"idx_rxlev":58,"idx_rsrp":58,"idx_rsrq":64,"narfcn_mhz":4804.3,"cesq":"99,99,255,255,255,255,65,59,91"},"raw":"{\"CESQ\": \"AT+CESQ\\r\\r\\n+CESQ: 99,99,255,255,255,255,65,59,91\\r\\n\\r\\nOK\", \"COPS\": \"AT+COPS?\\r\\r\\n+COPS: 0,0,\\\"999 66\\\",11\\r\\n\\r\\nOK\", \"plmn\": \"999 66\", \"GTCCINFO\": \"AT+GTCCINFO?\\r\\r\\n+GTCCINFO: \\r\\nNR service cell: \\r\\n1,9,999,66,8D,234001,AFDA0,8D,5079,100,91,58,58,64\\r\\n\\r\\nOK\"}"},{"t":102.97,"sinr":22.5,"rtt":19.700000762939453,"rsrp":-97.0,"rsrq":-10.5,"mode":"SA","src":"modem","lat":24.7732802,"lon":121.0460304,"dec":{"plmn":"999 66","tac":141,"nci":2310145,"narfcn":720288,"pci_hex":"8D","pci":141,"band":"n79","bw":100,"idx_sinr":91,"idx_rxlev":58,"idx_rsrp":58,"idx_rsrq":64,"narfcn_mhz":4804.3,"cesq":"99,99,255,255,255,255,65,59,91"},"raw":"{\"CESQ\": \"AT+CESQ\\r\\r\\n+CESQ: 99,99,255,255,255,255,65,59,91\\r\\n\\r\\nOK\", \"COPS\": \"AT+COPS?\\r\\r\\n+COPS: 0,0,\\\"999 66\\\",11\\r\\n\\r\\nOK\", \"plmn\": \"999 66\", \"GTCCINFO\": \"AT+GTCCINFO?\\r\\r\\n+GTCCINFO: \\r\\nNR service cell: \\r\\n1,9,999,66,8D,234001,AFDA0,8D,5079,100,91,58,58,64\\r\\n\\r\\nOK\"}"},{"t":103.96,"sinr":22.5,"rtt":19.700000762939453,"rsrp":-97.0,"rsrq":-10.5,"mode":"SA","src":"modem","lat":24.7732807,"lon":121.0460304,"dec":{"plmn":"999 66","tac":141,"nci":2310145,"narfcn":720288,"pci_hex":"8D","pci":141,"band":"n79","bw":100,"idx_sinr":91,"idx_rxlev":58,"idx_rsrp":58,"idx_rsrq":64,"narfcn_mhz":4804.3,"cesq":"99,99,255,255,255,255,65,59,91"},"raw":"{\"CESQ\": \"AT+CESQ\\r\\r\\n+CESQ: 99,99,255,255,255,255,65,59,91\\r\\n\\r\\nOK\", \"COPS\": \"AT+COPS?\\r\\r\\n+COPS: 0,0,\\\"999 66\\\",11\\r\\n\\r\\nOK\", \"plmn\": \"999 66\", \"GTCCINFO\": \"AT+GTCCINFO?\\r\\r\\n+GTCCINFO: \\r\\nNR service cell: \\r\\n1,9,999,66,8D,234001,AFDA0,8D,5079,100,91,58,58,64\\r\\n\\r\\nOK\"}"},{"t":104.95,"sinr":22.5,"rtt":19.700000762939453,"rsrp":-97.0,"rsrq":-10.5,"mode":"SA","src":"modem","lat":24.7732805,"lon":121.0460301,"dec":{"plmn":"999 66","tac":141,"nci":2310145,"narfcn":720288,"pci_hex":"8D","pci":141,"band":"n79","bw":100,"idx_sinr":91,"idx_rxlev":58,"idx_rsrp":58,"idx_rsrq":64,"narfcn_mhz":4804.3,"cesq":"99,99,255,255,255,255,65,59,91"},"raw":"{\"CESQ\": \"AT+CESQ\\r\\r\\n+CESQ: 99,99,255,255,255,255,65,59,91\\r\\n\\r\\nOK\", \"COPS\": \"AT+COPS?\\r\\r\\n+COPS: 0,0,\\\"999 66\\\",11\\r\\n\\r\\nOK\", \"plmn\": \"999 66\", \"GTCCINFO\": \"AT+GTCCINFO?\\r\\r\\n+GTCCINFO: \\r\\nNR service cell: \\r\\n1,9,999,66,8D,234001,AFDA0,8D,5079,100,91,58,58,64\\r\\n\\r\\nOK\"}"},{"t":105.95,"sinr":22.5,"rtt":19.700000762939453,"rsrp":-97.0,"rsrq":-10.5,"mode":"SA","src":"modem","lat":24.7732805,"lon":121.0460303,"dec":{"plmn":"999 66","tac":141,"nci":2310145,"narfcn":720288,"pci_hex":"8D","pci":141,"band":"n79","bw":100,"idx_sinr":91,"idx_rxlev":58,"idx_rsrp":58,"idx_rsrq":64,"narfcn_mhz":4804.3,"cesq":"99,99,255,255,255,255,65,59,91"},"raw":"{\"CESQ\": \"AT+CESQ\\r\\r\\n+CESQ: 99,99,255,255,255,255,65,59,91\\r\\n\\r\\nOK\", \"COPS\": \"AT+COPS?\\r\\r\\n+COPS: 0,0,\\\"999 66\\\",11\\r\\n\\r\\nOK\", \"plmn\": \"999 66\", \"GTCCINFO\": \"AT+GTCCINFO?\\r\\r\\n+GTCCINFO: \\r\\nNR service cell: \\r\\n1,9,999,66,8D,234001,AFDA0,8D,5079,100,91,58,58,64\\r\\n\\r\\nOK\"}"},{"t":107.0,"sinr":19.5,"rtt":31.799999237060547,"rsrp":-102.0,"rsrq":-10.5,"mode":"SA","src":"modem","lat":24.7732804,"lon":121.0460298,"dec":{"plmn":"999 66","tac":141,"nci":2310145,"narfcn":720288,"pci_hex":"8D","pci":141,"band":"n79","bw":100,"idx_sinr":85,"idx_rxlev":53,"idx_rsrp":53,"idx_rsrq":62,"narfcn_mhz":4804.3,"cesq":"99,99,255,255,255,255,65,54,85"},"raw":"{\"CESQ\": \"AT+CESQ\\r\\r\\n+CESQ: 99,99,255,255,255,255,65,54,85\\r\\n\\r\\nOK\", \"COPS\": \"AT+COPS?\\r\\r\\n+COPS: 0,0,\\\"999 66\\\",11\\r\\n\\r\\nOK\", \"plmn\": \"999 66\", \"GTCCINFO\": \"AT+GTCCINFO?\\r\\r\\n+GTCCINFO: \\r\\nNR service cell: \\r\\n1,9,999,66,8D,234001,AFDA0,8D,5079,100,85,53,53,62\\r\\n\\r\\nOK\"}"},{"t":107.96,"sinr":19.5,"rtt":31.799999237060547,"rsrp":-102.0,"rsrq":-10.5,"mode":"SA","src":"modem","lat":24.7732801,"lon":121.0460295,"dec":{"plmn":"999 66","tac":141,"nci":2310145,"narfcn":720288,"pci_hex":"8D","pci":141,"band":"n79","bw":100,"idx_sinr":85,"idx_rxlev":53,"idx_rsrp":53,"idx_rsrq":64,"narfcn_mhz":4804.3,"cesq":"99,99,255,255,255,255,65,54,85"},"raw":"{\"CESQ\": \"AT+CESQ\\r\\r\\n+CESQ: 99,99,255,255,255,255,65,54,85\\r\\n\\r\\nOK\", \"COPS\": \"AT+COPS?\\r\\r\\n+COPS: 0,0,\\\"999 66\\\",11\\r\\n\\r\\nOK\", \"plmn\": \"999 66\", \"GTCCINFO\": \"AT+GTCCINFO?\\r\\r\\n+GTCCINFO: \\r\\nNR service cell: \\r\\n1,9,999,66,8D,234001,AFDA0,8D,5079,100,85,53,53,64\\r\\n\\r\\nOK\"}"}],"events":[{"id":22592,"t":7.2,"clock":"16:28:07","type":"intent_cleared","sev":"info","src":"system","drone":"pi5-sdmodelh7v2-ardu","text":"意圖 開始任務 結束——守門通過，由地面站執行","detail":{"state":"READY","action":"start_mission","reason":"守門通過，由地面站執行","executor":"ground"}},{"id":22593,"t":7.26,"clock":"16:28:07","type":"vehicle_ack","sev":"info","src":"vehicle","drone":"pi5-sdmodelh7v2-ardu","text":"飛控**收下**了 MAV_CMD_DO_SET_MODE","detail":{"kind":"command","note":"ACK 是「我收到了」，不是「我做到了」","text":"飛控**收下**了 MAV_CMD_DO_SET_MODE","count":1,"result":0,"command":176,"result_name":"MAV_RESULT_ACCEPTED","command_name":"MAV_CMD_DO_SET_MODE"}},{"id":22594,"t":7.3,"clock":"16:28:07","type":"vehicle_ack","sev":"warning","src":"vehicle","drone":"pi5-sdmodelh7v2-ardu","text":"飛控拒絕 MAV_CMD_COMPONENT_ARM_DISARM：MAV_RESULT_FAILED","detail":{"kind":"command","note":"ACK 是「我收到了」，不是「我做到了」","text":"飛控拒絕 MAV_CMD_COMPONENT_ARM_DISARM：MAV_RESULT_FAILED","count":1,"result":4,"command":400,"result_name":"MAV_RESULT_FAILED","command_name":"MAV_CMD_COMPONENT_ARM_DISARM"}},{"id":22595,"t":7.31,"clock":"16:28:07","type":"statustext","sev":"critical","src":"vehicle","drone":"pi5-sdmodelh7v2-ardu","text":"Arm: Throttle (RC3) is not neutral","detail":{"text":"Arm: Throttle (RC3) is not neutral","count":1}},{"id":22596,"t":8.0,"clock":"16:28:08","type":"mode_change","sev":"info","src":"system","drone":"pi5-sdmodelh7v2-ardu","text":"模式 LOITER → GUIDED","detail":{"to":"GUIDED","from":"LOITER","to_verb":"guided","from_verb":"hold"}},{"id":22597,"t":14.75,"clock":"16:28:14","type":"statustext","sev":"critical","src":"vehicle","drone":"pi5-sdmodelh7v2-ardu","text":"Arm: Guided mode not armable","detail":{"text":"Arm: Guided mode not armable","count":1}},{"id":22598,"t":17.0,"clock":"16:28:17","type":"mode_change","sev":"info","src":"system","drone":"pi5-sdmodelh7v2-ardu","text":"模式 GUIDED → LAND","detail":{"to":"LAND","from":"GUIDED","to_verb":"land","from_verb":"guided"}},{"id":22599,"t":17.99,"clock":"16:28:18","type":"mode_change","sev":"info","src":"system","drone":"pi5-sdmodelh7v2-ardu","text":"模式 LAND → LOITER","detail":{"to":"LOITER","from":"LAND","to_verb":"hold","from_verb":"land"}},{"id":22600,"t":28.51,"clock":"16:28:28","type":"intent_cleared","sev":"info","src":"system","drone":"pi5-sdmodelh7v2-ardu","text":"意圖 開始任務 結束——守門通過，由地面站執行","detail":{"state":"ARMED_GROUND","action":"start_mission","reason":"守門通過，由地面站執行","executor":"ground"}},{"id":22601,"t":28.75,"clock":"16:28:28","type":"vehicle_ack","sev":"info","src":"vehicle","drone":"pi5-sdmodelh7v2-ardu","text":"飛控**收下**了 MAV_CMD_DO_SET_MODE","detail":{"kind":"command","note":"ACK 是「我收到了」，不是「我做到了」","text":"飛控**收下**了 MAV_CMD_DO_SET_MODE","count":1,"result":0,"command":176,"result_name":"MAV_RESULT_ACCEPTED","command_name":"MAV_CMD_DO_SET_MODE"}},{"id":22602,"t":28.81,"clock":"16:28:28","type":"vehicle_ack","sev":"info","src":"vehicle","drone":"pi5-sdmodelh7v2-ardu","text":"飛控**收下**了 MAV_CMD_NAV_TAKEOFF","detail":{"kind":"command","note":"ACK 是「我收到了」，不是「我做到了」","text":"飛控**收下**了 MAV_CMD_NAV_TAKEOFF","count":1,"result":0,"command":22,"result_name":"MAV_RESULT_ACCEPTED","command_name":"MAV_CMD_NAV_TAKEOFF"}},{"id":22603,"t":29.0,"clock":"16:28:29","type":"mode_change","sev":"info","src":"system","drone":"pi5-sdmodelh7v2-ardu","text":"模式 LOITER → GUIDED","detail":{"to":"GUIDED","from":"LOITER","to_verb":"guided","from_verb":"hold"}},{"id":22604,"t":32.99,"clock":"16:28:33","type":"vehicle_ack","sev":"info","src":"vehicle","drone":"pi5-sdmodelh7v2-ardu","text":"飛控**收下**了 MAV_CMD_DO_SET_MODE","detail":{"kind":"command","note":"ACK 是「我收到了」，不是「我做到了」","text":"飛控**收下**了 MAV_CMD_DO_SET_MODE","count":1,"result":0,"command":176,"result_name":"MAV_RESULT_ACCEPTED","command_name":"MAV_CMD_DO_SET_MODE"}},{"id":22605,"t":33.0,"clock":"16:28:33","type":"statustext","sev":"info","src":"vehicle","drone":"pi5-sdmodelh7v2-ardu","text":"Mission: 1 Takeoff","detail":{"text":"Mission: 1 Takeoff","count":1}},{"id":22607,"t":33.01,"clock":"16:28:33","type":"statustext","sev":"info","src":"vehicle","drone":"pi5-sdmodelh7v2-ardu","text":"Mission: 2 WP","detail":{"text":"Mission: 2 WP","count":1}},{"id":22606,"t":33.01,"clock":"16:28:33","type":"waypoint_reached","sev":"info","src":"vehicle","drone":"pi5-sdmodelh7v2-ardu","text":"已到達機上第 1 項（共 8 項）","detail":{"seq":1,"total":8}},{"id":22608,"t":33.02,"clock":"16:28:33","type":"mode_change","sev":"info","src":"system","drone":"pi5-sdmodelh7v2-ardu","text":"模式 GUIDED → AUTO","detail":{"to":"AUTO","from":"GUIDED","to_verb":"mission","from_verb":"guided"}},{"id":22609,"t":33.03,"clock":"16:28:33","type":"mission_shown","sev":"info","src":"system","drone":"pi5-sdmodelh7v2-ardu","text":"任務「lowspeed-test-260907-v4」：起飛→任務","detail":{"why":"起飛→任務","mission":"lowspeed-test-260907-v4","mission_id":"fdd69fa2-d6db-4d10-91fc-0e0269da6cfb"}},{"id":22610,"t":33.16,"clock":"16:28:33","type":"mission_progress","sev":"info","src":"vehicle","drone":"pi5-sdmodelh7v2-ardu","text":"任務進度：機上第 0 項 → 第 2 項，共 8 項","detail":{"to":2,"from":0,"state":"active","total":8}},{"id":22611,"t":33.17,"clock":"16:28:33","type":"mission_state","sev":"info","src":"vehicle","drone":"pi5-sdmodelh7v2-ardu","text":"任務狀態：未開始 → 執行中","detail":{"to":"active","seq":2,"from":"not_started","total":8}},{"id":22612,"t":38.51,"clock":"16:28:38","type":"statustext","sev":"info","src":"vehicle","drone":"pi5-sdmodelh7v2-ardu","text":"EKF3 IMU0 MAG0 in-flight yaw alignment complete","detail":{"text":"EKF3 IMU0 MAG0 in-flight yaw alignment complete","count":1}},{"id":22614,"t":42.76,"clock":"16:28:42","type":"statustext","sev":"info","src":"vehicle","drone":"pi5-sdmodelh7v2-ardu","text":"Reached command #2","detail":{"text":"Reached command #2","count":1}},{"id":22613,"t":42.76,"clock":"16:28:42","type":"waypoint_reached","sev":"info","src":"vehicle","drone":"pi5-sdmodelh7v2-ardu","text":"已到達機上第 3 項（共 8 項）","detail":{"seq":3,"total":8}},{"id":22616,"t":42.77,"clock":"16:28:42","type":"statustext","sev":"info","src":"vehicle","drone":"pi5-sdmodelh7v2-ardu","text":"Mission: 4 WP","detail":{"text":"Mission: 4 WP","count":1}},{"id":22615,"t":42.77,"clock":"16:28:42","type":"statustext","sev":"info","src":"vehicle","drone":"pi5-sdmodelh7v2-ardu","text":"Mission: 3 ChangeSpeed","detail":{"text":"Mission: 3 ChangeSpeed","count":1}},{"id":22617,"t":42.9,"clock":"16:28:43","type":"mission_progress","sev":"info","src":"vehicle","drone":"pi5-sdmodelh7v2-ardu","text":"任務進度：機上第 2 項 → 第 4 項，共 8 項","detail":{"to":4,"from":2,"state":"active","total":8}},{"id":22618,"t":51.01,"clock":"16:28:51","type":"waypoint_reached","sev":"info","src":"vehicle","drone":"pi5-sdmodelh7v2-ardu","text":"已到達機上第 5 項（共 8 項）","detail":{"seq":5,"total":8}},{"id":22619,"t":51.02,"clock":"16:28:51","type":"statustext","sev":"info","src":"vehicle","drone":"pi5-sdmodelh7v2-ardu","text":"Reached command #4","detail":{"text":"Reached command #4","count":1}},{"id":22621,"t":51.03,"clock":"16:28:51","type":"statustext","sev":"info","src":"vehicle","drone":"pi5-sdmodelh7v2-ardu","text":"Mission: 6 WP","detail":{"text":"Mission: 6 WP","count":1}},{"id":22620,"t":51.03,"clock":"16:28:51","type":"statustext","sev":"info","src":"vehicle","drone":"pi5-sdmodelh7v2-ardu","text":"Mission: 5 ChangeSpeed","detail":{"text":"Mission: 5 ChangeSpeed","count":1}},{"id":22622,"t":51.15,"clock":"16:28:51","type":"mission_progress","sev":"info","src":"vehicle","drone":"pi5-sdmodelh7v2-ardu","text":"任務進度：機上第 4 項 → 第 6 項，共 8 項","detail":{"to":6,"from":4,"state":"active","total":8}},{"id":22623,"t":98.66,"clock":"16:29:38","type":"mission_state","sev":"info","src":"vehicle","drone":"pi5-sdmodelh7v2-ardu","text":"任務狀態：執行中 → 未開始","detail":{"to":"not_started","seq":6,"from":"active","total":8}},{"id":22624,"t":99.0,"clock":"16:29:39","type":"mode_change","sev":"info","src":"system","drone":"pi5-sdmodelh7v2-ardu","text":"模式 AUTO → LAND","detail":{"to":"LAND","from":"AUTO","to_verb":"land","from_verb":"mission"}},{"id":22625,"t":109.4,"clock":"16:29:49","type":"mission_progress","sev":"info","src":"vehicle","drone":"pi5-sdmodelh7v2-ardu","text":"任務進度：機上第 6 項 → 第 0 項，共 8 項","detail":{"to":0,"from":6,"state":"not_started","total":8}},{"id":22626,"t":226.03,"clock":"16:31:46","type":"mode_change","sev":"info","src":"system","drone":"pi5-sdmodelh7v2-ardu","text":"模式 LAND → LOITER","detail":{"to":"LOITER","from":"LAND","to_verb":"hold","from_verb":"land"}},{"id":22627,"t":307.76,"clock":"16:33:07","type":"driver_disagreement","sev":"warn","src":"system","drone":"pi5-sdmodelh7v2-ardu","text":"機上與地面站對同一份遙測算出不同結果（1 項）","detail":{"note":"機上與地面站對同一份遙測算出不同結果（issues/026 §9）","driver":{"name":"uav-agent/autopilot","limits":{"takeoff_alt_m":{"max":null,"min":null,"source":"","default":null,"confidence":"unverified"}},"version":"c585825+f7edde2cbfb1","ported_from":"c585825","content_hash":"f7edde2cbfb1"},"fields":["ready：機上算 False、地面站算 True"],"agent_version":"0.18.4"}},{"id":22628,"t":311.99,"clock":"16:33:12","type":"driver_disagreement","sev":"warn","src":"system","drone":"pi5-sdmodelh7v2-ardu","text":"機上與地面站對同一份遙測算出不同結果（1 項）","detail":{"note":"機上與地面站對同一份遙測算出不同結果（issues/026 §9）","driver":{"name":"uav-agent/autopilot","limits":{"takeoff_alt_m":{"max":null,"min":null,"source":"","default":null,"confidence":"unverified"}},"version":"c585825+f7edde2cbfb1","ported_from":"c585825","content_hash":"f7edde2cbfb1"},"fields":["ready：機上算 False、地面站算 True"],"agent_version":"0.18.4"}},{"id":22629,"t":316.23,"clock":"16:33:16","type":"driver_disagreement","sev":"warn","src":"system","drone":"pi5-sdmodelh7v2-ardu","text":"機上與地面站對同一份遙測算出不同結果（1 項）","detail":{"note":"機上與地面站對同一份遙測算出不同結果（issues/026 §9）","driver":{"name":"uav-agent/autopilot","limits":{"takeoff_alt_m":{"max":null,"min":null,"source":"","default":null,"confidence":"unverified"}},"version":"c585825+f7edde2cbfb1","ported_from":"c585825","content_hash":"f7edde2cbfb1"},"fields":["ready：機上算 False、地面站算 True"],"agent_version":"0.18.4"}},{"id":22630,"t":320.48,"clock":"16:33:20","type":"driver_disagreement","sev":"warn","src":"system","drone":"pi5-sdmodelh7v2-ardu","text":"機上與地面站對同一份遙測算出不同結果（1 項）","detail":{"note":"機上與地面站對同一份遙測算出不同結果（issues/026 §9）","driver":{"name":"uav-agent/autopilot","limits":{"takeoff_alt_m":{"max":null,"min":null,"source":"","default":null,"confidence":"unverified"}},"version":"c585825+f7edde2cbfb1","ported_from":"c585825","content_hash":"f7edde2cbfb1"},"fields":["ready：機上算 False、地面站算 True"],"agent_version":"0.18.4"}},{"id":22631,"t":324.7,"clock":"16:33:24","type":"driver_disagreement","sev":"warn","src":"system","drone":"pi5-sdmodelh7v2-ardu","text":"機上與地面站對同一份遙測算出不同結果（1 項）","detail":{"note":"機上與地面站對同一份遙測算出不同結果（issues/026 §9）","driver":{"name":"uav-agent/autopilot","limits":{"takeoff_alt_m":{"max":null,"min":null,"source":"","default":null,"confidence":"unverified"}},"version":"c585825+f7edde2cbfb1","ported_from":"c585825","content_hash":"f7edde2cbfb1"},"fields":["ready：機上算 False、地面站算 True"],"agent_version":"0.18.4"}},{"id":22632,"t":328.97,"clock":"16:33:29","type":"driver_disagreement","sev":"warn","src":"system","drone":"pi5-sdmodelh7v2-ardu","text":"機上與地面站對同一份遙測算出不同結果（1 項）","detail":{"note":"機上與地面站對同一份遙測算出不同結果（issues/026 §9）","driver":{"name":"uav-agent/autopilot","limits":{"takeoff_alt_m":{"max":null,"min":null,"source":"","default":null,"confidence":"unverified"}},"version":"c585825+f7edde2cbfb1","ported_from":"c585825","content_hash":"f7edde2cbfb1"},"fields":["ready：機上算 False、地面站算 True"],"agent_version":"0.18.4"}},{"id":22633,"t":333.23,"clock":"16:33:33","type":"driver_disagreement","sev":"warn","src":"system","drone":"pi5-sdmodelh7v2-ardu","text":"機上與地面站對同一份遙測算出不同結果（1 項）","detail":{"note":"機上與地面站對同一份遙測算出不同結果（issues/026 §9）","driver":{"name":"uav-agent/autopilot","limits":{"takeoff_alt_m":{"max":null,"min":null,"source":"","default":null,"confidence":"unverified"}},"version":"c585825+f7edde2cbfb1","ported_from":"c585825","content_hash":"f7edde2cbfb1"},"fields":["ready：機上算 False、地面站算 True"],"agent_version":"0.18.4"}},{"id":22634,"t":337.5,"clock":"16:33:37","type":"driver_disagreement","sev":"warn","src":"system","drone":"pi5-sdmodelh7v2-ardu","text":"機上與地面站對同一份遙測算出不同結果（1 項）","detail":{"note":"機上與地面站對同一份遙測算出不同結果（issues/026 §9）","driver":{"name":"uav-agent/autopilot","limits":{"takeoff_alt_m":{"max":null,"min":null,"source":"","default":null,"confidence":"unverified"}},"version":"c585825+f7edde2cbfb1","ported_from":"c585825","content_hash":"f7edde2cbfb1"},"fields":["ready：機上算 False、地面站算 True"],"agent_version":"0.18.4"}},{"id":22635,"t":341.76,"clock":"16:33:41","type":"driver_disagreement","sev":"warn","src":"system","drone":"pi5-sdmodelh7v2-ardu","text":"機上與地面站對同一份遙測算出不同結果（1 項）","detail":{"note":"機上與地面站對同一份遙測算出不同結果（issues/026 §9）","driver":{"name":"uav-agent/autopilot","limits":{"takeoff_alt_m":{"max":null,"min":null,"source":"","default":null,"confidence":"unverified"}},"version":"c585825+f7edde2cbfb1","ported_from":"c585825","content_hash":"f7edde2cbfb1"},"fields":["ready：機上算 False、地面站算 True"],"agent_version":"0.18.4"}},{"id":22636,"t":345.95,"clock":"16:33:46","type":"driver_disagreement","sev":"warn","src":"system","drone":"pi5-sdmodelh7v2-ardu","text":"機上與地面站對同一份遙測算出不同結果（1 項）","detail":{"note":"機上與地面站對同一份遙測算出不同結果（issues/026 §9）","driver":{"name":"uav-agent/autopilot","limits":{"takeoff_alt_m":{"max":null,"min":null,"source":"","default":null,"confidence":"unverified"}},"version":"c585825+f7edde2cbfb1","ported_from":"c585825","content_hash":"f7edde2cbfb1"},"fields":["ready：機上算 False、地面站算 True"],"agent_version":"0.18.4"}},{"id":22637,"t":350.2,"clock":"16:33:50","type":"driver_disagreement","sev":"warn","src":"system","drone":"pi5-sdmodelh7v2-ardu","text":"機上與地面站對同一份遙測算出不同結果（1 項）","detail":{"note":"機上與地面站對同一份遙測算出不同結果（issues/026 §9）","driver":{"name":"uav-agent/autopilot","limits":{"takeoff_alt_m":{"max":null,"min":null,"source":"","default":null,"confidence":"unverified"}},"version":"c585825+f7edde2cbfb1","ported_from":"c585825","content_hash":"f7edde2cbfb1"},"fields":["ready：機上算 False、地面站算 True"],"agent_version":"0.18.4"}},{"id":22638,"t":354.43,"clock":"16:33:54","type":"driver_disagreement","sev":"warn","src":"system","drone":"pi5-sdmodelh7v2-ardu","text":"機上與地面站對同一份遙測算出不同結果（1 項）","detail":{"note":"機上與地面站對同一份遙測算出不同結果（issues/026 §9）","driver":{"name":"uav-agent/autopilot","limits":{"takeoff_alt_m":{"max":null,"min":null,"source":"","default":null,"confidence":"unverified"}},"version":"c585825+f7edde2cbfb1","ported_from":"c585825","content_hash":"f7edde2cbfb1"},"fields":["ready：機上算 False、地面站算 True"],"agent_version":"0.18.4"}},{"id":22639,"t":358.68,"clock":"16:33:58","type":"driver_disagreement","sev":"warn","src":"system","drone":"pi5-sdmodelh7v2-ardu","text":"機上與地面站對同一份遙測算出不同結果（1 項）","detail":{"note":"機上與地面站對同一份遙測算出不同結果（issues/026 §9）","driver":{"name":"uav-agent/autopilot","limits":{"takeoff_alt_m":{"max":null,"min":null,"source":"","default":null,"confidence":"unverified"}},"version":"c585825+f7edde2cbfb1","ported_from":"c585825","content_hash":"f7edde2cbfb1"},"fields":["ready：機上算 False、地面站算 True"],"agent_version":"0.18.4"}},{"id":22640,"t":362.91,"clock":"16:34:03","type":"driver_disagreement","sev":"warn","src":"system","drone":"pi5-sdmodelh7v2-ardu","text":"機上與地面站對同一份遙測算出不同結果（1 項）","detail":{"note":"機上與地面站對同一份遙測算出不同結果（issues/026 §9）","driver":{"name":"uav-agent/autopilot","limits":{"takeoff_alt_m":{"max":null,"min":null,"source":"","default":null,"confidence":"unverified"}},"version":"c585825+f7edde2cbfb1","ported_from":"c585825","content_hash":"f7edde2cbfb1"},"fields":["ready：機上算 False、地面站算 True"],"agent_version":"0.18.4"}},{"id":22641,"t":367.24,"clock":"16:34:07","type":"driver_disagreement","sev":"warn","src":"system","drone":"pi5-sdmodelh7v2-ardu","text":"機上與地面站對同一份遙測算出不同結果（1 項）","detail":{"note":"機上與地面站對同一份遙測算出不同結果（issues/026 §9）","driver":{"name":"uav-agent/autopilot","limits":{"takeoff_alt_m":{"max":null,"min":null,"source":"","default":null,"confidence":"unverified"}},"version":"c585825+f7edde2cbfb1","ported_from":"c585825","content_hash":"f7edde2cbfb1"},"fields":["ready：機上算 False、地面站算 True"],"agent_version":"0.18.4"}},{"id":22642,"t":371.49,"clock":"16:34:11","type":"driver_disagreement","sev":"warn","src":"system","drone":"pi5-sdmodelh7v2-ardu","text":"機上與地面站對同一份遙測算出不同結果（1 項）","detail":{"note":"機上與地面站對同一份遙測算出不同結果（issues/026 §9）","driver":{"name":"uav-agent/autopilot","limits":{"takeoff_alt_m":{"max":null,"min":null,"source":"","default":null,"confidence":"unverified"}},"version":"c585825+f7edde2cbfb1","ported_from":"c585825","content_hash":"f7edde2cbfb1"},"fields":["ready：機上算 False、地面站算 True"],"agent_version":"0.18.4"}},{"id":22643,"t":375.7,"clock":"16:34:15","type":"driver_disagreement","sev":"warn","src":"system","drone":"pi5-sdmodelh7v2-ardu","text":"機上與地面站對同一份遙測算出不同結果（1 項）","detail":{"note":"機上與地面站對同一份遙測算出不同結果（issues/026 §9）","driver":{"name":"uav-agent/autopilot","limits":{"takeoff_alt_m":{"max":null,"min":null,"source":"","default":null,"confidence":"unverified"}},"version":"c585825+f7edde2cbfb1","ported_from":"c585825","content_hash":"f7edde2cbfb1"},"fields":["ready：機上算 False、地面站算 True"],"agent_version":"0.18.4"}},{"id":22644,"t":379.96,"clock":"16:34:20","type":"driver_disagreement","sev":"warn","src":"system","drone":"pi5-sdmodelh7v2-ardu","text":"機上與地面站對同一份遙測算出不同結果（1 項）","detail":{"note":"機上與地面站對同一份遙測算出不同結果（issues/026 §9）","driver":{"name":"uav-agent/autopilot","limits":{"takeoff_alt_m":{"max":null,"min":null,"source":"","default":null,"confidence":"unverified"}},"version":"c585825+f7edde2cbfb1","ported_from":"c585825","content_hash":"f7edde2cbfb1"},"fields":["ready：機上算 False、地面站算 True"],"agent_version":"0.18.4"}},{"id":22645,"t":384.2,"clock":"16:34:24","type":"driver_disagreement","sev":"warn","src":"system","drone":"pi5-sdmodelh7v2-ardu","text":"機上與地面站對同一份遙測算出不同結果（1 項）","detail":{"note":"機上與地面站對同一份遙測算出不同結果（issues/026 §9）","driver":{"name":"uav-agent/autopilot","limits":{"takeoff_alt_m":{"max":null,"min":null,"source":"","default":null,"confidence":"unverified"}},"version":"c585825+f7edde2cbfb1","ported_from":"c585825","content_hash":"f7edde2cbfb1"},"fields":["ready：機上算 False、地面站算 True"],"agent_version":"0.18.4"}},{"id":22646,"t":388.56,"clock":"16:34:28","type":"driver_disagreement","sev":"warn","src":"system","drone":"pi5-sdmodelh7v2-ardu","text":"機上與地面站對同一份遙測算出不同結果（1 項）","detail":{"note":"機上與地面站對同一份遙測算出不同結果（issues/026 §9）","driver":{"name":"uav-agent/autopilot","limits":{"takeoff_alt_m":{"max":null,"min":null,"source":"","default":null,"confidence":"unverified"}},"version":"c585825+f7edde2cbfb1","ported_from":"c585825","content_hash":"f7edde2cbfb1"},"fields":["ready：機上算 False、地面站算 True"],"agent_version":"0.18.4"}},{"id":22647,"t":392.78,"clock":"16:34:32","type":"driver_disagreement","sev":"warn","src":"system","drone":"pi5-sdmodelh7v2-ardu","text":"機上與地面站對同一份遙測算出不同結果（1 項）","detail":{"note":"機上與地面站對同一份遙測算出不同結果（issues/026 §9）","driver":{"name":"uav-agent/autopilot","limits":{"takeoff_alt_m":{"max":null,"min":null,"source":"","default":null,"confidence":"unverified"}},"version":"c585825+f7edde2cbfb1","ported_from":"c585825","content_hash":"f7edde2cbfb1"},"fields":["ready：機上算 False、地面站算 True"],"agent_version":"0.18.4"}},{"id":22648,"t":400.64,"clock":"16:34:40","type":"failsafe","sev":"critical","src":"system","drone":"pi5-sdmodelh7v2-ardu","text":"機上進入緊急狀態（CRITICAL）","detail":{"state":"CRITICAL"}},{"id":22649,"t":401.56,"clock":"16:34:41","type":"statustext","sev":"warning","src":"vehicle","drone":"pi5-sdmodelh7v2-ardu","text":"GCS Failsafe Cleared","detail":{"text":"GCS Failsafe Cleared","count":1}},{"id":22650,"t":623.97,"clock":"16:38:24","type":"vehicle_ack","sev":"info","src":"vehicle","drone":"pi5-sdmodelh7v2-ardu","text":"飛控**收下**了 MAV_CMD_SET_MESSAGE_INTERVAL","detail":{"kind":"command","note":"ACK 是「我收到了」，不是「我做到了」","text":"飛控**收下**了 MAV_CMD_SET_MESSAGE_INTERVAL","count":5,"result":0,"command":511,"result_name":"MAV_RESULT_ACCEPTED","command_name":"MAV_CMD_SET_MESSAGE_INTERVAL"}},{"id":22651,"t":766.83,"clock":"16:40:46","type":"failsafe","sev":"critical","src":"system","drone":"pi5-sdmodelh7v2-ardu","text":"機上進入緊急狀態（CRITICAL）","detail":{"state":"CRITICAL"}}],"commands":[{"t":28.81,"clock":"16:28:28","action":"起飛（到 2.0m）","raw_action":"takeoff:2.0m","result":"accepted","client":"frontend","steps":[{"k":"guided","ok":true,"ms":148.8,"result":"MAV_RESULT_ACCEPTED","tries":1},{"k":"takeoff","ok":true,"ms":56.2,"result":"MAV_RESULT_ACCEPTED","tries":1}],"alt":2.0,"sem":"relative","raw":"{\n \"steps\": {\n  \"guided\": {\n   \"result\": \"MAV_RESULT_ACCEPTED\",\n   \"accepted\": true,\n   \"attempts\": 1,\n   \"ack_ms\": 148.8,\n   \"mode_engaged\": true,\n   \"attempts_mode\": 1\n  },\n  \"takeoff\": {\n   \"result\": \"MAV_RESULT_ACCEPTED\",\n   \"accepted\": true,\n   \"attempts\": 1,\n   \"ack_ms\": 56.2,\n   \"alt_param7\": 2.0,\n   \"alt_semantics\": \"relative\"\n  }\n },\n \"alt_param7\": 2.0,\n \"alt_semantics\": \"relative\"\n}"},{"t":33.0,"clock":"16:28:33","action":"繼續任務","raw_action":"mode:mission","result":"accepted","client":"frontend","steps":[{"k":"ack","ok":true,"ms":139.7,"result":"MAV_RESULT_ACCEPTED","tries":1}],"alt":null,"sem":null,"raw":"{\n \"result\": \"MAV_RESULT_ACCEPTED\",\n \"accepted\": true,\n \"attempts\": 1,\n \"ack_ms\": 139.7,\n \"mode_engaged\": true,\n \"attempts_mode\": 1\n}"},{"t":33.01,"clock":"16:28:33","action":"起飛→任務","raw_action":"mission_fly","result":"accepted","client":"frontend","steps":[],"alt":null,"sem":null,"raw":"{}"}],"log":{"file":"20260907-081927.tlog","bytes":1781274,"frames":44075,"span":622.1,"t_start":1788769167.9320788,"t_end":1788769790.0707269,"start_clock":"16:19:27","end_clock":"16:29:50","types":[{"name":"RAW_IMU","n":1671,"hz":2.69,"first":1.2,"last":622.1,"fields":{"time_usec":440506062,"xacc":-241,"yacc":-249,"zacc":-968,"xgyro":-6,"ygyro":3,"zgyro":5,"xmag":-301,"ymag":311,"zmag":307,"id":0,"temperature":4550},"buckets":[37,41,42,41,42,3,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,14,41,42,41,42,41,42,41,41,42,42,41,42,41,42,41,42,41,42,41,42,41,41,41,42,41,42,41,41,42,41,42,41,42,41,42]},{"name":"AHRS","n":1670,"hz":2.69,"first":1.4,"last":622.0,"fields":{"omegaIx":0.0047,"omegaIy":-0.0,"omegaIz":-0.0018,"accel_weight":0.0,"renorm_val":0.0,"error_rp":0.0231,"error_yaw":0.1194},"buckets":[36,42,41,42,41,3,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,14,41,42,41,42,41,42,41,42,41,42,41,42,41,42,41,42,41,42,41,42,41,41,41,42,41,42,41,42,41,42,41,42,41,42,41]},{"name":"AHRS2","n":1670,"hz":2.69,"first":1.4,"last":622.0,"fields":{"roll":0.2566,"pitch":-0.228,"yaw":-2.5641,"altitude":129.17,"lat":247732800,"lng":1210460289},"buckets":[36,42,41,42,41,3,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,14,41,42,41,42,41,42,41,42,41,42,41,42,41,42,41,42,41,42,41,42,41,41,41,42,41,42,41,42,41,42,41,42,41,42,41]},{"name":"ATTITUDE","n":1670,"hz":2.69,"first":1.4,"last":622.0,"fields":{"time_boot_ms":440505,"roll":0.2436,"pitch":-0.2295,"yaw":-2.6758,"rollspeed":-0.0019,"pitchspeed":0.0031,"yawspeed":0.0035},"buckets":[36,42,41,42,41,3,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,14,41,42,41,42,41,42,41,42,41,42,41,42,41,42,41,42,41,42,41,42,41,41,41,42,41,42,41,42,41,42,41,42,41,42,41]},{"name":"GLOBAL_POSITION_INT","n":1670,"hz":2.69,"first":1.4,"last":622.0,"fields":{"time_boot_ms":440505,"lat":247732799,"lon":1210460291,"alt":129330,"relative_alt":1035,"vx":0,"vy":-1,"vz":0,"hdg":20669},"buckets":[36,42,41,42,41,3,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,14,41,42,41,42,41,42,41,42,41,42,41,42,41,42,41,42,41,42,41,42,41,41,41,42,41,42,41,42,41,42,41,42,41,42,41]},{"name":"VFR_HUD","n":1670,"hz":2.69,"first":1.4,"last":622.0,"fields":{"airspeed":0.0126,"groundspeed":0.0116,"heading":206,"throttle":0,"alt":129.33,"climb":0.005},"buckets":[36,42,41,42,41,3,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,14,41,42,41,42,41,42,41,42,41,42,41,42,41,42,41,42,41,42,41,42,41,41,41,42,41,42,41,42,41,42,41,42,41,41,42]},{"name":"SYS_STATUS","n":1670,"hz":2.69,"first":1.5,"last":622.0,"fields":{"onboard_control_sensors_present":1399979055,"onboard_control_sensors_enabled":1398930479,"onboard_control_sensors_health":1467087919,"load":195,"voltage_battery":15271,"current_battery":37,"battery_remaining":87,"drop_rate_comm":0,"errors_comm":0,"errors_count1":0,"errors_count2":0,"errors_count3":0,"errors_count4":0},"buckets":[36,42,41,42,41,3,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,14,41,42,41,42,41,42,41,42,41,42,41,42,41,42,41,42,41,42,41,42,41,41,41,42,41,42,41,42,41,42,41,42,41,41,42]},{"name":"POWER_STATUS","n":1670,"hz":2.69,"first":1.5,"last":622.0,"fields":{"Vcc":0,"Vservo":0,"flags":4},"buckets":[36,42,41,42,41,3,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,14,41,42,41,42,41,42,41,42,41,42,41,42,41,42,41,42,41,42,41,42,41,41,41,42,41,42,41,42,41,42,41,41,42,41,42]},{"name":"MEMINFO","n":1670,"hz":2.69,"first":1.5,"last":622.0,"fields":{"brkval":0,"freemem":65535,"freemem32":662288},"buckets":[36,42,41,42,41,3,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,14,41,42,41,42,41,42,41,42,41,42,41,42,41,42,41,42,41,42,41,42,41,41,41,42,41,42,41,42,41,42,41,41,42,41,42]},{"name":"NAV_CONTROLLER_OUTPUT","n":1670,"hz":2.69,"first":1.5,"last":622.0,"fields":{"nav_roll":0.0244,"nav_pitch":0.0099,"nav_bearing":-153,"target_bearing":0,"wp_dist":0,"alt_error":0.0,"aspd_error":0.0,"xtrack_error":0.0},"buckets":[36,42,41,42,41,3,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,14,41,42,41,42,41,42,41,42,41,42,41,42,41,42,41,42,41,42,41,42,41,41,41,42,41,42,41,42,41,42,41,41,42,41,42]},{"name":"MISSION_CURRENT","n":1670,"hz":2.69,"first":1.5,"last":622.0,"fields":{"seq":0,"total":8,"mission_state":2,"mission_mode":0},"buckets":[36,42,41,42,41,3,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,14,41,42,41,42,41,42,41,42,41,42,41,42,41,42,41,42,41,42,41,42,41,41,41,42,41,42,41,42,41,42,41,41,42,41,42]},{"name":"SERVO_OUTPUT_RAW","n":1670,"hz":2.69,"first":1.5,"last":622.1,"fields":{"time_usec":440506027,"port":0,"servo1_raw":1000,"servo2_raw":1000,"servo3_raw":1000,"servo4_raw":1000,"servo5_raw":0,"servo6_raw":0,"servo7_raw":0,"servo8_raw":0,"servo9_raw":0,"servo10_raw":0,"servo11_raw":0,"servo12_raw":0},"buckets":[36,42,41,42,41,3,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,14,41,42,41,42,41,42,41,42,41,42,41,42,41,42,41,42,41,42,41,42,41,41,41,42,41,42,41,42,41,42,41,41,42,41,42]},{"name":"RC_CHANNELS","n":1670,"hz":2.69,"first":1.5,"last":622.1,"fields":{"time_boot_ms":440506,"chancount":16,"chan1_raw":1501,"chan2_raw":1503,"chan3_raw":1001,"chan4_raw":1501,"chan5_raw":1250,"chan6_raw":1441,"chan7_raw":1000,"chan8_raw":1000,"chan9_raw":1000,"chan10_raw":1005,"chan11_raw":1542,"chan12_raw":1542},"buckets":[36,42,41,41,42,3,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,14,41,42,41,42,41,42,41,41,42,42,41,42,41,42,41,42,41,42,41,42,41,41,41,42,41,42,41,42,41,41,42,41,42,41,42]},{"name":"SCALED_IMU2","n":1670,"hz":2.69,"first":1.5,"last":622.1,"fields":{"time_boot_ms":440506,"xacc":0,"yacc":0,"zacc":0,"xgyro":0,"ygyro":0,"zgyro":0,"xmag":-270,"ymag":319,"zmag":296,"temperature":0},"buckets":[36,41,42,41,42,3,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,14,41,41,42,41,42,41,42,41,42,42,41,42,41,42,41,42,41,42,41,42,41,41,41,42,41,41,42,41,42,41,42,41,42,41,42]},{"name":"SCALED_PRESSURE","n":1670,"hz":2.69,"first":1.5,"last":622.1,"fields":{"time_boot_ms":440506,"press_abs":994.8156,"press_diff":0.0,"temperature":4344,"temperature_press_diff":0},"buckets":[36,41,42,41,42,3,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,14,41,41,42,41,42,41,42,41,42,42,41,42,41,42,41,42,41,42,41,42,41,41,41,42,41,41,42,41,42,41,42,41,42,41,42]},{"name":"SCALED_PRESSURE2","n":1670,"hz":2.69,"first":1.5,"last":622.1,"fields":{"time_boot_ms":440506,"press_abs":994.6045,"press_diff":0.0,"temperature":3566,"temperature_press_diff":0},"buckets":[36,41,42,41,42,3,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,14,41,41,42,41,42,41,42,41,42,42,41,42,41,42,41,42,41,42,41,42,41,41,41,41,42,41,42,41,42,41,42,41,42,41,42]},{"name":"GPS_RAW_INT","n":1670,"hz":2.69,"first":1.5,"last":622.1,"fields":{"time_usec":440399000,"fix_type":4,"lat":247732800,"lon":1210460289,"alt":120270,"eph":53,"epv":73,"vel":1,"cog":23979,"satellites_visible":29,"alt_ellipsoid":136666,"h_acc":282,"v_acc":379,"vel_acc":80},"buckets":[36,41,42,41,42,3,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,13,42,41,42,41,42,41,42,41,42,41,42,42,41,42,41,42,41,42,41,42,41,40,42,41,42,41,42,41,42,41,42,41,42,41,42]},{"name":"SYSTEM_TIME","n":1670,"hz":2.69,"first":1.5,"last":622.1,"fields":{"time_unix_usec":1788769789909597,"time_boot_ms":440508},"buckets":[36,41,42,41,42,3,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,13,42,41,42,41,42,41,42,41,42,41,42,42,41,42,41,42,41,42,41,41,42,40,42,41,42,41,42,41,42,41,42,41,42,41,42]},{"name":"TERRAIN_REPORT","n":1670,"hz":2.69,"first":1.5,"last":622.1,"fields":{"lat":247732799,"lon":1210460291,"spacing":100,"terrain_height":128.5041,"current_height":0.8259,"pending":0,"loaded":336},"buckets":[36,41,42,41,42,3,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,13,42,41,42,41,42,41,42,41,42,41,42,42,41,42,41,42,41,42,41,41,42,40,42,41,42,41,42,41,42,41,42,41,42,41,42]},{"name":"EKF_STATUS_REPORT","n":1670,"hz":2.69,"first":1.5,"last":622.1,"fields":{"flags":831,"velocity_variance":0.0105,"pos_horiz_variance":0.0052,"pos_vert_variance":0.0021,"compass_variance":0.0021,"terrain_alt_variance":0.0,"airspeed_variance":0.0},"buckets":[36,41,42,41,42,3,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,13,42,41,42,41,42,41,42,41,42,41,42,42,41,42,41,42,41,41,42,41,42,40,42,41,42,41,42,41,42,41,42,41,42,41,42]},{"name":"VIBRATION","n":1670,"hz":2.69,"first":1.5,"last":622.1,"fields":{"time_usec":440508606,"vibration_x":0.3733,"vibration_y":0.3595,"vibration_z":0.1746,"clipping_0":0,"clipping_1":0,"clipping_2":0},"buckets":[36,41,42,41,42,3,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,13,42,41,42,41,42,41,42,41,42,41,42,41,42,41,42,41,42,41,42,41,42,40,42,41,42,41,42,41,42,41,42,41,42,41,42]},{"name":"BATTERY_STATUS","n":1670,"hz":2.69,"first":1.5,"last":622.1,"fields":{"id":0,"battery_function":0,"type":0,"temperature":32767,"voltages":[15271,65535,65535,65535,65535,65535],"current_battery":37,"current_consumed":508,"energy_consumed":277,"battery_remaining":87,"time_remaining":0,"charge_state":1,"voltages_ext":[0,0,0,0],"mode":0,"fault_bitmask":0},"buckets":[36,41,42,41,42,3,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,13,42,41,42,41,42,41,42,41,42,41,42,41,42,41,42,41,42,41,42,41,42,40,42,41,42,41,42,41,42,41,42,41,42,41,42]},{"name":"MCU_STATUS","n":1670,"hz":2.69,"first":1.5,"last":622.1,"fields":{"id":0,"MCU_temperature":4614,"MCU_voltage":3317,"MCU_voltage_min":3314,"MCU_voltage_max":3321},"buckets":[36,41,42,41,42,3,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,13,42,41,42,41,42,41,42,41,42,41,42,41,42,41,42,41,42,41,42,41,42,40,42,41,42,41,42,41,42,41,42,41,42,41,42]},{"name":"EXTENDED_SYS_STATE","n":1669,"hz":2.69,"first":1.8,"last":622.1,"fields":{"vtol_state":3,"landed_state":1},"buckets":[35,41,42,41,42,3,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,13,42,41,42,41,42,41,42,41,42,41,42,41,42,41,42,41,42,41,42,41,42,40,42,41,42,41,42,41,42,41,42,41,42,41,42]},{"name":"WIND","n":1580,"hz":2.64,"first":24.0,"last":622.1,"fields":{"direction":-180.0,"speed":0.0,"speed_z":0.0},"buckets":[0,0,29,41,42,3,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,13,42,41,42,41,42,41,42,41,42,41,42,42,41,42,41,42,41,42,41,41,42,40,42,41,42,41,42,41,42,41,42,41,42,41,42]},{"name":"LOCAL_POSITION_NED","n":1580,"hz":2.64,"first":24.0,"last":622.1,"fields":{"time_boot_ms":440508,"x":-30.7925,"y":15.0061,"z":-0.8448,"vx":-0.0064,"vy":-0.0101,"vz":-0.0052},"buckets":[0,0,29,41,42,3,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,13,42,41,42,41,42,41,42,41,42,41,42,42,41,42,41,42,41,41,42,41,42,40,42,41,42,41,42,41,42,41,42,41,42,41,42]},{"name":"HEARTBEAT","n":426,"hz":0.68,"first":0.0,"last":621.1,"fields":{"type":2,"autopilot":3,"base_mode":217,"custom_mode":9,"system_status":3,"mavlink_version":3},"buckets":[11,10,11,10,10,1,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,3,11,10,11,10,10,11,10,10,11,10,11,10,11,11,10,10,11,10,11,10,10,11,10,10,11,11,13,12,10,11,10,10,11,11,10]},{"name":"POSITION_TARGET_GLOBAL_INT","n":262,"hz":4.0,"first":545.4,"last":610.6,"fields":{"time_boot_ms":429008,"coordinate_frame":0,"type_mask":65016,"lat_int":247732088,"lon_int":1210459851,"alt":131.79,"vx":0.0,"vy":0.0,"vz":0.0,"afx":0.0,"afy":0.0,"afz":0.0,"yaw":0.0,"yaw_rate":0.0},"buckets":[0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,17,42,41,42,41,42,37,0]},{"name":"TIMESYNC","n":42,"hz":0.07,"first":8.6,"last":621.6,"fields":{"tc1":0,"ts1":440110687001},"buckets":[1,1,1,1,1,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,1,1,1,1,1,1,2,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,2,1]},{"name":"PARAM_VALUE","n":36,"hz":0.06,"first":1.2,"last":620.9,"fields":{"param_id":"STAT_RUNTIME","param_value":936837.0,"param_type":6,"param_count":1244,"param_index":65535},"buckets":[15,0,0,1,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,1,0,0,1,0,0,1,0,0,1,0,0,1,0,0,1,0,0,1,0,0,1,0,0,1,0,0,3,0,0,3,0,0,5]},{"name":"COMMAND_ACK","n":25,"hz":0.04,"first":1.2,"last":545.1,"fields":{"command":176,"result":0,"progress":0,"result_param2":0,"target_system":255,"target_component":190},"buckets":[20,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,2,0,3,0,0,0,0,0,0,0]},{"name":"STATUSTEXT","n":15,"hz":0.02,"first":2.1,"last":563.2,"fields":{"severity":6,"text":"Mission: 6 WP","id":0,"chunk_seq":0},"buckets":[2,0,1,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,1,0,0,0,2,0,2,4,3,0,0,0,0,0]},{"name":"MISSION_REQUEST","n":9,"hz":null,"first":481.1,"last":481.5,"fields":{"target_system":255,"target_component":190,"seq":8,"mission_type":0},"buckets":[0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,9,0,0,0,0,0,0,0,0,0,0,0,0,0]},{"name":"MISSION_ITEM_INT","n":8,"hz":12.6,"first":481.7,"last":482.2,"fields":{"target_system":255,"target_component":190,"seq":8,"frame":3,"command":21,"current":0,"autocontinue":1,"param1":0.0,"param2":0.0,"param3":0.0,"param4":1.0,"x":247734451,"y":1210459185,"z":0.0},"buckets":[0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,8,0,0,0,0,0,0,0,0,0,0,0,0,0]},{"name":"AUTOPILOT_VERSION","n":3,"hz":null,"first":1.2,"last":1.2,"fields":{"capabilities":64495,"flight_sw_version":67567871,"middleware_sw_version":0,"os_sw_version":0,"board_version":76480512,"flight_custom_version":[49,53,49,49,102,50],"middleware_custom_version":[0,0,0,0,0,0],"os_custom_version":[52,102,51,52,101,50],"vendor_id":4617,"product_id":22337,"uid":0,"uid2":[42,0,32,0,17,81]},"buckets":[3,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0]},{"name":"MISSION_ITEM_REACHED","n":3,"hz":0.11,"first":545.1,"last":563.1,"fields":{"seq":5},"buckets":[0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,1,1,1,0,0,0,0,0]},{"name":"GPS_GLOBAL_ORIGIN","n":2,"hz":0.0,"first":2.1,"last":532.7,"fields":{"latitude":247735565,"longitude":1210458806,"altitude":128490,"time_usec":351179071},"buckets":[1,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,1,0,0,0,0,0,0,0,0]},{"name":"HOME_POSITION","n":2,"hz":0.0,"first":2.1,"last":532.7,"fields":{"latitude":247735246,"longitude":1210459076,"altitude":128300,"x":-3.5511,"y":2.729,"z":0.19,"q":[NaN,NaN,NaN,NaN],"approach_x":0.0,"approach_y":0.0,"approach_z":0.0,"time_usec":351179087},"buckets":[1,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,1,0,0,0,0,0,0,0,0]},{"name":"MISSION_ACK","n":1,"hz":null,"first":481.5,"last":481.5,"fields":{"target_system":255,"target_component":190,"type":0,"mission_type":0},"buckets":[0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,1,0,0,0,0,0,0,0,0,0,0,0,0,0]},{"name":"MISSION_COUNT","n":1,"hz":null,"first":481.7,"last":481.7,"fields":{"target_system":255,"target_component":190,"count":9,"mission_type":0},"buckets":[0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,1,0,0,0,0,0,0,0,0,0,0,0,0,0]}],"statustext":[{"t":2.1,"clock":"16:19:30","sev":6,"text":"EKF3 IMU0 origin set"},{"t":2.1,"clock":"16:19:30","sev":6,"text":"Field Elevation Set: 128m"},{"t":23.9,"clock":"16:19:51","sev":6,"text":"EKF3 IMU0 is using GPS"},{"t":481.6,"clock":"16:27:29","sev":6,"text":"Flight plan received"},{"t":519.5,"clock":"16:28:07","sev":2,"text":"Arm: Throttle (RC3) is not neutral"},{"t":526.9,"clock":"16:28:14","sev":2,"text":"Arm: Guided mode not armable"},{"t":545.1,"clock":"16:28:33","sev":6,"text":"Mission: 1 Takeoff"},{"t":545.1,"clock":"16:28:33","sev":6,"text":"Mission: 2 WP"},{"t":550.6,"clock":"16:28:38","sev":6,"text":"EKF3 IMU0 MAG0 in-flight yaw alignment complete"},{"t":554.9,"clock":"16:28:42","sev":6,"text":"Reached command #2"},{"t":554.9,"clock":"16:28:42","sev":6,"text":"Mission: 3 ChangeSpeed"},{"t":554.9,"clock":"16:28:42","sev":6,"text":"Mission: 4 WP"},{"t":563.1,"clock":"16:28:51","sev":6,"text":"Reached command #4"},{"t":563.2,"clock":"16:28:51","sev":6,"text":"Mission: 5 ChangeSpeed"},{"t":563.2,"clock":"16:28:51","sev":6,"text":"Mission: 6 WP"}],"modes":[{"t":0.0,"clock":"16:19:27","mode":"LAND"},{"t":390.4,"clock":"16:25:58","mode":"LOITER"},{"t":519.4,"clock":"16:28:07","mode":"GUIDED"},{"t":528.9,"clock":"16:28:16","mode":"LAND"},{"t":529.4,"clock":"16:28:17","mode":"LOITER"},{"t":540.9,"clock":"16:28:28","mode":"GUIDED"},{"t":545.1,"clock":"16:28:33","mode":"AUTO"},{"t":610.7,"clock":"16:29:38","mode":"LAND"}],"series":{"alt":[[1.4,0.105],[2.9,-0.111],[4.7,-0.249],[6.4,-0.382],[8.2,-0.402],[9.9,-0.438],[11.7,-0.437],[13.4,-0.418],[15.2,-0.412],[16.9,-0.425],[18.7,-0.409],[20.4,-0.42],[22.2,-0.402],[23.9,-0.382],[25.7,-0.267],[27.4,-0.244],[29.2,-0.277],[30.9,-0.295],[32.7,-0.319],[34.4,-0.301],[36.2,-0.281],[37.9,-0.283],[39.7,-0.27],[41.4,-0.256],[43.2,-0.25],[44.7,-0.276],[46.4,-0.276],[48.2,-0.292],[49.9,-0.283],[51.7,-0.293],[256.7,-0.308],[258.4,-0.321],[260.2,-0.282],[261.9,-0.269],[263.7,-0.267],[265.4,-0.252],[267.2,-0.265],[268.9,-0.264],[270.7,-0.229],[272.4,-0.235],[274.2,-0.242],[275.9,-0.258],[277.7,-0.273],[279.4,-0.251],[281.2,-0.272],[282.9,-0.281],[284.7,-0.281],[286.4,-0.281],[288.2,-0.281],[289.7,-0.262],[291.4,-0.244],[293.2,-0.23],[294.9,-0.248],[296.6,-0.236],[298.4,-0.226],[300.1,-0.204],[301.9,-0.181],[303.6,-0.21],[305.4,-0.213],[307.1,-0.233],[308.9,-0.245],[310.6,-0.231],[312.4,-0.196],[314.1,-0.167],[315.9,-0.198],[317.6,-0.228],[319.4,-0.226],[321.1,-0.243],[322.9,-0.233],[324.6,-0.228],[326.4,-0.224],[328.1,-0.228],[329.9,-0.232],[331.4,-0.221],[333.1,-0.226],[334.9,-0.271],[336.6,-0.273],[338.4,-0.294],[340.1,-0.293],[341.9,-0.315],[343.6,-0.325],[345.4,-0.321],[347.1,-0.357],[348.9,-0.325],[350.6,-0.308],[352.4,-0.313],[354.1,-0.283],[355.9,-0.268],[357.6,-0.257],[359.4,-0.271],[361.1,-0.289],[362.8,-0.298],[364.6,-0.291],[366.3,-0.283],[368.1,-0.285],[369.8,-0.268],[371.6,-0.252],[373.1,-0.252],[374.8,-0.292],[376.6,-0.283],[378.3,-0.289],[380.1,-0.292],[381.8,-0.292],[383.6,-0.305],[385.3,-0.275],[387.0,-0.252],[388.8,-0.259],[390.5,-0.3],[392.3,-0.32],[394.0,-0.359],[395.8,-0.384],[397.5,-0.366],[399.3,-0.357],[401.0,-0.329],[402.8,-0.321],[404.5,-0.319],[406.3,-0.322],[408.0,-0.355],[409.8,-0.376],[411.5,-0.361],[413.3,-0.362],[414.8,-0.307],[416.5,0.032],[418.3,0.266],[420.0,0.303],[421.8,0.391],[423.5,0.398],[425.3,0.366],[427.0,0.2],[428.8,-0.004],[430.5,-0.058],[432.3,-0.135],[434.0,-0.138],[435.8,-0.185],[437.5,-0.222],[439.3,-0.23],[441.0,-0.198],[442.8,-0.205],[444.5,-0.203],[446.3,-0.194],[448.0,-0.194],[449.8,-0.182],[451.5,-0.177],[453.3,-0.193],[455.0,-0.207],[456.5,-0.216],[458.3,-0.189],[460.0,-0.159],[461.8,-0.139],[463.5,-0.149],[465.3,-0.139],[467.0,-0.168],[468.8,-0.193],[470.5,-0.186],[472.3,-0.186],[474.0,-0.156],[475.8,-0.146],[477.5,-0.137],[479.3,-0.133],[481.0,-0.142],[483.0,-0.164],[484.8,-0.132],[486.5,-0.123],[488.3,-0.143],[490.0,-0.183],[491.8,-0.203],[493.5,-0.206],[495.3,-0.188],[497.0,-0.23],[498.5,-0.235],[500.3,-0.248],[502.0,-0.245],[503.8,-0.276],[505.5,-0.286],[507.3,-0.284],[509.0,-0.244],[510.8,-0.254],[512.5,-0.266],[514.3,-0.318],[516.0,-0.349],[517.8,-0.367],[519.5,-0.361],[521.3,-0.346],[523.0,-0.279],[524.8,-0.238],[526.5,-0.189],[528.3,-0.201],[530.0,-0.188],[531.8,-0.174],[533.5,0.012],[535.3,0.032],[537.0,-0.018],[538.8,-0.042],[540.3,-0.056],[542.0,-0.035],[543.8,1.846],[545.5,2.018],[547.3,1.955],[549.0,2.05],[550.8,2.562],[552.5,2.938],[554.3,3.215],[556.0,3.445],[557.8,3.234],[559.5,3.3],[561.3,3.293],[563.0,3.639],[564.8,3.513],[566.5,3.335],[568.3,3.249],[570.0,3.149],[571.8,3.112],[573.5,3.103],[575.3,3.103],[577.0,3.135],[578.8,3.174],[580.5,3.219],[582.0,3.228],[583.8,3.221],[585.5,3.25],[587.3,3.293],[589.0,3.314],[590.8,3.34],[592.5,3.37],[594.3,3.394],[596.0,3.381],[597.8,3.405],[599.5,3.418],[601.3,3.432],[603.0,3.421],[604.8,3.427],[606.5,3.46],[608.3,3.521],[610.0,3.543],[611.8,3.273],[613.5,2.761],[615.3,2.232],[617.0,1.703],[618.8,1.262],[620.5,1.089]],"volt":[[1.5,15.646],[3.0,15.642],[4.7,15.641],[6.5,15.643],[8.2,15.642],[10.0,15.637],[11.7,15.636],[13.5,15.636],[15.2,15.634],[17.0,15.63],[18.7,15.628],[20.5,15.631],[22.2,15.63],[24.0,15.626],[25.7,15.625],[27.5,15.628],[29.2,15.627],[31.0,15.622],[32.7,15.622],[34.5,15.625],[36.2,15.624],[38.0,15.619],[39.7,15.619],[41.5,15.622],[43.2,15.622],[44.7,15.617],[46.5,15.62],[48.2,15.622],[50.0,15.616],[51.7,15.617],[256.7,15.621],[258.4,15.617],[260.2,15.613],[261.9,15.616],[263.7,15.614],[265.4,15.614],[267.2,15.616],[268.9,15.615],[270.7,15.612],[272.4,15.608],[274.2,15.611],[275.9,15.61],[277.7,15.609],[279.4,15.603],[281.2,15.606],[282.9,15.604],[284.7,15.602],[286.4,15.604],[288.2,15.605],[289.7,15.604],[291.4,15.604],[293.2,15.605],[294.9,15.605],[296.7,15.604],[298.4,15.601],[300.2,15.603],[301.9,15.602],[303.7,15.599],[305.4,15.598],[307.2,15.601],[308.9,15.606],[310.7,15.603],[312.4,15.601],[314.2,15.604],[316.2,15.602],[317.7,15.601],[319.4,15.6],[321.2,15.602],[322.9,15.602],[324.7,15.597],[326.4,15.595],[328.2,15.597],[329.9,15.597],[331.4,15.594],[333.2,15.595],[334.9,15.596],[336.7,15.593],[338.4,15.593],[340.1,15.594],[341.9,15.594],[343.6,15.59],[345.4,15.59],[347.1,15.591],[348.9,15.593],[350.6,15.589],[352.4,15.589],[354.1,15.592],[355.9,15.591],[357.6,15.586],[359.4,15.586],[361.1,15.588],[362.9,15.588],[364.6,15.586],[366.3,15.585],[368.1,15.587],[369.8,15.588],[371.6,15.584],[373.1,15.586],[374.8,15.586],[376.6,15.585],[378.3,15.582],[380.1,15.585],[381.8,15.585],[383.6,15.585],[385.3,15.58],[387.1,15.587],[388.8,15.586],[390.6,15.584],[392.3,15.583],[394.1,15.585],[395.8,15.586],[397.6,15.581],[399.3,15.582],[401.1,15.584],[402.8,15.585],[404.5,15.581],[406.3,15.58],[408.0,15.583],[409.8,15.583],[411.5,15.58],[413.3,15.578],[414.8,15.581],[416.5,15.577],[418.3,15.579],[420.0,15.578],[421.8,15.577],[423.5,15.575],[425.3,15.576],[427.0,15.578],[428.8,15.576],[430.5,15.575],[432.3,15.573],[434.0,15.575],[435.8,15.575],[437.5,15.573],[439.3,15.572],[441.0,15.574],[442.8,15.574],[444.5,15.572],[446.3,15.572],[448.0,15.574],[449.8,15.574],[451.5,15.572],[453.3,15.571],[455.0,15.573],[456.5,15.57],[458.3,15.569],[460.0,15.572],[461.8,15.572],[463.5,15.568],[465.3,15.569],[467.0,15.572],[468.8,15.572],[470.5,15.568],[472.3,15.568],[474.0,15.57],[475.8,15.57],[477.5,15.567],[479.3,15.566],[481.0,15.569],[483.0,15.565],[484.8,15.569],[486.5,15.567],[488.3,15.564],[490.0,15.564],[491.8,15.568],[493.5,15.567],[495.3,15.563],[497.0,15.563],[498.5,15.567],[500.3,15.562],[502.0,15.562],[503.8,15.565],[505.5,15.565],[507.3,15.561],[509.0,15.56],[510.8,15.563],[512.5,15.563],[514.3,15.56],[516.0,15.56],[517.8,15.562],[519.5,15.561],[521.3,15.557],[523.0,15.558],[524.8,15.561],[526.5,15.561],[528.3,15.559],[530.0,15.556],[531.8,15.559],[533.5,15.554],[535.3,15.538],[537.0,15.538],[538.8,15.537],[540.3,15.536],[542.0,15.257],[543.8,15.284],[545.5,15.209],[547.3,15.185],[549.0,15.163],[550.8,15.165],[552.5,15.168],[554.3,15.145],[556.0,15.127],[557.8,15.131],[559.5,15.155],[561.3,15.151],[563.0,15.114],[564.8,15.116],[566.5,15.107],[568.3,15.109],[570.0,15.096],[571.8,15.088],[573.5,15.087],[575.3,15.081],[577.0,15.076],[578.8,15.074],[580.5,15.072],[582.0,15.069],[583.8,15.059],[585.5,15.051],[587.3,15.05],[589.0,15.055],[590.8,15.04],[592.5,15.046],[594.3,15.043],[596.0,15.036],[597.8,15.023],[599.5,15.025],[601.3,15.023],[603.0,15.02],[604.8,15.01],[606.5,15.012],[608.3,15.01],[610.0,15.001],[611.8,14.995],[613.5,14.997],[615.3,14.988],[617.0,14.994],[618.8,15.124],[620.5,15.145]],"vib":[[1.5,0.03],[3.0,0.032],[4.8,0.033],[6.5,0.027],[8.3,0.032],[10.0,0.029],[11.8,0.033],[13.5,0.027],[15.3,0.032],[17.0,0.033],[18.8,0.034],[20.5,0.031],[22.3,0.031],[24.0,0.028],[26.4,0.032],[27.5,0.032],[29.3,0.028],[31.0,0.028],[32.8,0.031],[34.5,0.028],[36.3,0.032],[38.0,0.027],[39.8,0.033],[41.5,0.032],[43.3,0.035],[44.8,0.032],[46.5,0.036],[48.3,0.03],[50.0,0.032],[51.8,0.036],[256.8,0.033],[258.5,0.036],[260.3,0.036],[262.0,0.035],[263.8,0.03],[265.5,0.03],[267.3,0.031],[269.0,0.033],[270.8,0.029],[272.5,0.033],[274.3,0.033],[276.0,0.031],[277.8,0.035],[279.5,0.033],[281.3,0.036],[283.0,0.03],[284.8,0.033],[286.5,0.029],[288.3,0.035],[289.8,0.029],[291.5,0.03],[293.3,0.032],[295.0,0.033],[296.8,0.029],[298.5,0.039],[300.3,0.03],[302.0,0.035],[303.7,0.036],[305.5,0.034],[307.2,0.028],[309.0,0.03],[310.7,0.031],[312.5,0.031],[314.2,0.037],[316.2,0.033],[317.7,0.032],[319.5,0.036],[321.2,0.031],[323.0,0.036],[324.7,0.035],[326.5,0.037],[328.2,0.03],[330.0,0.032],[331.5,0.034],[333.2,0.031],[335.0,0.031],[336.7,0.033],[338.5,0.034],[340.2,0.03],[342.0,0.032],[343.7,0.032],[345.5,0.034],[347.2,0.032],[349.0,0.03],[350.7,0.028],[352.5,0.033],[354.2,0.029],[356.0,0.029],[357.7,0.031],[359.5,0.035],[361.2,0.033],[362.9,0.029],[364.7,0.032],[366.4,0.027],[368.2,0.033],[369.9,0.034],[371.7,0.031],[373.2,0.032],[374.9,0.03],[376.7,0.031],[378.4,0.032],[380.2,0.032],[381.9,0.03],[383.7,0.031],[385.4,0.033],[387.2,0.032],[388.9,0.034],[390.7,0.029],[392.4,0.029],[394.1,0.035],[395.9,0.035],[397.6,0.033],[399.4,0.029],[401.1,0.036],[402.9,0.031],[404.6,0.033],[406.4,0.032],[408.1,0.024],[409.9,0.028],[411.6,0.033],[413.4,0.324],[414.9,0.201],[416.6,0.325],[418.4,0.126],[420.1,0.057],[421.9,0.117],[423.6,0.101],[425.4,0.106],[427.1,0.21],[428.9,0.463],[430.6,0.381],[432.4,0.032],[434.1,0.033],[435.9,0.035],[437.6,0.033],[439.4,0.032],[441.1,0.033],[442.9,0.032],[444.6,0.031],[446.4,0.029],[448.1,0.031],[449.9,0.033],[451.6,0.03],[453.4,0.036],[455.1,0.031],[456.6,0.035],[458.4,0.031],[460.1,0.034],[461.9,0.031],[463.6,0.032],[465.4,0.031],[467.1,0.031],[468.9,0.031],[470.6,0.031],[472.4,0.03],[474.1,0.031],[475.9,0.032],[477.6,0.031],[479.4,0.033],[481.1,0.032],[483.1,0.031],[484.9,0.036],[486.6,0.031],[488.4,0.035],[490.1,0.03],[491.9,0.03],[493.6,0.037],[495.4,0.03],[497.1,0.036],[498.6,0.033],[500.4,0.032],[502.1,0.029],[503.9,0.031],[505.6,0.03],[507.4,0.035],[509.1,0.032],[510.9,0.036],[512.6,0.031],[514.4,0.034],[516.1,0.033],[517.9,0.035],[519.6,0.033],[521.4,0.03],[523.1,0.029],[524.9,0.027],[526.6,0.029],[528.4,0.031],[530.1,0.033],[531.9,0.029],[533.6,0.033],[535.4,0.528],[537.1,0.439],[538.9,0.461],[540.4,0.471],[542.1,4.625],[543.9,4.78],[545.6,6.255],[547.4,6.982],[549.1,6.918],[550.9,7.476],[552.6,7.739],[554.4,8.142],[556.1,9.836],[557.9,12.317],[559.6,10.387],[561.4,10.274],[563.1,6.884],[564.9,5.944],[566.6,6.996],[568.4,6.849],[570.1,7.319],[571.9,5.39],[573.6,6.764],[575.4,5.149],[577.1,5.406],[578.9,4.11],[580.6,6.677],[582.1,6.288],[583.9,4.839],[585.6,5.683],[587.4,4.372],[589.1,6.1],[590.9,4.585],[592.6,4.916],[594.4,4.878],[596.1,5.065],[597.9,4.552],[599.6,5.88],[601.4,5.258],[603.1,5.591],[604.9,5.537],[606.6,6.078],[608.4,6.913],[610.1,6.287],[611.9,7.781],[613.6,7.827],[615.4,6.173],[617.1,5.849],[618.9,2.876],[620.6,2.41]],"sats":[[1.5,27],[3.0,27],[4.8,28],[6.5,28],[8.3,27],[10.0,27],[11.8,27],[13.5,27],[15.3,27],[17.0,28],[18.8,26],[20.5,27],[22.3,27],[24.0,26],[26.4,27],[27.5,27],[29.3,27],[31.0,27],[32.8,26],[34.5,28],[36.3,27],[38.0,28],[39.8,27],[41.5,25],[43.3,26],[44.8,27],[46.5,27],[48.3,26],[50.0,26],[51.8,27],[256.7,26],[258.5,26],[260.2,26],[262.0,26],[263.7,27],[265.5,25],[267.2,27],[269.0,26],[270.7,27],[272.5,26],[274.2,27],[276.0,27],[277.7,26],[279.5,27],[281.2,27],[283.0,27],[284.7,26],[286.5,27],[288.2,27],[289.7,27],[291.5,27],[293.2,27],[295.0,27],[296.7,27],[298.5,27],[300.2,27],[302.0,27],[303.7,27],[305.5,27],[307.2,27],[309.0,27],[310.7,27],[312.5,27],[314.2,27],[316.2,27],[317.7,27],[319.5,27],[321.2,27],[323.0,27],[324.7,27],[326.5,27],[328.2,27],[330.0,27],[331.5,27],[333.2,27],[335.0,27],[336.7,27],[338.5,27],[340.2,27],[342.0,27],[343.7,27],[345.5,27],[347.2,27],[349.0,27],[350.7,26],[352.5,27],[354.2,27],[355.9,27],[357.7,27],[359.4,26],[361.2,26],[362.9,26],[364.7,27],[366.4,27],[368.2,26],[369.9,27],[371.6,27],[373.1,27],[374.9,26],[376.6,26],[378.4,27],[380.1,26],[381.9,27],[383.6,26],[385.4,27],[387.1,27],[388.9,27],[390.6,26],[392.4,27],[394.1,27],[395.9,27],[397.6,27],[399.4,27],[401.1,27],[402.9,27],[404.6,27],[406.4,27],[408.1,27],[409.9,27],[411.6,26],[413.4,27],[414.9,27],[416.6,27],[418.3,27],[420.1,27],[421.8,27],[423.6,27],[425.3,27],[427.1,27],[428.8,27],[430.6,27],[432.3,27],[434.1,27],[435.8,27],[437.6,27],[439.3,27],[441.1,27],[442.8,27],[444.6,27],[446.3,27],[448.1,27],[449.8,27],[451.6,27],[453.3,27],[455.1,27],[456.6,27],[458.3,27],[460.1,27],[461.8,27],[463.6,27],[465.3,27],[467.1,27],[468.8,27],[470.6,27],[472.3,27],[474.1,27],[475.8,27],[477.6,27],[479.3,27],[481.1,27],[483.1,27],[484.8,27],[486.6,27],[488.3,27],[490.1,27],[491.8,27],[493.6,27],[495.3,27],[497.1,27],[498.6,26],[500.3,26],[502.1,27],[503.8,27],[505.6,26],[507.3,26],[509.1,27],[510.8,27],[512.6,26],[514.3,26],[516.1,26],[517.8,26],[519.6,26],[521.3,26],[523.1,27],[524.8,27],[526.6,27],[528.3,27],[530.1,27],[531.8,27],[533.6,27],[535.3,27],[537.1,27],[538.8,27],[540.3,27],[542.1,27],[543.8,27],[545.6,27],[547.3,27],[549.1,27],[550.8,27],[552.6,27],[554.3,27],[556.1,27],[557.8,27],[559.6,27],[561.3,27],[563.1,27],[564.8,27],[566.6,27],[568.3,27],[570.1,27],[571.8,27],[573.6,27],[575.3,27],[577.1,27],[578.8,27],[580.6,27],[582.1,27],[583.8,27],[585.6,27],[587.3,27],[589.1,27],[590.8,28],[592.6,28],[594.3,28],[596.1,28],[597.8,28],[599.6,28],[601.3,28],[603.1,29],[604.8,29],[606.6,29],[608.3,29],[610.1,29],[611.8,29],[613.6,29],[615.3,29],[617.1,29],[618.8,29],[620.6,29]]},"flight_t0":533.2,"flight_t1":622.2},"dbstats":{"events_total":21012,"critical":15108,"warn":292,"top":[["PreArm: GPS 1: Bad fix",2788],["PreArm: Radio failsafe on",2600],["PreArm: RC not found",2390],["PreArm: Battery 1 low voltage failsafe",1089]]}};</script>
+<script>
+(function(){
+"use strict";
+const P = window.PROTO, W = P.window, F = P.flight, LOG = P.log;
+const $ = (s)=>document.querySelector(s);
+const el = (t,c,x)=>{const n=document.createElement(t); if(c)n.className=c; if(x!=null)n.textContent=x; return n;};
+
+/* ── 時間 ────────────────────────────────────────────── */
+const TZ = new Intl.DateTimeFormat("zh-TW",{timeZone:"Asia/Taipei",hour12:false,
+  hour:"2-digit",minute:"2-digit",second:"2-digit"});
+const absClock = (t)=>TZ.format(new Date((W.t0+t)*1000));
+function relClock(t){                       // 相對「開始記錄」，帶正負號
+  const d = t - F.start, s = d<0?"−":"+", a = Math.abs(d);
+  return s + String(Math.floor(a/60)).padStart(2,"0") + ":" + String(Math.floor(a%60)).padStart(2,"0");
+}
+const ageText = (s)=> s<60 ? `${Math.round(s)} 秒前`
+  : s<3600 ? `${Math.floor(s/60)} 分 ${Math.round(s%60)} 秒前` : `${(s/3600).toFixed(1)} 小時前`;
+const mb = (b)=> b>=1e9 ? (b/1e9).toFixed(2)+" GB" : (b/1e6).toFixed(1)+" MB";
+const dur = (s)=> s>=60 ? `${Math.floor(s/60)} 分 ${Math.round(s%60)} 秒` : `${Math.round(s)} 秒`;
+
+/* ── SINR 分級（門檻＝backend 事件門檻）───────────────── */
+const CLASSES = [
+  {key:"good",  label:"良好", color:"var(--sinr-good)", min:13},
+  {key:"fair",  label:"尚可", color:"var(--sinr-fair)", min:5},
+  {key:"bad",   label:"劣化", color:"var(--sinr-bad)",  min:-2},
+  {key:"crit",  label:"瀕斷", color:"var(--sinr-crit)", min:-Infinity}];
+const classify = (v)=> CLASSES.find(c=>v>=c.min) || CLASSES[3];
+const BARS = {good:4,fair:3,bad:2,crit:1};
+const SEV = {critical:"var(--danger)", warning:"var(--warn)", warn:"var(--warn)", info:"var(--muted)"};
+
+/* ── 狀態 ────────────────────────────────────────────── */
+const S = {t:104, playing:true, speed:8, fold:true, sev:"all", src:"all", openEv:null,
+           open:new Set(), sheet:null, sheetTab:"types", q:""};
+
+/* ── 取樣：目前時刻的遙測／鏈路 ────────────────────────── */
+const TELE = P.tele.filter(r=>r.lat!=null&&r.lon!=null);
+// **即時樣本與機上補傳樣本不是同一條軌跡。** 這趟兩者在同一批時間戳上
+// 彼此矛盾（即時：AUTO、3.1 m；補傳：LOITER、−0.4 m，相距 31 m），
+// 接成一條折線等於斷言「機從 A 飛到 B」——那是畫面自己生出來的事實
+const LIVE = TELE.filter(r=>!r.bf), BF = TELE.filter(r=>r.bf);
+function teleAt(t){          // 「現在的狀態」只採即時樣本
+  let i=-1; for(let k=0;k<LIVE.length;k++){ if(LIVE[k].t<=t) i=k; else break; }
+  return i<0 ? null : LIVE[i];
+}
+function bfAt(t){            // 同一時刻的補傳樣本（有就要說，不能默默蓋掉）
+  let best=null;
+  for(const r of BF){ if(Math.abs(r.t-t)<2 && (!best||Math.abs(r.t-t)<Math.abs(best.t-t))) best=r; }
+  return best;
+}
+const metersBetween=(a,b)=>{
+  const mLon=111320*Math.cos(a.lat*Math.PI/180);
+  return Math.hypot((b.lon-a.lon)*mLon,(b.lat-a.lat)*111320);
+};
+function linkAt(t){
+  let i=-1; for(let k=0;k<P.link.length;k++){ if(P.link[k].t<=t) i=k; else break; }
+  return i<0 ? null : P.link[i];
+}
+const armedAt = (t)=> t>=F.start && t<=F.end;
+
+/* ── 3D 視角（沿用舊版定案：傾斜視角＋地面網格＋起飛點錨定；
+   實際路徑＝懸浮在飛行高度、依 SINR 上色的彩帶，地面留淡色投影；
+   機體＝正圓球體）──────────────────────────────────────── */
+const V = (()=>{
+  const home = (TELE.find(p=>!p.bf) || TELE[0]);
+  const mLon = 111320*Math.cos(home.lat*Math.PI/180), mLat = 111320;
+  const PIT = 55*Math.PI/180, BRG = 28*Math.PI/180;
+  const cb=Math.cos(BRG), sb=Math.sin(BRG), cp=Math.cos(PIT), sp=Math.sin(PIT);
+  const en   = (lat,lon)=>[(lon-home.lon)*mLon, (lat-home.lat)*mLat];
+  const proj = (e,n,u)=>{ const X=e*cb+n*sb, Y=-e*sb+n*cb; return [X, -Y*cp-(u||0)*sp]; };
+  const G = 30;                                  // 網格半徑（m）
+  const pts=[];
+  TELE.forEach(p=>{ const [e,n]=en(p.lat,p.lon);
+    pts.push(proj(e,n,p.alt||0)); pts.push(proj(e,n,0)); });
+  [[-G,-G],[G,-G],[-G,G],[G,G]].forEach(([e,n])=>pts.push(proj(e,n,0)));
+  const xs=pts.map(p=>p[0]), ys=pts.map(p=>p[1]);
+  const minX=Math.min(...xs), maxX=Math.max(...xs);
+  const minY=Math.min(...ys), maxY=Math.max(...ys);
+  const pad=54;
+  const k=Math.min((1000-pad*2)/(maxX-minX),(700-pad*2)/(maxY-minY));
+  const ox=(1000-(maxX-minX)*k)/2-minX*k, oy=(700-(maxY-minY)*k)/2-minY*k;
+  const put=(x,y)=>[x*k+ox, y*k+oy];
+  return { home, G, k,
+    at:(lat,lon,u)=>{ const [e,n]=en(lat,lon); const [x,y]=proj(e,n,u); return put(x,y); },
+    ground:(e,n)=>{ const [x,y]=proj(e,n,0); return put(x,y); } };
+})();
+
+/* ── 地圖繪製 ────────────────────────────────────────── */
+function drawMap(){
+  const svg=$("#map"), t=S.t, ns="http://www.w3.org/2000/svg";
+  svg.textContent="";
+  const g=(tag,attrs)=>{const n=document.createElementNS(ns,tag);
+    for(const k in attrs) n.setAttribute(k,attrs[k]); return n;};
+  const defs=g("defs",{});
+  defs.innerHTML = `<radialGradient id="sph" cx="34%" cy="28%" r="74%">
+      <stop offset="0%" stop-color="#ffffff" stop-opacity=".55"/>
+      <stop offset="52%" stop-color="#ffffff" stop-opacity=".06"/>
+      <stop offset="100%" stop-color="#000000" stop-opacity=".38"/></radialGradient>`;
+  svg.appendChild(defs);
+
+  // 地面網格 10 m（起飛點錨定）——沒有底圖時距離感全靠它
+  const grid=g("g",{stroke:"#232a2f","stroke-width":1});
+  for(let e=-V.G;e<=V.G;e+=10){
+    const a=V.ground(e,-V.G), b=V.ground(e,V.G);
+    grid.appendChild(g("line",{x1:a[0],y1:a[1],x2:b[0],y2:b[1]})); }
+  for(let n=-V.G;n<=V.G;n+=10){
+    const a=V.ground(-V.G,n), b=V.ground(V.G,n);
+    grid.appendChild(g("line",{x1:a[0],y1:a[1],x2:b[0],y2:b[1]})); }
+  svg.appendChild(grid);
+
+  const pts = LIVE.filter(p=>p.t<=t);
+
+  // 地面投影：淡色，不上分級色（分級色只給實測彩帶）
+  if(pts.length>1){
+    const dgs = pts.map(p=>V.at(p.lat,p.lon,0).map(v=>v.toFixed(1)).join(",")).join(" ");
+    svg.appendChild(g("polyline",{points:dgs,fill:"none",stroke:"var(--muted)",
+      "stroke-width":1.6,"stroke-opacity":.32,"stroke-linejoin":"round"}));
+  }
+  // 垂直落線：把彩帶掛回地面，高度才讀得出來
+  const drop=g("g",{stroke:"var(--muted)","stroke-width":1,"stroke-opacity":.16});
+  pts.forEach((p,i)=>{ if(i%6 || !p.alt || p.alt<0.4) return;
+    const a=V.at(p.lat,p.lon,p.alt), b=V.at(p.lat,p.lon,0);
+    drop.appendChild(g("line",{x1:a[0],y1:a[1],x2:b[0],y2:b[1]})); });
+  svg.appendChild(drop);
+
+  // 懸浮彩帶：逐段依「當時」的 SINR 上色，不插值、不補值
+  for(let i=1;i<pts.length;i++){
+    const a=pts[i-1], b=pts[i], lk=linkAt(b.t), fresh = lk && (b.t-lk.t)<30;
+    const A=V.at(a.lat,a.lon,a.alt||0), B=V.at(b.lat,b.lon,b.alt||0);
+    svg.appendChild(g("line",{x1:A[0],y1:A[1],x2:B[0],y2:B[1],
+      stroke: fresh ? classify(lk.sinr).color : "var(--muted)",
+      "stroke-width":5,"stroke-linecap":"round",
+      "stroke-opacity": fresh?0.95:0.45}));
+  }
+
+  // 機上補傳的樣本：獨立一條虛線，**不與即時軌跡相連**
+  const bfp = BF.filter(p=>p.t<=t);
+  if(bfp.length>1){
+    const pl = bfp.map(p=>V.at(p.lat,p.lon,p.alt||0).map(v=>v.toFixed(1)).join(",")).join(" ");
+    svg.appendChild(g("polyline",{points:pl,fill:"none",stroke:"var(--ink-2)",
+      "stroke-width":2,"stroke-opacity":.55,"stroke-dasharray":"5 4","stroke-linejoin":"round"}));
+    const last=bfp[bfp.length-1], L=V.at(last.lat,last.lon,last.alt||0);
+    svg.appendChild(g("circle",{cx:L[0],cy:L[1],r:6,fill:"none",
+      stroke:"var(--ink-2)","stroke-width":1.6,"stroke-dasharray":"3 3"}));
+    const lb=g("text",{x:L[0]+11,y:L[1]+4,fill:"var(--muted)","font-size":11});
+    lb.textContent="補傳"; svg.appendChild(lb);
+  }
+
+  // 起飛點（地面）
+  const H=V.ground(0,0);
+  svg.appendChild(g("ellipse",{cx:H[0],cy:H[1],rx:9,ry:9*Math.cos(55*Math.PI/180),
+    fill:"none",stroke:"var(--ink-2)","stroke-width":1.5}));
+  const ht=g("text",{x:H[0]+13,y:H[1]+4,fill:"var(--muted)","font-size":11});
+  ht.textContent="起飛點"; svg.appendChild(ht);
+
+  // 機體：球體懸浮於實際高度＋地面航向三角（過舊＝空心紅框）
+  const cur=teleAt(t);
+  if(cur && cur.lat!=null){
+    const age=t-cur.t, stale=age>4;
+    const A=V.at(cur.lat,cur.lon,cur.alt||0), Gp=V.at(cur.lat,cur.lon,0);
+    const lk=linkAt(t), col=(!stale&&lk&&(t-lk.t)<30)?classify(lk.sinr).color:"var(--muted)";
+    svg.appendChild(g("line",{x1:A[0],y1:A[1],x2:Gp[0],y2:Gp[1],
+      stroke:"var(--ink-2)","stroke-width":1,"stroke-opacity":.35}));
+    if(cur.hdg!=null && !stale){
+      const a=(90-cur.hdg+28)*Math.PI/180, r=15, sq=Math.cos(55*Math.PI/180);
+      const P_=(ang,rr)=>[Gp[0]+Math.cos(ang)*rr, Gp[1]-Math.sin(ang)*rr*sq];
+      const p1=P_(a,r), p2=P_(a+2.5,9), p3=P_(a-2.5,9);
+      svg.appendChild(g("path",{d:`M${p1} L${p2} L${p3}Z`,
+        fill:"var(--ink-2)","fill-opacity":.6}));
+    }
+    svg.appendChild(g("circle",{cx:A[0],cy:A[1],r:11,fill:stale?"none":col,
+      stroke:stale?"var(--danger-ink)":"rgba(0,0,0,.4)","stroke-width":stale?2:1}));
+    if(!stale) svg.appendChild(g("circle",{cx:A[0],cy:A[1],r:11,fill:"url(#sph)"}));
+    const lab=g("text",{x:A[0]+16,y:A[1]-11,fill:"var(--ink)","font-size":12,"font-weight":600});
+    lab.textContent="sysid 1"; svg.appendChild(lab);
+    const alt=g("text",{x:A[0]+16,y:A[1]+3,fill:"var(--muted)","font-size":11});
+    alt.textContent = stale?"":`${(cur.alt||0).toFixed(1)} m`; svg.appendChild(alt);
+  }
+  $("#scalebar").innerHTML = `地面網格 10 m · 傾斜 55°`;
+}
+
+/* ── HUD ─────────────────────────────────────────────── */
+function drawHud(){
+  const t=S.t, cur=teleAt(t), lk=linkAt(t), hud=$("#hud");
+  const age = cur ? t-cur.t : Infinity;
+  const stale = age>4, gone = age>25;
+  hud.className = "hud"+(stale?" stale":"");
+  hud.textContent="";
+  const item=(label,inner)=>{const s=el("span","item"); s.title=label; s.innerHTML=inner; hud.appendChild(s); return s;};
+  const dash = '<span class="v">—</span>';
+  item("高度（相對起飛點）", "▲"+(cur&&!stale&&cur.alt!=null?`<span class="v">${cur.alt.toFixed(1)}m</span>`:dash));
+  item("對地速度", "→"+(cur&&!stale&&cur.gs!=null?`<span class="v">${cur.gs.toFixed(1)}</span>`:dash));
+  // 訊號格：形狀先於顏色（失聯＝0 格＋斜線）
+  const lkFresh = lk && (t-lk.t)<10 && !stale;
+  const cls = lkFresh ? classify(lk.sinr) : null, lvl = cls?BARS[cls.key]:0;
+  let bars = '<span class="sigbars">';
+  for(let i=1;i<=4;i++) bars += `<i style="height:${3+i*3}px;background:${i<=lvl?cls.color:"var(--hairline)"}"></i>`;
+  if(!lkFresh) bars += '<span class="sigslash"></span>';
+  bars += "</span>";
+  item(lkFresh?`SINR ${lk.sinr} dB`:"沒有新的鏈路量測", bars +
+    (lkFresh?`<span class="v">${lk.sinr.toFixed(1)}</span><span style="color:var(--muted);font-size:11px">dB</span>`:""));
+  if(cur && cur.batt!=null && !stale){
+    item("電量", `<span class="batt"><i style="width:${cur.batt}%;background:${cur.batt<=20?"var(--serious)":"var(--ink-2)"}"></i></span><span class="v">${Math.round(cur.batt)}%</span>`);
+  }
+  // 過舊：數值被拿掉，年齡取而代之——灰色的「1 m」讀起來還是一個高度
+  const sb = $("#stalebar");
+  if(gone && cur){ sb.hidden=false; sb.innerHTML = `資訊在 ${ageText(age)}更新`; }
+  else if(stale && cur){ sb.hidden=false; sb.innerHTML = `資料延遲 ${ageText(age)}——畫面可能不是最新`; }
+  else sb.hidden=true;
+  // 記錄燈：語意＝「現在的資料有沒有被記下來」（armed 且有架次）
+  const rec = armedAt(t);
+  $("#reclight").innerHTML = `<span class="recdot${rec?" on":""}"></span>`+
+    `<span class="rectxt${rec?" on":""}">${rec?"記錄中":"未記錄"}</span>`;
+  $("#reclight").title = rec ? "記錄中——遙測寫入資料庫（armed 且已建立架次）" : "待機（刻意不入庫）";
+}
+
+/* ── 機隊（色點＋文字標籤，永不只靠顏色）─────────────── */
+function drawFleet(){
+  const box=$("#fleet"); box.textContent="";
+  const COLORS=["#3987e5","#d95926","#199e70"];
+  // 「曾連上、現在斷線」與「未連線」不同形（ui-spec §0.2e-2）
+  const OFFLINE={"ai-model-rb5 [啪 沒了]":"離線 · 上次 08/13"};
+  P.fleet.forEach((d,i)=>{
+    const live = d.primary, rec = live && armedAt(S.t);
+    const b = el("button","fleetrow"); b.setAttribute("aria-pressed", live?"true":"false");
+    const dot = el("span","dot"+(live?"":" hollow"));
+    if(live) dot.style.background = COLORS[i%3];
+    b.appendChild(dot);
+    b.appendChild(el("span","nm", d.name));
+    const off = OFFLINE[d.name] || "未連線";
+    b.appendChild(el("span","st", live ? (rec?"飛行中":"在線 · 未記錄") : off));
+    b.title = live ? `sysid ${d.sysid} · 韌體 ${d.fw}`
+      : off==="未連線" ? "未連線——沒有「最後已知」可言，不畫在地圖上"
+      : "曾連上、現在斷線——最後已知位置在別的架次裡";
+    box.appendChild(b);
+  });
+}
+
+/* ── 機況 ────────────────────────────────────────────── */
+function drawFacts(){
+  const t=S.t, cur=teleAt(t), box=$("#facts"); box.textContent="";
+  const oldc=box.parentElement.querySelector(".conflict"); if(oldc) oldc.remove();
+  const age = cur ? t-cur.t : Infinity;
+  const add=(k,v,dim)=>{const f=el("div","fact"); f.appendChild(el("span","k",k));
+    const s=el("span","v"+(dim?" dim":"")); s.textContent=v; f.appendChild(s); box.appendChild(f);};
+  if(!cur){ add("狀態","尚無遙測",true); return; }
+  const old = age>25;
+  add("模式", old?"—":cur.mode, old);
+  add("鎖", old?"—":(cur.armed?"已解鎖":"上鎖"), old);
+  add("GPS", old?"—":`fix ${cur.fix} · ${cur.sats} 顆`, old);
+  add("電壓", old||cur.volt==null?"—":cur.volt.toFixed(2)+" V", old);
+  add("最後遙測", ageText(age), age>4);
+  // **「有兩份不一致的資料」是一個事實**，不是可以擇一顯示的細節
+  const bfs = BF.filter(r=>r.t<=t);
+  if(bfs.length && cur){
+    let n=0, mx=0, other=null;
+    for(const r of bfs){ const lv=teleAt(r.t); if(!lv) continue;
+      const gp=metersBetween(lv,r); if(gp>5){ n++; if(gp>mx){mx=gp; other=r;} } }
+    if(n){
+      const w=el("div","conflict");
+      w.innerHTML = `<b>這趟有 ${n} 筆機上補傳資料與即時串流不一致</b>`;
+      const inf=el("span","info"); inf.tabIndex=0; inf.textContent="ⓘ";
+      inf.dataset.tip="即時串流與機上補傳（telemetry.backfilled）在這一段互相矛盾：一份說 AUTO、3 m 在飛，一份說 LOITER、貼地不動。畫面採即時那一份，但不把矛盾藏起來——地圖上那條虛線就是另一份。";
+      w.appendChild(inf);
+      box.parentElement.appendChild(w);
+    }
+  }
+}
+
+/* ── 訊號卡 ──────────────────────────────────────────── */
+function drawSignal(){
+  const t=S.t, box=$("#sigbody"), lk=linkAt(t);
+  box.textContent="";
+  const hist = P.link.filter(r=>r.t<=t).slice(-40);
+  const fresh = lk && (t-lk.t)<10;
+  const hero = el("div","hero");
+  const n = el("span","n"); n.textContent = lk? lk.sinr.toFixed(1) : "—";
+  n.style.color = fresh ? "var(--ink)" : "var(--muted)";
+  hero.appendChild(n);
+  hero.appendChild(el("span","u","dB SINR"));
+  if(lk){
+    const c=classify(lk.sinr), chip=el("span","chip");
+    const d=el("span","dot"); d.style.background=fresh?c.color:"var(--muted)";
+    chip.appendChild(d); chip.appendChild(document.createTextNode(fresh?c.label:"最後一筆 "+ageText(t-lk.t)));
+    hero.appendChild(chip);
+  }
+  box.appendChild(hero);
+
+  // sparkline：原始細線＋2s 平滑粗線
+  if(hist.length>1){
+    const w=320,h=46, vals=hist.map(r=>r.sinr);
+    const mn=Math.min(...vals), mx=Math.max(...vals), sp=(mx-mn)||1;
+    const X=i=>4+i/(vals.length-1)*(w-8), Y=v=>h-6-((v-mn)/sp)*(h-14);
+    const sm=vals.map((_,i)=>{const s=vals.slice(Math.max(0,i-4),i+1); return s.reduce((a,b)=>a+b,0)/s.length;});
+    const pts=a=>a.map((v,i)=>`${X(i).toFixed(1)},${Y(v).toFixed(1)}`).join(" ");
+    box.insertAdjacentHTML("beforeend",
+      `<svg class="spark" viewBox="0 0 ${w} ${h}" preserveAspectRatio="none" role="img" aria-label="SINR 近期趨勢">
+        <line x1="0" x2="${w}" y1="${Y(13)}" y2="${Y(13)}" stroke="var(--hairline)" stroke-dasharray="3 4" vector-effect="non-scaling-stroke"/>
+        <polyline points="${pts(vals)}" fill="none" stroke="var(--muted)" stroke-width="1" stroke-opacity=".45" vector-effect="non-scaling-stroke"/>
+        <polyline points="${pts(sm)}" fill="none" stroke="var(--series-1)" stroke-width="2" vector-effect="non-scaling-stroke"/>
+        <circle cx="${X(vals.length-1)}" cy="${Y(vals[vals.length-1])}" r="2.6" fill="var(--series-1)"/>
+      </svg>
+      <div class="sparkfoot"><span>${hist.length} 筆 · ${dur(hist[hist.length-1].t-hist[0].t)}</span></div>`);
+  }
+  // 次要數字：三個，其餘進摺疊
+  const m = el("div","metrics");
+  const met=(k,v,u)=>{const d=el("div","metric"); d.appendChild(el("div","k",k));
+    const s=el("div","v"); s.textContent=v; if(u){const sm=el("small",null,u); s.appendChild(sm);} d.appendChild(s); m.appendChild(d);};
+  met("RSRP", lk&&lk.rsrp!=null?lk.rsrp.toFixed(0):"—"," dBm");
+  met("RTT",  lk&&lk.rtt!=null?lk.rtt.toFixed(0):"—"," ms");
+  met("RSRQ", lk&&lk.rsrq!=null?lk.rsrq.toFixed(1):"—"," dB");
+  box.appendChild(m);
+
+  // 詳細：欄位由 AT 原始回應解出（資料庫那幾欄是 null）
+  const d = lk && lk.dec;
+  const det = el("details","sub");
+  det.innerHTML = `<summary>Serving cell &amp; band</summary>`;
+  const kv = el("div","kv");
+  const row=(k,v)=>{kv.appendChild(el("span","k",k)); kv.appendChild(el("span","v",v));};
+  if(d){
+    row("Band", `${d.band} · ${d.bw} MHz`);
+    row("NR-ARFCN", `${d.narfcn} (≈ ${d.narfcn_mhz} MHz)`);
+    row("PCI", `${d.pci} (0x${d.pci_hex})`);
+    row("NCI", `${d.nci}`);
+    row("TAC", `${d.tac}`);
+    row("PLMN", `${d.plmn} · ${lk.mode}`);
+    row("Source", lk.src+" · AT+GTCCINFO? / AT+CESQ");
+  } else row("Status","這一刻沒有鏈路樣本");
+  det.appendChild(kv);
+  box.appendChild(det);
+}
+
+/* ── 事件流：折疊 ────────────────────────────────────── */
+function evStream(){
+  const t=S.t;
+  const evs = P.events.filter(e=>e.t<=t).map(e=>({kind:"ev",...e}));
+  const cmds = P.commands.filter(c=>c.t<=t).map(c=>({kind:"cmd",t:c.t,clock:c.clock,
+    type:"command", sev:c.result==="accepted"?"info":"warning", src:"system",
+    text:`${c.action} · ${c.result==="accepted"?"已執行":c.result}`, cmd:c}));
+  let all = evs.concat(cmds).sort((a,b)=>a.t-b.t);
+  if(S.sev==="warn") all = all.filter(e=>e.sev!=="info");
+  if(S.src!=="all") all = all.filter(e=>S.src==="vehicle" ? e.src==="vehicle" : e.src!=="vehicle");
+  return all;
+}
+function fold(list){
+  const map = new Map(), out=[];
+  for(const e of list){
+    const k = e.kind==="cmd" ? "cmd:"+e.t : e.type+"|"+e.text;
+    if(!map.has(k)){ const g={...e, times:[e.t], items:[e]}; map.set(k,g); out.push(g); }
+    else { const g=map.get(k); g.times.push(e.t); g.items.push(e); g.t=e.t; g.clock=e.clock; }
+  }
+  return out.sort((a,b)=>b.t-a.t);
+}
+function drawEvents(){
+  const list = evStream(), rows = S.fold ? fold(list) : list.slice().reverse().map(e=>({...e,times:[e.t],items:[e]}));
+
+  // 工具列
+  const tools=$("#evtools"); tools.textContent="";
+  const grp=(opts,cur,set)=>{opts.forEach(([k,lab])=>{
+    const b=el("button","pill",lab); b.setAttribute("aria-pressed", cur===k?"true":"false");
+    b.onclick=()=>{ set(k); render(); }; tools.appendChild(b); });};
+  grp([["all","全部"],["warn","警告以上"]], S.sev, k=>S.sev=k);
+  tools.appendChild(el("span",null,"")).style.width="6px";
+  grp([["all","不分來源"],["vehicle","機上"],["system","系統"]], S.src, k=>S.src=k);
+  const f=el("button","pill", S.fold?"折疊：開":"折疊：關");
+  f.setAttribute("aria-pressed", S.fold?"true":"false");
+  f.title = "關掉折疊＝今天畫面上的樣子";
+  f.onclick=()=>{S.fold=!S.fold; render();};
+  tools.appendChild(el("span",null,"")).style.flex="1";
+  tools.appendChild(f);
+
+  const box=$("#evlist"); box.textContent="";
+  if(!rows.length){ box.appendChild(el("div","empty","這段時間沒有事件（不是取不到——取得失敗會另外說）")); return; }
+  for(const g of rows){
+    const key = g.kind==="cmd" ? "cmd"+g.t : g.type+"|"+g.text;
+    const row = el("button","evrow"+(g.sev==="critical"?" crit":""));
+    const dot = el("span","dot"); dot.style.background = SEV[g.sev]||SEV.info; row.appendChild(dot);
+    const tm = el("time", null, relClock(g.t)); tm.title = absClock(g.t); row.appendChild(tm);
+    const tx = el("span","tx");
+    if(g.kind==="cmd") tx.appendChild(el("span","cmd","指令"));
+    else tx.appendChild(el("span","src", g.src==="vehicle"?"機上":"系統"));
+    tx.appendChild(document.createTextNode(g.text.replace(/\*\*/g,"")));
+    row.appendChild(tx);
+    const agg = el("span","agg");
+    if(g.times.length>1){
+      const gaps=[]; for(let i=1;i<g.times.length;i++) gaps.push(g.times[i]-g.times[i-1]);
+      gaps.sort((a,b)=>a-b);
+      const med = gaps[Math.floor(gaps.length/2)];
+      const c = el("span","count", `×${g.times.length}`); c.title =
+        `${absClock(g.times[0])} – ${absClock(g.t)} · 約每 ${med<60?med.toFixed(0)+" 秒":(med/60).toFixed(1)+" 分"}`;
+      agg.appendChild(c);
+      // 密度條：每一次發生的時刻，等比例落在起訖之間
+      const t0=g.times[0], t1=g.t, span=(t1-t0)||1;
+      let ticks=""; for(const x of g.times) ticks += `<line x1="${((x-t0)/span*62+1).toFixed(1)}" x2="${((x-t0)/span*62+1).toFixed(1)}" y1="1" y2="8" stroke="${SEV[g.sev]||SEV.info}" stroke-width="1.4" stroke-opacity=".8"/>`;
+      agg.insertAdjacentHTML("beforeend",
+        `<svg class="density" viewBox="0 0 64 9" preserveAspectRatio="none" aria-hidden="true">${ticks}</svg>`);
+    }
+    row.appendChild(agg);
+    row.onclick=()=>{ S.openEv=g; renderEvModal(); };
+    box.appendChild(row);
+  }
+}
+function evDetail(g){
+  const d = el("div","evdetail");
+  if(g.kind==="cmd"){
+    const c=g.cmd, steps=el("div","steps");
+    c.steps.forEach(s=>{
+      const b=el("span","step");
+      b.innerHTML = `${s.k}：${s.ok?"接受":"未接受"} <b>${s.ms!=null?s.ms.toFixed(0)+"ms":"—"}</b>`
+        + (s.tries>1?` · ${s.tries} 次`:"");
+      steps.appendChild(b);
+    });
+    d.appendChild(steps);
+    if(c.alt!=null){
+      const kv=el("div","kv");
+      kv.appendChild(el("span","k","高度參數")); kv.appendChild(el("span","v",`${c.alt} m（${c.sem==="relative"?"相對起飛點":c.sem}）`));
+      kv.appendChild(el("span","k","下令者")); kv.appendChild(el("span","v",c.client||"—"));
+      d.appendChild(kv);
+    }
+    const sub=el("details","sub"); sub.innerHTML="<summary>原始回應</summary>";
+    sub.appendChild(el("pre","raw", c.raw)); d.appendChild(sub);
+    return d;
+  }
+  const kv=el("div","kv");
+  const put=(k,v)=>{kv.appendChild(el("span","k",k)); kv.appendChild(el("span","v",v));};
+  put("型別", g.type + "（" + (g.src==="vehicle"?"機上訊息":"系統推導") + "）");
+  put("嚴重度", g.sev);
+  if(g.times.length>1){
+    put("首次", absClock(g.times[0]));
+    put("最近", absClock(g.t));
+  } else put("時刻", absClock(g.t));
+  for(const [k,v] of Object.entries(g.detail||{})){
+    if(k==="text"||k==="count") continue;
+    put(k, typeof v==="object" ? JSON.stringify(v) : String(v));
+  }
+  d.appendChild(kv);
+  if(g.times.length>1){
+    const sub=el("details","sub");
+    sub.open = true;
+    sub.innerHTML = `<summary>逐則（${g.times.length} 次）</summary>`;
+    const p=el("pre","raw", g.times.map(x=>`${absClock(x)}  ${relClock(x)}`).join("\n"));
+    sub.appendChild(p); d.appendChild(sub);
+  }
+  return d;
+}
+
+/* ── 事件詳細 modal（原地展開的空間放不下 detail）─────── */
+function renderEvModal(){
+  const m=$("#evmask"), g=S.openEv;
+  if(!g){ m.hidden=true; S.evRendered=null; return; }
+  m.hidden=false;
+  if(S.evRendered===g) return;          // 播放中每幀重畫會把捲動位置洗掉
+  S.evRendered=g;
+  $("#evTitle").textContent = g.kind==="cmd"
+    ? `指令 · ${g.cmd.action}` : g.text.replace(/\*\*/g,"");
+  $("#evMeta").textContent = g.times.length>1
+    ? `${g.times.length} 次 · ${absClock(g.times[0])} – ${absClock(g.t)}`
+    : `${absClock(g.t)} · ${relClock(g.t)}`;
+  const b=$("#evBody"); b.textContent=""; b.appendChild(evDetail(g));
+}
+$("#evClose").onclick=()=>{ S.openEv=null; renderEvModal(); };
+$("#evmask").onclick=(e)=>{ if(e.target.id==="evmask"){ S.openEv=null; renderEvModal(); } };
+
+/* ── 紀錄卡 ──────────────────────────────────────────── */
+function drawLogCard(){
+  const b=$("#logbody"); b.textContent="";
+  b.insertAdjacentHTML("beforeend",
+    `<div class="logline"><span class="f">${LOG.file}</span><span class="sep">·</span>
+      <span>${mb(LOG.bytes)}</span><span class="sep">·</span>
+      <span>${LOG.frames.toLocaleString()} frames</span><span class="sep">·</span>
+      <span>${LOG.types.length} 種訊息</span></div>
+     <div class="logline" style="color:var(--muted);margin-top:3px">
+      ${LOG.start_clock} – ${LOG.end_clock} · ${dur(LOG.span)}</div>`);
+  const acts=el("div","logactions");
+  const open=el("button","btn primary","在網頁上展開索引");
+  open.onclick=()=>openSheet();
+  acts.appendChild(open);
+  const dl=el("button","btn","下載 .tlog");
+  dl.title="仍然可以下載——QGC 與 mavlogdump 照樣讀得動";
+  acts.appendChild(dl);
+  b.appendChild(acts);
+}
+
+/* ── 紀錄索引 sheet ──────────────────────────────────── */
+function openSheet(){ S.sheet=true; $("#mask").hidden=false; renderSheet(); }
+function closeSheet(){ S.sheet=null; $("#mask").hidden=true; }
+$("#sheetClose").onclick=closeSheet;
+$("#mask").onclick=(e)=>{ if(e.target.id==="mask") closeSheet(); };
+document.addEventListener("keydown",(e)=>{
+  if(e.key!=="Escape") return;
+  if(S.openEv){ S.openEv=null; renderEvModal(); return; }
+  if(S.sheet) closeSheet();
+});
+
+function renderSheet(){
+  $("#sheetTitle").textContent = "紀錄索引 · " + LOG.file;
+  $("#sheetMeta").textContent =
+    `${mb(LOG.bytes)} · ${LOG.frames.toLocaleString()} frames · ${LOG.start_clock}–${LOG.end_clock} · ${dur(LOG.span)}`;
+  const tabs=$("#sheetTabs"); tabs.textContent="";
+  [["types",`訊息型別 ${LOG.types.length}`],["text",`機上訊息 ${LOG.statustext.length}`],["curve","模式與曲線"]]
+    .forEach(([k,lab])=>{
+      const b=el("button",null,lab); b.setAttribute("aria-selected", S.sheetTab===k?"true":"false");
+      b.onclick=()=>{S.sheetTab=k; renderSheet();}; tabs.appendChild(b);
+    });
+  const body=$("#sheetBody"); body.textContent="";
+  if(S.sheetTab==="types") sheetTypes(body);
+  else if(S.sheetTab==="text") sheetText(body);
+  else sheetCurves(body);
+}
+function sheetTypes(body){
+  const row=el("div","searchrow");
+  const inp=el("input"); inp.placeholder="搜尋訊息型別…"; inp.value=S.q;
+  inp.oninput=(e)=>{S.q=e.target.value; sheetTypesTable(tblwrap);};
+  row.appendChild(inp);
+  row.appendChild(el("span","hint","點一列看它最後一筆的每個欄位（原樣，不翻譯）"));
+  body.appendChild(row);
+  const tblwrap=el("div"); body.appendChild(tblwrap);
+  sheetTypesTable(tblwrap);
+  body.insertAdjacentHTML("beforeend",
+    `<div class="note">頻率＝(筆數−1)÷(首末間隔)。一次性訊息（MISSION_ACK、MISSION_COUNT）沒有頻率，欄位留空——
+     「還不知道」不是 0.0 也不是 —。密度條是這一型訊息在整份紀錄裡的分布，黃線標出這一趟飛行的區間。</div>`);
+}
+function sheetTypesTable(wrap){
+  wrap.textContent="";
+  const q=S.q.trim().toUpperCase();
+  const rows = LOG.types.filter(t=>!q||t.name.includes(q));
+  const tbl=el("table","tbl");
+  tbl.innerHTML = `<thead><tr><th>訊息型別</th><th style="text-align:right">筆數</th>
+    <th style="text-align:right">頻率</th><th>在紀錄中的分布</th><th>最後一筆</th><th></th></tr></thead>`;
+  const tb=el("tbody");
+  const fT0=0, fSpan=LOG.span;
+  rows.forEach(t=>{
+    const tr=el("tr","tap");
+    const opened=S.open.has("log:"+t.name);
+    const maxB=Math.max(...t.buckets);
+    let bars="";
+    t.buckets.forEach((v,i)=>{ if(!v) return;
+      const h=Math.max(1.5,(v/maxB)*13);
+      bars += `<rect x="${i*3.2}" y="${14-h}" width="2.4" height="${h}" fill="var(--series-1)" fill-opacity=".62"/>`; });
+    const fx=(LOG.flight_t0/fSpan)*192, fw=((LOG.flight_t1-LOG.flight_t0)/fSpan)*192;
+    const first = Object.entries(t.fields).slice(0,2)
+      .map(([k,v])=>`${k} ${typeof v==="number"?(Number.isInteger(v)?v:v.toFixed(3)):v}`).join("　");
+    tr.innerHTML =
+      `<td><span class="tname">${t.name}</span></td>
+       <td class="n">${t.n.toLocaleString()}</td>
+       <td class="n">${t.hz!=null?t.hz.toFixed(1)+" Hz":""}</td>
+       <td><svg viewBox="0 0 192 15" width="192" height="15" preserveAspectRatio="none" aria-hidden="true">
+         <rect x="${fx.toFixed(1)}" y="0" width="${Math.max(1,fw).toFixed(1)}" height="15" fill="var(--warn)" fill-opacity=".12"/>
+         ${bars}</svg></td>
+       <td style="font-family:var(--mono);font-size:11px;color:var(--muted)">${first}</td>
+       <td class="n arrow">${opened?"▾":"▸"}</td>`;
+    tr.onclick=()=>{ const k="log:"+t.name; S.open.has(k)?S.open.delete(k):S.open.add(k); sheetTypesTable(wrap); };
+    tb.appendChild(tr);
+    if(opened){
+      const trd=el("tr"), td=el("td"); td.colSpan=6;
+      const fb=el("div","fieldsbox"); const kv=el("div","kv");
+      Object.entries(t.fields).forEach(([k,v])=>{
+        kv.appendChild(el("span","k",k));
+        kv.appendChild(el("span","v", typeof v==="number"?(Number.isInteger(v)?String(v):v.toFixed(4)):JSON.stringify(v)));
+      });
+      fb.appendChild(kv);
+      fb.appendChild(el("div","note",`首見 +${t.first}s · 最後 +${t.last}s（相對這份紀錄開頭）`));
+      td.appendChild(fb); trd.appendChild(td); tb.appendChild(trd);
+    }
+  });
+  tbl.appendChild(tb); wrap.appendChild(tbl);
+  if(!rows.length) wrap.appendChild(el("div","empty","沒有符合的訊息型別"));
+}
+function sheetText(body){
+  const SEVN = {0:"緊急",1:"警報",2:"危急",3:"錯誤",4:"警告",5:"注意",6:"資訊",7:"除錯"};
+  const list=el("div","stlist");
+  LOG.statustext.forEach(s=>{
+    const r=el("div","strow");
+    const d=el("span","dot"); d.style.background = s.sev<=3?"var(--danger)":s.sev<=4?"var(--warn)":"var(--muted)";
+    r.appendChild(d);
+    const tm=el("time",null,s.clock); tm.title=`+${s.t}s`; r.appendChild(tm);
+    const t=el("span","t"); t.textContent=s.text;
+    const tag=el("span",null,`　${SEVN[s.sev]||s.sev}`); tag.style.color="var(--muted)"; tag.style.fontSize="11px";
+    t.appendChild(tag);
+    r.appendChild(t); list.appendChild(r);
+  });
+  body.appendChild(list);
+  body.insertAdjacentHTML("beforeend",
+    `<div class="note">機上原文不翻譯（event-stream-design 定案）——翻譯會讓「飛控真正說了什麼」不可回溯。
+     嚴重度是 MAVLink 的 severity，不是我方判斷。</div>`);
+}
+function sheetCurves(body){
+  // 模式帶
+  const band = el("div","chartblock");
+  band.innerHTML = "<h4>模式 <span>由 HEARTBEAT 的 custom_mode 還原，切換時才畫一段</span></h4>";
+  const segs = LOG.modes.map((m,i)=>({...m, end: i+1<LOG.modes.length?LOG.modes[i+1].t:LOG.span}));
+  let s = `<svg class="modeband" viewBox="0 0 1000 38" preserveAspectRatio="none">`;
+  const MC = {AUTO:"var(--series-3)",GUIDED:"var(--series-1)",LOITER:"var(--surface-2)",LAND:"var(--series-2)"};
+  segs.forEach(g=>{
+    const x=g.t/LOG.span*1000, w=(g.end-g.t)/LOG.span*1000;
+    s += `<rect x="${x.toFixed(1)}" y="2" width="${Math.max(1,w).toFixed(1)}" height="20" fill="${MC[g.mode]||"var(--surface-2)"}" fill-opacity=".55"/>`;
+    if(w>52) s += `<text x="${(x+5).toFixed(1)}" y="16" fill="var(--ink-2)" font-size="10">${g.mode}</text>`;
+  });
+  const fx=LOG.flight_t0/LOG.span*1000, fw=(LOG.flight_t1-LOG.flight_t0)/LOG.span*1000;
+  s += `<rect x="${fx.toFixed(1)}" y="0" width="${fw.toFixed(1)}" height="24" fill="none" stroke="var(--warn)" stroke-width="1"/>`;
+  s += `<text x="${fx.toFixed(1)}" y="34" fill="var(--warn)" font-size="10">架次區間 ${F.start_clock}–${F.end_clock}</text>`;
+  s += `</svg>`;
+  band.insertAdjacentHTML("beforeend", s);
+  body.appendChild(band);
+
+  chart(body, LOG.series.alt,  "高度（相對起飛點）", "m", "var(--series-1)");
+  chart(body, LOG.series.volt, "電池電壓", "V", "var(--series-3)");
+  chart(body, LOG.series.vib,  "振動（三軸最大）", "", "var(--series-2)", [30,60]);
+  body.insertAdjacentHTML("beforeend",
+    `<div class="note">曲線直接畫原始樣本，不做插值。振動的 30／60 是 PX4 與 ArduPilot 共用的判讀門檻，
+     所以它有刻度；其餘兩條沒有權威門檻，就不畫假的參考線。</div>`);
+}
+function chart(body, data, title, unit, color, refs){
+  if(!data || data.length<2) return;
+  const W_=1000, H_=104, L=44, R=8, T=10, B=20;
+  const xs=data.map(d=>d[0]), ys=data.map(d=>d[1]);
+  const x0=Math.min(...xs), x1=Math.max(...xs);
+  let y0=Math.min(...ys), y1=Math.max(...ys);
+  if(refs) y1=Math.max(y1, refs[refs.length-1]*1.05);
+  const padY=(y1-y0)*0.12||1; y0-=padY; y1+=padY;
+  const X=v=>L+(v-x0)/(x1-x0)*(W_-L-R);
+  const Y=v=>T+(1-(v-y0)/(y1-y0))*(H_-T-B);
+  const d = data.map((p,i)=>`${i?"L":"M"}${X(p[0]).toFixed(1)} ${Y(p[1]).toFixed(1)}`).join(" ");
+  const area = d + ` L${X(x1).toFixed(1)} ${Y(y0).toFixed(1)} L${X(x0).toFixed(1)} ${Y(y0).toFixed(1)} Z`;
+  const ticks=[y0+(y1-y0)*0.1, (y0+y1)/2, y1-(y1-y0)*0.1];
+  let g="";
+  ticks.forEach(v=>{ g+=`<line x1="${L}" x2="${W_-R}" y1="${Y(v).toFixed(1)}" y2="${Y(v).toFixed(1)}" stroke="var(--hairline)" stroke-width="1"/>
+    <text x="${L-6}" y="${(Y(v)+3.5).toFixed(1)}" fill="var(--muted)" font-size="10" text-anchor="end">${v.toFixed(1)}</text>`; });
+  if(refs) refs.forEach(v=>{ if(v<y0||v>y1) return;
+    g+=`<line x1="${L}" x2="${W_-R}" y1="${Y(v).toFixed(1)}" y2="${Y(v).toFixed(1)}" stroke="var(--warn)" stroke-width="1" stroke-dasharray="4 4"/>
+        <text x="${W_-R-2}" y="${(Y(v)-4).toFixed(1)}" fill="var(--warn)" font-size="10" text-anchor="end">${v}</text>`; });
+  const fx0=X(Math.max(x0,LOG.flight_t0)), fx1=X(Math.min(x1,LOG.flight_t1));
+  const block=el("div","chartblock");
+  block.innerHTML = `<h4>${title} <span>${unit?`單位 ${unit} · `:""}${data.length} 點</span></h4>
+   <svg viewBox="0 0 ${W_} ${H_}" preserveAspectRatio="none" role="img" aria-label="${title}">
+     <rect x="${fx0.toFixed(1)}" y="${T}" width="${Math.max(1,fx1-fx0).toFixed(1)}" height="${H_-T-B}" fill="var(--warn)" fill-opacity=".08"/>
+     ${g}
+     <path d="${area}" fill="${color}" fill-opacity=".13"/>
+     <path d="${d}" fill="none" stroke="${color}" stroke-width="1.6" vector-effect="non-scaling-stroke"/>
+     <text x="${L}" y="${H_-5}" fill="var(--muted)" font-size="10">${LOG.start_clock}</text>
+     <text x="${W_-R}" y="${H_-5}" fill="var(--muted)" font-size="10" text-anchor="end">${LOG.end_clock}</text>
+   </svg>`;
+  body.appendChild(block);
+}
+
+
+let last=performance.now();
+function tick(now){
+  const dt=(now-last)/1000; last=now;
+  if(S.playing){
+    S.t += dt*S.speed;
+    if(S.t>=W.len){ S.t=W.len; S.playing=false; }
+    render();
+  }
+  requestAnimationFrame(tick);
+}
+
+/* ── 總繪製 ──────────────────────────────────────────── */
+function render(){
+  drawMap(); drawHud(); drawFleet(); drawFacts();
+  drawSignal(); drawEvents(); drawLogCard(); renderEvModal();
+  if(S.sheet) renderSheet();
+}
+render();
+requestAnimationFrame(tick);
+})();
+</script>
