@@ -126,19 +126,46 @@ def pick(autopilot: str) -> tuple[int, dict]:
     去猜，不如讓跑的人指定；猜錯的代價是把「這台機飛不起來」誤記成「驅動壞了」。
     """
     want = os.environ.get("CONF_SYSID")
-    for sysid, d in sorted(fleet().items(), key=lambda kv: int(kv[0])):
-        if d.get("autopilot") != autopilot or d.get("armed") is not False:
-            continue
-        if want and str(sysid) != str(want):
-            continue
-        return int(sysid), d
-    raise Skip(f"沒有未解鎖的 {autopilot} 機可測"
-               + (f"（指定了 CONF_SYSID={want}）" if want else ""))
+    cands = [(int(k), v) for k, v in sorted(fleet().items(), key=lambda kv: int(kv[0]))
+             if v.get("autopilot") == autopilot and v.get("armed") is False]
+    if not cands:
+        raise Skip(f"沒有未解鎖的 {autopilot} 機可測"
+                   + (f"（指定了 CONF_SYSID={want}）" if want else ""))
+    if not want:
+        # **2026-09-07：不再自動挑。** 原本挑「號碼最小的那台」，而真機是
+        # sysid 1——這幾支測項會**解鎖並把機飛到 15 m**。真機開著的時候跑一次
+        # 一致性測試，它就會起飛，而下指令的人以為自己在測模擬器。
+        #
+        # 實際踩到：本機 sysid 1 有一筆還在推狀態的記錄（不是我的 SITL），
+        # `pick` 選了它，於是三次測試全部打在錯的目標上，還把假的失敗原因
+        # 記進了證據檔。
+        #
+        # **會飛的東西不該有「預設目標」。** 要跑就講清楚跑哪一台。
+        raise Skip(
+            f"**沒有指定 CONF_SYSID**——這幾支測項會解鎖並起飛，不自動挑目標。\n"
+            f"    候選：{[c[0] for c in cands]}（真機通常是 sysid 1）\n"
+            f"    跑法：CONF_SYSID=<模擬器的 sysid> python3 "
+            f"scripts/conformance/<測項>.py {autopilot}")
+    for sysid, d in cands:
+        if str(sysid) == str(want):
+            return sysid, d
+    raise Skip(f"指定的 CONF_SYSID={want} 不在候選裡"
+               f"（{[c[0] for c in cands]}）——沒連線、已解鎖、或不是 {autopilot}")
 
 
 #: 機端自己拒絕的訊號。**這些不是方言錯誤**——見 assert_dialect()。
+#:
+#: 2026-09-07 加入入列相關的三個：測到一半代理的板號被清掉（模擬器的
+#: `AUTOPILOT_VERSION` 回空 uid2，會覆蓋掉先前已知的板號），入列從
+#: `admitted` 掉回 `identifying`，於是 `mission_fly` 被記成 **fail**——
+#: 而它抹掉了同一天剛取得的 pass。
+#:
+#: **入列擋下不是「這個動詞驗過而且壞了」**，是「這次沒驗成」。前者會讓
+#: 能力值掉下來、讓真機少掉一個本來可用的動作；後者只是沒有新證據。
+#: 兩者記成同一種，等於讓一個環境問題去改變系統允許做什麼。
 _PRECONDITION_HINTS = ("解鎖被拒", "TEMPORARILY_REJECTED", "DENIED",
-                       "Preflight", "預檢", "未連線")
+                       "Preflight", "預檢", "未連線",
+                       "not_admitted", "身分還沒確認", "身分未定")
 
 #: **能力 gating 擋下**的訊號。這是一個結構性的雞生蛋問題：
 #: 動詞是 unverified → API 拒發 → 測試跑不了 → 永遠拿不到證據 → 永遠 unverified。
