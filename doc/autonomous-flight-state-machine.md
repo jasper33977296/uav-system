@@ -134,8 +134,14 @@ DISCONNECTED ──連上──▶ NOT_READY ──預檢過──▶ READY
 ### C. 地面直接 `mission_start`
 
 實戰教訓（2026-08-11）：地面直接 MISSION_START 在實機上會失敗。序列必須是
-起飛 → 到達高度 → 才切 AUTO。已由 `mission/fly` 實作。
+起飛 → **機端回報離地** → 才切 AUTO。已由 `mission/fly` 實作。
 **禁止**在 `READY`／`ARMED_GROUND` 狀態下單獨呼叫 `mission_start`。
+
+> **離地判定不能用 `alt_rel`**（2026-09-07）：沒有 GPS 定位時它會漂——量過
+> 停在地面的機漂到 4.4 m。原本的判準是 `alt_rel ≥ takeoff_alt × 0.8`，在
+> takeoff_alt 跟著低空任務降到 1–2 m 之後，門檻整個落進漂移範圍裡，那道門
+> 就不再證明任何事。現在看 `EXTENDED_SYS_STATE.landed_state`，機端沒送才
+> 退回高度、且回應裡寫明退回了。
 
 ### D. 未驗證的動詞
 

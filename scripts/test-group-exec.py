@@ -21,8 +21,9 @@ GID = sys.argv[1]
 class StubRouter:
     def __init__(self, sysids):
         # sysid → 新鮮的 px4 機（autopilot=12 → 能力全 ok）
-        # alt_rel 給高值 → START 的 per-sysid alt gating（_wait_alt）即刻通過
-        # （stub 不模擬爬升；真爬升在假機 live 測）
+        # alt_rel 給高值、**故意不給 landed_state** → START 的離地判定走
+        # 「機端沒送 → 退回高度判準」那條分支即刻通過（stub 不模擬爬升；
+        # 真爬升在假機 live 測）
         self.drones = {s: {"addr": ("127.0.0.1", 1000 + s),
                            "seen_mono": time.monotonic(), "autopilot": 12,
                            "alt_rel": 100.0}
@@ -40,15 +41,14 @@ class StubRouter:
             return {"uploaded": len(args[0]), "verified": True}
         if n == "job_set_mode":
             return {"accepted": True, "mode_engaged": True}
-        return {"result": "ACCEPTED", "accepted": True, "attempts": 1}   # job_command
+        if n == "job_arm_prep":
+            return {"needed": False}                    # PX4：不需要前置
+        # job_command（arm）與 job_takeoff_cmd 都攤平回 accepted
+        return {"result": "ACCEPTED", "accepted": True, "attempts": 1}
 
 
 async def _audit(*a, **k):
     pass
-
-
-async def _live():
-    return {"alt_msl": 500.0, "alt_rel": 0.0}
 
 
 def _build_items(wps):
@@ -95,22 +95,28 @@ async def main():
     # ── A. Happy path：2 台 upload→arm→start→flying ──────────────
     await reset(pool)
     router = StubRouter([2, 3])
-    ex = group_exec.GroupExecutor(router, pool, _build_items, _audit, _live)
+    ex = group_exec.GroupExecutor(router, pool, _build_items, _audit)
     r = await run_seq(ex, GID)
     ph, st = await phases(pool), await status(pool)
     check("A execute 回 executing", r.get("status") == "executing")
     check("A 終態 status=flying", st == "flying", f"(got {st})")
     check("A 兩台都 flying", all(v == "flying" for v in ph.values()), str(ph))
-    # 每台應有 upload、arm(400)、takeoff(22)、setmode 四步 → 逐台序列
+    # 每台應有 upload、arm_prep、arm(400)、takeoff、setmode 五步 → 逐台序列
     names = [c[0] for c in router.calls]
-    check("A 呼叫序列含 upload/arm/takeoff/setmode×2",
-          names.count("job_upload_mission") == 2 and names.count("job_set_mode") == 2
-          and names.count("job_command") == 4, str(names))
+    check("A 呼叫序列含 upload/arm_prep/arm/takeoff/setmode×2",
+          names.count("job_upload_mission") == 2 and names.count("job_arm_prep") == 2
+          and names.count("job_command") == 2 and names.count("job_takeoff_cmd") == 2
+          and names.count("job_set_mode") == 2, str(names))
+    # **群飛不得自己組起飛指令**：起飛一定走 job_takeoff_cmd（→ driver.takeoff_plan）。
+    # 原本這裡是 job_command(22, [...NaN..., g_amsl + alt])——PX4 的語意寫死在
+    # 群飛路徑裡，ArduPilot 三條方言全錯，而能力門還會放行（2026-09-07）
+    check("A 起飛走驅動（無裸 job_command 22）",
+          names.count("job_takeoff_cmd") == 2, str(names))
 
     # ── B. Gate reject：sysid 2 不在線 → 全不啟動 ─────────────────
     await reset(pool)
     router = StubRouter([3])          # 只有 3 在線，2 缺席
-    ex = group_exec.GroupExecutor(router, pool, _build_items, _audit, _live)
+    ex = group_exec.GroupExecutor(router, pool, _build_items, _audit)
     r = await ex.execute(GID)
     check("B gate 擋下（rejected）", r.get("rejected") is True)
     check("B status=gate_rejected", await status(pool) == "gate_rejected")
@@ -121,8 +127,8 @@ async def main():
     # ── C. Arm 失敗：sysid 3 arm 被拒 → 該台 prearm_failed、全撤（2 已 arm→disarm）──
     await reset(pool)
     router = StubRouter([2, 3])
-    router.fail[(3, "job_command")] = Exception("arm 被拒（DENIED）")  # 3 的 arm/takeoff 皆擋
-    ex = group_exec.GroupExecutor(router, pool, _build_items, _audit, _live)
+    router.fail[(3, "job_command")] = Exception("arm 被拒（DENIED）")  # 只擋 3 的 arm
+    ex = group_exec.GroupExecutor(router, pool, _build_items, _audit)
     await run_seq(ex, GID)
     ph, st = await phases(pool), await status(pool)
     check("C status=aborted（自動全撤）", st == "aborted", f"(got {st})")
@@ -132,7 +138,7 @@ async def main():
     # ── D. 操作員 abort：起飛後全撤 → RTL ────────────────────────
     await reset(pool)
     router = StubRouter([2, 3])
-    ex = group_exec.GroupExecutor(router, pool, _build_items, _audit, _live)
+    ex = group_exec.GroupExecutor(router, pool, _build_items, _audit)
     await run_seq(ex, GID)                       # 先飛起來
     r = await ex.abort(GID)
     ph, st = await phases(pool), await status(pool)

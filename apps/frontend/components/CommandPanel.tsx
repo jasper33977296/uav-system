@@ -103,6 +103,9 @@ export default function CommandPanel() {
   // toast「點這裡看原因」喚起（ui-spec §2.4）
   const cmdOpenReq = useUavStore((s) => s.cmdOpenReq);
   useEffect(() => { if (cmdOpenReq) setOpen(true); }, [cmdOpenReq]);
+  // 這個 alt 同時餵「起飛」（監督式起飛）與編隊 hold_alt，兩者都是操作員
+  // 自己指定的高度，維持原本的 10／下限 3。**任務起飛不再用它**——見下面的
+  // flyAlt
   const [alt, setAltState] = useState(10);
   useEffect(() => {
     const saved = Number(localStorage.getItem("takeoff-alt"));
@@ -112,6 +115,13 @@ export default function CommandPanel() {
     setAltState(v);
     if (v >= 3 && v <= 100) localStorage.setItem("takeoff-alt", String(v));
   };
+  // **「起飛→任務」的離地高度預設不由這裡決定**：留空＝後端跟著任務自己的
+  // NAV_TAKEOFF 走。原本這一格預設 10、下限 3，於是一份 takeoff 2 m、航點 3 m
+  // 的低空航線會先被拉到 10 m 才切任務——實際飛行高度是規劃的三倍以上，而
+  // 那個 10 不在任何一份 .plan 裡（2026-09-07 使用者回報）。
+  // **不記憶到 localStorage**：一個覆寫值悄悄套用到下一份任務，正是這次
+  // 出問題的形狀
+  const [flyAlt, setFlyAlt] = useState<number | null>(null);
   const live = useUavStore((s) => s.live);
   // 013-A 編隊：targetIds（指揮）疊在選中機（看）之上
   const formation = useUavStore((s) => s.formation);
@@ -1088,13 +1098,16 @@ export default function CommandPanel() {
               {btn("上傳", "① 上傳到機", "/mission/upload",
                    { disabled: !missionId, body: { mission_id: missionId },
                      cap: "mission_upload", accent: true })}
-              <label className="cmd-alt">起飛高度
-                <input type="number" min={3} max={100} step={1} value={alt}
-                  onChange={(e) => setAlt(Number(e.target.value) || 10)} /> m
+              <label className="cmd-alt" title="留空＝用任務自己的起飛高度">離地高度
+                <input type="number" min={1} max={100} step={1}
+                  placeholder="跟任務" value={flyAlt ?? ""}
+                  onChange={(e) => setFlyAlt(
+                    e.target.value === "" ? null : Number(e.target.value))} /> m
               </label>
               {btn("起飛→任務", "② 開始任務（起飛→執行）", "/mission/fly",
                    { confirm: true, cap: "mission_fly", disabled: rcDown,
-                     body: { mission_id: missionId || undefined, takeoff_alt: alt } })}
+                     body: { mission_id: missionId || undefined,
+                             takeoff_alt: flyAlt ?? undefined } })}
               {/* **換任務不該被迫用「上傳另一份蓋過去」來達成**——那是一個
                   更重、更容易出錯的動作（完整握手＋逐項讀回比對）。
                   兩段式確認：清掉機上航線是不可復原的 */}

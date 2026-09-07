@@ -24,6 +24,8 @@ import time
 from fastapi import HTTPException
 
 from . import capabilities as caps
+import plan_check          # libs/ 的共用實作（PYTHONPATH=/srv/libs）
+
 from . import guard_client, mav
 
 log = logging.getLogger("command.group")
@@ -31,7 +33,8 @@ log = logging.getLogger("command.group")
 # 執行序列會用到的能力鍵——嚴格 gate 逐台檢查，非 "ok" 一律擋（issue 015 唯一真相）
 _REQUIRED_CAPS = ["mission_upload", "arm", "takeoff", "mission_start"]
 _FRESH_S = 5.0            # 心跳新鮮度門檻：router.drones 不會自己過期，gate 得自己判
-_BASE_TAKEOFF_ALT = 10.0  # 分層起飛基準高度（相對）；逐台再加 layer×vsep
+#: 分層起飛的基準高度**不再是常數**——見 `_base_takeoff_alt`。原本是 10.0，
+#: 而一份 takeoff 2 m 的低空航線會因此被拉到規劃的五倍高（2026-09-07）。
 
 
 class GroupExecutor:
@@ -132,6 +135,53 @@ class GroupExecutor:
             raise mav.CommandError("材料化任務沒有航點")
         return self._build_items([dict(r) for r in rows])
 
+    async def _base_takeoff_alt(self, members: list[dict]) -> tuple[float, str]:
+        """分層起飛的基準高度 →（高度, 依據）。**全隊一個值**，逐台再加 layer×vsep。
+
+        **取全隊最低的那一份任務起飛高度**，不是常數、也不是最高：
+
+        - 常數（原本寫死的 10.0）跟任務完全無關——一份 takeoff 2 m 的低空航線
+          會被拉到規劃的五倍高（2026-09-07 使用者回報的就是單機版的同一個病）。
+        - 取最高等於「別台的任務比較高」變成「我這台被拉高」，同一個病換個來源。
+        - 取最低則保證**沒有任何一台因為基準本身而飛過自己的航線**；想飛更高是
+          它自己航線裡 NAV_TAKEOFF 的事，切 AUTO 之後會繼續爬。
+
+        **必須是全隊同一個值**：分層去衝突的保證是「相鄰層差 vsep」，基準逐台
+        不同的話那個保證就不成立了——兩台可能落在同一個高度上。
+
+        全隊都讀不到就退回 `plan_check.FALLBACK_TAKEOFF_ALT`（＝「離地」而已）。
+        各台任務的起飛高度不一致時，依據字串會說出來——那多半代表材料化出了
+        問題，操作員該看得到。
+        """
+        alts: list[float] = []
+        whys: list[str] = []
+        for m in members:
+            rows = await self.pool.fetch(
+                "SELECT alt, action, params FROM waypoints WHERE mission_id=$1 ORDER BY seq",
+                m["mission_id"])
+            alt, why = plan_check.takeoff_alt([self._with_command(r) for r in rows])
+            if alt is None:
+                whys.append(why)
+            else:
+                alts.append(alt)
+        if not alts:
+            return (plan_check.FALLBACK_TAKEOFF_ALT,
+                    f"全隊都讀不到任務起飛高度（{whys[0] if whys else '沒有成員'}），用保底值")
+        base = min(alts)
+        if len(set(alts)) > 1:
+            return base, ("各台任務的起飛高度不一致"
+                          f"（{sorted(set(alts))}），取最低的 {base} m")
+        return base, "任務的 NAV_TAKEOFF"
+
+    @staticmethod
+    def _with_command(row) -> dict:
+        """`waypoints` 的一列 → 本系統 waypoints 模型（`command` 從 params 解出來）。"""
+        w = dict(row)
+        p = w.get("params")
+        p = json.loads(p) if isinstance(p, str) else (p or {})
+        w["command"] = p.get("command")
+        return w
+
     @staticmethod
     def _err(e) -> dict:
         """例外 → §7.1 error 形狀（沿用單機拒絕的 {msg,hint,autopilot_notes}）。"""
@@ -200,6 +250,12 @@ class GroupExecutor:
                     return
                 await self._set_phase(gid, m["drone_id"], "arming")
                 try:
+                    # **arm 的前置條件是方言**：ArduPilot Copter 在 LOITER/
+                    # STABILIZE 下 arm 了也不會照指令起飛，必須先進 GUIDED；
+                    # PX4 不需要，`job_arm_prep` 對它是 no-op。原本這裡直接
+                    # arm，等於把 PX4 的前提當成通則
+                    await self._submit_audited(m["mav_sysid"], "arm_prep",
+                                               mav.job_arm_prep)
                     res = await self._submit_audited(m["mav_sysid"], "arm",
                                                      mav.job_command, 400, [1.0])
                     if not res.get("accepted"):
@@ -215,32 +271,57 @@ class GroupExecutor:
             # 失敗）；per-sysid 高度由 command router 從 GLOBAL_POSITION_INT 存（不靠 backend）。
             partial = False
             airborne = []
+            # **基準跟著任務走**（見 `_base_takeoff_alt`）：這一段只是「離地＋
+            # 分層去衝突」，不該自己挑一個與航線無關的高度。層距 vsep 仍然照加
+            # ——低空編隊要把 vsep 一起調小，否則上層還是會被推到航線之上
+            base_alt, base_why = await self._base_takeoff_alt(members)
+            log.info("group %s 分層基準 %.1f m（%s），層距 %.1f m",
+                     gid, base_alt, base_why, vsep)
+            await self._audit(0, f"group_takeoff_base:{gid}",
+                              {"base_alt_m": base_alt, "vsep_m": vsep},
+                              "accepted", base_why)
             for m in members:               # 3a. 全體 takeoff（連發、不等爬升）
                 if abort.is_set():
                     return
                 await self._set_phase(gid, m["drone_id"], "starting")
-                m["_alt_target"] = _BASE_TAKEOFF_ALT + m["layer_index"] * vsep
+                m["_alt_target"] = base_alt + m["layer_index"] * vsep
                 g_amsl = self._ground_amsl_for(m["mav_sysid"])   # **逐台**，不是全隊一個
-                amsl = ((g_amsl + m["_alt_target"]) if g_amsl is not None
-                        else m["_alt_target"])   # NAV_TAKEOFF param7=AMSL、經緯/偏航 NaN=原地
                 try:
-                    await self._submit_audited(
+                    # **起飛指令的內容是方言，交給驅動**（`mav.job_takeoff_cmd`
+                    # → `driver.takeoff_plan()`）。原本這裡自己組 MAVLink：
+                    # param7 一律 `g_amsl + alt`、空白參數一律 NaN——那是 PX4 的
+                    # 語意，ArduPilot 三條全錯（param7 是相對高度、NaN 的
+                    # NAV_TAKEOFF 連 ACK 都不回、arm 前要先進 GUIDED）。
+                    # 而 arm/takeoff 兩鍵對 ArduPilot 標的是 `ok`——那個 ok 是
+                    # **單機路徑**驗來的，群飛從沒走過那條路，等於能力門在替一條
+                    # 它沒測過的路徑背書。
+                    #
+                    # **群飛邏輯（誰先誰後、分幾層、等到什麼才切）留在這裡；
+                    # 動作內容（送什麼參數）一律由驅動決定。**
+                    res = await self._submit_audited(
                         m["mav_sysid"], f"takeoff:{m['_alt_target']:.0f}m",
-                        mav.job_command, 22, [0.0, 0.0, 0.0, float("nan"),
-                                              float("nan"), float("nan"), amsl])
+                        mav.job_takeoff_cmd, m["_alt_target"], g_amsl)
+                    # **被拒就當場處置**（同 Phase 2 的 arm）。原本這裡不看
+                    # `accepted`，被拒的機照樣進 airborne，然後在 `_wait_airborne`
+                    # 等滿 60 秒才因為「未達高度」被 RTL——理由還是錯的
+                    if not res.get("accepted"):
+                        raise mav.CommandError(f"起飛被拒（{res.get('result')}）")
                     airborne.append(m)
                 except Exception as e:
                     await self._member_rtl(gid, m, self._err(e))
                     partial = True
-            for m in airborne:              # 3b. 等各自到目標高度 80%（per-sysid alt gating）
+            for m in airborne:              # 3b. 等各自離地（per-sysid，不靠 backend）
                 if abort.is_set():
                     return
-                if await self._wait_alt(m["mav_sysid"], m["_alt_target"] * 0.8):
+                ok, why, alt = await self._wait_airborne(m["mav_sysid"],
+                                                        m["_alt_target"])
+                if ok:
                     m["_alt_ok"] = True
+                    m["_airborne_basis"] = why
                 else:
-                    alt = (self.router.drones.get(m["mav_sysid"]) or {}).get("alt_rel")
                     await self._member_rtl(gid, m, {
-                        "msg": f"起飛後未達目標高度（目前 {alt} m / 目標 {m['_alt_target']:.0f} m）",
+                        "msg": f"起飛後判定不到機已離地（{why}，"
+                               f"目前 alt_rel {alt} m / 目標 {m['_alt_target']:.0f} m）",
                         "hint": "機停在懸停、未進任務——檢查後可重試或 RTL"})
                     partial = True
             for m in airborne:              # 3c. 到高度者切 MISSION（已在空中，PX4 跳過任務內 takeoff）
@@ -261,18 +342,33 @@ class GroupExecutor:
         finally:
             self.runs.pop(gid, None)
 
-    async def _wait_alt(self, sysid: int, target: float, timeout: float = 60.0) -> bool:
-        """等該 sysid 相對高度達 target（m）才回 True；逾時 False。per-sysid alt 由
-        command router 從 GLOBAL_POSITION_INT 存（mav._recv）。[收尾] 真機 timeout
-        與 80% 門檻依實測調。"""
+    async def _wait_airborne(self, sysid: int, target: float,
+                             timeout: float = 60.0
+                             ) -> tuple[bool, str, float | None]:
+        """等該 sysid 真的離地 →（成功, 依據, 當下 alt_rel）。逾時回 False。
+
+        **判準與單機路徑同一份**（`mav.airborne_of`）：先看機端的 `landed_state`，
+        機端沒送才退回「高度達 target 的 80%」，而且依據字串會說出退回了。
+
+        原本只看 `alt_rel >= target * 0.8`。分層基準還是寫死 10 m 時那個門檻是
+        8 m、看起來夠高；**基準改成跟著任務走之後，一份 takeoff 2 m 的低空航線
+        會讓門檻掉到 1.6 m**——那正好落在 alt_rel 自己的漂移範圍裡（停在地面漂到
+        4.4 m 是量過的），於是這道門會對一台還在地上的機放行，把它切進 AUTO。
+        那是本序列存在的理由（2026-08-11 教訓）被架空。
+
+        per-sysid 狀態由 command router 存（`mav._recv`），不靠 backend。
+        """
         loop = asyncio.get_running_loop()
         deadline = loop.time() + timeout
+        why, alt = "還沒收到任何狀態", None
         while loop.time() < deadline:
             await asyncio.sleep(0.5)
-            alt = (self.router.drones.get(sysid) or {}).get("alt_rel")
-            if alt is not None and alt >= target:
-                return True
-        return False
+            up, why, alt = mav.airborne_of(self.router, sysid)
+            if up:
+                return True, why, alt
+            if up is None and alt is not None and alt >= target * 0.8:
+                return True, f"{why}，退回高度判準（alt_rel {alt} m ≥ {target * 0.8:.1f} m）", alt
+        return False, why, alt
 
     def _ground_amsl_for(self, sysid):
         """該機的地面海拔（NAV_TAKEOFF param7=AMSL 用）。

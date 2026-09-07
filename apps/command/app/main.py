@@ -17,6 +17,7 @@ import concurrent.futures
 import json
 import logging
 import math
+import time
 import urllib.parse
 import urllib.request
 import uuid
@@ -507,29 +508,83 @@ async def takeoff(sysid: int, body: TakeoffIn):
 
 class FlyIn(BaseModel):
     mission_id: str | None = None      # 給了就先上傳＋回讀比對；不給＝用機上現有任務
-    takeoff_alt: float = 10.0
+    #: 切 AUTO 前那一段 GUIDED 起飛的相對高度。**省略＝跟著任務自己的
+    #: NAV_TAKEOFF 走**（見 `_mission_takeoff_alt`），不是一個固定值。
+    takeoff_alt: float | None = None
     alt_timeout_s: float = 60.0
+
+
+def _with_command(row) -> dict:
+    """`waypoints` 的一列 → 本系統 waypoints 模型（`command` 從 params 解出來）。
+
+    plan_check 那一組函式吃的是解出來的形狀；DB 存的是 params JSONB。
+    """
+    w = dict(row)
+    p = w.get("params")
+    p = json.loads(p) if isinstance(p, str) else (p or {})
+    w["command"] = p.get("command")
+    return w
+
+
+async def _mission_takeoff_alt(mission_id: str | None) -> tuple[float, str]:
+    """任務自己的起飛高度 →（高度, 依據）。讀不到就回保底值，**並說出為什麼**。
+
+    **切 AUTO 前那一段不該由一個固定常數決定。** 原本寫死 10 m：對一份
+    takeoff 2 m、航點 3 m 的低空航線，序列會先把機拉到 10 m 才切任務——
+    實際飛行高度是規劃的三倍以上，而那個 10 不在任何一份 `.plan` 裡
+    （2026-09-07 使用者回報）。任務裡的 NAV_TAKEOFF 已經寫了要爬到哪。
+
+    挑選規則在 `plan_check.takeoff_alt`——**群飛路徑用的是同一份**。
+    """
+    if not mission_id:
+        return plan_check.FALLBACK_TAKEOFF_ALT, "沒有任務可讀，用保底值"
+    rows = await pool.fetch(
+        "SELECT alt, action, params FROM waypoints WHERE mission_id = $1 ORDER BY seq",
+        mission_id)
+    alt, why = plan_check.takeoff_alt([_with_command(r) for r in rows])
+    return (alt, why) if alt is not None else (plan_check.FALLBACK_TAKEOFF_ALT,
+                                               f"{why}，用保底值")
+
+
+def _airborne(sysid: int) -> tuple[bool | None, str, float | None]:
+    """這台機離地了沒 →（判定, 依據, alt_rel）。實作在 `mav.airborne_of`，
+    **群飛路徑用的是同一份**。"""
+    return mav.airborne_of(router, sysid) if router else (None, "指令服務未連線", None)
 
 
 @app.post("/api/command/{sysid}/mission/fly", tags=["一鍵"])
 async def mission_fly(sysid: int, body: FlyIn):
     """起飛→任務自動序列（實戰教訓 2026-08-11：地面直接 MISSION_START
-    在實機上會失敗，須先到高度）：
+    在實機上會失敗，須先離地）：
 
-      （上傳＋回讀比對）→ 解鎖 → NAV_TAKEOFF → **等實際到達目標高度**
+      （上傳＋回讀比對）→ 解鎖 → NAV_TAKEOFF → **等機端回報離地**
       → 切 AUTO.MISSION（已在空中，PX4 跳過任務內的 takeoff 項續飛）
 
-    高度沒到就不切任務——序列在任何一步失敗都停在安全狀態
+    沒判定到離地就不切任務——序列在任何一步失敗都停在安全狀態
     （PX4 起飛後自動懸停），並回報卡在哪一步。
+
+    **這一段只負責「離地」，不負責飛到任務高度**：`takeoff_alt` 省略時取
+    任務自己的 NAV_TAKEOFF 高度（見 `_mission_takeoff_alt`），離地判定看
+    機端的 `landed_state`（見 `_airborne`）。兩者用的依據都寫進 `steps`。
     """
     _require_enabled(); await _require_capability(sysid, "mission_fly")
     await guard_client.ask_guard(sysid, "mission_fly")
     steps = {}
     if body.mission_id:
         steps["upload"] = await mission_upload(sysid, UploadIn(mission_id=body.mission_id))
-    steps.update(await _do_takeoff(sysid, body.takeoff_alt))
+    # **這一段只是「離地」，高度跟著任務走。** mid 在這裡就解出來（原本是
+    # 序列跑完才解）——不給 mission_id 的呼叫用的是機上現有任務，那份任務的
+    # 起飛高度同樣該由它自己決定
+    mid = body.mission_id or await pool.fetchval(
+        "SELECT current_mission_id::text FROM drones WHERE mav_sysid = $1", sysid)
+    if body.takeoff_alt is not None:
+        alt_target, alt_src = float(body.takeoff_alt), "呼叫端指定"
+    else:
+        alt_target, alt_src = await _mission_takeoff_alt(mid)
+    steps["takeoff_alt"] = {"alt_m": alt_target, "source": alt_src}
+    steps.update(await _do_takeoff(sysid, alt_target))
 
-    # 等高度實際到達（80% 即視為到位，PX4 收斂段不必等滿）
+    # 等機真的離地（退回高度判準時 80% 即視為到位，PX4 收斂段不必等滿）
     # **必須看這一台的高度**：原本讀 backend `/api/live`，而那個端點只回**主機**。
     # 飛非主機時這個判斷完全與目標機無關——2026-08-12 前端驗收實測，uav-s2 起飛
     # 成功卻回報「未達目標高度（-0.04m）」，那個 -0.04 是停在地面的主機。
@@ -537,26 +592,40 @@ async def mission_fly(sysid: int, body: FlyIn):
     # 還在地面的機切進 AUTO.MISSION——正是本序列存在的理由（2026-08-11 教訓）被
     # 架空。群組執行器早就改用 per-sysid（mav.py GLOBAL_POSITION_INT），單機路徑
     # 漏了同一課，現在同源。
+    #
+    # **判準優先序：機端的 landed_state ＞ 高度**（見 `_airborne`）。原本只看
+    # alt_rel ≥ 目標×0.8，而目標值現在跟著任務走、可以低到 1–2 m——那個門檻
+    # 會落進 alt_rel 自己的漂移範圍裡（停在地面漂到 4.4 m 是量過的），於是
+    # 「等到高度」變成一句不成立的保證。門檻降低不是放寬安全，是讓那道門
+    # 不再證明任何事，所以改由機端自己說它在不在空中。
     deadline = asyncio.get_running_loop().time() + body.alt_timeout_s
     alt = None
+    basis = None
     while asyncio.get_running_loop().time() < deadline:
         await asyncio.sleep(1.0)
-        alt = ((router.drones.get(sysid) if router else None) or {}).get("alt_rel")
-        if alt is not None and alt >= body.takeoff_alt * 0.8:
+        up, why, alt = _airborne(sysid)
+        if up:
+            basis = why
+            break
+        if up is None and alt is not None and alt >= alt_target * 0.8:
+            # 退回高度判準——**並且說出退回了**。操作員必須分得出「機端說它
+            # 在空中」與「機端沒說，我在拿一個會漂的數字猜」
+            basis = f"{why}，退回高度判準（alt_rel {alt} m ≥ {alt_target * 0.8:.1f} m）"
             break
     else:
+        _, why, alt = _airborne(sysid)
         await _audit(sysid, "mission_fly", body.model_dump(), "failed",
-                     f"起飛後 {body.alt_timeout_s:.0f}s 未達目標高度（目前 {alt} m）")
+                     f"起飛後 {body.alt_timeout_s:.0f}s 判定不到離地"
+                     f"（{why}，alt_rel {alt} m / 目標 {alt_target} m）")
         raise HTTPException(504, {
-            "msg": f"起飛後未達目標高度（目前 {alt} m / 目標 {body.takeoff_alt} m）",
+            "msg": f"起飛後判定不到機已離地（{why}，"
+                   f"目前 alt_rel {alt} m / 目標 {alt_target} m）",
             "hint": "機停在懸停狀態，未啟動任務——檢查 RC/遙測後可重試或 RTL",
             "steps": steps})
-    steps["alt_reached"] = {"alt_rel": alt}
+    steps["airborne"] = {"alt_rel": alt, "basis": basis}
 
     steps["mission"] = await _run(sysid, "mode:mission", mav.job_set_mode, "mission")
     await _audit(sysid, "mission_fly", body.model_dump(), "accepted", json.dumps(steps))
-    mid = body.mission_id or await pool.fetchval(
-        "SELECT current_mission_id::text FROM drones WHERE mav_sysid = $1", sysid)
     if mid:
         await guard_client.show_on_live(sysid, mid, "起飛→任務")
     return {"ok": True, "steps": steps}
@@ -859,13 +928,7 @@ async def mission_upload(sysid: int, body: UploadIn):
     meta = await pool.fetchrow(
         "SELECT firmware_type, vehicle_type, fence, home FROM missions WHERE id = $1",
         body.mission_id)
-    wps = []
-    for r in rows:
-        w = dict(r)
-        p = w.get("params")
-        p = json.loads(p) if isinstance(p, str) else (p or {})
-        w["command"] = p.get("command")      # plan_check 用原始 command 判導航類
-        wps.append(w)
+    wps = [_with_command(r) for r in rows]   # plan_check 用原始 command 判導航類
     # 幾何預檢：報告一律附在回應與留痕；GEOFENCE_ENFORCE=true 才擋
     # （預設不擋——2026-08-10 使用者決定；空中防線是 PX4 自己的 Geofence）
     # 圍欄用**這份航線自己宣告的**（存在 missions.fence，來自 .plan 的
@@ -1123,7 +1186,7 @@ class StartIn(BaseModel):
     plan: str | None = None          # 次要：missions/ 下的 .plan 檔名
     sysid: int | None = None         # 省略＝唯一在線的那台；多台必填
     store: bool = True               # 保留相容；plan 路徑一律入庫（現版經 mission_fly 需 DB mission，去重不洗版）
-    takeoff_alt: float = 10.0        # 起飛相對高度（現版先起飛才切任務）
+    takeoff_alt: float | None = None  # 省略＝跟著任務的 NAV_TAKEOFF（見 FlyIn.takeoff_alt）
 
 
 @app.post("/api/start", tags=["一鍵"], summary="一鍵：上傳→解鎖→起飛→切任務")

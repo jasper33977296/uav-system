@@ -72,7 +72,11 @@ def check(autopilot: str) -> str:
                      timeout=180)
         assert_dialect(ok, r, "任務執行序列")
         steps = r.get("steps", {}) if isinstance(r, dict) else {}
-        reached = steps.get("alt_reached", {}).get("alt_rel")
+        # 2026-09-07：`alt_reached` 改名 `airborne`——那一步的判準已經不是
+        # 「到了某個高度」而是「機端說它在空中」（landed_state），舊名字會把
+        # 一個已經不成立的保證繼續講下去
+        air = steps.get("airborne", {})
+        reached, basis = air.get("alt_rel"), air.get("basis")
 
         # 序列宣稱成功不算數——**讀回 HEARTBEAT 確認機端真的在 mission 模式**
         engaged, cm = wait_verb(sysid, drv, "mission", timeout=15.0)
@@ -85,8 +89,9 @@ def check(autopilot: str) -> str:
         alt = _st(sysid).get("alt_rel")
         assert alt is not None and alt >= TAKEOFF_ALT * 0.5, (
             f"進了 mission 模式但高度只有 {alt} m——不像在空中執行任務")
-        return (f"sysid {sysid}：上傳 {len(wps)} 項 → 起飛至 {reached} m → "
-                f"機端實際進入 {got}（mission），當下高度 {alt:.1f} m")
+        return (f"sysid {sysid}：上傳 {len(wps)} 項 → 離地（{basis}，"
+                f"alt_rel {reached} m）→ 機端實際進入 {got}（mission），"
+                f"當下高度 {alt:.1f} m")
     finally:
         if not _recover(sysid):
             print(f"  ⚠ sysid {sysid} 未在時限內上鎖，請人工確認")

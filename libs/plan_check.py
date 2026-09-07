@@ -43,6 +43,36 @@ def _cmd(w: dict) -> int | None:
             "waypoint": 16}.get(w.get("action") or "waypoint")
 
 
+#: 「離地了」的保底高度。**它不是一個飛行高度**——是航線沒說起飛高度時，
+#: 序列為了讓機離開地面（切 AUTO 的前提）而用的最小值。爬到任務高度是航線裡
+#: NAV_TAKEOFF 自己的事。單機（`mission_fly`）與群飛（`group_exec`）共用同一個值。
+FALLBACK_TAKEOFF_ALT = 1.0
+
+
+def takeoff_alt(wps: list[dict]) -> tuple[float | None, str]:
+    """這份航線的起飛高度 →（高度, 依據）。沒有可用的起飛項時回 `(None, 原因)`。
+
+    **不在這裡套保底值**：要不要退回 `FALLBACK_TAKEOFF_ALT` 是呼叫端的政策，
+    這個函式只回答「這份航線自己說了什麼」。回不出來時說得出為什麼——
+    「航線裡沒有起飛項」與「有起飛項但高度是 0」對操作員是兩件事。
+
+    `wps` 是本系統 waypoints 模型（`command` 已從 params 解出來，同
+    `check_waypoints`）；舊資料沒有 `command` 時由 `_cmd` 從 action 回推。
+
+    **這裡是唯一一份實作**：切 AUTO 前那一段離地高度原本在單機路徑寫死 10.0、
+    在群飛路徑寫死 10.0，兩個常數各自漂——而一份 takeoff 2 m、航點 3 m 的低空
+    航線會因此被拉到規劃的五倍高（2026-09-07 使用者回報）。
+    """
+    for w in wps:
+        if _cmd(w) != _TAKEOFF:
+            continue
+        alt = w.get("alt")
+        if alt is not None and alt > 0:
+            return float(alt), "航線的 NAV_TAKEOFF"
+        return None, f"航線的 NAV_TAKEOFF 高度是 {alt}"
+    return None, "航線裡沒有 NAV_TAKEOFF"
+
+
 def _is_nav(w: dict) -> bool:
     c = _cmd(w)
     return c is None or c in NAV_CMDS

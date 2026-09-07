@@ -63,10 +63,18 @@ failsafe 邏輯留在 PX4，地面站只負責觸發與顯示。
 > **啟動流程（2026-08-11 併入現版時更新）**：`/api/start` **不再是「地面直接
 > MISSION_START」**——那個真機會失敗（PX4 地面直接啟動任務踩過的雷）。現版
 > 內部委派 `POST /api/command/{sysid}/mission/fly`＝**上傳回讀 → arm → NAV_TAKEOFF
-> → 等實際到達高度 → 切 AUTO.MISSION**（真 SITL 驗過）。對外介面完全不變，
-> 回應多帶 `steps`（upload/arm/takeoff/alt_reached/mission）＋`sysid`＋`source`。
-> 起飛高度可用 `takeoff_alt`（預設 10 m）帶。能力 gating／逐台 audit／X-Client 歸因
-> 全部自動繼承現版。
+> → 等機端回報離地 → 切 AUTO.MISSION**（真 SITL 驗過）。對外介面完全不變，
+> 回應多帶 `steps`（upload/arm/takeoff/takeoff_alt/airborne/mission）＋`sysid`＋`source`。
+> 能力 gating／逐台 audit／X-Client 歸因全部自動繼承現版。
+>
+> **離地高度預設跟著任務走**（2026-09-07）：`takeoff_alt` 省略時取該任務第一個
+> `NAV_TAKEOFF` 的高度，讀不到才退回 1 m 保底；`steps.takeoff_alt.source` 說出
+> 用的是哪一個。原本寫死 10 m，對 takeoff 2 m／航點 3 m 的低空航線來說，序列會
+> 先把機拉到規劃高度的三倍以上，而那個 10 不在任何一份 `.plan` 裡。
+>
+> **離地判定用機端的 `EXTENDED_SYS_STATE.landed_state`**，不是高度：`alt_rel`
+> 在沒有 GPS 定位時會漂（量過停在地面漂到 4.4 m）。機端沒送 landed_state 時才
+> 退回高度判準，且 `steps.airborne.basis` 會寫明退回了。
 
 **航線來源以任務庫（DB）為主**（2026-08-11 決定）：總表與內容都讀
 `missions`/`waypoints` 表，跟前端路徑管理頁看到的是同一份。`missions/` 目錄的

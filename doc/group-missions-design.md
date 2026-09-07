@@ -52,6 +52,42 @@ link_metrics/events 完整可追，且與 019 MCP 的 submit_mission(N 台) 同�
   這也順帶提供**返航分離**：unified 各台在不同高度層飛行，RTL 時 PX4 於高於
   `RTL_RETURN_ALT` 時維持當前高度返航，故各台以 vsep 的間隔錯開返航（2026-08-12
   三機實飛驗證：29.9／34.9／39.9m，差 5m）。
+
+> **切 AUTO 前那一段起飛的基準高度跟著任務走**（2026-09-07）：原本寫死
+> `_BASE_TAKEOFF_ALT = 10.0`，跟航線完全無關——一份 takeoff 2 m 的低空航線
+> 會因此被拉到規劃的五倍高（單機路徑的同一個病由使用者回報）。現在取**全隊
+> 最低**的那一份任務 `NAV_TAKEOFF` 高度（`group_exec._base_takeoff_alt`，挑選
+> 規則與單機共用 `plan_check.takeoff_alt`），全隊仍是同一個值——基準逐台不同
+> 的話「相鄰層差 vsep」這個去衝突保證就不成立了。
+>
+> ⚠ **層距 vsep 沒有跟著縮**：低空編隊（航線 3 m、vsep 5 m）第 2 層仍會被推到
+> 13 m，遠高於航線。那是去衝突的必要代價，但 `vsep_m` 是群組參數，**低空任務
+> 要自己調小**。
+
+### 2a. 群飛邏輯在這裡，起飛動作在驅動（2026-09-07）
+
+**本執行器整份是 PX4 語意寫死的**——被 issue 015／026 的方言抽離漏掉了：
+
+| 步驟 | 原本 | 對 ArduPilot 的後果 |
+|---|---|---|
+| Phase 2 arm | 直接送 `job_command(400)` | Copter 在 LOITER/STABILIZE 下 arm 了也不會照指令起飛（要先進 GUIDED） |
+| Phase 3a takeoff | 自己組 `job_command(22, […NaN…, g_amsl + alt])` | param7 是相對高度不是 AMSL（差一整個地面海拔）；**NaN 的 NAV_TAKEOFF 連 ACK 都不回，指令被靜默丟棄**（實測 2026-08-12） |
+
+而且**能力門會放行**：`_REQUIRED_CAPS`（`mission_upload`／`arm`／`takeoff`／
+`mission_start`）對 ArduPilot 全標 `ok`，但那個 ok 是**單機路徑**（走
+`mav.job_takeoff` → 驅動）在 SITL 驗來的——群飛從沒走過那條路，等於能力門在替
+一條它沒測過的路徑背書。
+
+**分界**：誰先誰後、分幾層、等到什麼才切 MISSION＝**群飛邏輯，留在本執行器**；
+送什麼參數＝**方言，一律問驅動**。起飛因此拆成三個可組合的動作
+（`mav.job_arm_prep` / `job_takeoff_cmd` / `job_takeoff`），三個都向
+`driver.takeoff_plan()` 要參數。單機的 `job_takeoff` 就是那三個組起來的，
+所以兩條路徑吃的是同一份輸入。
+
+> `takeoff_plan()` 原本在三個驅動裡都實作了、等價測試也逐項驗過，**卻沒有任何
+> 產品呼叫者**——兩條路徑各自從旗標重推一份，等價測試全綠而錯的那條不在它的
+> 視野裡（issues/026 B4-d 的同一課）。`scripts/test-takeoff-dialect.py` 現在直接
+> 攔 `job_command`，驗的是**產品端實際送上線的參數**。
 - **RTL 高度錯開（`GROUP_RTL_STAGGER_M`）——設計項，現況未實作**：原設計要各台 RTL
   返航高度按 `layer_index × GROUP_RTL_STAGGER_M` 顯式錯開。實作現況是 `group_exec.rtl()`
   純 RTL-all（無 per-drone 返航高度、mav 層無 param-set）。unified 情境有上面的 vsep

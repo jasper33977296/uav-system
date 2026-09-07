@@ -50,6 +50,14 @@ PEERS_WRITE_S = 1.0
 #: 位址表裡的一筆最多留這麼久。比心跳行程的過期門檻大一個量級——過期由它判，
 #: 這裡只是防止檔案無限長大（例如反覆換 sysid 的測試機）
 PEERS_KEEP_S = 300.0
+#: `EXTENDED_SYS_STATE.landed_state` → 人話。**與 backend 同一份**
+#: （`app/mavlink_rx.py:_LANDED`）——兩份會漂，而這個字彙是「機在不在空中」
+#: 的判準，兩邊講不同的話等於同一台機有兩個答案。
+_LANDED = {1: "on_ground", 2: "in_air", 3: "takeoff", 4: "landing"}
+#: `landed_state` 多久沒更新就不再拿它下判斷。**「我們不再聽到」不等於
+#: 「機還在地上」**——過期就退回高度判準，並且說出退回了（同 RC_STALE_S 的紀律）。
+#: ArduPilot／PX4 都把 EXTENDED_SYS_STATE 放在低頻串流，5 s 已經很寬鬆
+LANDED_STALE_S = 5.0
 #: 活性門檻：主迴圈超過這麼久沒跑過一圈＝卡住（見 MavRouter.alive）。
 #: 正常節奏是 run() 每圈 ≤0.2s、指令對話期間 _wait() 每圈 ≤0.2s，
 #: 兩條路徑都會呼叫 _tick()，所以 5s 對「正常但忙碌」有極大餘裕。
@@ -268,6 +276,15 @@ class MavRouter(threading.Thread):
                     # 掉頭」。沒有它那句警告就永遠不會出現——**而不是不會發生**
                     if msg.hdg != 65535:          # 65535＝不知道
                         d["heading"] = msg.hdg / 100.0
+                elif msg.get_type() == "EXTENDED_SYS_STATE":
+                    # **「機真的離地了沒」的唯一可信來源。**「等到高度才切
+                    # AUTO」原本只看 alt_rel，而 alt_rel 在沒有 GPS 定位時是
+                    # 漂的——前端量過停在地面的機漂到 4.4 m（CommandPanel
+                    # 那條註解）。用一個會漂的數字去證明「離地了」，門檻訂多
+                    # 低都證明不了，訂多高又只是把同一個漂移往上推。
+                    # 字彙與 backend 同一份（mavlink_rx._LANDED），**不另立一套**。
+                    d["landed_state"] = _LANDED.get(msg.landed_state)
+                    d["landed_t"] = time.monotonic()
                 elif msg.get_type() == "STATUSTEXT":
                     # PX4 的解釋（"Arming denied: ..."）——被拒時要能拿出來給人看。
                     # 實戰教訓：沒有這段文字，操作員只看到 result code 乾瞪眼
@@ -486,20 +503,88 @@ def job_set_mode(r: MavRouter, sysid: int, mode: str,
 # ── 任務方言（issue 015 實測；issue 026 抽驅動時從這裡提取）──────────────
 # **本檔的方言分支集中在這一處**，不要散落到各 job_* 裡——之後把廠牌差異收進
 # 獨立驅動時，要能「把這一段提取出來」而不是全域搜捕。
-def job_takeoff(r: MavRouter, sysid: int, alt: float, ground_amsl=None) -> dict:
-    """起飛序列（方言差異集中在這裡，見 dialect()）。
+# **起飛拆成三個可組合的動作**，而不是一顆 job。
+#
+# 理由是編隊：群飛的序列是「全體 arm → 全體 takeoff → 全體等 → 全體切 MISSION」，
+# 拆步驟才能讓 N 台幾乎同時離地。原本 `job_takeoff` 把「切 GUIDED＋arm＋起飛」
+# 綁成一顆，群飛用不了，於是 `group_exec` **自己重寫了一份起飛**——而它重寫的是
+# PX4 的語意（param7 用絕對海拔、空白參數用 NaN），對 ArduPilot 三條方言全錯。
+#
+# **順序（群飛邏輯）由呼叫端決定，動作內容（方言）由驅動決定。** 這一層只負責
+# 後者，而且**只有這一份**：三個動作全部向 `driver.takeoff_plan()` 要參數，不再
+# 自己從旗標推。原本 `takeoff_plan()` 在驅動裡定義了卻沒有任何產品呼叫者，只有
+# 等價測試在跑它——**一個沒有人用的抽象不會讓兩條路徑一致**（issues/026 B4-d 的
+# 同一課：等價測試證明不了兩邊吃的是同樣的輸入）。
 
-    - **PX4**：NAV_TAKEOFF 的 param7 是**絕對海拔**，要用地面海拔＋目標高度。
-    - **ArduPilot Copter**：param7 是**相對高度**（送絕對海拔會差一整個地面
-      海拔、數百公尺），而且必須**先進 GUIDED 才能 arm 與起飛**。
+
+def _takeoff_plan(r: MavRouter, sysid: int, alt: float, ground_amsl) -> dict:
+    """向驅動要起飛參數。驅動說不行（PX4 缺地面海拔）就轉成 CommandError。"""
+    try:
+        return dialect(r, sysid)["driver"].takeoff_plan(alt, ground_amsl)
+    except ValueError as e:
+        raise CommandError(str(e))
+
+
+def airborne_of(r: MavRouter, sysid: int) -> tuple[bool | None, str, float | None]:
+    """這台機離地了沒 →（判定, 依據, alt_rel）。判定 None＝**還不知道**。
+
+    **先看 `landed_state`，拿不到才退回高度。** `alt_rel` 在沒有 GPS 定位時是
+    漂的——前端量過停在地面的機漂到 4.4 m（`CommandPanel.tsx` 那條註解）。拿一個
+    會漂的數字去證明「機真的離地了」，門檻訂多低都證明不了，訂多高又只是把同一個
+    漂移往上推。`EXTENDED_SYS_STATE` 是機端自己說的。
+
+    **退回時要說得出退回了**：操作員必須分得出「機端說它在空中」與「機端沒說，
+    我在拿高度猜」——後者才是 2026-08-11 那條教訓（地面直接切 AUTO 會失敗）的
+    風險面。回傳的依據字串就是給留痕與錯誤訊息用的。
+
+    **單機（`mission_fly`）與群飛（`group_exec`）共用這一份。** 這件事本身不是
+    方言——`landed_state` 兩家都送，所以它在這裡而不是在驅動裡。
+    """
+    d = (r.drones.get(sysid) or {})
+    alt = d.get("alt_rel")
+    ls, lt = d.get("landed_state"), d.get("landed_t")
+    if ls is not None and lt is not None and time.monotonic() - lt <= LANDED_STALE_S:
+        return ls == "in_air", f"機端 landed_state={ls}", alt
+    why = "機端沒送 landed_state" if ls is None else "機端的 landed_state 已過期"
+    return None, why, alt
+
+
+def job_arm_prep(r: MavRouter, sysid: int) -> dict:
+    """arm 之前的方言前置。ArduPilot Copter 在 LOITER/STABILIZE 下 arm 了也不會
+    照指令起飛，必須先進 GUIDED；PX4 不需要，回 `{"needed": False}`。
+
+    **不需要時不送任何東西**——對不需要的廠牌多切一次模式是自己製造狀態變化。
+    """
+    if not dialect(r, sysid)["takeoff_needs_guided"]:
+        return {"needed": False}
+    return {"needed": True, "guided": job_set_mode(r, sysid, "guided")}
+
+
+def job_takeoff_cmd(r: MavRouter, sysid: int, alt: float, ground_amsl=None) -> dict:
+    """只送 NAV_TAKEOFF（不切模式、不 arm）。參數全部由驅動的 `takeoff_plan()` 給：
+
+    - param7 是**相對高度還是絕對海拔**（送錯會差一整個地面海拔、數百公尺）
+    - 空白參數用 **NaN 還是 0.0**（實測 2026-08-12：ArduPilot 對 NaN 的
+      NAV_TAKEOFF 連 ACK 都不回，指令被靜默丟棄）
+    """
+    p = _takeoff_plan(r, sysid, alt, ground_amsl)
+    b, p7 = p["blank"], p["param7"]
+    res = job_command(r, sysid, M.MAV_CMD_NAV_TAKEOFF, [0.0, 0.0, 0.0, b, b, b, p7])
+    # **`accepted`／`verified` 攤在頂層**：呼叫端（群飛的 `_submit_audited`）
+    # 是靠這兩個鍵判「這台到底有沒有被接受」的。包進子物件的話，被拒的起飛
+    # 會被記成 accepted——留痕說謊比沒留痕更糟
+    return {**res, "alt_param7": p7, "alt_semantics": p["alt_semantics"]}
+
+
+def job_takeoff(r: MavRouter, sysid: int, alt: float, ground_amsl=None) -> dict:
+    """單機起飛序列＝前置 → arm → 起飛。三步都走上面那三個動作，**方言不在這裡**。
 
     回傳逐步結果，任一步失敗就往上拋（呼叫端已有留痕與錯誤呈現）。
     """
-    d = dialect(r, sysid)
     steps = {}
-    if d["takeoff_needs_guided"]:
-        # Copter 在 LOITER/STABILIZE 下 arm 了也不會照指令起飛——先進 GUIDED
-        steps["guided"] = job_set_mode(r, sysid, "guided")
+    prep = job_arm_prep(r, sysid)
+    if prep.get("needed"):
+        steps["guided"] = prep["guided"]
     if not (r.drones.get(sysid) or {}).get("armed"):
         res = job_command(r, sysid, 400, [1.0])
         steps["arm"] = res
@@ -512,21 +597,10 @@ def job_takeoff(r: MavRouter, sysid: int, alt: float, ground_amsl=None) -> dict:
                 "解鎖被拒（%s），未送出起飛指令" % res.get("result", "?")
                 + ("｜" + "；".join(res.get("autopilot_notes", []))
                    if res.get("autopilot_notes") else ""))
-    if d["takeoff_alt_is_relative"]:
-        p7 = alt
-    else:
-        if ground_amsl is None:
-            raise CommandError("PX4 起飛需要地面海拔（GPS/EKF 未就緒）")
-        p7 = ground_amsl + alt
-    # 偏航/經緯度：PX4 用 NaN 表示「用當前值」；**ArduPilot 對 NaN 沒有 ACK**
-    # （實測 2026-08-12：送 NaN 的 NAV_TAKEOFF 連 ACK 都沒有，指令被靜默丟棄），
-    # 它的慣例是 0＝當前位置。又一個方言差異。
-    blank = 0.0 if d["takeoff_alt_is_relative"] else float("nan")
-    steps["takeoff"] = job_command(
-        r, sysid, M.MAV_CMD_NAV_TAKEOFF,
-        [0.0, 0.0, 0.0, blank, blank, blank, p7])
-    return {"steps": steps, "alt_param7": p7,
-            "alt_semantics": "relative" if d["takeoff_alt_is_relative"] else "amsl"}
+    t = job_takeoff_cmd(r, sysid, alt, ground_amsl)
+    steps["takeoff"] = t
+    return {"steps": steps, "alt_param7": t["alt_param7"],
+            "alt_semantics": t["alt_semantics"]}
 
 
 def job_clear_mission(r: MavRouter, sysid: int) -> dict:

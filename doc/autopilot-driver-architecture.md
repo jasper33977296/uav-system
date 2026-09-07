@@ -145,9 +145,15 @@ virtual QStringList flightModes(Vehicle* vehicle);
 ### 5.3 兩個漏掉的軸（兩個我們都已經以臨時形式踩過）
 
 **軸一：每廠牌數值限制。** QGC 讓 `minimumTakeoffAltitudeMeters` 逐韌體覆寫；
-我們的起飛高度是 `command/main.py:290` 的 `takeoff_alt: float = 10.0`——一個
-**全域 API 預設值，不分廠牌**。目前沒出事，只因為 10 m 對兩家都安全。這是
-「條件變了誰會發現」的同一個形狀：**沒有任何機制會在某廠牌下限不同時告訴我們**。
+我們的監督式起飛高度是 `TakeoffIn.alt: float = 10.0`——一個**全域 API 預設值，
+不分廠牌**。這是「條件變了誰會發現」的同一個形狀：**沒有任何機制會在某廠牌
+下限不同時告訴我們**。
+
+> 2026-09-07：原文說「目前沒出事，只因為 10 m 對兩家都安全」——**出事了，只是
+> 出在另一個方向**。同一個 10.0 也是 `mission_fly` 切 AUTO 前的離地高度，而一份
+> takeoff 2 m／航點 3 m 的低空航線因此被拉到規劃高度的三倍以上飛。危險的不只是
+> 「某廠牌的下限比我們的預設高」，還有**「某份任務的天花板比我們的預設低」**——
+> 那條軸完全不在原本的盤點裡。`mission_fly` 已改取任務自己的 `NAV_TAKEOFF` 高度。
 
 **軸二：逐訊息方言修正。** `adjustIncomingMavlinkMessage` 是**兩家都覆寫**的方法
 ——不是 APM 特例。它的存在說明：**有一類方言差異不是動詞，是「同一則訊息在不同
@@ -194,8 +200,9 @@ Driver.adjust_incoming(msg) / adjust_outgoing(msg)   → 逐訊息方言修正�
 `bool | None`、影像五態、`msg_registry` 停掉的 hz 留 null 是同一條原則：
 **缺乏證據不是給出一個看似權威數字的理由。**
 
-現況待修的實例：起飛高度 `apps/command/app/main.py` 的 `takeoff_alt: float = 10.0`
-（全域），前端寫死 min 3／max 100／預設 10。B1 落地後兩邊都改由 `limits()` 供給。
+現況待修的實例：監督式起飛高度 `TakeoffIn.alt: float = 10.0`（全域），前端那一格
+寫死 min 3／max 100／預設 10。B1 落地後兩邊都改由 `limits()` 供給。
+（`mission_fly` 的那一條已於 2026-09-07 改由任務自己的 `NAV_TAKEOFF` 決定。）
 
 ## 6. 與 019 MCP 的接口關係
 
