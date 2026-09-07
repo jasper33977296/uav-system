@@ -20,6 +20,9 @@ export type ModalEvent = Pick<UavEvent, "id" | "time" | "type"> & {
   source?: string | null;
   drone?: string | null;
   timeFirst?: string;                    // 折疊事件的首次時間（store 客端保留）
+  /** 折疊群組裡每一次發生的時刻（epoch ms）。**有幾次不等於什麼時候發生**——
+   * ×N 與起訖只說了密度，逐則才看得出是連續一串還是散在各處。 */
+  times?: number[];
 };
 
 const SEV: Record<string, { label: string; color: string }> = {
@@ -97,9 +100,17 @@ export default function EventModal({ ev, onClose, mixed = false }: {
           <span className="spacer" />
           <button className="btn-plain btn-sm" aria-label="關閉" onClick={onClose}>✕</button>
         </div>
-        <div className="evm-meta">{fmtMs(ev.time)}</div>
-        <div className="evm-meta">{ev.drone ?? "—"} · {srcTxt}</div>
-        <hr className="evm-hr" />
+        {/* meta 併成一行：時刻 · 來源 ·（有機名才有機名）。
+            **`—` 是「這則事件不屬於任何一台機」的意思，不該長得像缺值**——
+            系統層事件本來就沒有機身，直接不印那一格 */}
+        <div className="evm-meta">
+          {fmtMs(ev.time)}　{srcTxt}{ev.drone ? `　${ev.drone}` : ""}
+          {count > 1 && ev.timeFirst && (
+            <span className="evm-range">
+              　×{count}　{fmtHms(ev.timeFirst)} – {fmtHms(ev.time)}
+            </span>
+          )}
+        </div>
 
         {ev.type === "statustext" && typeof d.text === "string" && (
           <pre className="evm-text">{d.text}</pre>
@@ -146,11 +157,14 @@ export default function EventModal({ ev, onClose, mixed = false }: {
               source: ev.source ?? null, detail: d }, null, 2)}</pre>
         </details>
 
-        {count > 1 && (
-          <div className="evm-meta">
-            重複 ×{count}
-            {ev.timeFirst && `　${fmtHms(ev.timeFirst)} – ${fmtHms(ev.time)}`}
-          </div>
+        {/* 逐則：折疊起來的東西要看得到原樣（原型同段） */}
+        {ev.times && ev.times.length > 1 && (
+          <details className="evm-raw" open>
+            <summary>逐則（{ev.times.length} 次）</summary>
+            <pre className="evm-text">{[...ev.times].sort((a, b) => a - b)
+              .map((t) => new Date(t).toLocaleTimeString("zh-TW", { hour12: false }))
+              .join("\n")}</pre>
+          </details>
         )}
         <div className="evm-foot">
           <span className="spacer" />

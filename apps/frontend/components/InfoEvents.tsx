@@ -38,7 +38,8 @@ export default function InfoEvents({ drones }: { drones: DroneRow[] }) {
   const [err, setErr] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
   const [more, setMore] = useState(false);          // 還有更早的可以載
-  const [openEv, setOpenEv] = useState<(EventRow & { timeFirst?: string }) | null>(null);
+  const [openEv, setOpenEv] =
+    useState<(EventRow & { timeFirst?: string; times?: number[] }) | null>(null);
   // 折疊（lib/foldEvents.tsx）。**這一頁最需要它**：資料庫裡兩萬則事件，
   // 其中一萬四千則是四句 PreArm 嘮叨的重複——不折的話往回翻永遠翻不到
   // 真正發生過的那幾件事
@@ -198,7 +199,7 @@ export default function InfoEvents({ drones }: { drones: DroneRow[] }) {
                     ...e,
                     // 折疊在列表這一層做，modal 也要拿得到同一個次數
                     detail: g.count > 1 ? { ...d, count: g.count } : d,
-                    ...(g.count > 1 ? { timeFirst: g.first } : {}),
+                    ...(g.count > 1 ? { timeFirst: g.first, times: g.times } : {}),
                   })}>
                   <span className="dot" style={{ background: SEV_COLOR[sv] }} />
                   <time>{dateTime(e.time)}</time>
@@ -240,7 +241,7 @@ export default function InfoEvents({ drones }: { drones: DroneRow[] }) {
           ev={{ id: openEv.id, time: openEv.time, type: openEv.type,
             severity: openEv.severity, detail: openEv.detail,
             source: openEv.source, timeFirst: openEv.timeFirst,
-            drone: droneName(openEv.drone_id) }} />
+            times: openEv.times, drone: droneName(openEv.drone_id) }} />
       )}
     </>
   );

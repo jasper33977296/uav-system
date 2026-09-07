@@ -327,7 +327,8 @@ function SessionEventsCard({ sessionId, droneName }: {
   const [rows, setRows] = useState<EventRow[] | null>(null);
   const [err, setErr] = useState<string | null>(null);
   const [src, setSrc] = useState<"all" | "vehicle" | "system">("all");
-  const [open, setOpen] = useState<(EventRow & { timeFirst?: string }) | null>(null);
+  const [open, setOpen] =
+    useState<(EventRow & { timeFirst?: string; times?: number[] }) | null>(null);
   const [foldOn, setFoldOn] = useState(true);
   useEffect(() => {
     let stop = false;
@@ -389,7 +390,7 @@ function SessionEventsCard({ sessionId, droneName }: {
                 onClick={() => setOpen({
                   ...e,
                   detail: g.count > 1 ? { ...d, count: g.count } : d,
-                  ...(g.count > 1 ? { timeFirst: g.first } : {}),
+                  ...(g.count > 1 ? { timeFirst: g.first, times: g.times } : {}),
                 })}>
                 <span className="dot" style={{ background: SEV_COLOR[sv] }} />
                 {/* 折疊列顯示**首次**時間：讀一趟飛行是照發生順序讀的 */}
@@ -409,7 +410,7 @@ function SessionEventsCard({ sessionId, droneName }: {
         <EventModal onClose={() => setOpen(null)}
           ev={{ id: open.id, time: open.time, type: open.type, severity: open.severity,
             detail: open.detail, source: open.source, timeFirst: open.timeFirst,
-            drone: droneName }} />
+            times: open.times, drone: droneName }} />
       )}
     </div>
   );

@@ -7,6 +7,7 @@ import { useEffect, useRef, useState } from "react";
 
 import BasemapToggle from "@/components/BasemapToggle";
 import CommandPanel from "@/components/CommandPanel";
+import InfoTip from "@/components/InfoTip";
 import { colorFor } from "@/components/droneLayer";
 import SimpleHud from "@/components/SimpleHud";
 import VideoModal from "@/components/VideoModal";
@@ -720,22 +721,24 @@ export default function MapView() {
       </div>
 
       {/* 軌跡顏色圖例：回歸左下常駐（ui-spec §2 使用者定案），HUD 上方 */}
+      {/* 圖例：**一列色階，門檻與其餘圖層住 ⓘ**（2026-09-08 使用者定案，
+          同 live-redesign-proto.html）。原本是六列垂直清單，每列都把門檻寫在
+          括號裡——那些數字看第一次有用，之後每一眼都在佔地圖。
+          顏色永不單獨傳達語意的規則不變：分級字仍在每個色塊旁邊、側欄也照樣
+          同時給數值與分級。底圖切換留在同一張卡（§2.4b：圖例就是「地圖上有
+          什麼」的說明處），但縮成一行 */}
       <div className="legend">
-        <h4>訊號品質</h4>
-        {/* 底圖切換住圖例卡內（§2.4b）：圖例本就是「地圖上有什麼」的說明處 */}
-        {LINK_CLASSES.map((c) => (
-          <div className="row" key={c.key}>
-            <span className="dot" style={{ background: c.color }} />
-            {c.label}
-          </div>
-        ))}
-        <div className="row">
-          <span className="dot" style={{ background: "#8f8b80", opacity: 0.6 }} />
-          預計任務路徑
-        </div>
-        <div className="row">
-          <span className="dot" style={{ background: "transparent", border: "1.5px solid #8f8b80" }} />
-          起飛點
+        <div className="legend-row">
+          <span className="legend-lab">鏈路</span>
+          {LINK_CLASSES.map((c) => (
+            <span className="legend-seg" key={c.key}>
+              <i className="legend-sw" style={{ background: c.color }} />
+              {c.label.split(" ")[0]}
+            </span>
+          ))}
+          <InfoTip tip={`軌跡依實測 SINR 上色，門檻與 backend 的事件門檻同一出處：${
+            LINK_CLASSES.map((c) => c.label).join("、")}。灰色＝那一段沒有 SINR 樣本。
+            另外：灰色細帶＝預計任務路徑、空心圈＝起飛點。`} />
         </div>
         <BasemapToggle on={base.on} set={base.set}
           offline={base.offline} outside={base.outside} />

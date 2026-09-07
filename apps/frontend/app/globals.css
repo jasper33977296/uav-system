@@ -112,9 +112,15 @@ a:focus-visible, button:focus-visible, input:focus-visible, select:focus-visible
 .legend {
   position: absolute; left: 12px; bottom: 56px; z-index: 5;   /* HUD 上方 10px（ui-spec §2） */
   background: var(--surface); border: 1px solid var(--border);
-  border-radius: 14px; padding: 10px 14px; font-size: 12px;
+  border-radius: 12px; padding: 8px 11px; font-size: 11.5px;
+  display: flex; flex-direction: column; gap: 6px;
   box-shadow: 0 4px 16px rgba(0, 0, 0, 0.35);   /* 浮動面板唯一一層柔影 */
 }
+/* 一列色階（2026-09-08）：門檻與其餘圖層說明住 ⓘ，不再逐列印在地圖上 */
+.legend-row { display: flex; align-items: center; gap: 9px; }
+.legend-lab { color: var(--muted); }
+.legend-seg { display: inline-flex; align-items: center; gap: 5px; color: var(--ink-2); }
+.legend-sw { width: 14px; height: 6px; border-radius: 2px; flex: none; }
 .legend h4 { font-size: 12px; font-weight: 600; margin-bottom: 6px; }
 .legend .row { display: flex; align-items: center; gap: 6px; color: var(--ink-2); line-height: 1.7; }
 .dot { width: 8px; height: 8px; border-radius: 50%; flex: none; }
@@ -409,25 +415,31 @@ a:focus-visible, button:focus-visible, input:focus-visible, select:focus-visible
   background: rgba(0, 0, 0, 0.45);
   display: flex; align-items: center; justify-content: center; padding: 16px;
 }
+/* 事件詳情 modal（2026-09-08 改版，對齊 live-redesign-proto.html）：
+   440px 太窄——detail 的鍵值表在裡面每一列都折行，看起來像沒有內容。 */
 .evm {
-  width: min(440px, 100%); max-height: 82vh; overflow-y: auto;
-  display: flex; flex-direction: column; gap: 6px;
+  width: min(680px, 94vw); max-height: 88dvh; overflow-y: auto;
+  display: flex; flex-direction: column; gap: 8px; padding: 14px 16px 12px;
 }
-.evm-head { display: flex; align-items: center; gap: 8px; }
-.evm-title { font-size: 14px; font-weight: 600; min-width: 0; }
+.evm-head { display: flex; align-items: center; gap: 9px; }
+.evm-title { font-size: 14.5px; font-weight: 600; min-width: 0; line-height: 1.5; }
 .evm-meta {
-  font-size: 12px; color: var(--ink-2); font-variant-numeric: tabular-nums;
+  font-size: 11.5px; color: var(--muted); font-variant-numeric: tabular-nums;
+  padding-bottom: 8px; border-bottom: 1px solid var(--hairline);
 }
+.evm-range { color: var(--ink-2); }
 .evm-hr { border: none; border-top: 1px solid var(--hairline); margin: 2px 0; }
 .evm-text {
   margin: 0; padding: 6px 8px; background: var(--surface-2); border-radius: 6px;
   font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
   font-size: 12px; white-space: pre-wrap; word-break: break-all;
 }
-.evm-kv { display: flex; flex-direction: column; gap: 2px; }
+.evm-kv { display: flex; flex-direction: column; gap: 3px; }
+.evm-raw summary { cursor: pointer; font-size: 11.5px; color: var(--muted); }
+.evm-raw summary:hover { color: var(--ink-2); }
 .evm-kv-row {
-  display: grid; grid-template-columns: minmax(90px, auto) 1fr;
-  gap: 0 12px; font-size: 12.5px;
+  display: grid; grid-template-columns: 108px minmax(0, 1fr);
+  gap: 2px 14px; font-size: 12.5px; align-items: baseline;
 }
 .evm-k { color: var(--muted); }
 .evm-v {

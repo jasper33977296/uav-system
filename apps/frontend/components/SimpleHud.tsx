@@ -237,7 +237,8 @@ export function EventsCard() {
             ...(() => {
               const g = rows.find((r) => r.items.some((i) => i.id === openEv.id));
               return g && g.count > 1
-                ? { detail: { ...openEv.detail, count: g.count }, timeFirst: g.first }
+                ? { detail: { ...openEv.detail, count: g.count },
+                    timeFirst: g.first, times: g.times }
                 : {};
             })(),
             // REST 補歷史的事件只有 drone_id——查 fleet 補機名
