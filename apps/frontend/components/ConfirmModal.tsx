@@ -23,8 +23,14 @@ export default function ConfirmModal({
   return (
     <div className="modal-backdrop" onClick={onClose}>
       <div className="modal confirm-modal" onClick={(e) => e.stopPropagation()}>
+        {/* ✕ 固定右上、label 在它左邊（全站 modal 同形，使用者定案 2026-09-08）。
+            **底部的取消／確認不算關閉鍵**：那是這個決定的兩個選項，而右上角
+            那個是「我不做這件事」的退路——兩者語意不同，不能互相取代 */}
         <div className="modal-head">
           <span className="name">{title}</span>
+          <span className="spacer" />
+          <button className="btn-plain btn-sm" aria-label="關閉（Esc）"
+            title="關閉（Esc）" onClick={onClose}>✕</button>
         </div>
         <div className="modal-text">{children}</div>
         <div className="modal-actions">
