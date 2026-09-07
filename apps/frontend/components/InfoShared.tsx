@@ -64,6 +64,8 @@ export const num = (v: number | null | undefined, d = 1) =>
   typeof v === "number" ? v.toFixed(d) : "—";
 
 // ── 嚴重度 ───────────────────────────────────────────────────
+// **鍵一律先過 `normSev`**（lib/severity.ts）：資料庫裡有 292 列寫的是
+// `warn`，直接查表會落到「查無」而退回灰色的資訊點——警告冒充正常。
 export const SEV_COLOR: Record<string, string> = {
   critical: "#a01818", warning: "#fab219", info: "#8f8b80",
 };

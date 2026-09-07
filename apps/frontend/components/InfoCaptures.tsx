@@ -2,6 +2,7 @@
 import { useCallback, useEffect, useState } from "react";
 
 import CoverageCard, { type Coverage } from "@/components/InfoCoverage";
+import InfoTip from "@/components/InfoTip";
 import { errText, getJson } from "@/lib/fetchJson";
 import { API } from "@/lib/signal";
 import { AgentState, RecordUpload, useUavStore } from "@/lib/store";
@@ -197,7 +198,7 @@ export default function InfoCaptures() {
 
       {/* ② 每台機的回傳狀態 */}
       <div className="card">
-        <h3>回傳狀態<span className="cap-hint">需要注意的排前面</span></h3>
+        <h3>回傳狀態<InfoTip tip="需要注意的排前面，不照機隊順序。「沒有東西要傳」與「傳不動」都是沒在傳，但一個是完成、一個是故障——所以每張卡都說得出為什麼。代理失聯時整張卡降調、圓點空心：那是「不知道」，不是「沒有」。" /></h3>
         {drones === null && !err && <div className="empty">載入中…</div>}
         {drones?.length === 0 && <div className="empty">還沒有註冊過任何無人機。</div>}
         <div className="cap-fleet">

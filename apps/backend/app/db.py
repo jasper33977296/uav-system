@@ -944,9 +944,19 @@ async def _snapshot_params_inner(session_id: str, st) -> None:
              session_id[:8], len(st.params), st.param_total)
 
 
+#: 嚴重度的合法值。**`warn` 與 `warning` 曾經兩種都寫進去過**（2026-09-07
+#: 實測：292 列是 `warn`），而前端的對照表只認 `warning`——查不到的鍵退回
+#: 灰色的「資訊」，於是那 292 則警告在畫面上長得跟正常事件一模一樣
+#: （ui-spec §0.2b：非正常不得冒充正常）。**正規化放在唯一的寫入點**，
+#: 呼叫端寫哪一種都不會再分岔。歷史那 292 列不改——改寫既有事件等於改寫
+#: 紀錄；讀的那一端自己認得舊值（前端 lib/severity.ts）。
+SEVERITY_ALIASES = {"warn": "warning"}
+
+
 async def insert_event(drone_id: str, session_id: str | None,
                        severity: str, type_: str, detail: dict,
                        source: str = "system") -> dict:
+    severity = SEVERITY_ALIASES.get(severity, severity)
     row = await pool.fetchrow(
         """
         INSERT INTO events (drone_id, session_id, severity, type, detail, source)

@@ -24,6 +24,7 @@ import {
   dateTime, dayShort, duration, hms, num, SEV_COLOR,
 } from "@/components/InfoShared";
 import EventModal from "@/components/EventModal";
+import InfoTip from "@/components/InfoTip";
 import { emph } from "@/lib/emph";
 import { evText } from "@/lib/evtext";
 import { errText, getJson } from "@/lib/fetchJson";
@@ -236,7 +237,7 @@ function CommandsCard({ sessionId }: { sessionId: string }) {
 
   return (
     <div className="card">
-      <h3>指令<span className="h3-note">含被擋下來的</span></h3>
+      <h3>指令<InfoTip tip="含被擋下來的。「守門擋下」是我方攔住了（飛機沒動），「機端拒絕」是指令出去了而飛控不接受，「逾時無回應」是送出去了不知道結果——三者的處置完全不同。" /></h3>
       {err && <div className="form-err">{err}</div>}
       {!err && rows === null && <div className="empty">載入中…</div>}
       {!err && rows?.length === 0 && (

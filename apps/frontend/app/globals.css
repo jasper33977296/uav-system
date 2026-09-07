@@ -844,6 +844,34 @@ a:focus-visible, button:focus-visible, input:focus-visible, select:focus-visible
   background: var(--surface-2); border-radius: 999px; padding: 0 6px;
   animation: ev-flash 0.2s ease-out;
 }
+
+/* 折疊列的密度條（lib/foldEvents.tsx）：×N 說了幾次，這條說「連續的一串
+   還是散在各處」——折疊唯一不可省的補償。 */
+.ev-density { flex: none; width: 56px; height: 9px; display: block; }
+/* 抽屜比資訊頁窄：同一條密度條在這裡要讓出文字的空間 */
+.event .ev-density { width: 40px; }
+
+/* ⓘ 說明（components/InfoTip.tsx）：版面上只留事實，解釋住這裡。
+   tooltip 靠右展開——這些 ⓘ 幾乎都在卡片標頭的右端，靠左會出畫面。 */
+.info-tip {
+  flex: none; width: 15px; height: 15px; border-radius: 50%;
+  border: 1px solid var(--hairline); color: var(--muted);
+  font-size: 10px; font-weight: 400; line-height: 1;
+  display: inline-grid; place-items: center; position: relative; cursor: help;
+}
+.info-tip:hover, .info-tip:focus-visible { color: var(--ink); border-color: var(--border); }
+.info-tip::after {
+  content: attr(data-tip);
+  position: absolute; right: -2px; top: 20px; z-index: 40; width: 250px;
+  background: var(--surface-2); color: var(--ink-2);
+  border: 1px solid var(--border); border-radius: 8px;
+  padding: 8px 10px; font-size: 11px; line-height: 1.65; text-align: left;
+  font-weight: 400; letter-spacing: 0; white-space: normal;
+  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.45);
+  opacity: 0; visibility: hidden; transition: opacity 0.12s;
+}
+.info-tip:hover::after, .info-tip:focus-visible::after { opacity: 1; visibility: visible; }
+@media (prefers-reduced-motion: reduce) { .info-tip::after { transition: none; } }
 @keyframes ev-flash {
   0% { background: rgba(240, 238, 230, 0.35); }
   100% { background: var(--surface-2); }
@@ -1362,7 +1390,10 @@ details.card summary { cursor: pointer; font-size: 14px; font-weight: 600; }
 /* 事件分頁：一列一則，整列可點 */
 .info-evlist { display: flex; flex-direction: column; gap: 1px; }
 .info-evrow {
-  display: grid; grid-template-columns: auto auto auto auto minmax(0, 1fr) auto;
+  /* 欄位固定七格（含折疊徽章那一格）——**徽章那格即使空的也要佔位**，
+     否則有折疊的列與沒折疊的列時間欄會對不齊，整份清單讀起來像壞掉 */
+  display: grid;
+  grid-template-columns: auto auto auto auto minmax(0, 1fr) auto auto;
   gap: 8px; align-items: baseline; text-align: left; width: 100%;
   font: inherit; font-size: 12px; color: var(--ink-2);
   background: none; border: 0; border-radius: 6px; padding: 5px 6px; cursor: pointer;
@@ -1372,6 +1403,9 @@ details.card summary { cursor: pointer; font-size: 14px; font-weight: 600; }
 .info-evsrc { font-size: 11px; color: var(--muted); }
 .info-evdrone { font-size: 11px; color: var(--muted); max-width: 120px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .info-evtext { color: var(--ink); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.info-evagg {
+  display: inline-flex; align-items: center; gap: 6px; justify-self: end;
+}
 .info-evflag {
   font-size: 10px; color: var(--muted);
   border: 1px solid var(--hairline); border-radius: 999px; padding: 0 6px;

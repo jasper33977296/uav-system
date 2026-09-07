@@ -3,6 +3,7 @@ import { useEffect, useState } from "react";
 
 import { emph } from "@/lib/emph";
 import { evText } from "@/lib/evtext";
+import { normSev } from "@/lib/severity";
 import type { UavEvent } from "@/lib/store";
 
 /** 事件詳情 modal（ui-spec §2.7，使用者核准 2026-08-12）。
@@ -51,7 +52,7 @@ export default function EventModal({ ev, onClose, mixed = false }: {
     return () => window.removeEventListener("keydown", onKey);
   }, [onClose]);
 
-  const sev = SEV[ev.severity] ?? { label: ev.severity, color: "#8f8b80" };
+  const sev = SEV[normSev(ev.severity)];
   const d = ev.detail ?? {};
   const count = typeof d.count === "number" ? d.count : 0;
   const srcTxt = ev.source === "vehicle" ? "機上訊息" : "系統事件";

@@ -10,9 +10,12 @@
 import { useEffect, useRef, useState } from "react";
 
 import EventModal from "@/components/EventModal";
+import InfoTip from "@/components/InfoTip";
 import { emph } from "@/lib/emph";
 import { evText } from "@/lib/evtext";
+import { asGroups, EvDensity, foldEvents, foldTitle } from "@/lib/foldEvents";
 import { armFix } from "@/lib/prearm";
+import { normSev, SEV_DOT } from "@/lib/severity";
 import { classifySinr } from "@/lib/signal";
 import { ageText, staleLevel, staleStyle } from "@/lib/staleness";
 import { useUavStore } from "@/lib/store";
@@ -116,6 +119,9 @@ export function EventsCard() {
   // 事件詳情 modal（§2.7）：單一 modal、新點替換；存 id 不存物件——
   // fold 就地更新時 modal 跟著長 ×N
   const [openEvId, setOpenEvId] = useState<number | null>(null);
+  // 折疊預設開。**留一個關得掉的開關**：折疊是判讀的加工，人要有辦法
+  // 回去看未加工的那一份（同 sparkline 原始線與平滑線並存的理由）
+  const [foldOn, setFoldOn] = useState(true);
   const openEv = events.find((e) => e.id === openEvId);
   const shown = events.filter((e) => {
     if (!(src === "all"
@@ -129,6 +135,7 @@ export function EventsCard() {
     return e.drone_id === focusId
       || (e.drone != null && e.drone === focusName);
   });
+  const rows = foldOn ? foldEvents(shown, mixed) : asGroups(shown);
   const evTime = (t: string) =>
     new Date(t).toLocaleTimeString("zh-TW", { hour12: false });
   // 014 字典版本旗標（§2.7 c）：unknown 用次要文字色而非警告色——那是我方
@@ -144,6 +151,7 @@ export function EventsCard() {
   return (
     <div className="card card-grow">
       <h3>事件
+        <InfoTip tip="同一句話重複出現時折成一列：×N 是總次數，右邊的細條是每一次發生的時刻，滑過去看起訖與間隔。點列看逐則與原始 detail。「折疊」關掉即回到一則一列。" />
         {dictUnknownAll && (
           <span className="ev-dictnote">未能確認字典版本與機上韌體相符</span>
         )}
@@ -168,6 +176,12 @@ export function EventsCard() {
                 onClick={() => setSrc(k)}>{label}</button>
             ))}
         </span>
+        <span className="ev-filter">
+          <button className={foldOn ? "on" : ""}
+            title={foldOn ? "同一句話折成一列（點擊看未折疊的原樣）"
+              : "一則一列（點擊折疊重複）"}
+            onClick={() => setFoldOn(!foldOn)}>折疊</button>
+        </span>
       </h3>
       <div className="events">
         {/* 空事件流有兩個成因：真的沒事件、或我方取不到。同形而語意相反——
@@ -182,16 +196,17 @@ export function EventsCard() {
                 : "尚無事件"}
           </div>
         )}
-        {shown.map((e) => {
-          const count = (e.type === "statustext" || e.type === "vehicle_event")
-            && typeof e.detail.count === "number" ? e.detail.count : 0;
+        {rows.map((g) => {
+          const e = g.latest;
+          // **`warn` 也是警告**（lib/severity.ts）：舊資料裡有 292 則這樣寫，
+          // 不正規化的話它們會被畫成灰色的「資訊」
+          const sev = normSev(e.severity);
+          const count = g.count;
           return (
-            <div className={`event ev-tap ${e.severity === "critical" ? "ev-crit" : ""}`}
-              key={e.id} title="點擊看詳情"
+            <div className={`event ev-tap ${sev === "critical" ? "ev-crit" : ""}`}
+              key={g.key} title={count > 1 ? foldTitle(g) : "點擊看詳情"}
               onClick={() => setOpenEvId(e.id)}>
-              <span className="dot" style={{
-                background: e.severity === "critical" ? "#a01818"
-                  : e.severity === "warning" ? "#fab219" : "#8f8b80" }} />
+              <span className="dot" style={{ background: SEV_DOT[sev] }} />
               <time>{evTime(e.time)}</time>
               <span className={`detail${e.detail?.parse_failed
                 ? " ev-unreadable" : ""}`}>{emph(evText(e, { mixed }))}</span>
@@ -209,6 +224,7 @@ export function EventsCard() {
               {count > 1 && (
                 <span className="ev-count" key={`${e.id}:${count}`}>×{count}</span>
               )}
+              {count > 1 && <EvDensity times={g.times} color={SEV_DOT[sev]} />}
             </div>
           );
         })}
@@ -216,6 +232,14 @@ export function EventsCard() {
       {openEv && (
         <EventModal onClose={() => setOpenEvId(null)} mixed={mixed}
           ev={{ ...openEv,
+            // 折疊是列表這一層做的，**modal 也要拿得到同一個次數**——
+            // 否則點開一列 ×21 的事件，裡面只講其中一則
+            ...(() => {
+              const g = rows.find((r) => r.items.some((i) => i.id === openEv.id));
+              return g && g.count > 1
+                ? { detail: { ...openEv.detail, count: g.count }, timeFirst: g.first }
+                : {};
+            })(),
             // REST 補歷史的事件只有 drone_id——查 fleet 補機名
             drone: openEv.drone ?? (openEv.drone_id
               ? useUavStore.getState().fleet[openEv.drone_id]?.drone_name : null)
@@ -364,7 +388,7 @@ export default function SimpleHud() {
           這條不會消失，因為它描述的是**畫面現在的性質**，不是一個事件。 */}
       {lv === "old" && (
         <div className="hud-stale">
-          ⚠ 這些是<b>最後已知</b>的數值，{ageText(live?.telem_age_s)}——不是現在的狀態
+          資訊在 {ageText(live?.telem_age_s)}更新
         </div>
       )}
 

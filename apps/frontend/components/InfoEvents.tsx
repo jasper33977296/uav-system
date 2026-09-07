@@ -19,10 +19,13 @@ import EventModal from "@/components/EventModal";
 import {
   type DroneRow, type EventRow, dateTime, SEV_COLOR,
 } from "@/components/InfoShared";
+import InfoTip from "@/components/InfoTip";
 import { emph } from "@/lib/emph";
 import { evText } from "@/lib/evtext";
 import { errText, getJson } from "@/lib/fetchJson";
+import { asGroups, EvDensity, foldEvents, foldTitle } from "@/lib/foldEvents";
 import { eventDetail } from "@/lib/jsonb";
+import { normSev } from "@/lib/severity";
 import { API } from "@/lib/signal";
 
 const PAGE = 120;
@@ -35,7 +38,11 @@ export default function InfoEvents({ drones }: { drones: DroneRow[] }) {
   const [err, setErr] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
   const [more, setMore] = useState(false);          // 還有更早的可以載
-  const [openEv, setOpenEv] = useState<EventRow | null>(null);
+  const [openEv, setOpenEv] = useState<(EventRow & { timeFirst?: string }) | null>(null);
+  // 折疊（lib/foldEvents.tsx）。**這一頁最需要它**：資料庫裡兩萬則事件，
+  // 其中一萬四千則是四句 PreArm 嘮叨的重複——不折的話往回翻永遠翻不到
+  // 真正發生過的那幾件事
+  const [foldOn, setFoldOn] = useState(true);
 
   // 篩選。**空字串＝不篩**，不用 null——select 的值本來就是字串，
   // 兩種「沒選」會在比較時分岔
@@ -99,6 +106,10 @@ export default function InfoEvents({ drones }: { drones: DroneRow[] }) {
     setLoading(false);
   };
 
+  // 逐列解析 detail：**一筆壞掉不得讓整份清單消失**（lib/jsonb.ts）
+  const parsed = (rows ?? []).map((e) => ({ ...e, detail: eventDetail(e.detail) }));
+  const groups = foldOn ? foldEvents(parsed) : asGroups(parsed);
+
   const droneName = (id: string | null) =>
     drones.find((d) => d.id === id)?.name ?? null;
   const filtered = !!(drone || sev || src || type || q.trim());
@@ -157,6 +168,13 @@ export default function InfoEvents({ drones }: { drones: DroneRow[] }) {
           <span className="h3-note">
             {rows ? `已載入 ${rows.length} 則${more ? "（還有更早的）" : ""}` : ""}
           </span>
+          <InfoTip tip="同一句話重複出現時折成一列：×N 是總次數，右邊的細條是每一次發生的時刻，滑過去看起訖與間隔。點列看逐則與原始 detail。「折疊」關掉即回到一則一列。" />
+          <span className="ev-filter">
+            <button className={foldOn ? "on" : ""}
+              title={foldOn ? "同一句話折成一列（點擊看未折疊的原樣）"
+                : "一則一列（點擊折疊重複）"}
+              onClick={() => setFoldOn(!foldOn)}>折疊</button>
+          </span>
         </h3>
         {err && <div className="form-err">{err}</div>}
         {!err && rows === null && <div className="empty">載入中…</div>}
@@ -167,15 +185,22 @@ export default function InfoEvents({ drones }: { drones: DroneRow[] }) {
         )}
         {!!rows?.length && (
           <div className="info-evlist">
-            {rows.map((e) => {
-              const d = eventDetail(e.detail);
+            {groups.map((g) => {
+              const e = g.latest;
+              const d = e.detail;
               const dn = droneName(e.drone_id);
+              // **`warn` 也是警告**（lib/severity.ts）：舊資料裡有 292 則
+              const sv = normSev(e.severity);
               return (
-                <button key={e.id} className="info-evrow"
-                  title="點擊看完整內容"
-                  onClick={() => setOpenEv({ ...e, detail: d })}>
-                  <span className="dot" style={{
-                    background: SEV_COLOR[e.severity] ?? SEV_COLOR.info }} />
+                <button key={g.key} className="info-evrow"
+                  title={g.count > 1 ? foldTitle(g) : "點擊看完整內容"}
+                  onClick={() => setOpenEv({
+                    ...e,
+                    // 折疊在列表這一層做，modal 也要拿得到同一個次數
+                    detail: g.count > 1 ? { ...d, count: g.count } : d,
+                    ...(g.count > 1 ? { timeFirst: g.first } : {}),
+                  })}>
+                  <span className="dot" style={{ background: SEV_COLOR[sv] }} />
                   <time>{dateTime(e.time)}</time>
                   <span className="info-evsrc">
                     {e.source === "vehicle" ? "機上" : "系統"}
@@ -186,6 +211,11 @@ export default function InfoEvents({ drones }: { drones: DroneRow[] }) {
                   <span className="info-evtext">
                     {emph(evText({ type: e.type, detail: d,
                       severity: e.severity as "info" | "warning" | "critical" }))}
+                  </span>
+                  {/* 折疊徽章那一格：**空的時候也要在**（見 .info-evrow 註解） */}
+                  <span className="info-evagg">
+                    {g.count > 1 && <span className="ev-count">×{g.count}</span>}
+                    {g.count > 1 && <EvDensity times={g.times} color={SEV_COLOR[sv]} />}
                   </span>
                   {e.session_id && <span className="info-evflag" title="這則事件屬於某一趟飛行">飛行中</span>}
                 </button>
@@ -209,7 +239,7 @@ export default function InfoEvents({ drones }: { drones: DroneRow[] }) {
         <EventModal onClose={() => setOpenEv(null)}
           ev={{ id: openEv.id, time: openEv.time, type: openEv.type,
             severity: openEv.severity, detail: openEv.detail,
-            source: openEv.source,
+            source: openEv.source, timeFirst: openEv.timeFirst,
             drone: droneName(openEv.drone_id) }} />
       )}
     </>

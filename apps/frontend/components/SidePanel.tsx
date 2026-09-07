@@ -1,6 +1,7 @@
 "use client";
 import { useEffect, useRef, useState } from "react";
 
+import InfoTip from "@/components/InfoTip";
 import OnboardDataCard from "@/components/OnboardData";
 import { EventsCard } from "@/components/SimpleHud";
 import { classifySinr } from "@/lib/signal";
@@ -264,7 +265,7 @@ export default function SidePanel() {
   return (
     <aside className="panel">
       <div className="card">
-        <h3>訊號品質<span className="h3-note">平滑 2s 窗</span></h3>
+        <h3>訊號品質<InfoTip tip="大字＝最新一筆 SINR。走勢圖裡細線是原始樣本、粗線是 2 秒滑動平均——只畫平滑線會產生量測點之間沒有量到的值。分級門檻與 backend 的事件門檻同一出處。" /></h3>
         <div className="hero">
           <span className="num">{fmt(link?.sinr)}</span>
           <span className="unit">dB SINR</span>
@@ -289,13 +290,13 @@ export default function SidePanel() {
           <Metric label="丟包率" value={fmt(link?.packet_loss_pct)} unit="%" />
         </div>
         <details className="sig-detail" open={sigOpen} onToggle={onSigToggle}>
-          <summary>詳細（RSRQ · PCI · 頻帶 · CQI · 模式）</summary>
+          <summary>Serving cell &amp; band</summary>
           <div className="metrics">
             <Metric label="RSRQ" value={fmt(link?.rsrq)} unit="dB" />
             <Metric label="PCI" value={link?.pci?.toString() ?? "—"} />
-            <Metric label="頻帶" value={link?.band ?? "—"} />
+            <Metric label="Band" value={link?.band ?? "—"} />
             <Metric label="CQI" value={link?.cqi?.toString() ?? "—"} />
-            <Metric label="模式" value={link?.nr_mode ?? "—"} />
+            <Metric label="NR mode" value={link?.nr_mode ?? "—"} />
             <Metric
               label="下行吞吐"
               value={link?.throughput_down_kbps != null ? (link.throughput_down_kbps / 1000).toFixed(0) : "—"}

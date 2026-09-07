@@ -28,6 +28,7 @@ import { useRouter, useSearchParams } from "next/navigation";
 import InfoCaptures from "@/components/InfoCaptures";
 import InfoEvents from "@/components/InfoEvents";
 import InfoFlights from "@/components/InfoFlights";
+import InfoTip from "@/components/InfoTip";
 import { type DroneRow } from "@/components/InfoShared";
 import { getJson } from "@/lib/fetchJson";
 import { API } from "@/lib/signal";
@@ -59,7 +60,7 @@ function InfoPage() {
     <div className="page-pad">
       <div className="drone-head">
         <span className="name">資訊</span>
-        <span className="meta">這套系統記得的每一趟飛行、每一則事件、每一個檔案</span>
+        <InfoTip tip="這套系統記得的每一趟飛行、每一則事件、每一個檔案。三個分頁的順序＝回想一件事的順序：先找那一趟（架次）、再找那件事什麼時候開始的（事件）、最後看檔案還在不在（錄製與回傳）。" />
       </div>
 
       <div className="info-tabs" role="tablist">

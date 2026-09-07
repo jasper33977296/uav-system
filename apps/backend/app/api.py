@@ -1386,7 +1386,13 @@ async def list_events(limit: int = 100, session_id: str | None = None,
     if drone_id:
         conds.append(f"drone_id = {arg(drone_id)}")
     if severity:
-        conds.append(f"severity = {arg(severity)}")
+        # **選「警告」要選得到舊資料裡的 `warn`。** 寫入端已正規化
+        # （db.SEVERITY_ALIASES），但既有 292 列不改寫——篩選這一端要認得，
+        # 否則畫面上看得到、篩選卻永遠濾掉，比沒有這個篩選更糟
+        if severity == "warning":
+            conds.append(f"severity = ANY({arg(['warning', 'warn'])})")
+        else:
+            conds.append(f"severity = {arg(severity)}")
     if source:
         conds.append(f"source = {arg(source)}")
     if type:
