@@ -544,11 +544,13 @@ def job_get_params(r: MavRouter, sysid: int, names: list) -> dict:
     # **先停掉代理**再跑，那正是把串流關掉、把線路讓出來。
     if not values and other > 0:
         raise CommandError(
-            f"飛控沒有回任何 PARAM_VALUE（這段期間這條鏈路收到 {other} 則其他"
-            "訊息，所以鏈路與轉發都是通的）。原因是**飛控到 Pi 的序列埠被遙測"
-            "串流佔滿**——57600 上跑著約 4Hz × 27 種，ArduPilot 沒有空間送"
-            "PARAM_VALUE 時會安靜丟掉。要讀寫參數，得先把那條線讓出來："
-            "提高 SERIAL1_BAUD、調低串流率、或由機上代理在交換參數期間暫停串流")
+            f"飛控沒有回應具名參數讀取（這段期間這條鏈路收到 {other} 則其他"
+            "訊息，鏈路與轉發都是通的）。已排除：轉發（機上代理逐則記下轉送到"
+            "飛控的請求，名字與 target 都對）、頻寬（代理 v0.18.2 起在交換參數"
+            "期間讓路，實測 98→8 msg/s，讓乾淨了一樣沒有回應）。"
+            "**目前最可能的是 MAVLink 版本**：飛控的 SERIAL1_PROTOCOL=1（v1），"
+            "而本服務送 v2；v2 會截掉尾端零位元組，而 param_id 尾巴正好是 NUL。"
+            "驗證方式是把 SERIAL1_PROTOCOL 改成 2，或讓本服務改送 v1")
     return {"values": values, "elapsed_s": round(time.monotonic() - t0, 1),
             "missing": [n for n in names if n not in values]}
 
