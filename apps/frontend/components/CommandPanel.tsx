@@ -683,6 +683,11 @@ export default function CommandPanel() {
   // 連退路都沒有。編隊入口例外地鎖住——它換掉的是指令的對象。
   //
   // 唯一不受這條規則管的是編隊的「中止」：那是緊急出口。
+  // **失聯**（2026-09-07 使用者裁定）：斷線時畫面上的即時數值一律寫「未知」，
+  // 不留殘影——摔機那一趟畫面顯示「穩定 0.91 m」94 筆，而飛機正在翻覆。
+  // 按鈕只留返航與降落：那兩個是「把飛機帶回來」，其餘都需要知道當下狀態。
+  const linkLost = !!live && live.connected === false;
+
   const inFlight = busy !== null || groupBusy;
 
   // ── 緊急原地降落 ───────────────────────────────────────────
@@ -840,15 +845,15 @@ export default function CommandPanel() {
       {open && health.enabled && !routerDead && admOffline && (
         <div className="cmd-body">
           <div className="cmd-ready lock">
-            <b>機上代理的意圖通道斷了——只剩「把飛機帶回來」。</b>
-            <div className="hint-line">
-              · <b>身分沒有問題</b>：板號與配號都對得上。斷的是那條通道，而指令走的是另一條路。
-            </div>
-            <div className="hint-line">
-              · 問不到機上守門，所以暫停／續飛／開始任務都擋著——
-              那些需要知道「當下狀態允不允許」。
-            </div>
-            <div className="hint-line">· <b>實體遙控器不受影響</b></div>
+            {/* **一句話講完**（2026-09-07 使用者：字太多）。原本四行在講
+                「身分沒問題」「守門問不到」「遙控器不受影響」——那三件事
+                操作員此刻都不需要決定什麼，他要知道的只有「現在能按什麼」。
+                來龍去脈搬進 tooltip：要查的人查得到，不佔版面。 */}
+            <b title={"板號與配號都對得上，斷的只是意圖通道；指令走的是另一條路。"
+              + "問不到機上守門，所以暫停／續飛／開始任務都擋著——那些需要知道"
+              + "「當下狀態允不允許」。實體遙控器不受影響。"}>
+              意圖通道斷了——只剩返航與降落 ⋯
+            </b>
           </div>
           <div className="cmd-row">
             {btn("RTL", "⌂ 返航", "/mode/rtl", { danger: true, cap: "rtl" })}
@@ -1133,12 +1138,17 @@ export default function CommandPanel() {
                 （PX4 HOLD 與 ArduPilot LOITER 是同一件事，單一廠牌無歧義
                 就不加字）。**要判斷模式請用 live.mode_verb，不得比對
                 flight_mode 字串**——比字串在混機環境必錯 */}
-            <span>{modeLabel(live?.flight_mode, live?.mode_verb, mixedFleet)}</span>
-            <span>GPS {live?.gps_fix ?? "—"} · {live?.satellites ?? "—"}顆</span>
+            {/* 失聯時這幾格一律「未知」。**模式與解鎖狀態誤判的代價最高**，
+                而停在最後一個值與「現在是這樣」在畫面上完全同形 */}
+            <span>{linkLost ? "模式 未知"
+              : modeLabel(live?.flight_mode, live?.mode_verb, mixedFleet)}</span>
+            <span>{linkLost ? "GPS 未知"
+              : `GPS ${live?.gps_fix ?? "—"} · ${live?.satellites ?? "—"}顆`}</span>
             {/* **「不知道」與「0%」不得同形**，而 `—%` 讀起來像一個壞掉的數字。
                 與 HUD 的電池元件用同一句話（見 SimpleHud.Battery） */}
-            <span>{live?.battery_pct != null
-              ? `電量 ${Math.round(live.battery_pct)}%` : "電量 不知道"}</span>
+            <span>{linkLost ? "電量 未知"
+              : live?.battery_pct != null
+                ? `電量 ${Math.round(live.battery_pct)}%` : "電量 不知道"}</span>
             {/* 編隊入口（§2.5 漸進顯示）：≥2 機連線才出現，單機永遠看不到 */}
             {Object.values(fleet).filter((t) => t.connected).length >= 2 && (
               <button className="btn-plain btn-sm" title="進入編隊（多機）模式"
@@ -1153,7 +1163,8 @@ export default function CommandPanel() {
           </div>
           {/* 原因行：未就緒（知道不行）與遙測不足（不知道）都要說明白——
               後端在 ready=null 時也帶原因句（「尚未收到 SYS_STATUS…」） */}
-          {live && live.ready !== true && (live.not_ready_reasons ?? []).map((r, i) => {
+          {!linkLost && live && live.ready !== true
+            && (live.not_ready_reasons ?? []).map((r, i) => {
             const fix = armFix(r);
             const note = armNote(r);
             return (
@@ -1207,7 +1218,23 @@ export default function CommandPanel() {
             </div>
           )}
 
-          {!observeOnly && !noChannel && !unseen && !admOffline && !!dh && (<>
+          {/* 失聯：一句話＋兩顆鈕，其餘全收（使用者裁定 2026-09-07）。
+              **不列未就緒原因**——那些是斷線之前的事，掛在這裡會被讀成現在。 */}
+          {linkLost && !observeOnly && !noChannel && (
+            <div className="cmd-dead">
+              <b title={"畫面上的數值停在最後一次收到的那一刻，不是現在的狀態。"
+                + "指令仍會送出，但送不送得到不知道——實體遙控器不受影響。"}>
+                失聯——只剩返航與降落 ⋯
+              </b>
+              <div className="cmd-row">
+                {btn("RTL", "⌂ 返航", "/mode/rtl", { danger: true, cap: "rtl" })}
+                {btn("降落", "降落", "/mode/land",
+                     { confirm: true, danger: true, cap: "land" })}
+              </div>
+            </div>
+          )}
+
+          {!linkLost && !observeOnly && !noChannel && !unseen && !admOffline && !!dh && (<>
           {/* ── 任務區（2026-08-26 重排）─────────────────────────────
               **按操作員想做的事分組，不是按端點分組。** 原本一排是
               上傳／起飛→任務／啟動任務、另一排是解鎖／懸停／降落——那是
