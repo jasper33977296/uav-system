@@ -55,7 +55,7 @@ COMMANDABLE = {"admitted"}
 OFFLINE_COMMANDABLE = {"admitted_offline"}
 #: `admitted_offline` 時放行的端點鍵。**不是意圖名**——這裡比對的是
 #: `_require_capability` 收到的 endpoint_key
-OFFLINE_ACTIONS = {"mode:rtl", "mode:land", "rtl", "land"}
+OFFLINE_ACTIONS = {"mode:rtl", "mode:land", "rtl", "land", "emergency_land"}
 
 _cache: dict[int, tuple[dict, float]] = {}
 

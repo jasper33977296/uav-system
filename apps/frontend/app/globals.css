@@ -602,6 +602,20 @@ a:focus-visible, button:focus-visible, input:focus-visible, select:focus-visible
   position: sticky; top: 0; z-index: 1;
   background: var(--surface); border-radius: 14px 14px 0 0;
 }
+/* 緊急原地降落（使用者指示 2026-09-07：系統內最高優先的指令）。
+   **實心而不是外框**：面板上其餘的鈕都是外框或淡底，只有這一顆是實心，
+   在任何狀態下它都是視線最先落到的東西——而它常駐標題列，收合著也在。
+   永不 disable，所以不需要 :disabled 樣式；hover 只加深一階，不做位移或
+   陰影動畫——緊急時的按鈕不該有「等它動完」的感覺。 */
+.btn-emerg {
+  font: inherit; font-weight: 600; cursor: pointer; flex: none;
+  color: #fff; background: var(--status-danger);
+  border: 1px solid var(--status-danger); border-radius: 6px;
+  padding: 3px 10px; white-space: nowrap;
+}
+.btn-emerg:hover { background: #c33; border-color: #c33; }
+.cmd-panel.cmd-closed .cmd-head .btn-emerg { padding: 1px 8px; }
+
 /* 收合態：高度與隔壁 [▤][地圖|影像] 一致（32px），圓角同 10 */
 .cmd-panel.cmd-closed { border-radius: 10px; }
 .cmd-panel.cmd-closed .cmd-head { padding: 5px 12px; }
@@ -623,6 +637,12 @@ a:focus-visible, button:focus-visible, input:focus-visible, select:focus-visible
 .cmd-panel .cmd-row { align-items: stretch; }
 .cmd-panel .cmd-row > button {
   flex: 1 1 0; min-width: 0;
+  /* **內距與字級也要一致，否則 `flex-basis: 0` 不會給出等寬。**
+     box-sizing 是 border-box，所以 basis 0 的下限是「內距＋邊框」——
+     accent 鈕的 14px 內距讓它比鄰居寬 10px（實測 93 / 83 / 83）。
+     字級同理：13px 對 12px 讀起來就是兩個層級的東西。
+     收窄到 6px 還有另一個好處：「上傳無人機」五個字排得下一行。 */
+  padding: 4px 6px; font-size: 12px;
   white-space: normal; line-height: 1.4;
 }
 .cmd-row select {

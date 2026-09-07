@@ -45,4 +45,7 @@ ENDPOINT_CAP = {
     # set_mode/{mode} 的 mode → 能力鍵
     "mode:rtl": "rtl", "mode:hold": "hold", "mode:land": "land",
     "mode:mission": "mission_start",
+    # 緊急原地降落走自己的端點（見 main.emergency_land），但它做的事與
+    # `mode:land` 完全一樣，所以吃同一個能力鍵
+    "emergency_land": "land",
 }

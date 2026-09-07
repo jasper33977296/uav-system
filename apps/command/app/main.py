@@ -451,6 +451,43 @@ async def set_mode(sysid: int, mode: str, skip_guard: bool = False):
     return await _run(sysid, f"mode:{mode}", mav.job_set_mode, mode)
 
 
+@app.post("/api/command/{sysid}/emergency/land", tags=["操作"],
+          summary="緊急原地降落（系統內最高優先）")
+async def emergency_land(sysid: int):
+    """**把飛機放下來。** 出意外時按這一顆。
+
+    送出去的東西與 `/mode/land` 一模一樣（切 LAND、原地下降），差別有兩個：
+
+    1. **不問機上守門。** 守門回答的是「當下狀態允不允許」，而「把飛機放
+       下來」在任何狀態下的答案都一樣——RTL／LAND 在意圖通道斷線時本來
+       就已經是這樣處理的（`admission.OFFLINE_ACTIONS`），這裡只是把同一條
+       理由推到通道正常的時候也成立。
+    2. **在 `command_log` 裡有自己的名字**（`emergency_land`）。事後看得出
+       「這一趟有人按過緊急降落」——而那是回放時最想知道的一件事。
+
+    ## 它跳過什麼、不跳過什麼
+
+    **跳過**：機上守門（第三層），以及地面站畫面上的所有節流——等回覆、
+    兩段式確認、面板收合。那些是為了防手滑與防指令交錯，而這一顆存在的
+    理由正是「其他東西卡住的時候它還要能按」。
+
+    **不跳過這三道，它們不是流程而是「送出去會不會做錯事」**：
+
+    * `ENABLE_COMMANDS=false`——那台部署宣告過自己只觀察不指揮。繞過它
+      等於讓一個顯式宣告的安全開關失效，而不是讓飛機更安全。
+    * **入列**：身分不明的機不是我們的機。對它下降落指令，可能是在指揮
+      別人的飛機。
+    * **能力**：機型未驗證時，我方不確定 LAND 在它上面對應到哪個模式；
+      送過去可能切到別的東西——**那比不送更危險**。
+
+    三道都會說得出是哪一道擋的，而且擋下的當下操作員手上還有實體遙控器
+    ——那才是最後一道，不是這一顆。
+    """
+    _require_enabled()
+    await _require_capability(sysid, "emergency_land")
+    return await _run(sysid, "emergency_land", mav.job_set_mode, "land")
+
+
 @app.post("/api/command/{sysid}/mission/start", tags=["任務"],
           summary="③ 開始執行機上的任務")
 async def mission_start(sysid: int):

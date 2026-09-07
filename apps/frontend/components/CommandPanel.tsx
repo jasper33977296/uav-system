@@ -92,6 +92,35 @@ function missionLabel(m: Mission): string {
   return `${m.name}（${t || "未宣告目標機種"}）`;
 }
 
+/** 伺服器拒絕 → 一句人話。**失敗一定要說得出原因**（使用者指示 2026-09-07）。
+ *
+ * detail 可能是字串或結構化報告（預檢 problems／機端拒絕＋自駕儀原因文字／
+ * 非 PX4 機的 501 飛安 guard `{msg, autopilot, hint}`）。四種來源依序試，
+ * 最後才退回狀態碼——而退回的是一句話，不是 `JSON.stringify` 的結果：
+ * 後者在 detail 缺席時會產生**帶引號的** `"失敗（HTTP 502）"`，
+ * 在 detail 是物件時則是一坨沒有人讀得懂的 JSON。
+ *
+ * **一般指令與緊急降落共用這一份**：分兩份的下場是哪天修了一個、
+ * 另一個還在吐 JSON——而那一個偏偏會是急著看理由的時候。
+ */
+function failText(action: string, status: number, d: any): string {
+  // autopilot_notes 為新名、px4_notes 為舊名：雙讀一版，後端改名後移除舊讀
+  const noteList = d?.autopilot_notes ?? d?.px4_notes;
+  const notes = noteList?.length ? `｜自駕儀：${noteList.join("；")}` : "";
+  // **被擋下時一定要說得出合法做法**（狀態機文件 §3-A2）：空中上傳被擋
+  // 是對的，但只說「不行」會逼人去找繞道，而繞道正是這道門要防的事
+  const how = d?.how_to?.length
+    ? `｜合法做法：${d.how_to.map((t: string, i: number) => `${i + 1}. ${t}`).join(" → ")}`
+    : "";
+  const fallback = `${action}失敗（HTTP ${status}）`;
+  return typeof d === "string" && d ? d
+    : d?.problems?.length ? `${d.msg ?? "被拒"}：${d.problems.join("；")}`
+    : d?.msg ? `${d.msg}${d.hint ? `——${d.hint}` : ""}${notes}${how}`
+    : d != null && typeof d === "object"
+      ? `${fallback}：${JSON.stringify(d)}`   // 認不得的結構：原文照列
+      : fallback;
+}
+
 export default function CommandPanel() {
   const [health, setHealth] = useState<Health | "off" | null>(null);
   const [missions, setMissions] = useState<Mission[]>([]);
@@ -132,6 +161,11 @@ export default function CommandPanel() {
   const clearReplays = useUavStore((s) => s.clearReplays);
   const draftGroup = useUavStore((s) => s.draftGroup);
   const [groupBusy, setGroupBusy] = useState(false);
+  // 緊急原地降落的送出中旗標。**宣告在這裡不是風格問題**：這個元件在
+  // `health === null`／`"off"` 時會提早 return，而 hooks 必須每次渲染都
+  // 無條件跑到——放在早退之後，指令服務一連上就是 React #310（渲染的
+  // hook 數量變了），整頁白掉。見 emergencyLand()
+  const [landing, setLanding] = useState(false);
   // draft 失效＝連伺服器端一起清（07260a6 的 DELETE，限 draft；409 不理）——
   // 使用者反覆調整不在 DB 堆孤兒群組
   const discardDraft = (reason = "?") => {
@@ -617,28 +651,7 @@ export default function CommandPanel() {
       });
       const body = await res.json().catch(() => ({}));
       if (!res.ok) {
-        // detail 可能是字串或結構化報告（預檢 problems／機端拒絕＋自駕儀原因
-        // 文字／非 PX4 機的 501 飛安 guard {msg, autopilot, hint}）。
-        // autopilot_notes 為新名、px4_notes 為舊名：雙讀一版，後端改名後移除舊讀
-        const d = body.detail;
-        const noteList = d?.autopilot_notes ?? d?.px4_notes;
-        const notes = noteList?.length ? `｜自駕儀：${noteList.join("；")}` : "";
-        // **被擋下時一定要說得出合法做法**（狀態機文件 §3-A2）：空中上傳被擋
-        // 是對的，但只說「不行」會逼人去找繞道，而繞道正是這道門要防的事
-        const how = d?.how_to?.length
-          ? `｜合法做法：${d.how_to.map((t: string, i: number) => `${i + 1}. ${t}`).join(" → ")}`
-          : "";
-        // **失敗一定要說得出原因**（使用者指示 2026-09-07）。四種來源依序試，
-        // 最後才退回狀態碼——而退回時給的是一句話，不是 `JSON.stringify` 的
-        // 結果：後者在 detail 缺席時會產生**帶引號的** `"失敗（HTTP 502）"`，
-        // 在 detail 是物件時則是一坨沒有人讀得懂的 JSON
-        const fallback = `${action}失敗（HTTP ${res.status}）`;
-        const text = typeof d === "string" && d ? d
-          : d?.problems?.length ? `${d.msg ?? "被拒"}：${d.problems.join("；")}`
-          : d?.msg ? `${d.msg}${d.hint ? `——${d.hint}` : ""}${notes}${how}`
-          : d != null && typeof d === "object"
-            ? `${fallback}：${JSON.stringify(d)}`   // 認不得的結構：原文照列
-            : fallback;
+        const text = failText(action, res.status, body?.detail);
         setResult({ ok: false, text });
         // **每一次被拒都要浮出來，不只起飛。** 原本只有 `/takeoff` 會通知 HUD，
         // 所以按「解鎖」「切模式」被 403 擋下時，面板收起來的人什麼都看不到。
@@ -671,6 +684,42 @@ export default function CommandPanel() {
   //
   // 唯一不受這條規則管的是編隊的「中止」：那是緊急出口。
   const inFlight = busy !== null || groupBusy;
+
+  // ── 緊急原地降落 ───────────────────────────────────────────
+  // **這一顆不歸上面那條規則管**（使用者指示 2026-09-07：整個系統優先權
+  // 最高的指令，出意外時用）。三件事讓它真的「隨時按得下去」：
+  //
+  //  1. **不共用 `busy`**：共用就等於被別人的等待綁住，而它存在的理由
+  //     正是「其他東西卡住的時候它還要能按」。自己的 `landing` 只用來
+  //     顯示送出中，**不拿來 disable**——連按兩次的結果是再送一次 LAND，
+  //     那是冪等的，比按不下去好。
+  //  2. **不做兩段式確認**：緊急時多一步是風險不是保護（同 RTL 的既有裁定）。
+  //  3. **住在標題列**：面板收合著也在，不必先展開才找得到。
+  //
+  // 它送的是專屬端點 `/emergency/land`——與 `/mode/land` 做同一件事，但
+  // 不問機上守門，而且在 command_log 裡有自己的名字（見指令服務的 docstring）。
+  async function emergencyLand() {
+    if (!sid) return;
+    setLanding(true);
+    setResult(null);
+    try {
+      const res = await fetch(
+        `${COMMAND_API}/api/command/${sid}/emergency/land`,
+        { method: "POST", headers: { ...CLIENT_HEADERS } });
+      const body = await res.json().catch(() => ({}));
+      if (!res.ok) {
+        const text = failText("原地降落", res.status, body?.detail);
+        setResult({ ok: false, text });
+        // 被擋下也要浮到 HUD：面板收著的人才看得到理由
+        useUavStore.getState().noticeDenied("原地降落", text);
+      } else {
+        setResult({ ok: true, text: "原地降落已下達——正在下降" });
+      }
+    } catch (e) {
+      setResult({ ok: false, text: `原地降落送不出去：${e}` });
+    }
+    setLanding(false);
+  }
 
   const btn = (action: string, label: string, path: string,
                opts: { confirm?: boolean; danger?: boolean; disabled?: boolean;
@@ -728,6 +777,20 @@ export default function CommandPanel() {
           <span onPointerDown={(e) => e.stopPropagation()}
             onPointerUp={(e) => e.stopPropagation()}>
             {btn("RTL", "⌂ 返航", "/mode/rtl", { danger: true, cap: "rtl" })}
+          </span>
+        )}
+        {/* **緊急原地降落：標題列常駐，永不 disable。**
+            條件只有「有 sysid」——沒有 sysid 就沒有可定址的飛機，那時候
+            畫一顆按得下去的鈕才是假的。其餘每一種擋法（未入列、能力未驗證、
+            指令未啟用）都讓它送出去、由伺服器說是哪一道擋的：**在緊急時，
+            一顆按下去會說話的鈕，勝過一顆看起來就沒救的灰鈕**。 */}
+        {health.enabled && sid && (
+          <span onPointerDown={(e) => e.stopPropagation()}
+            onPointerUp={(e) => e.stopPropagation()}>
+            <button className="btn-emerg btn-sm" onClick={emergencyLand}
+              title="緊急原地降落——不受其他規則限制，隨時可按">
+              {landing ? "⋯" : "⏷ 原地降落"}
+            </button>
           </span>
         )}
         {/* 箭頭指的是**按下去會往哪走**，不是現在是什麼狀態（使用者裁定
