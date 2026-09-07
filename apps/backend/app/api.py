@@ -1,3 +1,4 @@
+import bisect
 import asyncio
 import json
 import time
@@ -707,6 +708,15 @@ class BackfillSample(BaseModel):
 BACKFILL_MIN_T = 1735689600.0
 #: 未來多少秒內還算合理（時鐘小偏差）。再遠就是壞掉的時鐘，不是慢半拍
 BACKFILL_FUTURE_S = 120.0
+#: 補傳去重的時間窗（秒）。**不是精確比對**——即時那條路的時間戳是「收到
+#: 封包的時刻」（逐筆漂移），補傳是「機上 1Hz 取樣的刻度」（整齊的固定小數），
+#: 兩者永遠不會落在同一個百分秒。
+#:
+#: **0.6 不是 0.5**：即時入庫的間隔實測是 1.01 秒（逐筆漂移），所以最壞情況
+#: 下一個補傳樣本離最近的即時列有 0.505 秒。用 0.5 會讓那一筆漏網——
+#: 實測 10 筆裡漏了 1 筆（0.563 秒）。0.6 涵蓋得住，又遠小於真正的缺口
+#: （真的斷線是好幾秒到好幾分鐘），不會把該補的洞也吃掉。
+DEDUP_WINDOW_S = 0.6
 
 
 class BackfillIn(BaseModel):
@@ -785,9 +795,29 @@ async def telemetry_backfill(body: BackfillIn):
     exist = await db.pool.fetch(
         "SELECT extract(epoch FROM time) AS t FROM telemetry "
         "WHERE drone_id = $1::uuid AND time BETWEEN to_timestamp($2) "
-        "AND to_timestamp($3)", drone_id, lo - 0.5, hi + 0.5)
-    have = {round(float(r["t"]), 2) for r in exist}
-    fresh = [s for s in good if round(s.t, 2) not in have]
+        "AND to_timestamp($3)", drone_id, lo - DEDUP_WINDOW_S,
+        hi + DEDUP_WINDOW_S)
+    # **去重要用時間窗，不能比對確切的時間戳**（2026-09-07 實測踩到）。
+    #
+    # 原本是 `round(t, 2) not in have`——百分之一秒的精確比對。而即時那條路
+    # 的時間戳是收到封包的時刻（`.775`、`.784`、`.795`⋯逐筆漂移），補傳那條
+    # 是機上 1Hz 取樣的刻度（整齊的 `.51`）。**兩邊永遠不會落在同一個百分秒，
+    # 所以去重從來沒有生效過。**
+    #
+    # 實測後果：v4 那一趟飛行中，補傳把「LOITER、高度 −0.5 m、機在地上」
+    # 的樣本插進了飛機正在 3.4 m 空中的那 20 秒，與正確的即時列**一比一交錯**。
+    # 事後看那段軌跡，兩種互相矛盾的資料長得一樣可信。
+    #
+    # 改成「這一秒已經有即時資料就不補」。**即時的一律優先**：
+    # 補傳的樣本是代理對自己狀態的 1Hz 快照（會落後），而即時那筆直接來自
+    # 飛控的封包。同一秒有兩份時，補傳那份不會更好，只會更矛盾。
+    have = sorted(float(r["t"]) for r in exist)
+
+    def covered(t: float) -> bool:
+        i = bisect.bisect_left(have, t - DEDUP_WINDOW_S)
+        return i < len(have) and have[i] <= t + DEDUP_WINDOW_S
+
+    fresh = [s for s in good if not covered(s.t)]
     rows = [(s.t, drone_id, session_id, s.lat, s.lon, s.alt_msl, s.alt_rel,
              s.heading, s.ground_speed, s.battery_pct, s.battery_voltage,
              s.gps_fix, s.satellites, s.flight_mode) for s in fresh]
