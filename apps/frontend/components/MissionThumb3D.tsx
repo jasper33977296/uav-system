@@ -8,6 +8,8 @@
  * 最大半徑計算，轉動時比例不跳。拖曳後抑制 click（父卡的點擊行為不誤觸）。 */
 import { useId, useRef, useState } from "react";
 
+/** 餵進來的點請先過 `geo.planPath`（起飛爬升段、降落段、缺值高度都在那裡
+ * 補齊）——**這個元件只負責投影，不自己補任務語意**。 */
 export interface ThumbWp { lat: number; lon: number; alt?: number | null }
 
 const GRID_M = 50;
@@ -36,7 +38,10 @@ export default function MissionThumb3D({ wps, className = "", onTap }: {
   const xyz = pts.map((w) => ({
     x: (w.lon - lon0) * k,
     y: (w.lat - lat0) * 110574,
-    z: w.alt ?? 10,
+    // **缺高度不畫成 10 m**：那個 10 是憑空來的，一份全程 1 m 的低空航線
+    // 會因此看起來忽高忽低（2026-09-07 使用者回報）。餵進來的點已由
+    // geo.planPath 把高度補齊（起飛從 0 爬、降落降到 0），真的沒有就當 0
+    z: w.alt ?? 0,
   }));
   const maxR = Math.max(...xyz.map((p) => Math.hypot(p.x, p.y)), 1);
   const zMax = Math.max(...xyz.map((p) => p.z), 0);

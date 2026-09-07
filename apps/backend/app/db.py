@@ -359,6 +359,16 @@ async def migrate() -> None:
     await pool.execute("CREATE INDEX IF NOT EXISTS idx_command_log_session "
                        "ON command_log (session_id, time)")
 
+    # ⑤ 電流與累積消耗（2026-09-07）。**原本只存在於 014 的原始層**——
+    # `telemetry` 只有電壓與百分比，於是「待機能撐多久」「電流刻度準不準」
+    # 只能去翻幾十 MB 的 tlog。而那個百分比正是飛控拿電流積分算出來的，
+    # 對一個以電力與鏈路為研究核心的系統，缺這兩欄等於把推導過程丟掉、
+    # 只留結論。
+    await pool.execute(
+        "ALTER TABLE telemetry ADD COLUMN IF NOT EXISTS battery_current REAL")
+    await pool.execute(
+        "ALTER TABLE telemetry ADD COLUMN IF NOT EXISTS battery_consumed_mah REAL")
+
     # ══ 大檔案：DB 記路徑，內容留在磁碟 ═══════════════════════════════
     # （2026-09-02 使用者裁定）**資料本身很大的時候，SQL 欄位記路徑，
     # 要內容再到那個路徑下去看。**
@@ -788,12 +798,15 @@ async def insert_telemetry(s: LiveState) -> None:
         """
         INSERT INTO telemetry (time, drone_id, session_id, lat, lon, alt_msl, alt_rel,
           heading, ground_speed, vertical_speed, battery_pct, battery_voltage,
-          gps_fix, satellites, flight_mode, armed)
-        VALUES (now(), $1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15)
+          gps_fix, satellites, flight_mode, armed,
+          battery_current, battery_consumed_mah)
+        VALUES (now(), $1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15,
+                $16, $17)
         """,
         s.drone_id, s.session_id, s.lat, s.lon, s.alt_msl, s.alt_rel,
         s.heading, s.ground_speed, s.vertical_speed, s.battery_pct, s.battery_voltage,
         s.gps_fix, s.satellites, s.flight_mode, s.armed,
+        s.battery_current, s.battery_consumed_mah,
     )
 
 

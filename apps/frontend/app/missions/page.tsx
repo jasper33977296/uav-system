@@ -5,6 +5,7 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import { colorFor } from "@/components/droneLayer";
 import MissionThumb3D from "@/components/MissionThumb3D";
 import { errText, getJson } from "@/lib/fetchJson";
+import { type PlanPt, planPath } from "@/lib/geo";
 import { parseJsonb } from "@/lib/jsonb";
 import { API } from "@/lib/signal";
 
@@ -184,7 +185,7 @@ export default function Missions() {
   const [menuId, setMenuId] = useState<string | null>(null);
   const [deleting, setDeleting] = useState<string | null>(null);
   const delTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
-  const [thumbs, setThumbs] = useState<Record<string, { lat: number; lon: number }[]>>({});
+  const [thumbs, setThumbs] = useState<Record<string, PlanPt[]>>({});
   const fileRef = useRef<HTMLInputElement>(null);
 
   // 縮圖資料：每條路線抓一次 waypoints（路線數少，逐條抓可接受）
@@ -192,23 +193,17 @@ export default function Missions() {
     for (const m of missions) {
       if (thumbs[m.id]) continue;
       // 縮圖取不到＝該卡無縮圖（顯性缺口，不會假裝沒事），沿用靜默 catch
-      getJson<{ waypoints?: any[] }>(`${API}/api/missions/${m.id}/waypoints`)
+      getJson<{ waypoints?: PlanPt[] }>(`${API}/api/missions/${m.id}/waypoints`)
         .then((d) => {
-          // 縮圖也要含起飛與返航段：那兩項在 .plan 裡沒有座標（意思是
-          // 「從 home 起飛」「回 home」），照 lat/lon 過濾會讓縮圖從第一個
-          // 航點畫起——與 QGC 的圖形狀不同（2026-08-26 使用者回報）
-          const all = d.waypoints ?? [];
-          const h = m.home;
-          const pts = all.filter((w: any) => w.lat && w.lon);
-          if (!Array.isArray(h) || h.length < 2 || !(h[0] || h[1]))
-            return setThumbs((t) => ({ ...t, [m.id]: pts }));
-          const first = all.find((w: any) => w.action !== "do");
-          const out = [...pts];
-          if (first?.action === "takeoff" && !(first.lat || first.lon))
-            out.unshift({ lat: h[0], lon: h[1] });
-          if (all.some((w: any) => w.action === "rtl" || w.action === "land"))
-            out.push({ lat: h[0], lon: h[1] });
-          setThumbs((t) => ({ ...t, [m.id]: out }));
+          // **縮圖與三個地圖頁走同一支 planPath**（2026-09-07）。這裡原本
+          // 自己寫過一份補點邏輯，而它跟 geo.planPath 在兩件事上不一樣：
+          //   1. 補進來的 home 點**沒有帶高度**，縮圖的 `alt ?? 10` 就把它
+          //      畫在 10 m 的空中——一份全程 1 m 的低空航線，起點與終點
+          //      憑空飛起來（使用者回報：「為啥起始高度都超高的」）。
+          //   2. 只要有 land 就往尾巴接一個 home 點，不管那個 land 自己
+          //      有沒有座標——降落點與起飛點不同的航線因此被連成一圈。
+          // 同一份任務在四個畫面上必須是同一個形狀，所以不留第二份實作。
+          setThumbs((t) => ({ ...t, [m.id]: planPath(d.waypoints ?? [], m.home) }));
         })
         .catch(() => {});
     }

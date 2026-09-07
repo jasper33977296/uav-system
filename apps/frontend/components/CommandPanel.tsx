@@ -710,9 +710,11 @@ export default function CommandPanel() {
             {btn("RTL", "⌂ 返航", "/mode/rtl", { danger: true, cap: "rtl" })}
           </span>
         )}
-        {/* 箭頭＝**現在是什麼狀態**，不是「按下去會怎樣」（使用者指示
-            2026-09-07）：展開↓、收起↑ */}
-        <span className="meta">{open ? "▾" : "▴"}</span>
+        {/* 箭頭指的是**按下去會往哪走**，不是現在是什麼狀態（使用者裁定
+            2026-09-07）：收合時 ▾＝「點我往下展開」、展開時 ▴＝「點我收上去」。
+            這顆箭頭在同一個標題列上，而那一列的唯一互動就是收合／展開——
+            指向下一個狀態才與「它是一顆按鈕」一致 */}
+        <span className="meta">{open ? "▴" : "▾"}</span>
       </div>
 
       {open && !health.enabled && (

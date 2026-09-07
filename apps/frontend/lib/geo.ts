@@ -170,47 +170,78 @@ export interface PlanPt {
   lat: number; lon: number; alt: number | null; action?: string | null;
 }
 
-/** 任務航點 → 畫得出來的 3D 折線：起飛爬升段 + 航路 + 返航降落段。
+/** 任務航點 → 畫得出來的 3D 折線：起飛爬升段 + 航路 + 降落段。
  *
  * **起飛項的高度是「爬到哪」，不是「它所在的高度」。** 直接把 NAV_TAKEOFF
  * 當第一個點畫，折線就從 40 m 的空中開始——任務看起來從半空中出發，而使用者
- * 在 QGC 畫的明明是從地面起飛（2026-09-07 使用者回報）。返航段本來就補了
- * 落地點（alt 0），起飛段少的正是對稱的那一個地面點。
+ * 在 QGC 畫的明明是從地面起飛（2026-09-07 使用者回報）。
  *
  * 起飛項的經緯度可能是 0,0：NAV_TAKEOFF 在 ArduPilot 只需要高度，那組 0,0
- * 的意思是「從 home 起飛」。這種情況位置取 `plannedHomePosition`，而且爬升
- * 終點要自己補回來——它會被 lat/lon 過濾掉。
+ * 的意思是「從 home 起飛」。這種情況位置取 `plannedHomePosition`。
  *
- * **這裡是唯一一份實作。** 原本只有即時頁做了起飛/返航段補點，兩個回放頁
- * 直接畫過濾後的航點，於是同一份任務在三個畫面上是三個形狀。
+ * ## 收尾的三種寫法**意思完全不同**（2026-09-07 二修）
+ *
+ * 原本一律當成「回 home 降落」：`all.some(w => w.action === "rtl" || "land")`
+ * 就在尾巴接兩個 home 點。於是一份**降落點與起飛點不同**的航線，畫出來會
+ * 從降落點再拉一條線回到起飛點——那條線不在任何一份 .plan 裡
+ * （使用者回報：「我的起飛點跟降落點不同，但顯示的時候會把兩點連在一起」；
+ * 實測那份航線的降落點離 home 5.6 m）。
+ *
+ * | 項目 | 意思 | 怎麼畫 |
+ * |---|---|---|
+ * | `RTL`（cmd 20） | 回 home 再降 | 平飛回 home → 垂直下降 |
+ * | `LAND` 有座標 | 飛到那個點再降 | 平飛到該點 → 垂直下降 |
+ * | `LAND` 沒座標 | **在當下的位置降**（不是回 home）| 在最後一點垂直下降 |
+ *
+ * 兩段式（先平飛、再垂直下降）而不是一條斜線：斜線會讓人以為航線會穿過
+ * 中間的地形。
+ *
+ * **這裡是唯一一份實作。** 三個地圖頁與路徑管理頁的縮圖全部走這一支——
+ * 同一份任務在四個畫面上必須是同一個形狀（縮圖曾經自己寫過一份，
+ * 於是它把補進來的 home 點畫在 10 m 的空中，見 MissionThumb3D）。
  */
 export function planPath(all: PlanPt[], home?: (number | null)[] | null): PlanPt[] {
-  let wps = all.filter((w) => w.lat || w.lon);
   const h = Array.isArray(home) && home.length >= 2 && (home[0] || home[1])
     ? { lat: home[0] as number, lon: home[1] as number } : null;
+  // `do` 項沒有位置語意（DO_CHANGE_SPEED 之類），不進折線
+  const nav = all.filter((w) => w.action !== "do");
+  const out: PlanPt[] = [];
+  // 目前高度：航點沒帶高度時沿用上一個——**不要掉回 0**，那會讓折線
+  // 無緣無故插一段俯衝到地面再爬回來
+  let alt = 0;
+  const pos = (w: PlanPt) => (w.lat || w.lon) ? { lat: w.lat, lon: w.lon } : null;
+  const lastPos = () => (out.length
+    ? { lat: out[out.length - 1].lat, lon: out[out.length - 1].lon } : null);
 
-  // 起飛段：從地面爬到起飛項的高度
-  const first = all.find((w) => w.action !== "do");
-  if (first && first.action === "takeoff") {
-    const at = (first.lat || first.lon) ? { lat: first.lat, lon: first.lon } : h;
-    if (at) {
-      const climb: PlanPt[] = [{ ...at, alt: 0, action: "takeoff-ground" }];
-      if (!(first.lat || first.lon))
-        climb.push({ ...at, alt: first.alt ?? 0, action: "takeoff-leg" });
-      wps = [...climb, ...wps];
+  for (const w of nav) {
+    if (w.action === "takeoff") {
+      const at = pos(w) ?? h;
+      if (!at) continue;                       // 不知道從哪起飛就不畫這一段
+      out.push({ ...at, alt: 0, action: "takeoff-ground" });
+      alt = w.alt ?? alt;
+      out.push({ ...at, alt, action: "takeoff-leg" });
+      continue;
     }
+    if (w.action === "rtl") {
+      if (!h) continue;                        // 沒有 home 就畫不出返航段
+      out.push({ ...h, alt, action: "rtl-leg" });
+      out.push({ ...h, alt: 0, action: "rtl-land" });
+      alt = 0;
+      continue;
+    }
+    if (w.action === "land") {
+      // 沒座標＝在當下的位置降落。**不是回 home**——那是 RTL 的意思
+      const at = pos(w) ?? lastPos();
+      if (!at) continue;
+      if (pos(w)) out.push({ ...at, alt, action: "land-approach" });
+      alt = w.alt ?? 0;
+      out.push({ ...at, alt, action: "land" });
+      continue;
+    }
+    const at = pos(w);
+    if (!at) continue;                         // 沒座標的一般航點畫不出來
+    alt = w.alt ?? alt;
+    out.push({ ...at, alt, action: w.action });
   }
-
-  // 返航段：RTL／LAND 沒有座標（它們的意思是「回到 home」），照 lat/lon
-  // 過濾會把它們整個丟掉，畫面上航線就停在最後一個航點——看起來像規劃到
-  // 一半就沒了（2026-08-26 使用者回報）。
-  // 高度取最後航點的：返航是**先平飛回去再下降**，不是斜線下降。畫成斜線
-  // 會讓人以為航線會穿過中間的地形。
-  const back = all.some((w) => w.action === "rtl" || w.action === "land");
-  if (back && h && wps.length) {
-    const last = wps[wps.length - 1];
-    wps = [...wps, { ...h, alt: last.alt, action: "rtl-leg" },
-                   { ...h, alt: 0, action: "rtl-land" }];
-  }
-  return wps;
+  return out;
 }

@@ -68,6 +68,14 @@ class LiveState:
     #: failsafe`，而畫面上只寫「預檢未過」，操作員得自己去事件流裡翻。
     prearm_msgs: dict = field(default_factory=dict)
     battery_voltage: float | None = None
+    #: 電流（A）與從上電起的累積消耗（mAh）——**都來自 `BATTERY_STATUS`**。
+    #: 這兩個原本只存在於 014 的原始層，`telemetry` 表沒有：於是「待機能撐
+    #: 多久」「電流刻度準不準」這種問題只能去翻幾十 MB 的 tlog（2026-09-07）。
+    #:
+    #: **`consumed_mah` 是從上電起算的累加器，不是總量**：斷電歸零，所以它
+    #: 只在同一段供電裡有意義。跨段比較要看時間戳有沒有跨過重新上電。
+    battery_current: float | None = None
+    battery_consumed_mah: float | None = None
     gps_fix: int | None = None
     satellites: int | None = None
     flight_mode: str | None = None        # 機端原廠模式名（不翻譯）
@@ -298,6 +306,8 @@ class LiveState:
             "vertical_speed": self.vertical_speed,
             "battery_pct": self.battery_pct,
             "battery_voltage": self.battery_voltage,
+            "battery_current": self.battery_current,
+            "battery_consumed_mah": self.battery_consumed_mah,
             "gps_fix": self.gps_fix, "satellites": self.satellites,
             "rc_link": self.rc_link,
             "identity_ok": self.identity_ok,

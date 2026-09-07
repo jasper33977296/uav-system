@@ -508,6 +508,20 @@ class MavlinkRx:
                 if await self._identity_guard(st, board_uid=st.board_uid):
                     await db.set_board_uid(st.drone_id, st.board_uid,
                                            st.flight_sw_version)
+        elif t == "BATTERY_STATUS":
+            # **電流積分的兩個數字**（2026-09-07）：飛控的 `battery_remaining`
+            # 就是拿 `(BATT_CAPACITY − current_consumed) / BATT_CAPACITY` 算的，
+            # 所以少了 `current_consumed`，畫面上那個百分比就只剩結論、
+            # 沒有推導過程——而那個推導的刻度（`BATT_AMP_PERVLT`）本專案
+            # 還沒有人驗過。要驗它就得先把這兩個數字留下來。
+            #
+            # **只收第一顆電池**（instance 0）：多電池機還沒有，等有了再說；
+            # 現在無條件覆蓋的話，第二顆的讀數會蓋掉主電池的。
+            if getattr(msg, "id", 0) == 0:
+                if getattr(msg, "current_consumed", -1) >= 0:
+                    st.battery_consumed_mah = float(msg.current_consumed)
+                if getattr(msg, "current_battery", -1) >= 0:
+                    st.battery_current = msg.current_battery / 100.0
         elif t == "GLOBAL_POSITION_INT":
             # **0,0 是自駕儀的「不知道」哨兵，不是幾內亞灣外海。**
             # GLOBAL_POSITION_INT 在沒有位置估計時送 lat=lon=0；照寫會把
@@ -563,6 +577,12 @@ class MavlinkRx:
                 st.battery_pct = float(msg.battery_remaining)
             if msg.voltage_battery != 65535:
                 st.battery_voltage = msg.voltage_battery / 1000.0
+            # **電流是次要來源**：`SYS_STATUS` 只有電流沒有累積消耗，
+            # 而兩者要同源才對得起來——所以下面的 BATTERY_STATUS 會覆蓋它。
+            # 這裡收著是為了「舊韌體只送 SYS_STATUS」的情況。
+            # 單位是 cA（10 mA），-1＝不知道
+            if getattr(msg, "current_battery", -1) >= 0:
+                st.battery_current = msg.current_battery / 100.0
             # PX4 預檢總結果：PREARM_CHECK 健康位（QGC「Ready To Fly」的核心）
             p_, e_, h_ = (msg.onboard_control_sensors_present,
                           msg.onboard_control_sensors_enabled,
