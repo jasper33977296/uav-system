@@ -17,7 +17,7 @@ import { DRONE_ICON_SIZE, droneIconUrl } from "@/lib/droneIcon";
 import { lodFactor } from "@/lib/droneMesh";
 import { droneMeshLayers } from "@/lib/droneMeshLayer";
 import { basePreview, separatePreview, unifiedPreview, type Wp } from "@/lib/formation";
-import { CANVAS, groundGrid, ribbon, trailLineString } from "@/lib/geo";
+import { CANVAS, groundGrid, planPath, ribbon, trailLineString } from "@/lib/geo";
 import { getJson } from "@/lib/fetchJson";
 import { API, LINK_CLASSES } from "@/lib/signal";
 import { firstFleetPos, useUavStore } from "@/lib/store";
@@ -354,34 +354,10 @@ export default function MapView() {
             const plan = await ra.json();
             planFence = plan.fence ?? null;
             planRally = plan.rally ?? null;
-            const all = plan.waypoints ?? [];
-            wps = all.filter((w: any) => w.lat && w.lon);
-            // **返航那一段要畫出來**：RTL／LAND 沒有座標（它們的意思是
-            // 「回到 home」），照 lat/lon 過濾會把它們整個丟掉，於是畫面上
-            // 航線停在最後一個航點——看起來像規劃到一半就沒了
-            // （2026-08-26 使用者回報）。用 .plan 的 plannedHomePosition 補上。
-            const h = plan.home;
-            // **起飛段也要畫**：NAV_TAKEOFF 在 ArduPilot 只需要高度，經緯度
-            // 是 0,0，於是照 lat/lon 過濾會把它丟掉——折線就從第一個航點
-            // 開始，而不是從起飛點。QGC 從 home 畫起，兩張圖因此形狀不同
-            // （2026-08-26 使用者回報）。
-            const first = all.find((w: any) => w.action !== "do");
-            if (first && first.action === "takeoff" && !(first.lat || first.lon)
-                && Array.isArray(h) && h.length >= 2 && (h[0] || h[1])) {
-              wps = [{ lat: h[0], lon: h[1], alt: first.alt ?? 0,
-                       action: "takeoff-leg" }, ...wps];
-            }
-            const back = all.some((w: any) =>
-              w.action === "rtl" || w.action === "land");
-            if (back && Array.isArray(h) && h.length >= 2 && (h[0] || h[1])
-                && wps.length) {
-              const last = wps[wps.length - 1];
-              // 高度取最後航點的：返航是**先平飛回去再下降**，不是斜線下降。
-              // 畫成斜線會讓人以為航線會穿過中間的地形
-              wps = [...wps, { lat: h[0], lon: h[1], alt: last.alt,
-                               action: "rtl-leg" },
-                             { lat: h[0], lon: h[1], alt: 0, action: "rtl-land" }];
-            }
+            // 起飛爬升段、返航降落段都要補回來——過濾掉沒座標的項會讓
+            // 航線從第一個航點開始、停在最後一個航點；而起飛項的高度是
+            // 「爬到哪」，直接畫會讓折線從空中出發（見 geo.planPath）
+            wps = planPath(plan.waypoints ?? [], plan.home);
           }
           const has = wps.length >= 2;
           (map.getSource("plan3d") as maplibregl.GeoJSONSource | undefined)?.setData(

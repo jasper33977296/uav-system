@@ -16,7 +16,7 @@ import { useBasemap } from "@/lib/basemap";
 import { DRONE_ICON_SIZE, droneIconUrl } from "@/lib/droneIcon";
 import { evText } from "@/lib/evtext";
 import { eventDetail } from "@/lib/jsonb";
-import { CANVAS, groundGrid, pathArrows, ribbon, trailLineString } from "@/lib/geo";
+import { CANVAS, groundGrid, pathArrows, planPath, ribbon, trailLineString } from "@/lib/geo";
 import { API, classifySinr } from "@/lib/signal";
 import { useUavStore } from "@/lib/store";
 
@@ -149,7 +149,9 @@ export default function Replay() {
         if (d.session?.mission_id)
           fetch(`${API}/api/missions/${d.session.mission_id}/waypoints`)
             .then((r) => (r.ok ? r.json() : null))
-            .then((m) => m && setPlan(m.waypoints.filter((w: any) => w.lat && w.lon)))
+            // planPath 補起飛爬升段與返航降落段：起飛項的高度是「爬到哪」，
+            // 照 lat/lon 過濾直接畫會讓預計路徑從空中出發、與即時頁不同形狀
+            .then((m) => m && setPlan(planPath(m.waypoints, m.home)))
             .catch(() => {});
       })
       // 取得失敗**不得**顯示「這趟沒有訊號量測」——那是把我方的失敗說成

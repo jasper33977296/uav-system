@@ -7,7 +7,7 @@ import { useEffect, useMemo, useRef, useState } from "react";
 
 import { createDroneLayer, DRONE_PALETTE } from "@/components/droneLayer";
 import { routeLayer } from "@/lib/deckRoute";
-import { CANVAS, groundGrid, ribbon, trailLineString } from "@/lib/geo";
+import { CANVAS, groundGrid, planPath, ribbon, trailLineString } from "@/lib/geo";
 import { getJson } from "@/lib/fetchJson";
 import { API } from "@/lib/signal";
 
@@ -98,7 +98,9 @@ export default function MissionReplay() {
   useEffect(() => {
     fetch(`${API}/api/missions/${missionId}/waypoints`)
       .then((r) => (r.ok ? r.json() : null))
-      .then((m) => m && setPlan(m.waypoints.filter((w: any) => w.lat && w.lon)))
+      // planPath 補起飛爬升段與返航降落段：起飛項的高度是「爬到哪」，
+      // 照 lat/lon 過濾直接畫會讓預計路徑從空中出發、與即時頁不同形狀
+      .then((m) => m && setPlan(planPath(m.waypoints, m.home)))
       .catch(() => {});
     // 取得失敗不得說成「此路徑尚無已完成的航線」（見 lib/fetchJson.ts）
     getJson<any[]>(`${API}/api/sessions?mission_id=${missionId}&limit=100`)

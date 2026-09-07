@@ -164,3 +164,53 @@ export function trailLineString<T extends { lat: number | null; lon: number | nu
   return { type: "Feature", properties: props,
            geometry: { type: "LineString", coordinates: coords } };
 }
+
+/** 任務航點（畫圖只需要這幾欄；`action` 是本系統的語意欄，見 plans.py）。 */
+export interface PlanPt {
+  lat: number; lon: number; alt: number | null; action?: string | null;
+}
+
+/** 任務航點 → 畫得出來的 3D 折線：起飛爬升段 + 航路 + 返航降落段。
+ *
+ * **起飛項的高度是「爬到哪」，不是「它所在的高度」。** 直接把 NAV_TAKEOFF
+ * 當第一個點畫，折線就從 40 m 的空中開始——任務看起來從半空中出發，而使用者
+ * 在 QGC 畫的明明是從地面起飛（2026-09-07 使用者回報）。返航段本來就補了
+ * 落地點（alt 0），起飛段少的正是對稱的那一個地面點。
+ *
+ * 起飛項的經緯度可能是 0,0：NAV_TAKEOFF 在 ArduPilot 只需要高度，那組 0,0
+ * 的意思是「從 home 起飛」。這種情況位置取 `plannedHomePosition`，而且爬升
+ * 終點要自己補回來——它會被 lat/lon 過濾掉。
+ *
+ * **這裡是唯一一份實作。** 原本只有即時頁做了起飛/返航段補點，兩個回放頁
+ * 直接畫過濾後的航點，於是同一份任務在三個畫面上是三個形狀。
+ */
+export function planPath(all: PlanPt[], home?: (number | null)[] | null): PlanPt[] {
+  let wps = all.filter((w) => w.lat || w.lon);
+  const h = Array.isArray(home) && home.length >= 2 && (home[0] || home[1])
+    ? { lat: home[0] as number, lon: home[1] as number } : null;
+
+  // 起飛段：從地面爬到起飛項的高度
+  const first = all.find((w) => w.action !== "do");
+  if (first && first.action === "takeoff") {
+    const at = (first.lat || first.lon) ? { lat: first.lat, lon: first.lon } : h;
+    if (at) {
+      const climb: PlanPt[] = [{ ...at, alt: 0, action: "takeoff-ground" }];
+      if (!(first.lat || first.lon))
+        climb.push({ ...at, alt: first.alt ?? 0, action: "takeoff-leg" });
+      wps = [...climb, ...wps];
+    }
+  }
+
+  // 返航段：RTL／LAND 沒有座標（它們的意思是「回到 home」），照 lat/lon
+  // 過濾會把它們整個丟掉，畫面上航線就停在最後一個航點——看起來像規劃到
+  // 一半就沒了（2026-08-26 使用者回報）。
+  // 高度取最後航點的：返航是**先平飛回去再下降**，不是斜線下降。畫成斜線
+  // 會讓人以為航線會穿過中間的地形。
+  const back = all.some((w) => w.action === "rtl" || w.action === "land");
+  if (back && h && wps.length) {
+    const last = wps[wps.length - 1];
+    wps = [...wps, { ...h, alt: last.alt, action: "rtl-leg" },
+                   { ...h, alt: 0, action: "rtl-land" }];
+  }
+  return wps;
+}
