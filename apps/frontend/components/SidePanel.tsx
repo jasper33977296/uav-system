@@ -7,10 +7,17 @@ import { EventsCard } from "@/components/SimpleHud";
 import { classifySinr } from "@/lib/signal";
 import { type ImuData, type Telemetry, useUavStore } from "@/lib/store";
 
-function Metric({ label, value, unit }: { label: string; value: string; unit?: string }) {
+function Metric({ label, value, unit, derived }: {
+  label: string; value: string; unit?: string;
+  /** 這個值是後端從 modem 原始回應解出來的，不是模組直接報的欄位 */
+  derived?: boolean;
+}) {
   return (
     <div className="metric">
-      <div className="label">{label}</div>
+      <div className="label">
+        {label}
+        {derived && <span className="metric-derived" title="由模組原始回應解出（AT+GTCCINFO?）">＊</span>}
+      </div>
       <div className="value">
         {value}
         {unit && <span className="unit">{unit}</span>}
@@ -248,6 +255,11 @@ export default function SidePanel() {
   const { live, primaryId, selectedId, sinrHistories } = useUavStore();
   const link = live?.link;
   const cls = link?.sinr != null ? classifySinr(link.sinr) : null;
+  // **分得出「模組報的」與「我方算的」**：後端在 raw._derived 記下解了哪幾欄
+  // （app/modem_raw.py）。舊資料沒有這個鍵＝那些值本來就是模組填的
+  const derived = new Set<string>(
+    (((link?.raw as Record<string, unknown> | null | undefined)?.
+      _derived as { fields?: string[] } | undefined)?.fields) ?? []);
   const effective = selectedId ?? primaryId;
 
   // 5G 詳細摺疊：展開狀態記 localStorage（IA 定案配套，同起飛高度前例）
@@ -293,8 +305,12 @@ export default function SidePanel() {
           <summary>Serving cell &amp; band</summary>
           <div className="metrics">
             <Metric label="RSRQ" value={fmt(link?.rsrq)} unit="dB" />
-            <Metric label="PCI" value={link?.pci?.toString() ?? "—"} />
-            <Metric label="Band" value={link?.band ?? "—"} />
+            <Metric label="PCI" value={link?.pci?.toString() ?? "—"}
+              derived={derived.has("pci")} />
+            <Metric label="NCI" value={link?.cell_id?.toString() ?? "—"}
+              derived={derived.has("cell_id")} />
+            <Metric label="Band" value={link?.band ?? "—"}
+              derived={derived.has("band")} />
             <Metric label="CQI" value={link?.cqi?.toString() ?? "—"} />
             <Metric label="NR mode" value={link?.nr_mode ?? "—"} />
             <Metric
@@ -303,6 +319,11 @@ export default function SidePanel() {
               unit="Mbps"
             />
           </div>
+          {derived.size > 0 && (
+            <div className="hint-line">
+              ＊ 由模組原始回應解出（<code>AT+GTCCINFO?</code>）——欄位本身沒有值
+            </div>
+          )}
         </details>
         {/* 圖例回歸地圖左下常駐（ui-spec §2 使用者定案）——不在卡內 */}
       </div>

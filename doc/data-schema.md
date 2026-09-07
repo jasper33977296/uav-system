@@ -218,9 +218,33 @@ mission_groups ─< group_assignments                (CASCADE)
 | 端到端 | `rtt_ms` `jitter_ms` `packet_loss_pct` `throughput_up_kbps` `throughput_down_kbps` | RF 劣化如何反映到應用層 |
 | 標注 | `in_interference_zone` bool | **模擬專用**；真機階段為 NULL（干擾分布是產出不是輸入） |
 | 來源 | `source` text NOT NULL | `simulated`／`modem`，可共存可過濾 |
-| 原始 | `raw` jsonb | modem 原始回應 |
+| 原始 | `raw` jsonb | modem 原始回應；`_derived` 是我方從它解出來的（見下）|
 
 唯一索引 `(drone_id, time)`：機上補傳是 at-least-once，靠它冪等去重。
+
+### `pci`／`cell_id`／`band`：值在 `raw` 裡，欄位卻是 null（2026-09-07 修）
+
+實測：今天的 107 筆 modem 樣本，三欄全 null，**而 `AT+GTCCINFO?` 的原始回應
+一直都在 `raw` 裡**（8/10–8/13 的舊資料相反：欄位有值、沒有存 raw）。畫面上
+那三格顯示「—」，讀的人會以為這個場域量不到細胞資訊——**我方的解析缺口穿上
+了「沒有資料」的外衣**（§0.2e 同族）。
+
+解析在後端做（`app/modem_raw.py`，live 與 batch 兩條路都接），理由是
+`reference/fibocom-fm160/README.md` 當初決定整包存 raw 的那個理由：**對照表
+日後修正，歷史資料可以回頭重算，不必重飛**。歷史列由
+`scripts/backfill-link-cell.py` 補（乾跑預設；`--revert` 可還原）。
+
+三條規矩：
+
+* **只補 null**——機上代理自己填的才是第一手，不覆蓋。
+* **解不開就不填**（欄位數不足、進位讀不了、PCI 超出 0–1007）。填一個看似
+  合理的錯值比空著更難發現（`doc/verification-checklist.md` §1.5）。
+* **留下痕跡**：`raw._derived` 記規則版本與補了哪幾欄，畫面據此在 PCI／NCI／
+  Band 標「＊ 由模組原始回應解出」——**「模組報的」與「我方算的」要分得出來**。
+
+順帶更正了對照表本身：`physicalcellId` 原記為十進位，那是從一筆兩種進位都
+合法的「85」推出來的；本場域實測值 `8D` 有字母，證明是十六進位。另外文件裡
+`7EFAE = 519086` 的算術錯了（正確是 520110，結論不變，仍在 n41 值域）。
 
 ### `telemetry` 有兩個來源，而它們曾經互相矛盾（2026-09-07）
 

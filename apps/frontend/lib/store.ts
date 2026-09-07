@@ -2,7 +2,10 @@ import { create } from "zustand";
 
 export interface LinkMetrics {
   rsrp: number; rsrq: number; sinr: number; cqi: number;
-  pci: number; band: string; nr_mode: string;
+  pci: number; cell_id: number; band: string; nr_mode: string;
+  /** modem 原始回應。**其中 `_derived` 是後端從 raw 解出來的欄位清單**
+   * （`app/modem_raw.py`）——畫面要分得出「模組報的」與「我方算的」。 */
+  raw: Record<string, unknown> | null;
   rtt_ms: number; jitter_ms: number; packet_loss_pct: number;
   throughput_up_kbps: number; throughput_down_kbps: number;
   in_interference_zone: boolean; source: string;

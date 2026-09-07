@@ -1425,6 +1425,8 @@ details.card summary { cursor: pointer; font-size: 14px; font-weight: 600; }
 }
 .tq-row.tq-bad b { color: var(--status-warn); font-weight: 600; }
 
+.metric-derived { color: var(--muted); font-size: 9px; vertical-align: super; margin-left: 1px; }
+
 .cap-acts { white-space: nowrap; display: flex; gap: 6px; justify-content: flex-end; }
 
 /* ── 錄製檔摘要索引 sheet（components/LogIndexSheet.tsx）───────────
