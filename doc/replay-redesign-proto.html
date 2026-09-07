@@ -1,0 +1,624 @@
+<title>UAV 架次回放 v2</title>
+<style>
+/* tokens 同 doc/design-tokens.md */
+:root{
+  color-scheme:dark;
+  --page:#1b1a17; --surface:#262624; --surface-2:#30302c;
+  --ink:#f0eee6; --ink-2:#c2bfb3; --muted:#8f8b80; --hairline:#3a3833;
+  --border:rgba(240,238,230,.1);
+  --accent:#d97757; --accent-bg:rgba(217,119,87,.12);
+  --series-1:#3987e5; --series-2:#d95926; --series-3:#199e70;
+  --ok:#0ca30c; --warn:#fab219; --serious:#e05e0e; --danger:#a01818; --danger-ink:#e05e5e;
+  --sinr-good:#0ca30c; --sinr-fair:#fab219; --sinr-bad:#e05e0e; --sinr-crit:#a01818;
+  --mono:ui-monospace,"SF Mono","JetBrains Mono",Menlo,Consolas,monospace;
+}
+*{margin:0;padding:0;box-sizing:border-box}
+html,body{height:100%}
+body{font-family:system-ui,-apple-system,"Noto Sans TC","Segoe UI",sans-serif;
+  background:var(--page);color:var(--ink);font-size:13px;line-height:1.5;
+  -webkit-font-smoothing:antialiased}
+button,input,select{font:inherit;color:inherit}
+button{background:none;border:none;cursor:pointer}
+:focus-visible{outline:2px solid var(--accent);outline-offset:1px}
+.spacer{flex:1}
+.mono{font-family:var(--mono);font-variant-numeric:tabular-nums}
+
+.shell{height:100dvh;display:flex;flex-direction:column;overflow:hidden}
+/* ── 頂欄：這一趟是誰、什麼時候、飛哪條 ─────────────────── */
+.top{flex:none;height:46px;display:flex;align-items:center;gap:11px;padding:0 13px;
+  background:var(--surface);border-bottom:1px solid var(--hairline)}
+.back{padding:3px 9px;border:1px solid var(--hairline);border-radius:7px;color:var(--ink-2);font-size:12px}
+.back:hover{color:var(--ink);border-color:var(--border)}
+.top .who{font-size:14px;font-weight:700}
+.top .meta{font-size:12px;color:var(--muted);font-variant-numeric:tabular-nums}
+.top .chip{font-size:11px}
+.chip{display:inline-flex;align-items:center;gap:5px;padding:1px 8px;border-radius:999px;
+  background:var(--surface-2);font-size:11px;color:var(--ink-2);white-space:nowrap}
+.chip .dot{width:7px;height:7px;border-radius:50%}
+.btn{padding:4px 10px;border:1px solid var(--hairline);border-radius:7px;color:var(--ink-2);
+  background:var(--surface-2);font-size:12px}
+.btn:hover{color:var(--ink);border-color:var(--border)}
+.btn.on{color:var(--accent);border-color:var(--accent);background:var(--accent-bg)}
+
+/* ⓘ */
+.info{width:15px;height:15px;border-radius:50%;border:1px solid var(--hairline);
+  color:var(--muted);font-size:10px;display:inline-grid;place-items:center;position:relative;
+  flex:none;cursor:help;line-height:1}
+.info:hover,.info:focus-visible{color:var(--ink);border-color:var(--border)}
+.info::after{content:attr(data-tip);position:absolute;right:-2px;top:20px;width:262px;z-index:60;
+  background:var(--surface-2);color:var(--ink-2);border:1px solid var(--border);border-radius:8px;
+  padding:8px 10px;font-size:11px;line-height:1.65;text-align:left;font-weight:400;
+  box-shadow:0 8px 24px rgba(0,0,0,.45);opacity:0;visibility:hidden;transition:opacity .12s}
+.info:hover::after,.info:focus-visible::after{opacity:1;visibility:visible}
+
+/* ── 主版面：地圖＋右側欄；時間軸與圖表在底部 ───────────── */
+.body{flex:1;min-height:0;display:grid;grid-template-columns:minmax(0,1fr) clamp(300px,26vw,368px)}
+.mapwrap{position:relative;min-height:0;background:#14181c;overflow:hidden}
+#map{position:absolute;inset:0;width:100%;height:100%}
+.legend{position:absolute;left:12px;bottom:12px;background:var(--surface);
+  border:1px solid var(--border);border-radius:12px;padding:8px 11px;font-size:11.5px;
+  display:flex;flex-direction:column;gap:6px;box-shadow:0 4px 16px rgba(0,0,0,.35)}
+.legend-row{display:flex;align-items:center;gap:9px}
+.legend-lab{color:var(--muted)}
+.legend-seg{display:inline-flex;align-items:center;gap:5px;color:var(--ink-2)}
+.legend-sw{width:14px;height:6px;border-radius:2px;flex:none}
+.scalebar{position:absolute;right:12px;bottom:14px;font-size:11px;color:var(--ink-2)}
+/* 起點時畫面上只有預計航線——**那不是壞掉，是還沒飛**，說一句比讓人猜好 */
+.startnote{position:absolute;left:50%;top:50%;transform:translate(-50%,-50%);
+  font-size:12px;color:var(--muted);background:rgba(38,38,36,.9);border:1px solid var(--border);
+  border-radius:999px;padding:5px 14px;pointer-events:none}
+.startnote[hidden]{display:none}
+.mapmeta{position:absolute;left:12px;top:12px;display:flex;gap:7px;align-items:center}
+
+.panel{background:var(--page);border-left:1px solid var(--hairline);padding:10px;
+  display:flex;flex-direction:column;gap:9px;overflow-y:auto;min-height:0}
+.card{background:var(--surface);border:1px solid var(--border);border-radius:12px;padding:11px 12px}
+.card.grow{flex:1;min-height:150px;display:flex;flex-direction:column}
+.card h3{font-size:12px;font-weight:600;color:var(--ink-2);display:flex;align-items:center;gap:7px;margin-bottom:8px}
+.h3-note{font-size:11px;color:var(--muted);font-weight:400}
+.facts{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:7px 12px}
+.fact .k{font-size:10.5px;color:var(--muted)}
+.fact .v{font-size:13px;color:var(--ink);font-family:var(--mono);font-variant-numeric:tabular-nums}
+.fact .v small{font-size:10px;color:var(--muted);margin-left:2px}
+.sdot{width:7px;height:7px;border-radius:50%;display:inline-block;margin-right:5px;vertical-align:1px}
+
+/* 事件流（折疊、可跳時刻） */
+.evtools{display:flex;gap:4px;align-items:center;flex-wrap:wrap;margin-bottom:6px}
+.pill{padding:2px 8px;border-radius:6px;border:1px solid transparent;color:var(--muted);font-size:11px}
+.pill:hover{color:var(--ink-2)}
+.pill[aria-pressed="true"]{color:var(--ink);background:var(--surface-2);border-color:var(--border)}
+.evlist{flex:1;overflow-y:auto;min-height:0;margin:0 -4px;padding:0 4px}
+.evrow{width:100%;display:grid;grid-template-columns:9px 44px 1fr auto;gap:8px;align-items:start;
+  padding:5px 4px;border-radius:7px;text-align:left;border-bottom:1px solid rgba(58,56,51,.5)}
+.evrow:hover{background:var(--surface-2)}
+.evrow.now{background:var(--accent-bg)}
+.evrow .dot{width:7px;height:7px;border-radius:50%;margin-top:5px}
+.evrow time{font-family:var(--mono);font-size:11px;color:var(--muted);margin-top:1px}
+.evrow .tx{font-size:12px;color:var(--ink-2);word-break:break-word}
+.evrow .src{font-size:10px;color:var(--muted);margin-right:5px}
+.count{font-size:10.5px;color:var(--ink);background:var(--surface-2);border:1px solid var(--border);
+  border-radius:999px;padding:0 6px;font-variant-numeric:tabular-nums}
+.density{height:9px;width:52px;display:block}
+.cmdrow{display:grid;grid-template-columns:44px 1fr auto;gap:8px;align-items:baseline;
+  padding:5px 2px;border-bottom:1px solid rgba(58,56,51,.5);font-size:12px}
+.cmdrow time{font-family:var(--mono);font-size:11px;color:var(--muted)}
+.cmdrow .ok{font-size:11px;color:var(--ok)}
+.steps{display:flex;gap:5px;flex-wrap:wrap;margin-top:3px}
+.step{font-size:10.5px;padding:1px 7px;border-radius:999px;border:1px solid var(--border);color:var(--muted)}
+.hint{font-size:11px;color:var(--muted);line-height:1.7}
+
+/* ── 底部：時間軸＋圖表（共用 X 軸）───────────────────── */
+.bottom{flex:none;background:var(--surface);border-top:1px solid var(--hairline);
+  padding:8px 13px 10px;display:flex;flex-direction:column;gap:7px}
+.transport{display:flex;align-items:center;gap:11px}
+.tbtn{width:28px;height:28px;border:1px solid var(--hairline);border-radius:8px;
+  display:grid;place-items:center;color:var(--ink-2);font-size:12px;background:var(--surface-2)}
+.tbtn:hover{color:var(--ink)}
+.clock{font-family:var(--mono);font-size:13px;white-space:nowrap}
+.clock .rel{color:var(--muted);margin-left:6px;font-size:12px}
+/* 時間軸與下面兩張圖用**同一個 viewBox 與同一組左右內距**——這是「共用 X 軸」
+   的實作，不是排版巧合。原本時間軸被左右的按鈕擠在中間，兩者對不起來。 */
+.track{position:relative;height:34px;width:100%}
+.track svg{position:absolute;inset:0;width:100%;height:100%}
+.track input{position:absolute;inset:0;width:100%;height:100%;opacity:0;cursor:pointer;margin:0}
+.charts{display:flex;flex-direction:column;gap:2px}
+.chart{position:relative}
+.chart h4{font-size:11px;color:var(--muted);font-weight:400;position:absolute;left:0;top:-1px}
+.chart svg{width:100%;height:74px;display:block}
+details.foldcharts summary{font-size:11.5px;color:var(--muted);cursor:pointer;list-style:none;
+  display:flex;align-items:center;gap:6px}
+details.foldcharts summary::-webkit-details-marker{display:none}
+details.foldcharts summary::before{content:"▸";font-size:9px}
+details.foldcharts[open] summary::before{content:"▾"}
+details.foldcharts summary:hover{color:var(--ink-2)}
+
+/* modal：✕ 貼齊右上、label 在它左邊 */
+.mask{position:fixed;inset:0;background:rgba(12,11,9,.62);z-index:70;display:grid;place-items:center;padding:20px}
+.mask[hidden]{display:none}
+.modal{position:relative;background:var(--surface);border:1px solid var(--border);border-radius:14px;
+  width:min(680px,94vw);max-height:88dvh;display:flex;flex-direction:column;overflow:hidden;
+  box-shadow:0 24px 64px rgba(0,0,0,.55);padding:14px 16px 12px;gap:8px}
+.mhead{display:flex;align-items:center;gap:9px;padding-right:42px;flex:none}
+.mhead .t{font-size:14.5px;font-weight:600;line-height:1.5}
+.mclose{position:absolute;top:8px;right:8px;width:26px;height:26px;display:grid;place-items:center;
+  border:1px solid var(--hairline);border-radius:7px;background:var(--surface);color:var(--muted);font-size:12px}
+.mclose:hover{color:var(--ink);border-color:var(--border);background:var(--surface-2)}
+.mmeta{font-size:11.5px;color:var(--muted);font-variant-numeric:tabular-nums;
+  padding-bottom:8px;border-bottom:1px solid var(--hairline)}
+.mbody{overflow-y:auto;display:flex;flex-direction:column;gap:8px}
+.kv{display:grid;grid-template-columns:108px minmax(0,1fr);gap:3px 14px;font-size:12.5px;align-items:baseline}
+.kv .k{color:var(--muted)}
+.kv .v{font-family:var(--mono);word-break:break-all;color:var(--ink-2)}
+pre.raw{background:var(--page);border:1px solid var(--hairline);border-radius:7px;padding:8px;
+  font-family:var(--mono);font-size:10.5px;color:var(--ink-2);white-space:pre-wrap;
+  word-break:break-all;max-height:300px;overflow:auto}
+</style>
+
+<div class="shell">
+  <div class="top">
+    <button class="back" title="回上一頁">←</button>
+    <span class="who" id="who"></span>
+    <span class="meta" id="topmeta"></span>
+    <span class="chip" id="endchip"></span>
+    <span class="spacer"></span>
+    <button class="btn" id="openIndex">紀錄索引</button>
+    <button class="btn" id="exportBtn">匯出 JSON</button>
+    <span class="info" tabindex="0" data-tip="回放的是這一趟已經記下來的資料：地圖上的彩帶依實測 SINR 上色、灰帶是預計航線。時間軸上的釘點是事件（顏色＝嚴重度）、底色帶是飛行模式。拖時間軸，地圖與右側同步跳到那一刻。">ⓘ</span>
+  </div>
+
+  <div class="body">
+    <section class="mapwrap">
+      <svg id="map" viewBox="0 0 1000 700" preserveAspectRatio="xMidYMid meet"></svg>
+      <div class="mapmeta">
+        <span class="chip" id="modechip"></span>
+        <span class="chip" id="altchip"></span>
+        <span class="chip" id="sigchip"></span>
+      </div>
+      <div class="legend">
+        <div class="legend-row">
+          <span class="legend-lab">訊號品質</span>
+          <span class="legend-seg"><i class="legend-sw" style="background:var(--sinr-good)"></i>良好</span>
+          <span class="legend-seg"><i class="legend-sw" style="background:var(--sinr-fair)"></i>尚可</span>
+          <span class="legend-seg"><i class="legend-sw" style="background:var(--sinr-bad)"></i>劣化</span>
+          <span class="legend-seg"><i class="legend-sw" style="background:var(--sinr-crit)"></i>瀕斷</span>
+          <span class="info" tabindex="0" data-tip="彩帶＝實際飛的路徑，依當時 SINR 上色（門檻同 backend 事件：良好 ≥13、尚可 5–13、劣化 −2–5、瀕斷 −2 dB 以下）。灰色細帶＝預計航線，空心圈＝起飛點，白色箭頭＝方向。顏色永不單獨傳達語意。">ⓘ</span>
+        </div>
+        <div class="legend-row">
+          <span class="legend-lab">底圖</span>
+          <button class="btn" style="padding:1px 8px;font-size:11px">無</button>
+          <button class="btn" style="padding:1px 8px;font-size:11px">影像</button>
+        </div>
+      </div>
+      <div class="scalebar">地面網格 10 m · 傾斜 55°</div>
+      <div class="startnote" id="startnote" hidden>回放在起點——按 ▶ 開始，或拖時間軸</div>
+    </section>
+
+    <aside class="panel">
+      <article class="card">
+        <h3>這一趟
+          <span class="spacer"></span>
+          <span class="info" tabindex="0" data-tip="鏈路樣本＝這趟收到幾筆 5G 量測；SINR 與 RTT 是那些樣本的統計。「結束方式」分得出「上鎖」與「遙測中斷」——後者不代表飛行結束，只代表資料在那裡斷了。">ⓘ</span>
+        </h3>
+        <div class="facts" id="facts"></div>
+        <div id="quality"></div>
+      </article>
+
+      <article class="card grow">
+        <h3>事件<span class="h3-note" id="evcount"></span>
+          <span class="spacer"></span>
+          <span class="info" tabindex="0" data-tip="同一句話重複只佔一列（×N＋密度條）。點一列把時間軸跳到那一刻——判讀「那件事發生時機在哪裡、訊號如何」就不必自己對時間。目前時刻的那一列會highlight。">ⓘ</span>
+        </h3>
+        <div class="evtools" id="evtools"></div>
+        <div class="evlist" id="evlist"></div>
+      </article>
+
+      <article class="card">
+        <h3>指令<span class="h3-note" id="cmdcount"></span>
+          <span class="spacer"></span>
+          <span class="info" tabindex="0" data-tip="這一趟下了什麼、飛控接不接受、花了幾毫秒。含被擋下來的——「我按了但它沒動」是事後最需要回答的問題之一。">ⓘ</span>
+        </h3>
+        <div id="cmds"></div>
+      </article>
+    </aside>
+  </div>
+
+  <div class="bottom">
+    <div class="transport">
+      <button class="tbtn" id="play">▶</button>
+      <button class="btn" id="spd">1×</button>
+      <span class="clock"><span id="clkAbs"></span><span class="rel" id="clkRel"></span></span>
+      <span class="spacer"></span>
+      <span class="hint" id="nowinfo"></span>
+    </div>
+    <div class="track">
+      <svg id="tracksvg" viewBox="0 0 1000 34" preserveAspectRatio="none"></svg>
+      <input type="range" id="range" min="0" max="100" step="0.1" value="0" aria-label="回放時間">
+    </div>
+    <details class="foldcharts" open>
+      <summary>SINR 與 RTT（與時間軸共用 X 軸）</summary>
+      <div class="charts" id="charts"></div>
+    </details>
+  </div>
+</div>
+
+<div class="mask" id="mask" hidden>
+  <div class="modal" role="dialog" aria-modal="true" aria-label="詳細">
+    <button class="mclose" id="mClose" aria-label="關閉（Esc）" title="關閉（Esc）">✕</button>
+    <div class="mhead"><span class="t" id="mTitle"></span><span class="spacer"></span>
+      <span class="chip" id="mChip"></span></div>
+    <div class="mmeta" id="mMeta"></div>
+    <div class="mbody" id="mBody"></div>
+  </div>
+</div>
+
+<script>window.PROTO={"session":{"id":"eeb4e6de-3793-418b-b636-f6688757b5e0","drone":"pi5-sdmodelh7v2-ardu","mission":"lowspeed-test-260907-v4","start":"2026-09-07T08:28:21.124932+00:00","end":"2026-09-07T08:29:50.150256+00:00","start_clock":"16:28:21","end_clock":"16:29:50","dur":89.0,"end_reason":"disarmed","video":"no_source","summary":{"avg_sinr":21.006493506493506,"min_sinr":11.5,"avg_rtt_ms":28.546753103082832,"max_alt_rel":3.6659998893737793,"samples_total":77,"samples_in_zone":0}},"quality":{"live":88,"backfilled":0,"conflicts":0,"max_gap_m":null,"mode_mismatch":0,"rule":"0.6 秒內已有即時樣本則不補（d6dea0b 起）"},"tele":[{"t":0.33,"lat":24.7735248,"lon":121.0459077,"alt":0.014000000432133675,"gs":0.02127564325928688,"hdg":129.88999938964844,"batt":99.0,"mode":"LOITER","armed":true,"sats":27},{"t":1.34,"lat":24.7735253,"lon":121.0459077,"alt":0.017999999225139618,"gs":0.01386473048478365,"hdg":129.8800048828125,"batt":99.0,"mode":"LOITER","armed":true,"sats":27},{"t":2.35,"lat":24.7735257,"lon":121.0459082,"alt":0.03200000151991844,"gs":0.02258821204304695,"hdg":129.8699951171875,"batt":99.0,"mode":"LOITER","armed":true,"sats":27},{"t":3.36,"lat":24.7735262,"lon":121.0459084,"alt":0.01899999938905239,"gs":0.024083536118268967,"hdg":129.8800048828125,"batt":99.0,"mode":"LOITER","armed":true,"sats":27},{"t":4.37,"lat":24.7735269,"lon":121.0459083,"alt":-0.023000000044703484,"gs":0.029980121180415154,"hdg":129.8699951171875,"batt":99.0,"mode":"LOITER","armed":true,"sats":27},{"t":5.39,"lat":24.7735276,"lon":121.0459084,"alt":-0.04100000113248825,"gs":0.03597276285290718,"hdg":129.8699951171875,"batt":99.0,"mode":"LOITER","armed":true,"sats":27},{"t":6.4,"lat":24.7735282,"lon":121.0459084,"alt":-0.052000001072883606,"gs":0.03880539536476135,"hdg":129.9199981689453,"batt":99.0,"mode":"LOITER","armed":true,"sats":27},{"t":7.4,"lat":24.7735286,"lon":121.0459083,"alt":-0.050999999046325684,"gs":0.03414376452565193,"hdg":129.91000366210938,"batt":99.0,"mode":"LOITER","armed":true,"sats":27},{"t":8.41,"lat":24.7735289,"lon":121.045908,"alt":-0.0430000014603138,"gs":0.024328181520104408,"hdg":129.9199981689453,"batt":99.0,"mode":"GUIDED","armed":true,"sats":27},{"t":9.42,"lat":24.7735295,"lon":121.0459091,"alt":0.1809999942779541,"gs":0.27756595611572266,"hdg":132.27000427246094,"batt":98.0,"mode":"GUIDED","armed":true,"sats":27},{"t":10.43,"lat":24.7735284,"lon":121.0459106,"alt":1.5260000228881836,"gs":0.1566963791847229,"hdg":132.1999969482422,"batt":98.0,"mode":"GUIDED","armed":true,"sats":27},{"t":11.44,"lat":24.7735281,"lon":121.0459081,"alt":2.186000108718872,"gs":0.3252595067024231,"hdg":131.3699951171875,"batt":98.0,"mode":"GUIDED","armed":true,"sats":27},{"t":12.45,"lat":24.7735286,"lon":121.0459059,"alt":2.0179998874664307,"gs":0.0664042979478836,"hdg":131.41000366210938,"batt":98.0,"mode":"AUTO","armed":true,"sats":27},{"t":13.47,"lat":24.7735279,"lon":121.0459054,"alt":1.9730000495910645,"gs":0.4994666278362274,"hdg":131.83999633789062,"batt":98.0,"mode":"AUTO","armed":true,"sats":27},{"t":14.47,"lat":24.7735208,"lon":121.0459027,"alt":1.9450000524520874,"gs":1.2743459939956665,"hdg":181.57000732421875,"batt":98.0,"mode":"AUTO","armed":true,"sats":27},{"t":15.48,"lat":24.7735059,"lon":121.0458933,"alt":1.9600000381469727,"gs":2.6204957962036133,"hdg":206.10000610351562,"batt":98.0,"mode":"AUTO","armed":true,"sats":27},{"t":16.49,"lat":24.7734766,"lon":121.0458773,"alt":2.1659998893737793,"gs":4.385043144226074,"hdg":205.25,"batt":97.0,"mode":"AUTO","armed":true,"sats":27},{"t":17.5,"lat":24.7734365,"lon":121.0458584,"alt":2.4800000190734863,"gs":5.181584358215332,"hdg":205.57000732421875,"batt":97.0,"mode":"AUTO","armed":true,"sats":27},{"t":18.51,"lat":24.7733904,"lon":121.0458382,"alt":2.7809998989105225,"gs":5.744979381561279,"hdg":205.5800018310547,"batt":97.0,"mode":"AUTO","armed":true,"sats":27},{"t":19.52,"lat":24.7733436,"lon":121.0458156,"alt":2.937999963760376,"gs":5.552950382232666,"hdg":205.82000732421875,"batt":97.0,"mode":"AUTO","armed":true,"sats":27},{"t":20.52,"lat":24.7733015,"lon":121.0457948,"alt":3.0920000076293945,"gs":4.44534969329834,"hdg":205.08999633789062,"batt":97.0,"mode":"AUTO","armed":true,"sats":27},{"t":21.53,"lat":24.773275,"lon":121.0457822,"alt":3.260999917984009,"gs":1.8720096349716187,"hdg":185.22000122070312,"batt":97.0,"mode":"AUTO","armed":true,"sats":27},{"t":22.54,"lat":24.7732673,"lon":121.0457938,"alt":3.4119999408721924,"gs":2.6894211769104004,"hdg":126.52999877929688,"batt":97.0,"mode":"AUTO","armed":true,"sats":27},{"t":23.55,"lat":24.7732792,"lon":121.0458316,"alt":3.484999895095825,"gs":5.249829292297363,"hdg":69.5199966430664,"batt":96.0,"mode":"AUTO","armed":true,"sats":27},{"t":24.56,"lat":24.7733004,"lon":121.0458839,"alt":3.315000057220459,"gs":6.162201881408691,"hdg":66.06999969482422,"batt":96.0,"mode":"AUTO","armed":true,"sats":27},{"t":25.57,"lat":24.773324,"lon":121.0459424,"alt":3.3269999027252197,"gs":6.542102813720703,"hdg":65.7699966430664,"batt":96.0,"mode":"AUTO","armed":true,"sats":27},{"t":26.57,"lat":24.7733473,"lon":121.0460018,"alt":3.299999952316284,"gs":6.196652889251709,"hdg":65.8499984741211,"batt":96.0,"mode":"AUTO","armed":true,"sats":27},{"t":27.58,"lat":24.7733674,"lon":121.0460516,"alt":3.178999900817871,"gs":4.4058074951171875,"hdg":66.12999725341797,"batt":96.0,"mode":"AUTO","armed":true,"sats":27},{"t":28.59,"lat":24.773381,"lon":121.0460824,"alt":3.3910000324249268,"gs":2.341545820236206,"hdg":66.6500015258789,"batt":96.0,"mode":"AUTO","armed":true,"sats":27},{"t":29.6,"lat":24.7733882,"lon":121.0460958,"alt":3.6659998893737793,"gs":0.763355016708374,"hdg":66.5199966430664,"batt":96.0,"mode":"AUTO","armed":true,"sats":27},{"t":30.61,"lat":24.7733887,"lon":121.0460994,"alt":3.624000072479248,"gs":0.4389724135398865,"hdg":103.75,"batt":95.0,"mode":"AUTO","armed":true,"sats":27},{"t":31.62,"lat":24.7733827,"lon":121.0460966,"alt":3.513000011444092,"gs":0.7466858625411987,"hdg":179.57000732421875,"batt":95.0,"mode":"AUTO","armed":true,"sats":27},{"t":32.63,"lat":24.7733814,"lon":121.0460909,"alt":3.3889999389648438,"gs":0.4328745901584625,"hdg":209.97000122070312,"batt":95.0,"mode":"AUTO","armed":true,"sats":27},{"t":33.64,"lat":24.7733792,"lon":121.0460895,"alt":3.321000099182129,"gs":0.4824090898036957,"hdg":209.6199951171875,"batt":95.0,"mode":"AUTO","armed":true,"sats":27},{"t":34.65,"lat":24.7733758,"lon":121.0460901,"alt":3.2799999713897705,"gs":0.3943689167499542,"hdg":209.69000244140625,"batt":95.0,"mode":"AUTO","armed":true,"sats":27},{"t":35.66,"lat":24.773373,"lon":121.0460891,"alt":3.2200000286102295,"gs":0.32428181171417236,"hdg":209.4199981689453,"batt":95.0,"mode":"AUTO","armed":true,"sats":27},{"t":36.67,"lat":24.7733705,"lon":121.0460876,"alt":3.1570000648498535,"gs":0.2804766595363617,"hdg":208.8800048828125,"batt":95.0,"mode":"AUTO","armed":true,"sats":27},{"t":37.68,"lat":24.7733683,"lon":121.0460869,"alt":3.121999979019165,"gs":0.195817232131958,"hdg":210.0500030517578,"batt":94.0,"mode":"AUTO","armed":true,"sats":27},{"t":38.69,"lat":24.7733664,"lon":121.0460853,"alt":3.111999988555908,"gs":0.3514435291290283,"hdg":211.08999633789062,"batt":94.0,"mode":"AUTO","armed":true,"sats":27},{"t":39.7,"lat":24.7733638,"lon":121.0460829,"alt":3.0959999561309814,"gs":0.3229731619358063,"hdg":209.42999267578125,"batt":94.0,"mode":"AUTO","armed":true,"sats":27},{"t":40.71,"lat":24.7733614,"lon":121.0460822,"alt":3.1070001125335693,"gs":0.24395084381103516,"hdg":208.97000122070312,"batt":94.0,"mode":"AUTO","armed":true,"sats":27},{"t":41.72,"lat":24.7733592,"lon":121.0460812,"alt":3.1089999675750732,"gs":0.24768196046352386,"hdg":208.77000427246094,"batt":94.0,"mode":"AUTO","armed":true,"sats":27},{"t":42.73,"lat":24.7733572,"lon":121.0460799,"alt":3.11299991607666,"gs":0.3797990679740906,"hdg":210.8300018310547,"batt":94.0,"mode":"AUTO","armed":true,"sats":27},{"t":43.74,"lat":24.7733546,"lon":121.0460775,"alt":3.140000104904175,"gs":0.26712995767593384,"hdg":212.39999389648438,"batt":94.0,"mode":"AUTO","armed":true,"sats":27},{"t":44.75,"lat":24.7733534,"lon":121.0460759,"alt":3.125,"gs":0.28336453437805176,"hdg":210.4199981689453,"batt":93.0,"mode":"AUTO","armed":true,"sats":27},{"t":45.76,"lat":24.7733501,"lon":121.0460756,"alt":3.1740000247955322,"gs":0.307625949382782,"hdg":212.27000427246094,"batt":93.0,"mode":"AUTO","armed":true,"sats":27},{"t":46.77,"lat":24.7733485,"lon":121.046074,"alt":3.200000047683716,"gs":0.21347661316394806,"hdg":210.3699951171875,"batt":93.0,"mode":"AUTO","armed":true,"sats":27},{"t":47.78,"lat":24.7733468,"lon":121.0460728,"alt":3.2160000801086426,"gs":0.30129140615463257,"hdg":208.83999633789062,"batt":93.0,"mode":"AUTO","armed":true,"sats":27},{"t":48.79,"lat":24.7733446,"lon":121.0460713,"alt":3.2239999771118164,"gs":0.31643110513687134,"hdg":209.05999755859375,"batt":93.0,"mode":"AUTO","armed":true,"sats":27},{"t":49.8,"lat":24.7733418,"lon":121.0460699,"alt":3.190000057220459,"gs":0.43141308426856995,"hdg":210.3300018310547,"batt":93.0,"mode":"AUTO","armed":true,"sats":27},{"t":50.8,"lat":24.7733386,"lon":121.0460693,"alt":3.2209999561309814,"gs":0.27480342984199524,"hdg":212.1699981689453,"batt":93.0,"mode":"AUTO","armed":true,"sats":27},{"t":51.81,"lat":24.7733374,"lon":121.0460664,"alt":3.250999927520752,"gs":0.42085909843444824,"hdg":210.77999877929688,"batt":92.0,"mode":"AUTO","armed":true,"sats":27},{"t":52.82,"lat":24.7733361,"lon":121.0460643,"alt":3.259000062942505,"gs":0.25516679883003235,"hdg":210.3800048828125,"batt":92.0,"mode":"AUTO","armed":true,"sats":27},{"t":53.83,"lat":24.7733334,"lon":121.0460644,"alt":3.2880001068115234,"gs":0.3397495448589325,"hdg":209.9199981689453,"batt":92.0,"mode":"AUTO","armed":true,"sats":27},{"t":54.84,"lat":24.7733308,"lon":121.0460632,"alt":3.305999994277954,"gs":0.3325739800930023,"hdg":210.92999267578125,"batt":92.0,"mode":"AUTO","armed":true,"sats":27},{"t":55.85,"lat":24.7733291,"lon":121.0460609,"alt":3.303999900817871,"gs":0.30518579483032227,"hdg":209.1999969482422,"batt":92.0,"mode":"AUTO","armed":true,"sats":27},{"t":56.86,"lat":24.7733265,"lon":121.0460595,"alt":3.3420000076293945,"gs":0.2618734836578369,"hdg":211.50999450683594,"batt":92.0,"mode":"AUTO","armed":true,"sats":28},{"t":57.87,"lat":24.7733244,"lon":121.0460582,"alt":3.3399999141693115,"gs":0.27483999729156494,"hdg":213.1699981689453,"batt":92.0,"mode":"AUTO","armed":true,"sats":28},{"t":58.88,"lat":24.7733229,"lon":121.0460555,"alt":3.3559999465942383,"gs":0.28923559188842773,"hdg":209.55999755859375,"batt":91.0,"mode":"AUTO","armed":true,"sats":28},{"t":59.89,"lat":24.7733191,"lon":121.046055,"alt":3.377000093460083,"gs":0.4120927155017853,"hdg":210.3000030517578,"batt":91.0,"mode":"AUTO","armed":true,"sats":28},{"t":60.9,"lat":24.7733163,"lon":121.0460537,"alt":3.388000011444092,"gs":0.2833636999130249,"hdg":210.16000366210938,"batt":91.0,"mode":"AUTO","armed":true,"sats":28},{"t":61.91,"lat":24.7733145,"lon":121.0460526,"alt":3.3910000324249268,"gs":0.18315976858139038,"hdg":211.57000732421875,"batt":91.0,"mode":"AUTO","armed":true,"sats":28},{"t":62.92,"lat":24.7733124,"lon":121.0460519,"alt":3.38100004196167,"gs":0.2364998459815979,"hdg":209.52999877929688,"batt":91.0,"mode":"AUTO","armed":true,"sats":28},{"t":63.93,"lat":24.7733108,"lon":121.0460505,"alt":3.380000114440918,"gs":0.3214043378829956,"hdg":211.17999267578125,"batt":91.0,"mode":"AUTO","armed":true,"sats":28},{"t":64.93,"lat":24.773308,"lon":121.0460483,"alt":3.4079999923706055,"gs":0.3427380919456482,"hdg":211.1199951171875,"batt":90.0,"mode":"AUTO","armed":true,"sats":28},{"t":65.94,"lat":24.7733063,"lon":121.0460466,"alt":3.4260001182556152,"gs":0.23413734138011932,"hdg":209.2100067138672,"batt":90.0,"mode":"AUTO","armed":true,"sats":28},{"t":66.95,"lat":24.7733045,"lon":121.0460457,"alt":3.4079999923706055,"gs":0.307319700717926,"hdg":207.67999267578125,"batt":90.0,"mode":"AUTO","armed":true,"sats":28},{"t":67.96,"lat":24.7733014,"lon":121.0460452,"alt":3.427000045776367,"gs":0.2982611656188965,"hdg":207.60000610351562,"batt":90.0,"mode":"AUTO","armed":true,"sats":28},{"t":68.97,"lat":24.7732994,"lon":121.0460437,"alt":3.427000045776367,"gs":0.2686842679977417,"hdg":209.24000549316406,"batt":90.0,"mode":"AUTO","armed":true,"sats":28},{"t":69.98,"lat":24.773297,"lon":121.046042,"alt":3.4210000038146973,"gs":0.32504740357398987,"hdg":208.4199981689453,"batt":90.0,"mode":"AUTO","armed":true,"sats":29},{"t":70.99,"lat":24.7732947,"lon":121.0460403,"alt":3.444999933242798,"gs":0.27383068203926086,"hdg":209.3300018310547,"batt":90.0,"mode":"AUTO","armed":true,"sats":29},{"t":72.0,"lat":24.7732931,"lon":121.0460391,"alt":3.430000066757202,"gs":0.16966183483600616,"hdg":210.3800048828125,"batt":89.0,"mode":"AUTO","armed":true,"sats":29},{"t":73.01,"lat":24.7732916,"lon":121.0460378,"alt":3.4700000286102295,"gs":0.3039538264274597,"hdg":210.19000244140625,"batt":89.0,"mode":"AUTO","armed":true,"sats":29},{"t":74.01,"lat":24.7732888,"lon":121.0460362,"alt":3.4709999561309814,"gs":0.3877392113208771,"hdg":210.52999877929688,"batt":89.0,"mode":"AUTO","armed":true,"sats":29},{"t":75.02,"lat":24.7732859,"lon":121.0460352,"alt":3.5139999389648438,"gs":0.2668111324310303,"hdg":209.3800048828125,"batt":89.0,"mode":"AUTO","armed":true,"sats":29},{"t":76.03,"lat":24.7732841,"lon":121.0460338,"alt":3.5299999713897705,"gs":0.24128109216690063,"hdg":209.80999755859375,"batt":89.0,"mode":"AUTO","armed":true,"sats":29},{"t":77.04,"lat":24.7732826,"lon":121.0460324,"alt":3.5429999828338623,"gs":0.2066679298877716,"hdg":210.25999450683594,"batt":89.0,"mode":"AUTO","armed":true,"sats":29},{"t":78.05,"lat":24.7732809,"lon":121.0460312,"alt":3.51200008392334,"gs":0.2506369352340698,"hdg":209.88999938964844,"batt":89.0,"mode":"LAND","armed":true,"sats":29},{"t":79.05,"lat":24.7732798,"lon":121.0460306,"alt":3.194999933242798,"gs":0.05011429265141487,"hdg":210.8800048828125,"batt":88.0,"mode":"LAND","armed":true,"sats":29},{"t":80.06,"lat":24.7732803,"lon":121.0460306,"alt":2.9179999828338623,"gs":0.044905610382556915,"hdg":209.49000549316406,"batt":88.0,"mode":"LAND","armed":true,"sats":29},{"t":81.07,"lat":24.7732799,"lon":121.0460304,"alt":2.61299991607666,"gs":0.02217879705131054,"hdg":209.64999389648438,"batt":88.0,"mode":"LAND","armed":true,"sats":29},{"t":82.08,"lat":24.7732802,"lon":121.0460304,"alt":2.305999994277954,"gs":0.09121391922235489,"hdg":209.66000366210938,"batt":88.0,"mode":"LAND","armed":true,"sats":29},{"t":83.09,"lat":24.7732807,"lon":121.0460304,"alt":2.013000011444092,"gs":0.05905890092253685,"hdg":209.88999938964844,"batt":88.0,"mode":"LAND","armed":true,"sats":29},{"t":84.1,"lat":24.7732805,"lon":121.0460301,"alt":1.7029999494552612,"gs":0.05471011623740196,"hdg":210.8699951171875,"batt":88.0,"mode":"LAND","armed":true,"sats":29},{"t":85.11,"lat":24.7732805,"lon":121.0460303,"alt":1.4140000343322754,"gs":0.10210100561380386,"hdg":210.24000549316406,"batt":88.0,"mode":"LAND","armed":true,"sats":29},{"t":86.12,"lat":24.7732804,"lon":121.0460298,"alt":1.2400000095367432,"gs":0.014272511936724186,"hdg":208.27999877929688,"batt":87.0,"mode":"LAND","armed":true,"sats":29},{"t":87.13,"lat":24.7732801,"lon":121.0460295,"alt":1.1030000448226929,"gs":0.02198966220021248,"hdg":207.74000549316406,"batt":87.0,"mode":"LAND","armed":true,"sats":29},{"t":88.14,"lat":24.7732799,"lon":121.0460293,"alt":1.0709999799728394,"gs":0.02080291323363781,"hdg":207.1699981689453,"batt":87.0,"mode":"LAND","armed":true,"sats":29}],"link":[{"t":8.96,"sinr":11.5,"rtt":94.0999984741211,"rsrp":-105.0,"rsrq":-10.5,"pci":141,"band":"n79","lat":24.7735292,"lon":121.045908,"alt":-0.03999999910593033},{"t":9.96,"sinr":11.5,"rtt":94.0999984741211,"rsrp":-105.0,"rsrq":-10.5,"pci":141,"band":"n79","lat":24.773529,"lon":121.0459104,"alt":0.7200000286102295},{"t":10.96,"sinr":11.5,"rtt":94.0999984741211,"rsrp":-105.0,"rsrq":-10.5,"pci":141,"band":"n79","lat":24.7735281,"lon":121.0459099,"alt":2.059999942779541},{"t":11.96,"sinr":11.5,"rtt":94.0999984741211,"rsrp":-105.0,"rsrq":-10.5,"pci":141,"band":"n79","lat":24.7735282,"lon":121.0459065,"alt":2.0799999237060547},{"t":12.99,"sinr":11.5,"rtt":24.0,"rsrp":-105.0,"rsrq":-10.5,"pci":141,"band":"n79","lat":24.7735289,"lon":121.0459058,"alt":2.0},{"t":13.95,"sinr":19.5,"rtt":24.0,"rsrp":-101.0,"rsrq":-10.5,"pci":141,"band":"n79","lat":24.773525,"lon":121.0459045,"alt":1.9700000286102295},{"t":14.96,"sinr":19.5,"rtt":24.0,"rsrp":-101.0,"rsrq":-10.5,"pci":141,"band":"n79","lat":24.7735147,"lon":121.0458989,"alt":1.9299999475479126},{"t":15.96,"sinr":19.5,"rtt":24.0,"rsrp":-101.0,"rsrq":-10.5,"pci":141,"band":"n79","lat":24.773493,"lon":121.0458862,"alt":2.049999952316284},{"t":16.96,"sinr":19.5,"rtt":24.0,"rsrp":-101.0,"rsrq":-10.5,"pci":141,"band":"n79","lat":24.7734574,"lon":121.0458676,"alt":2.2899999618530273},{"t":17.96,"sinr":19.5,"rtt":24.0,"rsrp":-101.0,"rsrq":-10.5,"pci":141,"band":"n79","lat":24.773414,"lon":121.0458484,"alt":2.6500000953674316},{"t":18.98,"sinr":19.5,"rtt":25.700000762939453,"rsrp":-101.0,"rsrq":-10.5,"pci":141,"band":"n79","lat":24.7733665,"lon":121.0458272,"alt":2.880000114440918},{"t":19.95,"sinr":19.5,"rtt":25.700000762939453,"rsrp":-99.0,"rsrq":-10.5,"pci":141,"band":"n79","lat":24.7733215,"lon":121.0458046,"alt":3.009999990463257},{"t":20.96,"sinr":19.5,"rtt":25.700000762939453,"rsrp":-99.0,"rsrq":-10.5,"pci":141,"band":"n79","lat":24.7732854,"lon":121.0457868,"alt":3.1700000762939453},{"t":21.97,"sinr":19.5,"rtt":25.700000762939453,"rsrp":-99.0,"rsrq":-10.5,"pci":141,"band":"n79","lat":24.7732688,"lon":121.0457839,"alt":3.3299999237060547},{"t":22.95,"sinr":19.5,"rtt":25.700000762939453,"rsrp":-99.0,"rsrq":-10.5,"pci":141,"band":"n79","lat":24.7732712,"lon":121.04581,"alt":3.440000057220459},{"t":23.98,"sinr":19.5,"rtt":21.899999618530273,"rsrp":-99.0,"rsrq":-10.5,"pci":141,"band":"n79","lat":24.7732894,"lon":121.0458569,"alt":3.4600000381469727},{"t":24.96,"sinr":19.5,"rtt":21.899999618530273,"rsrp":-99.0,"rsrq":-10.5,"pci":141,"band":"n79","lat":24.7733123,"lon":121.0459126,"alt":3.2100000381469727},{"t":25.96,"sinr":14.5,"rtt":21.899999618530273,"rsrp":-100.0,"rsrq":-10.5,"pci":141,"band":"n79","lat":24.7733357,"lon":121.0459724,"alt":3.3499999046325684},{"t":26.96,"sinr":14.5,"rtt":21.899999618530273,"rsrp":-100.0,"rsrq":-10.5,"pci":141,"band":"n79","lat":24.7733583,"lon":121.0460288,"alt":3.190000057220459},{"t":27.96,"sinr":14.5,"rtt":21.899999618530273,"rsrp":-100.0,"rsrq":-10.5,"pci":141,"band":"n79","lat":24.773375,"lon":121.0460696,"alt":3.240000009536743},{"t":28.99,"sinr":21.5,"rtt":21.200000762939453,"rsrp":-91.0,"rsrq":-10.5,"pci":141,"band":"n79","lat":24.7733856,"lon":121.0460907,"alt":3.5999999046325684},{"t":29.96,"sinr":21.5,"rtt":21.200000762939453,"rsrp":-91.0,"rsrq":-10.5,"pci":141,"band":"n79","lat":24.7733892,"lon":121.0460985,"alt":3.640000104904175},{"t":30.95,"sinr":21.5,"rtt":21.200000762939453,"rsrp":-91.0,"rsrq":-10.5,"pci":141,"band":"n79","lat":24.7733863,"lon":121.0460992,"alt":3.5999999046325684},{"t":31.95,"sinr":21.5,"rtt":21.200000762939453,"rsrp":-91.0,"rsrq":-10.5,"pci":141,"band":"n79","lat":24.7733821,"lon":121.0460952,"alt":3.4800000190734863},{"t":32.95,"sinr":21.5,"rtt":21.200000762939453,"rsrp":-91.0,"rsrq":-10.5,"pci":141,"band":"n79","lat":24.7733811,"lon":121.04609,"alt":3.369999885559082},{"t":33.96,"sinr":21.5,"rtt":21.200000762939453,"rsrp":-91.0,"rsrq":-10.5,"pci":141,"band":"n79","lat":24.7733783,"lon":121.0460898,"alt":3.309999942779541},{"t":34.99,"sinr":20.5,"rtt":30.399999618530273,"rsrp":-97.0,"rsrq":-10.5,"pci":141,"band":"n79","lat":24.773375,"lon":121.0460899,"alt":3.259999990463257},{"t":35.95,"sinr":20.5,"rtt":30.399999618530273,"rsrp":-97.0,"rsrq":-10.5,"pci":141,"band":"n79","lat":24.7733724,"lon":121.0460887,"alt":3.2100000381469727},{"t":36.95,"sinr":20.5,"rtt":30.399999618530273,"rsrp":-97.0,"rsrq":-10.5,"pci":141,"band":"n79","lat":24.7733698,"lon":121.0460874,"alt":3.1500000953674316},{"t":37.95,"sinr":20.5,"rtt":30.399999618530273,"rsrp":-97.0,"rsrq":-10.5,"pci":141,"band":"n79","lat":24.773368,"lon":121.0460865,"alt":3.109999895095825},{"t":38.96,"sinr":20.5,"rtt":30.399999618530273,"rsrp":-97.0,"rsrq":-10.5,"pci":141,"band":"n79","lat":24.7733657,"lon":121.0460847,"alt":3.109999895095825},{"t":39.95,"sinr":20.5,"rtt":30.399999618530273,"rsrp":-97.0,"rsrq":-10.5,"pci":141,"band":"n79","lat":24.7733633,"lon":121.0460826,"alt":3.0899999141693115},{"t":41.01,"sinr":25.5,"rtt":30.799999237060547,"rsrp":-96.0,"rsrq":-10.5,"pci":141,"band":"n79","lat":24.7733608,"lon":121.046082,"alt":3.109999895095825},{"t":41.96,"sinr":25.5,"rtt":30.799999237060547,"rsrp":-96.0,"rsrq":-10.5,"pci":141,"band":"n79","lat":24.7733587,"lon":121.046081,"alt":3.0999999046325684},{"t":42.97,"sinr":25.5,"rtt":30.799999237060547,"rsrp":-96.0,"rsrq":-10.5,"pci":141,"band":"n79","lat":24.7733564,"lon":121.0460793,"alt":3.119999885559082},{"t":43.96,"sinr":27.5,"rtt":30.799999237060547,"rsrp":-90.0,"rsrq":-10.5,"pci":141,"band":"n79","lat":24.7733544,"lon":121.046077,"alt":3.130000114440918},{"t":44.95,"sinr":27.5,"rtt":30.799999237060547,"rsrp":-90.0,"rsrq":-10.5,"pci":141,"band":"n79","lat":24.7733526,"lon":121.0460759,"alt":3.140000104904175},{"t":46.01,"sinr":27.5,"rtt":24.299999237060547,"rsrp":-90.0,"rsrq":-10.5,"pci":141,"band":"n79","lat":24.7733496,"lon":121.0460752,"alt":3.180000066757202},{"t":46.97,"sinr":27.5,"rtt":24.299999237060547,"rsrp":-90.0,"rsrq":-10.5,"pci":141,"band":"n79","lat":24.7733481,"lon":121.0460737,"alt":3.200000047683716},{"t":47.96,"sinr":27.5,"rtt":24.299999237060547,"rsrp":-90.0,"rsrq":-10.5,"pci":141,"band":"n79","lat":24.7733463,"lon":121.0460724,"alt":3.2100000381469727},{"t":48.96,"sinr":27.5,"rtt":24.299999237060547,"rsrp":-90.0,"rsrq":-10.5,"pci":141,"band":"n79","lat":24.773344,"lon":121.0460709,"alt":3.2300000190734863},{"t":49.97,"sinr":25.5,"rtt":24.299999237060547,"rsrp":-91.0,"rsrq":-10.5,"pci":141,"band":"n79","lat":24.7733408,"lon":121.0460697,"alt":3.180000066757202},{"t":50.97,"sinr":25.5,"rtt":24.299999237060547,"rsrp":-91.0,"rsrq":-10.5,"pci":141,"band":"n79","lat":24.7733382,"lon":121.0460688,"alt":3.2300000190734863},{"t":51.99,"sinr":25.5,"rtt":30.200000762939453,"rsrp":-91.0,"rsrq":-10.5,"pci":141,"band":"n79","lat":24.7733371,"lon":121.0460656,"alt":3.259999990463257},{"t":52.95,"sinr":25.5,"rtt":30.200000762939453,"rsrp":-91.0,"rsrq":-10.5,"pci":141,"band":"n79","lat":24.7733355,"lon":121.0460643,"alt":3.2699999809265137},{"t":53.95,"sinr":25.5,"rtt":30.200000762939453,"rsrp":-91.0,"rsrq":-10.5,"pci":141,"band":"n79","lat":24.7733326,"lon":121.0460643,"alt":3.2899999618530273},{"t":54.96,"sinr":25.5,"rtt":30.200000762939453,"rsrp":-91.0,"rsrq":-10.5,"pci":141,"band":"n79","lat":24.7733304,"lon":121.0460626,"alt":3.309999942779541},{"t":55.97,"sinr":23.5,"rtt":30.200000762939453,"rsrp":-98.0,"rsrq":-10.5,"pci":141,"band":"n79","lat":24.7733285,"lon":121.0460604,"alt":3.309999942779541},{"t":56.99,"sinr":23.5,"rtt":21.5,"rsrp":-98.0,"rsrq":-10.5,"pci":141,"band":"n79","lat":24.7733259,"lon":121.0460593,"alt":3.3399999141693115},{"t":57.95,"sinr":23.5,"rtt":21.5,"rsrp":-98.0,"rsrq":-10.5,"pci":141,"band":"n79","lat":24.7733241,"lon":121.0460577,"alt":3.3399999141693115},{"t":58.95,"sinr":22.5,"rtt":21.5,"rsrp":-99.0,"rsrq":-10.5,"pci":141,"band":"n79","lat":24.7733229,"lon":121.0460555,"alt":3.359999895095825},{"t":59.97,"sinr":22.5,"rtt":21.5,"rsrp":-99.0,"rsrq":-10.5,"pci":141,"band":"n79","lat":24.7733191,"lon":121.046055,"alt":3.380000114440918},{"t":60.96,"sinr":22.5,"rtt":21.5,"rsrp":-99.0,"rsrq":-10.5,"pci":141,"band":"n79","lat":24.7733163,"lon":121.0460537,"alt":3.390000104904175},{"t":61.96,"sinr":22.5,"rtt":21.5,"rsrp":-99.0,"rsrq":-10.5,"pci":141,"band":"n79","lat":24.7733145,"lon":121.0460526,"alt":3.390000104904175},{"t":62.97,"sinr":22.5,"rtt":21.5,"rsrp":-99.0,"rsrq":-10.5,"pci":141,"band":"n79","lat":24.7733124,"lon":121.0460519,"alt":3.380000114440918},{"t":63.97,"sinr":22.5,"rtt":21.5,"rsrp":-99.0,"rsrq":-10.5,"pci":141,"band":"n79","lat":24.7733108,"lon":121.0460505,"alt":3.380000114440918},{"t":64.95,"sinr":18.5,"rtt":21.5,"rsrp":-102.0,"rsrq":-10.5,"pci":141,"band":"n79","lat":24.773308,"lon":121.0460483,"alt":3.4100000858306885},{"t":65.96,"sinr":18.5,"rtt":21.5,"rsrp":-102.0,"rsrq":-10.5,"pci":141,"band":"n79","lat":24.7733063,"lon":121.0460466,"alt":3.430000066757202},{"t":66.97,"sinr":18.5,"rtt":21.5,"rsrp":-102.0,"rsrq":-10.5,"pci":141,"band":"n79","lat":24.7733045,"lon":121.0460457,"alt":3.4100000858306885},{"t":68.01,"sinr":18.5,"rtt":34.599998474121094,"rsrp":-102.0,"rsrq":-10.5,"pci":141,"band":"n79","lat":24.7733014,"lon":121.0460452,"alt":3.430000066757202},{"t":68.96,"sinr":18.5,"rtt":34.599998474121094,"rsrp":-102.0,"rsrq":-10.5,"pci":141,"band":"n79","lat":24.7732994,"lon":121.0460437,"alt":3.430000066757202},{"t":69.99,"sinr":18.5,"rtt":34.599998474121094,"rsrp":-102.0,"rsrq":-10.5,"pci":141,"band":"n79","lat":24.773297,"lon":121.046042,"alt":3.4200000762939453},{"t":70.95,"sinr":18.5,"rtt":34.599998474121094,"rsrp":-101.0,"rsrq":-10.5,"pci":141,"band":"n79","lat":24.7732947,"lon":121.0460403,"alt":3.440000057220459},{"t":71.97,"sinr":18.5,"rtt":34.599998474121094,"rsrp":-101.0,"rsrq":-10.5,"pci":141,"band":"n79","lat":24.7732931,"lon":121.0460391,"alt":3.430000066757202},{"t":72.96,"sinr":18.5,"rtt":34.599998474121094,"rsrp":-101.0,"rsrq":-10.5,"pci":141,"band":"n79","lat":24.7732916,"lon":121.0460378,"alt":3.4700000286102295},{"t":73.98,"sinr":21.5,"rtt":19.5,"rsrp":-99.0,"rsrq":-10.5,"pci":141,"band":"n79","lat":24.7732888,"lon":121.0460362,"alt":3.4700000286102295},{"t":74.96,"sinr":21.5,"rtt":19.5,"rsrp":-99.0,"rsrq":-10.5,"pci":141,"band":"n79","lat":24.7732859,"lon":121.0460352,"alt":3.509999990463257},{"t":75.96,"sinr":21.5,"rtt":19.5,"rsrp":-99.0,"rsrq":-10.5,"pci":141,"band":"n79","lat":24.7732841,"lon":121.0460338,"alt":3.5299999713897705},{"t":76.95,"sinr":21.5,"rtt":19.5,"rsrp":-99.0,"rsrq":-10.5,"pci":141,"band":"n79","lat":24.7732826,"lon":121.0460324,"alt":3.5399999618530273},{"t":77.96,"sinr":21.5,"rtt":19.5,"rsrp":-99.0,"rsrq":-10.5,"pci":141,"band":"n79","lat":24.7732809,"lon":121.0460312,"alt":3.509999990463257},{"t":78.95,"sinr":21.5,"rtt":19.5,"rsrp":-99.0,"rsrq":-10.5,"pci":141,"band":"n79","lat":24.7732798,"lon":121.0460306,"alt":3.190000057220459},{"t":79.98,"sinr":22.5,"rtt":19.700000762939453,"rsrp":-97.0,"rsrq":-10.5,"pci":141,"band":"n79","lat":24.7732803,"lon":121.0460306,"alt":2.9200000762939453},{"t":80.96,"sinr":22.5,"rtt":19.700000762939453,"rsrp":-97.0,"rsrq":-10.5,"pci":141,"band":"n79","lat":24.7732799,"lon":121.0460304,"alt":2.609999895095825},{"t":81.97,"sinr":22.5,"rtt":19.700000762939453,"rsrp":-97.0,"rsrq":-10.5,"pci":141,"band":"n79","lat":24.7732802,"lon":121.0460304,"alt":2.309999942779541},{"t":82.96,"sinr":22.5,"rtt":19.700000762939453,"rsrp":-97.0,"rsrq":-10.5,"pci":141,"band":"n79","lat":24.7732807,"lon":121.0460304,"alt":2.009999990463257},{"t":83.95,"sinr":22.5,"rtt":19.700000762939453,"rsrp":-97.0,"rsrq":-10.5,"pci":141,"band":"n79","lat":24.7732805,"lon":121.0460301,"alt":1.7000000476837158},{"t":84.95,"sinr":22.5,"rtt":19.700000762939453,"rsrp":-97.0,"rsrq":-10.5,"pci":141,"band":"n79","lat":24.7732805,"lon":121.0460303,"alt":1.409999966621399},{"t":86.0,"sinr":19.5,"rtt":31.799999237060547,"rsrp":-102.0,"rsrq":-10.5,"pci":141,"band":"n79","lat":24.7732804,"lon":121.0460298,"alt":1.2400000095367432},{"t":86.96,"sinr":19.5,"rtt":31.799999237060547,"rsrp":-102.0,"rsrq":-10.5,"pci":141,"band":"n79","lat":24.7732801,"lon":121.0460295,"alt":1.1299999952316284}],"events":[{"id":22601,"t":7.75,"clock":"16:28:28","type":"vehicle_ack","sev":"info","src":"vehicle","text":"飛控**收下**了 MAV_CMD_DO_SET_MODE","detail":{"kind":"command","note":"ACK 是「我收到了」，不是「我做到了」","text":"飛控**收下**了 MAV_CMD_DO_SET_MODE","count":1,"result":0,"command":176,"result_name":"MAV_RESULT_ACCEPTED","command_name":"MAV_CMD_DO_SET_MODE"}},{"id":22602,"t":7.81,"clock":"16:28:28","type":"vehicle_ack","sev":"info","src":"vehicle","text":"飛控**收下**了 MAV_CMD_NAV_TAKEOFF","detail":{"kind":"command","note":"ACK 是「我收到了」，不是「我做到了」","text":"飛控**收下**了 MAV_CMD_NAV_TAKEOFF","count":1,"result":0,"command":22,"result_name":"MAV_RESULT_ACCEPTED","command_name":"MAV_CMD_NAV_TAKEOFF"}},{"id":22603,"t":8.0,"clock":"16:28:29","type":"mode_change","sev":"info","src":"system","text":"模式 LOITER → GUIDED","detail":{"to":"GUIDED","from":"LOITER","to_verb":"guided","from_verb":"hold"}},{"id":22604,"t":11.99,"clock":"16:28:33","type":"vehicle_ack","sev":"info","src":"vehicle","text":"飛控**收下**了 MAV_CMD_DO_SET_MODE","detail":{"kind":"command","note":"ACK 是「我收到了」，不是「我做到了」","text":"飛控**收下**了 MAV_CMD_DO_SET_MODE","count":1,"result":0,"command":176,"result_name":"MAV_RESULT_ACCEPTED","command_name":"MAV_CMD_DO_SET_MODE"}},{"id":22605,"t":12.0,"clock":"16:28:33","type":"statustext","sev":"info","src":"vehicle","text":"Mission: 1 Takeoff","detail":{"text":"Mission: 1 Takeoff","count":1}},{"id":22606,"t":12.01,"clock":"16:28:33","type":"waypoint_reached","sev":"info","src":"vehicle","text":"已到達機上第 1 項（共 8 項）","detail":{"seq":1,"total":8}},{"id":22607,"t":12.01,"clock":"16:28:33","type":"statustext","sev":"info","src":"vehicle","text":"Mission: 2 WP","detail":{"text":"Mission: 2 WP","count":1}},{"id":22608,"t":12.02,"clock":"16:28:33","type":"mode_change","sev":"info","src":"system","text":"模式 GUIDED → AUTO","detail":{"to":"AUTO","from":"GUIDED","to_verb":"mission","from_verb":"guided"}},{"id":22610,"t":12.16,"clock":"16:28:33","type":"mission_progress","sev":"info","src":"vehicle","text":"任務進度：機上第 0 項 → 第 2 項，共 8 項","detail":{"to":2,"from":0,"state":"active","total":8}},{"id":22611,"t":12.17,"clock":"16:28:33","type":"mission_state","sev":"info","src":"vehicle","text":"任務狀態：未開始 → 執行中","detail":{"to":"active","seq":2,"from":"not_started","total":8}},{"id":22612,"t":17.51,"clock":"16:28:38","type":"statustext","sev":"info","src":"vehicle","text":"EKF3 IMU0 MAG0 in-flight yaw alignment complete","detail":{"text":"EKF3 IMU0 MAG0 in-flight yaw alignment complete","count":1}},{"id":22613,"t":21.76,"clock":"16:28:42","type":"waypoint_reached","sev":"info","src":"vehicle","text":"已到達機上第 3 項（共 8 項）","detail":{"seq":3,"total":8}},{"id":22614,"t":21.76,"clock":"16:28:42","type":"statustext","sev":"info","src":"vehicle","text":"Reached command #2","detail":{"text":"Reached command #2","count":1}},{"id":22615,"t":21.77,"clock":"16:28:42","type":"statustext","sev":"info","src":"vehicle","text":"Mission: 3 ChangeSpeed","detail":{"text":"Mission: 3 ChangeSpeed","count":1}},{"id":22616,"t":21.77,"clock":"16:28:42","type":"statustext","sev":"info","src":"vehicle","text":"Mission: 4 WP","detail":{"text":"Mission: 4 WP","count":1}},{"id":22617,"t":21.9,"clock":"16:28:43","type":"mission_progress","sev":"info","src":"vehicle","text":"任務進度：機上第 2 項 → 第 4 項，共 8 項","detail":{"to":4,"from":2,"state":"active","total":8}},{"id":22618,"t":30.01,"clock":"16:28:51","type":"waypoint_reached","sev":"info","src":"vehicle","text":"已到達機上第 5 項（共 8 項）","detail":{"seq":5,"total":8}},{"id":22619,"t":30.02,"clock":"16:28:51","type":"statustext","sev":"info","src":"vehicle","text":"Reached command #4","detail":{"text":"Reached command #4","count":1}},{"id":22620,"t":30.03,"clock":"16:28:51","type":"statustext","sev":"info","src":"vehicle","text":"Mission: 5 ChangeSpeed","detail":{"text":"Mission: 5 ChangeSpeed","count":1}},{"id":22621,"t":30.03,"clock":"16:28:51","type":"statustext","sev":"info","src":"vehicle","text":"Mission: 6 WP","detail":{"text":"Mission: 6 WP","count":1}},{"id":22622,"t":30.15,"clock":"16:28:51","type":"mission_progress","sev":"info","src":"vehicle","text":"任務進度：機上第 4 項 → 第 6 項，共 8 項","detail":{"to":6,"from":4,"state":"active","total":8}},{"id":22623,"t":77.66,"clock":"16:29:38","type":"mission_state","sev":"info","src":"vehicle","text":"任務狀態：執行中 → 未開始","detail":{"to":"not_started","seq":6,"from":"active","total":8}},{"id":22624,"t":78.0,"clock":"16:29:39","type":"mode_change","sev":"info","src":"system","text":"模式 AUTO → LAND","detail":{"to":"LAND","from":"AUTO","to_verb":"land","from_verb":"mission"}},{"id":22625,"t":88.4,"clock":"16:29:49","type":"mission_progress","sev":"info","src":"vehicle","text":"任務進度：機上第 6 項 → 第 0 項，共 8 項","detail":{"to":0,"from":6,"state":"not_started","total":8}}],"commands":[{"t":7.81,"clock":"16:28:28","action":"起飛（到 2.0m）","result":"accepted","steps":[{"k":"guided","ok":true,"ms":148.8},{"k":"takeoff","ok":true,"ms":56.2}],"client":"frontend","raw":"{\n \"steps\": {\n  \"guided\": {\n   \"result\": \"MAV_RESULT_ACCEPTED\",\n   \"accepted\": true,\n   \"attempts\": 1,\n   \"ack_ms\": 148.8,\n   \"mode_engaged\": true,\n   \"attempts_mode\": 1\n  },\n  \"takeoff\": {\n   \"result\": \"MAV_RESULT_ACCEPTED\",\n   \"accepted\": true,\n   \"attempts\": 1,\n   \"ack_ms\": 56.2,\n   \"alt_param7\": 2.0,\n   \"alt_semantics\": \"relative\"\n  }\n },\n \"alt_param7\": 2.0,\n \"alt_semantics\": \"relative\"\n}"},{"t":12.0,"clock":"16:28:33","action":"繼續任務","result":"accepted","steps":[{"k":"ack","ok":true,"ms":139.7}],"client":"frontend","raw":"{\n \"result\": \"MAV_RESULT_ACCEPTED\",\n \"accepted\": true,\n \"attempts\": 1,\n \"ack_ms\": 139.7,\n \"mode_engaged\": true,\n \"attempts_mode\": 1\n}"},{"t":12.01,"clock":"16:28:33","action":"mission_fly","result":"accepted","steps":[],"client":"frontend","raw":"{}"}],"plan":[{"seq":0,"lat":24.77344905,"lon":121.04586381,"alt":2.0,"action":"takeoff"},{"seq":1,"lat":24.77325853,"lon":121.04577461,"alt":3.5,"action":"waypoint"},{"seq":2,"lat":24.77344905,"lon":121.04586381,"alt":0.0,"action":"do"},{"seq":3,"lat":24.77338532,"lon":121.0460963,"alt":3.5,"action":"waypoint"},{"seq":4,"lat":24.77344905,"lon":121.04586381,"alt":0.0,"action":"do"},{"seq":5,"lat":24.77320874,"lon":121.04598517,"alt":3.5,"action":"waypoint"},{"seq":6,"lat":24.77344905,"lon":121.04586381,"alt":0.0,"action":"do"},{"seq":7,"lat":24.773445067210737,"lon":121.04591854953372,"alt":0.0,"action":"land"}],"home":[24.77344905,121.04586381,119.0],"modes":[{"t":0.33,"mode":"LOITER"},{"t":8.41,"mode":"GUIDED"},{"t":12.45,"mode":"AUTO"},{"t":78.05,"mode":"LAND"}],"gen":"2026-09-08T01:32:53+08:00"};</script>
+<script>
+(function(){
+"use strict";
+const P=window.PROTO, S=P.session, $=(s)=>document.querySelector(s);
+const el=(t,c,x)=>{const n=document.createElement(t); if(c)n.className=c; if(x!=null)n.textContent=x; return n;};
+const T0=new Date(S.start).getTime()/1000, DUR=S.dur;
+
+/* ── 格式 ────────────────────────────────────────── */
+const TZ=new Intl.DateTimeFormat("zh-TW",{timeZone:"Asia/Taipei",hour12:false,
+  hour:"2-digit",minute:"2-digit",second:"2-digit"});
+const clock=(t)=>TZ.format(new Date((T0+t)*1000));
+const rel=(t)=>`+${String(Math.floor(t/60)).padStart(2,"0")}:${String(Math.floor(t%60)).padStart(2,"0")}`;
+const num=(v,d=1)=>v==null?"—":v.toFixed(d);
+const dur=(s)=>s>=60?`${Math.floor(s/60)} 分 ${Math.round(s%60)} 秒`:`${Math.round(s)} 秒`;
+
+const CLS=[{k:"good",l:"良好",c:"var(--sinr-good)",min:13},{k:"fair",l:"尚可",c:"var(--sinr-fair)",min:5},
+           {k:"bad",l:"劣化",c:"var(--sinr-bad)",min:-2},{k:"crit",l:"瀕斷",c:"var(--sinr-crit)",min:-Infinity}];
+const cls=(v)=>CLS.find(c=>v>=c.min)||CLS[3];
+const SEV={critical:"var(--danger)",warning:"var(--warn)",info:"var(--muted)"};
+const END={disarmed:"上鎖（正常結束）",telemetry_lost:"遙測中斷（不代表飛行結束）",
+  telemetry_lost_backfilled:"遙測中斷，事後由機上補回"};
+
+// **進度條預設 0**（使用者定案 2026-09-08）：回放就從這一趟的開頭開始。
+// 此時地圖上只有預計航線與起飛點——實跡還沒飛出來，那是誠實的畫面，
+// 不是空白；事件與指令清單照樣列全趟，目前時刻那一列會 highlight
+let t=0, playing=false, speed=1, evFilter="all", openEv=null;
+
+/* ── 3D 視角（同即時頁：傾斜、地面網格、起飛點錨定、球體機身）──── */
+const V=(()=>{
+  const pts=P.tele.filter(p=>p.lat!=null);
+  const home=P.home ? {lat:P.home[0],lon:P.home[1]} : pts[0];
+  const mLon=111320*Math.cos(home.lat*Math.PI/180), mLat=111320;
+  const PIT=55*Math.PI/180, BRG=28*Math.PI/180;
+  const cb=Math.cos(BRG), sb=Math.sin(BRG), cp=Math.cos(PIT), sp=Math.sin(PIT);
+  const en=(lat,lon)=>[(lon-home.lon)*mLon,(lat-home.lat)*mLat];
+  const proj=(e,n,u)=>{const X=e*cb+n*sb, Y=-e*sb+n*cb; return [X,-Y*cp-(u||0)*sp];};
+  const all=[];
+  pts.forEach(p=>{const [e,n]=en(p.lat,p.lon); all.push(proj(e,n,p.alt||0)); all.push(proj(e,n,0));});
+  P.plan.forEach(w=>{const [e,n]=en(w.lat,w.lon); all.push(proj(e,n,w.alt||0)); all.push(proj(e,n,0));});
+  const G=25;
+  [[-G,-G],[G,-G],[-G,G],[G,G]].forEach(([e,n])=>all.push(proj(e,n,0)));
+  const xs=all.map(a=>a[0]), ys=all.map(a=>a[1]);
+  const minX=Math.min(...xs),maxX=Math.max(...xs),minY=Math.min(...ys),maxY=Math.max(...ys);
+  const pad=54, k=Math.min((1000-pad*2)/(maxX-minX),(700-pad*2)/(maxY-minY));
+  const ox=(1000-(maxX-minX)*k)/2-minX*k, oy=(700-(maxY-minY)*k)/2-minY*k;
+  const put=(x,y)=>[x*k+ox,y*k+oy];
+  return {G,k,at:(lat,lon,u)=>{const [e,n]=en(lat,lon); const [x,y]=proj(e,n,u); return put(x,y);},
+          ground:(e,n)=>{const [x,y]=proj(e,n,0); return put(x,y);}};
+})();
+
+const teleAt=(tt)=>{let r=null; for(const p of P.tele){ if(p.t<=tt) r=p; else break; } return r;};
+const linkAt=(tt)=>{let r=null; for(const p of P.link){ if(p.t<=tt) r=p; else break; } return r;};
+
+function drawMap(){
+  const svg=$("#map"), ns="http://www.w3.org/2000/svg";
+  svg.textContent="";
+  const g=(tag,a)=>{const n=document.createElementNS(ns,tag); for(const k in a) n.setAttribute(k,a[k]); return n;};
+  const defs=g("defs",{});
+  defs.innerHTML=`<radialGradient id="sph" cx="34%" cy="28%" r="74%">
+    <stop offset="0%" stop-color="#fff" stop-opacity=".55"/>
+    <stop offset="52%" stop-color="#fff" stop-opacity=".06"/>
+    <stop offset="100%" stop-color="#000" stop-opacity=".38"/></radialGradient>`;
+  svg.appendChild(defs);
+
+  const grid=g("g",{stroke:"#232a2f","stroke-width":1});
+  for(let e=-V.G;e<=V.G;e+=10){const a=V.ground(e,-V.G),b=V.ground(e,V.G);
+    grid.appendChild(g("line",{x1:a[0],y1:a[1],x2:b[0],y2:b[1]}));}
+  for(let n=-V.G;n<=V.G;n+=10){const a=V.ground(-V.G,n),b=V.ground(V.G,n);
+    grid.appendChild(g("line",{x1:a[0],y1:a[1],x2:b[0],y2:b[1]}));}
+  svg.appendChild(grid);
+
+  // 預計航線：**灰色細帶＋地面虛線**，不與實跡的分級色混淆
+  if(P.plan.length>1){
+    const air=P.plan.map(w=>V.at(w.lat,w.lon,w.alt||0).map(v=>v.toFixed(1)).join(",")).join(" ");
+    const gnd=P.plan.map(w=>V.at(w.lat,w.lon,0).map(v=>v.toFixed(1)).join(",")).join(" ");
+    svg.appendChild(g("polyline",{points:gnd,fill:"none",stroke:"var(--muted)",
+      "stroke-width":1.2,"stroke-opacity":.3,"stroke-dasharray":"5 5"}));
+    svg.appendChild(g("polyline",{points:air,fill:"none",stroke:"var(--muted)",
+      "stroke-width":2,"stroke-opacity":.45}));
+    P.plan.forEach(w=>{const [x,y]=V.at(w.lat,w.lon,w.alt||0);
+      svg.appendChild(g("circle",{cx:x,cy:y,r:3.5,fill:"none",stroke:"var(--muted)","stroke-width":1.2}));});
+  }
+
+  const pts=P.tele.filter(p=>p.t<=t && p.lat!=null);
+  if(pts.length>1){
+    const gnd=pts.map(p=>V.at(p.lat,p.lon,0).map(v=>v.toFixed(1)).join(",")).join(" ");
+    svg.appendChild(g("polyline",{points:gnd,fill:"none",stroke:"var(--muted)",
+      "stroke-width":1.6,"stroke-opacity":.3}));
+  }
+  const drop=g("g",{stroke:"var(--muted)","stroke-width":1,"stroke-opacity":.16});
+  pts.forEach((p,i)=>{ if(i%6||!p.alt||p.alt<0.4) return;
+    const a=V.at(p.lat,p.lon,p.alt), b=V.at(p.lat,p.lon,0);
+    drop.appendChild(g("line",{x1:a[0],y1:a[1],x2:b[0],y2:b[1]}));});
+  svg.appendChild(drop);
+
+  // 實際路徑：逐段依**當時**的 SINR 上色，不插值不補值
+  for(let i=1;i<pts.length;i++){
+    const a=pts[i-1], b=pts[i], lk=linkAt(b.t), fresh=lk && (b.t-lk.t)<30;
+    const A=V.at(a.lat,a.lon,a.alt||0), B=V.at(b.lat,b.lon,b.alt||0);
+    svg.appendChild(g("line",{x1:A[0],y1:A[1],x2:B[0],y2:B[1],
+      stroke:fresh?cls(lk.sinr).c:"var(--muted)","stroke-width":5,
+      "stroke-linecap":"round","stroke-opacity":fresh?.95:.45}));
+  }
+  // 方向箭頭：每 12 個樣本一枚（回放特有，即時頁沒有）
+  for(let i=6;i<pts.length;i+=12){
+    const a=pts[i-1], b=pts[i];
+    const A=V.at(a.lat,a.lon,a.alt||0), B=V.at(b.lat,b.lon,b.alt||0);
+    const ang=Math.atan2(B[1]-A[1],B[0]-A[0]);
+    const p1=[B[0],B[1]], p2=[B[0]-Math.cos(ang-0.5)*9,B[1]-Math.sin(ang-0.5)*9],
+          p3=[B[0]-Math.cos(ang+0.5)*9,B[1]-Math.sin(ang+0.5)*9];
+    svg.appendChild(g("path",{d:`M${p1} L${p2} L${p3}Z`,fill:"#f0eee6","fill-opacity":.75}));
+  }
+
+  const H=V.ground(0,0);
+  svg.appendChild(g("ellipse",{cx:H[0],cy:H[1],rx:9,ry:9*Math.cos(55*Math.PI/180),
+    fill:"none",stroke:"var(--ink-2)","stroke-width":1.5}));
+
+  const cur=teleAt(t);
+  if(cur){
+    const A=V.at(cur.lat,cur.lon,cur.alt||0), Gp=V.at(cur.lat,cur.lon,0);
+    const lk=linkAt(t), col=lk?cls(lk.sinr).c:"var(--muted)";
+    svg.appendChild(g("line",{x1:A[0],y1:A[1],x2:Gp[0],y2:Gp[1],
+      stroke:"var(--ink-2)","stroke-width":1,"stroke-opacity":.35}));
+    svg.appendChild(g("circle",{cx:A[0],cy:A[1],r:11,fill:col,stroke:"rgba(0,0,0,.4)","stroke-width":1}));
+    svg.appendChild(g("circle",{cx:A[0],cy:A[1],r:11,fill:"url(#sph)"}));
+    const lab=g("text",{x:A[0]+15,y:A[1]-10,fill:"var(--ink)","font-size":12,"font-weight":600});
+    lab.textContent=`${(cur.alt||0).toFixed(1)} m`; svg.appendChild(lab);
+  }
+}
+
+/* ── 右側：這一趟 ─────────────────────────────────── */
+function drawFacts(){
+  const s=S.summary||{}, box=$("#facts"); box.textContent="";
+  const f=(k,v,u,dot)=>{const d=el("div","fact"); d.appendChild(el("div","k",k));
+    const x=el("div","v");
+    if(dot) x.innerHTML=`<span class="sdot" style="background:${dot}"></span>`;
+    x.appendChild(document.createTextNode(v));
+    if(u){const sm=el("small",null,u); x.appendChild(sm);} d.appendChild(x); box.appendChild(d);};
+  f("任務", S.mission ?? "無");
+  f("時長", dur(S.dur));
+  f("樣本數", String(s.samples_total ?? "—"));
+  f("平均 SINR", num(s.avg_sinr), " dB", s.avg_sinr!=null?cls(s.avg_sinr).c:null);
+  f("最低 SINR", num(s.min_sinr), " dB", s.min_sinr!=null?cls(s.min_sinr).c:null);
+  f("平均 RTT", num(s.avg_rtt_ms,0), " ms");
+  f("最高高度", num(s.max_alt_rel,0), " m");
+  f("結束方式", END[S.end_reason] ?? (S.end_reason ?? "—"));
+  // 遙測來源：有補傳才說（大多數架次沒這回事，不必每趟掛一句）
+  const q=P.quality, qb=$("#quality"); qb.textContent="";
+  if(q && q.backfilled>0){
+    const w=el("div","hint");
+    w.style.marginTop="8px";
+    w.textContent=`遙測 ${q.live} 筆即時 · ${q.backfilled} 筆機上補傳`
+      + (q.conflicts>0 ? `　⚠ ${q.conflicts} 筆落在即時資料已覆蓋的秒數上` : "");
+    qb.appendChild(w);
+  }
+}
+
+/* ── 事件：折疊、可跳時刻 ───────────────────────────── */
+function fold(list){
+  const m=new Map();
+  for(const e of list){
+    const k=e.type+"|"+e.text;
+    if(!m.has(k)) m.set(k,{...e,times:[e.t],n:1});
+    else{const g=m.get(k); g.times.push(e.t); g.n++; g.t=e.t; g.clock=e.clock;}
+  }
+  return [...m.values()].sort((a,b)=>a.times[0]-b.times[0]);
+}
+function drawEvents(){
+  const tools=$("#evtools"); tools.textContent="";
+  [["all","全部"],["warn","警告以上"],["vehicle","機上"],["system","系統"]].forEach(([k,l])=>{
+    const b=el("button","pill",l); b.setAttribute("aria-pressed", evFilter===k?"true":"false");
+    b.onclick=()=>{evFilter=k; render();}; tools.appendChild(b);
+  });
+  let list=P.events;
+  if(evFilter==="warn") list=list.filter(e=>e.sev!=="info");
+  if(evFilter==="vehicle") list=list.filter(e=>e.src==="vehicle");
+  if(evFilter==="system") list=list.filter(e=>e.src!=="vehicle");
+  const rows=fold(list);
+  $("#evcount").textContent=`${list.length} 則`;
+  const box=$("#evlist"); box.textContent="";
+  if(!rows.length){ box.appendChild(el("div","hint","這組篩選沒有事件。")); return; }
+  for(const g of rows){
+    const near=Math.abs(g.times.reduce((a,x)=>Math.abs(x-t)<Math.abs(a-t)?x:a,g.times[0])-t)<1.5;
+    const row=el("button","evrow"+(near?" now":""));
+    const dot=el("span","dot"); dot.style.background=SEV[g.sev]||SEV.info; row.appendChild(dot);
+    const tm=el("time",null,rel(g.times[0])); tm.title=clock(g.times[0]); row.appendChild(tm);
+    const tx=el("span","tx");
+    tx.appendChild(el("span","src", g.src==="vehicle"?"機上":"系統"));
+    tx.appendChild(document.createTextNode(g.text.replace(/\*\*/g,"")));
+    row.appendChild(tx);
+    const agg=el("span");
+    if(g.n>1){
+      agg.appendChild(el("span","count",`×${g.n}`));
+      const t0=g.times[0], t1=g.times[g.times.length-1], span=(t1-t0)||1;
+      let ticks="";
+      g.times.forEach(x=>{const px=((x-t0)/span*50+1).toFixed(1);
+        ticks+=`<line x1="${px}" x2="${px}" y1="1" y2="8" stroke="${SEV[g.sev]||SEV.info}" stroke-width="1.4" stroke-opacity=".8"/>`;});
+      agg.insertAdjacentHTML("beforeend",`<svg class="density" viewBox="0 0 52 9" preserveAspectRatio="none">${ticks}</svg>`);
+    }
+    row.appendChild(agg);
+    // **點事件＝跳到那一刻**：判讀「那件事發生時訊號如何」不必自己對時間
+    row.onclick=()=>{ t=g.times[0]; playing=false; openEv=g; render(); showEvent(g); };
+    box.appendChild(row);
+  }
+}
+
+function drawCmds(){
+  const box=$("#cmds"); box.textContent="";
+  $("#cmdcount").textContent=`${P.commands.length} 筆`;
+  if(!P.commands.length){ box.appendChild(el("div","hint","這一趟沒有從地面站下過指令。")); return; }
+  for(const c of P.commands){
+    const r=el("div","cmdrow");
+    const tm=el("time",null,rel(c.t)); tm.title=clock(c.t); r.appendChild(tm);
+    const mid=el("div");
+    mid.appendChild(el("div",null,c.action));
+    const st=el("div","steps");
+    c.steps.forEach(s=>{const b=el("span","step",
+      `${s.k}：${s.ok?"接受":"未接受"}${s.ms!=null?` ${s.ms.toFixed(0)}ms`:""}`); st.appendChild(b);});
+    mid.appendChild(st);
+    r.appendChild(mid);
+    r.appendChild(el("span","ok", c.result==="accepted"?"已執行":c.result));
+    r.onclick=()=>{ t=c.t; playing=false; render(); showCmd(c); };
+    r.style.cursor="pointer";
+    box.appendChild(r);
+  }
+}
+
+/* ── 底部：時間軸（事件釘點＋模式帶）＋兩張圖共用 X 軸 ───── */
+const PAD_L=44, PAD_R=10;
+const X=(tt)=>PAD_L+(tt/DUR)*(1000-PAD_L-PAD_R);
+
+function drawTrack(){
+  const MC={AUTO:"var(--series-3)",GUIDED:"var(--series-1)",LAND:"var(--series-2)",LOITER:"var(--surface-2)"};
+  let s="";
+  const segs=P.modes.map((m,i)=>({...m,end:i+1<P.modes.length?P.modes[i+1].t:DUR}));
+  segs.forEach(m=>{
+    s+=`<rect x="${X(m.t).toFixed(1)}" y="20" width="${(X(m.end)-X(m.t)).toFixed(1)}" height="8"
+        fill="${MC[m.mode]||"var(--surface-2)"}" fill-opacity=".5"/>`;
+    if(X(m.end)-X(m.t)>46)
+      s+=`<text x="${(X(m.t)+4).toFixed(1)}" y="27" fill="var(--muted)" font-size="8">${m.mode}</text>`;
+  });
+  s+=`<rect x="${PAD_L}" y="12" width="${1000-PAD_L-PAD_R}" height="4" fill="var(--hairline)"/>`;
+  s+=`<rect x="${PAD_L}" y="12" width="${(X(t)-PAD_L).toFixed(1)}" height="4" fill="var(--accent)" fill-opacity=".65"/>`;
+  P.events.forEach(e=>{
+    const c=SEV[e.sev]||SEV.info;
+    s+=`<line x1="${X(e.t).toFixed(1)}" x2="${X(e.t).toFixed(1)}" y1="4" y2="11" stroke="${c}" stroke-width="1.4"/>`;
+  });
+  P.commands.forEach(c=>{
+    s+=`<path d="M${X(c.t).toFixed(1)} 2 l4 6 l-8 0 Z" fill="var(--accent)"/>`;
+  });
+  s+=`<line x1="${X(t).toFixed(1)}" x2="${X(t).toFixed(1)}" y1="0" y2="30" stroke="var(--accent)" stroke-width="2"/>`;
+  $("#tracksvg").innerHTML=s;
+  $("#range").value=String((t/DUR)*100);
+  $("#clkAbs").textContent=clock(t);
+  $("#clkRel").textContent=rel(t);
+  $("#play").textContent=playing?"❚❚":"▶";
+  $("#spd").textContent=speed+"×";
+}
+
+/** 兩張圖共用 X 軸、上下堆疊。**SINR 線用中性墨色不分段變色**——地圖軌跡
+ *  已經載了分級色，圖上重複是噪音（doc/frontend.md 回放頁定案）。 */
+function chart(key, label, unit, refs){
+  const pts=P.link.filter(r=>r[key]!=null).map(r=>[r.t,r[key]]);
+  if(pts.length<2) return "";
+  const H=74, T=12, B=14;
+  const ys=pts.map(p=>p[1]);
+  let y0=Math.min(...ys), y1=Math.max(...ys);
+  if(refs) refs.forEach(v=>{y0=Math.min(y0,v); y1=Math.max(y1,v);});
+  const pad=(y1-y0)*0.15||1; y0-=pad; y1+=pad;
+  const Y=(v)=>T+(1-(v-y0)/(y1-y0))*(H-T-B);
+  const d=pts.map((p,i)=>`${i?"L":"M"}${X(p[0]).toFixed(1)} ${Y(p[1]).toFixed(1)}`).join(" ");
+  let g="";
+  [y0+(y1-y0)*0.15,(y0+y1)/2,y1-(y1-y0)*0.15].forEach(v=>{
+    g+=`<line x1="${PAD_L}" x2="${1000-PAD_R}" y1="${Y(v).toFixed(1)}" y2="${Y(v).toFixed(1)}"
+        stroke="var(--hairline)" stroke-width="1"/>
+        <text x="${PAD_L-6}" y="${(Y(v)+3.5).toFixed(1)}" fill="var(--muted)" font-size="9" text-anchor="end">${v.toFixed(0)}</text>`;
+  });
+  // 門檻帶：SINR 才有（5／13 dB＝backend 事件門檻），RTT 沒有權威門檻就不畫
+  if(refs) refs.forEach(v=>{
+    g+=`<line x1="${PAD_L}" x2="${1000-PAD_R}" y1="${Y(v).toFixed(1)}" y2="${Y(v).toFixed(1)}"
+        stroke="var(--warn)" stroke-width="1" stroke-dasharray="4 4" stroke-opacity=".55"/>`;
+  });
+  const cur=P.link.filter(r=>r.t<=t && r[key]!=null).slice(-1)[0];
+  const dot=cur?`<circle cx="${X(cur.t).toFixed(1)}" cy="${Y(cur[key]).toFixed(1)}" r="3" fill="var(--ink)"/>`:"";
+  return `<div class="chart"><h4>${label}${unit?` · ${unit}`:""}</h4>
+    <svg viewBox="0 0 1000 ${H}" preserveAspectRatio="none">
+      ${g}<path d="${d}" fill="none" stroke="var(--ink-2)" stroke-width="1.6" vector-effect="non-scaling-stroke"/>
+      <line x1="${X(t).toFixed(1)}" x2="${X(t).toFixed(1)}" y1="0" y2="${H-B}" stroke="var(--accent)" stroke-width="1.5"/>
+      ${dot}</svg></div>`;
+}
+function drawCharts(){
+  $("#charts").innerHTML = chart("sinr","SINR","dB",[5,13]) + chart("rtt","RTT","ms",null);
+}
+
+/* ── modal ───────────────────────────────────────── */
+const mask=$("#mask");
+function openModal(title, chip, meta, body){
+  $("#mTitle").textContent=title;
+  const c=$("#mChip"); c.textContent=chip||""; c.hidden=!chip;
+  $("#mMeta").textContent=meta;
+  const b=$("#mBody"); b.textContent=""; b.appendChild(body);
+  mask.hidden=false;
+}
+$("#mClose").onclick=()=>{mask.hidden=true;};
+mask.onclick=(e)=>{ if(e.target===mask) mask.hidden=true; };
+document.addEventListener("keydown",(e)=>{ if(e.key==="Escape") mask.hidden=true; });
+
+function showEvent(g){
+  const body=el("div");
+  const kv=el("div","kv");
+  const put=(k,v)=>{kv.appendChild(el("span","k",k)); kv.appendChild(el("span","v",v));};
+  put("型別", `${g.type}（${g.src==="vehicle"?"機上訊息":"系統推導"}）`);
+  put("嚴重度", g.sev);
+  put(g.n>1?"首次":"時刻", clock(g.times[0]));
+  if(g.n>1) put("最近", clock(g.times[g.times.length-1]));
+  Object.entries(g.detail||{}).forEach(([k,v])=>{
+    if(k==="text"||k==="count") return;
+    put(k, typeof v==="object"?JSON.stringify(v):String(v));
+  });
+  body.appendChild(kv);
+  if(g.n>1){
+    const p=el("pre","raw", g.times.map(x=>`${clock(x)}  ${rel(x)}`).join("\n"));
+    body.appendChild(el("div","hint",`逐則（${g.n} 次）`)); body.appendChild(p);
+  }
+  openModal(g.text.replace(/\*\*/g,""), g.sev==="critical"?"危急":g.sev==="warning"?"警告":"資訊",
+    `${clock(g.times[0])} · ${rel(g.times[0])}`, body);
+}
+function showCmd(c){
+  const body=el("div");
+  const st=el("div","steps");
+  c.steps.forEach(s=>st.appendChild(el("span","step",
+    `${s.k}：${s.ok?"接受":"未接受"}${s.ms!=null?` ${s.ms.toFixed(0)}ms`:""}`)));
+  body.appendChild(st);
+  body.appendChild(el("div","hint","下令者：" + (c.client||"—")));
+  body.appendChild(el("pre","raw", c.raw));
+  openModal(`指令 · ${c.action}`, c.result==="accepted"?"已執行":c.result,
+    `${clock(c.t)} · ${rel(c.t)}`, body);
+}
+
+/* ── 傳輸控制 ────────────────────────────────────── */
+$("#play").onclick=()=>{ playing=!playing; if(playing && t>=DUR) t=0; render(); };
+$("#spd").onclick=()=>{ speed = speed===1?2:speed===2?4:1; render(); };
+$("#range").oninput=(e)=>{ t=(parseFloat(e.target.value)/100)*DUR; playing=false; render(); };
+let last=performance.now();
+function tick(now){
+  const dt=(now-last)/1000; last=now;
+  if(playing){ t+=dt*speed; if(t>=DUR){t=DUR; playing=false;} render(); }
+  requestAnimationFrame(tick);
+}
+
+function render(){
+  drawMap(); drawFacts(); drawEvents(); drawCmds(); drawTrack(); drawCharts();
+  const cur=teleAt(t), lk=linkAt(t);
+  $("#startnote").hidden = !!cur;
+  $("#modechip").textContent = cur?cur.mode:"—";
+  $("#altchip").textContent = cur? `▲ ${(cur.alt||0).toFixed(1)} m` : "▲ —";
+  const c=$("#sigchip");
+  c.textContent = lk? `${lk.sinr.toFixed(1)} dB SINR` : "無量測";
+  c.innerHTML = lk
+    ? `<span class="dot" style="background:${cls(lk.sinr).c}"></span>${lk.sinr.toFixed(1)} dB · ${cls(lk.sinr).l}`
+    : "此刻沒有鏈路量測";
+}
+
+$("#who").textContent=S.drone;
+$("#topmeta").textContent=`${S.start_clock}–${S.end_clock} · ${dur(S.dur)} · ${S.mission ?? "無任務"}`;
+$("#endchip").textContent=END[S.end_reason] ?? (S.end_reason ?? "—");
+render();
+requestAnimationFrame(tick);
+})();
+</script>
