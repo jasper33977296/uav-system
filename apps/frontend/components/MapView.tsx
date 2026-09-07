@@ -729,7 +729,7 @@ export default function MapView() {
           什麼」的說明處），但縮成一行 */}
       <div className="legend">
         <div className="legend-row">
-          <span className="legend-lab">鏈路</span>
+          <span className="legend-lab">訊號品質</span>
           {LINK_CLASSES.map((c) => (
             <span className="legend-seg" key={c.key}>
               <i className="legend-sw" style={{ background: c.color }} />

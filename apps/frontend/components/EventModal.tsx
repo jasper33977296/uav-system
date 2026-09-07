@@ -89,17 +89,20 @@ export default function EventModal({ ev, onClose, mixed = false }: {
     <div className="evm-mask" onClick={onClose}>
       <div className="evm card" role="dialog" aria-modal="true"
         aria-label="事件詳情" onClick={(e) => e.stopPropagation()}>
+        {/* head 不捲動：**✕ 永遠在右上角**，label（嚴重度）緊靠它左邊
+            （使用者定案 2026-09-08，與紀錄索引 sheet 同一形狀） */}
         <div className="evm-head">
           <span className={`evm-title${d.parse_failed ? " ev-unreadable" : ""}`}>
             {/* `**` 是後端文案的強調記號，畫面不解析 Markdown（ui-spec §0.3c）
                 ——在讀的這一端畫成粗體，不要把星號印給使用者看 */}
             {emph(evText(ev as Parameters<typeof evText>[0], { mixed }))}</span>
+          <span className="spacer" />
           <span className="chip">
             <span className="dot" style={{ background: sev.color }} />{sev.label}
           </span>
-          <span className="spacer" />
           <button className="btn-plain btn-sm" aria-label="關閉" onClick={onClose}>✕</button>
         </div>
+        <div className="evm-body">
         {/* meta 併成一行：時刻 · 來源 ·（有機名才有機名）。
             **`—` 是「這則事件不屬於任何一台機」的意思，不該長得像缺值**——
             系統層事件本來就沒有機身，直接不印那一格 */}
@@ -166,6 +169,7 @@ export default function EventModal({ ev, onClose, mixed = false }: {
               .join("\n")}</pre>
           </details>
         )}
+        </div>
         <div className="evm-foot">
           <span className="spacer" />
           <button className="btn-plain btn-sm" onClick={copyAll}>

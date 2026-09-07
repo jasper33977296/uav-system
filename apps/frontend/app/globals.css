@@ -418,10 +418,19 @@ a:focus-visible, button:focus-visible, input:focus-visible, select:focus-visible
 /* 事件詳情 modal（2026-09-08 改版，對齊 live-redesign-proto.html）：
    440px 太窄——detail 的鍵值表在裡面每一列都折行，看起來像沒有內容。 */
 .evm {
-  width: min(680px, 94vw); max-height: 88dvh; overflow-y: auto;
+  width: min(680px, 94vw); max-height: 88dvh; overflow: hidden;
   display: flex; flex-direction: column; gap: 8px; padding: 14px 16px 12px;
 }
-.evm-head { display: flex; align-items: center; gap: 9px; }
+/* head 不捲動：**✕ 永遠在右上角**，內容再長也不會把它推走 */
+.evm-head { display: flex; align-items: center; gap: 9px; flex: none; }
+.evm-body {
+  flex: 1; min-height: 0; overflow-y: auto;
+  display: flex; flex-direction: column; gap: 8px;
+}
+.logx-headmeta {
+  font-size: 11.5px; color: var(--muted); font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
 .evm-title { font-size: 14.5px; font-weight: 600; min-width: 0; line-height: 1.5; }
 .evm-meta {
   font-size: 11.5px; color: var(--muted); font-variant-numeric: tabular-nums;

@@ -19,6 +19,7 @@
  */
 import { Fragment, useCallback, useEffect, useMemo, useState } from "react";
 
+import InfoTip from "@/components/InfoTip";
 import { EvDensity } from "@/lib/foldEvents";
 
 export interface LogIndex {
@@ -117,9 +118,16 @@ export default function LogIndexSheet({ url, title, onClose }: {
     <div className="evm-mask" onClick={onClose}>
       <div className="logx card" role="dialog" aria-modal="true"
         aria-label="紀錄索引" onClick={(e) => e.stopPropagation()}>
+        {/* ✕ 固定右上，label 在它左邊（與事件 modal 同一形狀） */}
         <div className="evm-head">
           <span className="evm-title">{title}</span>
           <span className="spacer" />
+          {idx && (
+            <span className="logx-headmeta">
+              {mb(idx.bytes)} · {idx.frames.toLocaleString()} frames · {dur(idx.span)}
+            </span>
+          )}
+          <InfoTip tip="欄位值與單位都是線上原樣，沒有換算（cdegC、degE7 那些就是機上送出來的形式）。曲線是原始樣本的抽樣，不做平滑也不插值。只有振動畫參考線——30／60 是 PX4 與 ArduPilot 共用的判讀門檻，其餘幾條沒有權威門檻就不畫。" />
           <button className="btn-plain btn-sm" aria-label="關閉" onClick={onClose}>✕</button>
         </div>
 
@@ -138,9 +146,7 @@ export default function LogIndexSheet({ url, title, onClose }: {
         {idx && (
           <>
             <div className="logx-meta">
-              {mb(idx.bytes)} · {idx.frames.toLocaleString()} frames ·{" "}
-              {idx.types.length} 種訊息 · {dur(idx.span)} ·{" "}
-              {clock(idx.t_start)}–{clock(idx.t_end)}
+              {idx.types.length} 種訊息 · {clock(idx.t_start)}–{clock(idx.t_end)}
               {/* **索引落後要說**：地面站那份 tlog 整天都在寫 */}
               {idx.indexed_bytes < idx.bytes && (
                 <span className="logx-stale">
@@ -283,11 +289,6 @@ export default function LogIndexSheet({ url, title, onClose }: {
                 <>
                   <ModeBand idx={idx} sys={mainSys} />
                   {idx.series.map((s) => <Chart key={s.key} s={s} span={idx.span} />)}
-                  <div className="logx-note">
-                    曲線是原始樣本的抽樣，<b>不做平滑也不插值</b>。振動的 30／60 是
-                    PX4 與 ArduPilot 共用的判讀門檻，所以它有刻度；其餘幾條沒有
-                    權威門檻，就不畫參考線。
-                  </div>
                 </>
               )}
             </div>
