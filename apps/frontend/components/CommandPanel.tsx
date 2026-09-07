@@ -12,7 +12,7 @@ import { useEffect, useRef, useState } from "react";
 import { colorFor } from "@/components/droneLayer";
 import { modeLabel } from "@/lib/modeVerb";
 import { API, CLIENT_HEADERS, COMMAND_API } from "@/lib/signal";
-import { armFix } from "@/lib/prearm";
+import { armFix, armNote } from "@/lib/prearm";
 import { useUavStore } from "@/lib/store";
 
 /** 能力四態（doc/capability-ui-proposal.md，issue 015）：按鈕由每機
@@ -104,8 +104,8 @@ export default function CommandPanel() {
   const cmdOpenReq = useUavStore((s) => s.cmdOpenReq);
   useEffect(() => { if (cmdOpenReq) setOpen(true); }, [cmdOpenReq]);
   // 這個 alt 同時餵「起飛」（監督式起飛）與編隊 hold_alt，兩者都是操作員
-  // 自己指定的高度，維持原本的 10／下限 3。**任務起飛不再用它**——見下面的
-  // flyAlt
+  // 自己指定的高度，維持原本的 10／下限 3。**任務起飛不用它**——任務的
+  // 起飛高度一律跟著任務自己的 NAV_TAKEOFF（見下面「起飛→任務」）
   const [alt, setAltState] = useState(10);
   useEffect(() => {
     const saved = Number(localStorage.getItem("takeoff-alt"));
@@ -115,13 +115,11 @@ export default function CommandPanel() {
     setAltState(v);
     if (v >= 3 && v <= 100) localStorage.setItem("takeoff-alt", String(v));
   };
-  // **「起飛→任務」的離地高度預設不由這裡決定**：留空＝後端跟著任務自己的
-  // NAV_TAKEOFF 走。原本這一格預設 10、下限 3，於是一份 takeoff 2 m、航點 3 m
-  // 的低空航線會先被拉到 10 m 才切任務——實際飛行高度是規劃的三倍以上，而
-  // 那個 10 不在任何一份 .plan 裡（2026-09-07 使用者回報）。
-  // **不記憶到 localStorage**：一個覆寫值悄悄套用到下一份任務，正是這次
-  // 出問題的形狀
-  const [flyAlt, setFlyAlt] = useState<number | null>(null);
+  // 「起飛→任務」的離地高度**沒有前端欄位**：後端跟著任務自己的 NAV_TAKEOFF
+  // 走。曾經有一格預設 10、下限 3，於是一份 takeoff 2 m、航點 3 m 的低空航線
+  // 會先被拉到 10 m 才切任務——實際飛行高度是規劃的三倍以上，而那個 10 不在
+  // 任何一份 .plan 裡（2026-09-07）。先改成留空預設，同日再整格移除：
+  // **一個永遠應該留空的欄位，不該出現在畫面上**
   const live = useUavStore((s) => s.live);
   // 013-A 編隊：targetIds（指揮）疊在選中機（看）之上
   const formation = useUavStore((s) => s.formation);
@@ -323,6 +321,22 @@ export default function CommandPanel() {
     dragRef.current = { dx: e.clientX - r.left, dy: e.clientY - r.top, moved: false };
     (e.currentTarget as Element).setPointerCapture(e.pointerId);
   }
+  /** 把座標收進視口。**拖曳、視窗縮放、面板自己長高共用這一份**——
+   * 三條路各寫一份判準，就會有一條算錯而把面板留在畫面外。 */
+  function clampPos(x: number, y: number) {
+    const el = panelRef.current;
+    const vw = window.innerWidth, vh = window.innerHeight;
+    const w = el?.offsetWidth ?? 300, h = el?.offsetHeight ?? 0;
+    return {
+      x: Math.max(8, Math.min(x, Math.max(8, vw - w - 8))),
+      // 上界避開導覽列；下界用 Math.max 兜底：面板比視口還高時寧可切齊上緣，
+      // 也不要算出一個負的 y 把標題列推到畫面外（那就再也拖不回來了）
+      y: Math.max(56, Math.min(y, Math.max(56, vh - h - 8))),
+    };
+  }
+  function savePos(p: { x: number; y: number }) {
+    try { localStorage.setItem("cmd-panel-pos2", JSON.stringify(p)); } catch { /* 私密模式 */ }
+  }
   function dragMove(e: React.PointerEvent) {
     const d = dragRef.current;
     const el = panelRef.current;
@@ -331,14 +345,11 @@ export default function CommandPanel() {
     // 不能再以 offsetParent 定位（批 2a blocker 修正配套）
     const vw = window.innerWidth, vh = window.innerHeight;
     const w = el.offsetWidth, h = el.offsetHeight;
-    let x = e.clientX - d.dx;
-    let y = e.clientY - d.dy;
-    x = Math.max(8, Math.min(x, vw - w - 8));
-    y = Math.max(56, Math.min(y, vh - h - 8));        // 上界避開導覽列
+    let { x, y } = clampPos(e.clientX - d.dx, e.clientY - d.dy);
     if (x < 28) x = 8;                                // 貼齊邊緣
-    if (vw - (x + w) < 28) x = vw - w - 8;
+    if (vw - (x + w) < 28) x = Math.max(8, vw - w - 8);
     if (y < 84) y = 56;
-    if (vh - (y + h) < 28) y = vh - h - 8;
+    if (vh - (y + h) < 28) y = Math.max(56, vh - h - 8);
     d.moved = d.moved || Math.abs(x - (posRef.current?.x ?? -1)) > 4
       || Math.abs(y - (posRef.current?.y ?? -1)) > 4;
     setPos({ x, y });
@@ -348,10 +359,47 @@ export default function CommandPanel() {
     dragRef.current = null;
     if (!d) return;
     if (!d.moved) setOpen((o) => !o);                 // 沒拖動＝點擊：收合/展開
-    else if (posRef.current) {
-      localStorage.setItem("cmd-panel-pos2", JSON.stringify(posRef.current));
-    }
+    else if (posRef.current) savePos(posRef.current);
   }
+
+  // **面板永遠留在畫面內**（2026-09-07 使用者回報：任務控制的高度超出頁面，
+  // 連拖都拖不動）。兩件事一起做，因為它們是同一個失效的兩半：
+  //
+  //   1. **高度上限**＝從面板頂端到視口底。這個數字 CSS 算不出來：面板平時
+  //      住 map-wrap 裡的 top-stack（不是視口頂），拖走之後又變 position:fixed
+  //      ——兩種座標系可用的高度不一樣。超過就內部捲動（標題列 sticky 釘住，
+  //      **捲到哪都拖得到**）。
+  //   2. **位置回收**：存在 localStorage 的座標是上次視窗尺寸下算的。視窗一縮、
+  //      或面板自己長高（未就緒原因一次冒五條），那個座標就落在畫面外了。
+  //
+  // 拖曳進行中不回收位置——那是使用者的手正在決定的事，不要跟他搶。
+  const [maxH, setMaxH] = useState<number | null>(null);
+  const fitRef = useRef<() => void>(() => {});
+  fitRef.current = () => {
+    const cur = panelRef.current;
+    if (!cur) return;
+    const top = cur.getBoundingClientRect().top;
+    const avail = Math.max(160, Math.round(window.innerHeight - top - 8));
+    setMaxH((m) => (m != null && Math.abs(m - avail) < 2 ? m : avail));
+    const p = posRef.current;
+    if (p && !dragRef.current) {
+      const c = clampPos(p.x, p.y);
+      if (c.x !== p.x || c.y !== p.y) { setPos(c); savePos(c); }
+    }
+  };
+  useEffect(() => {
+    const el = panelRef.current;
+    if (!el) return;
+    const fit = () => fitRef.current();
+    fit();
+    const ro = new ResizeObserver(fit);
+    ro.observe(el);
+    window.addEventListener("resize", fit);
+    return () => { ro.disconnect(); window.removeEventListener("resize", fit); };
+  }, []);
+  // 拖曳／收合改變的是**位置**不是尺寸，ResizeObserver 不會叫——但可用高度
+  // 跟著頂端一起變（往下拖＝能長的空間變少），所以這兩件事也要重算
+  useEffect(() => { fitRef.current(); }, [pos, open]);
 
   useEffect(() => {
     let stop = false;
@@ -625,7 +673,10 @@ export default function CommandPanel() {
 
   return (
     <div className={`cmd-panel ${open ? "" : "cmd-closed"}`} ref={panelRef}
-      style={pos ? { position: "fixed", left: pos.x, top: pos.y, zIndex: 60 } : undefined}>
+      style={{
+        ...(pos ? { position: "fixed" as const, left: pos.x, top: pos.y, zIndex: 60 } : null),
+        ...(maxH != null ? { maxHeight: maxH } : null),
+      }}>
       <div className="cmd-head" title="拖曳移動；點擊收合"
         onPointerDown={dragStart} onPointerMove={dragMove}
         onPointerUp={dragEnd} onPointerCancel={dragEnd}>
@@ -687,11 +738,10 @@ export default function CommandPanel() {
                 ?? "MAVLink router 迴圈未在運轉：GCS 心跳已停發、指令不會送達。"}
             </div>
             <div className="hint-line">
-              · 遙測可能仍然正常（那是另一條路），**畫面正常不代表指得動**
+              · 遙測可能仍然正常（那是另一條路），<b>畫面正常不代表指得動</b>
             </div>
             <div className="hint-line">
-              · 機上仍有自己的 failsafe 與待命的實體遙控器；
-              查 command 服務日誌後重啟服務
+              · 機上仍有自己的 failsafe 與待命的實體遙控器；查 command 服務日誌後重啟服務
             </div>
           </div>
         </div>
@@ -709,8 +759,7 @@ export default function CommandPanel() {
           <div className="cmd-ready lock">
             <b>機上代理的意圖通道斷了——只剩「把飛機帶回來」。</b>
             <div className="hint-line">
-              · <b>身分沒有問題</b>：板號與配號都對得上。斷的是那條通道，
-              而指令走的是另一條路。
+              · <b>身分沒有問題</b>：板號與配號都對得上。斷的是那條通道，而指令走的是另一條路。
             </div>
             <div className="hint-line">
               · 問不到機上守門，所以暫停／續飛／開始任務都擋著——
@@ -1022,18 +1071,27 @@ export default function CommandPanel() {
               後端在 ready=null 時也帶原因句（「尚未收到 SYS_STATUS…」） */}
           {live && live.ready !== true && (live.not_ready_reasons ?? []).map((r, i) => {
             const fix = armFix(r);
+            const note = armNote(r);
             return (
               <div className="hint-line" key={i}>
                 · {r}
                 {/* **「為什麼」與「怎麼辦」是兩件事，畫面上要都有。**
                     飛控說得出哪裡不對（Throttle (RC3) is not neutral），
                     說不出要做什麼——而站在場邊的人需要的是後者。
-                    **原文不刪**：處置是加在後面，不是取代它。 */}
+                    **原文不刪**：處置是加在後面，不是取代它。
+
+                    **但處置只給一行**（2026-09-07 使用者回報）：未就緒時這裡
+                    同時站著四五條原因，每條再掛兩行說明＝一整片沒人讀的字，
+                    連「換一顆電池」那幾個字都被埋掉。補充說明改掛 tooltip
+                    （lib/prearm.ts 的 note），要查的人查得到，不佔版面。 */}
                 {fix
-                  ? <div className="cmd-fix">→ {fix}</div>
-                  : <div className="cmd-fix cmd-fix-none">
-                      → 這一項還沒有對應的處置。<b>原文照列在上面</b>——
-                      看起來合理但其實錯誤的指示，比沒有指示更糟。
+                  ? <div className="cmd-fix" title={note ?? undefined}>
+                      → {fix}{note && <span className="cmd-fix-more">⋯</span>}
+                    </div>
+                  : <div className="cmd-fix cmd-fix-none"
+                      title={"看起來合理但其實錯誤的指示，比沒有指示更糟——"
+                        + "所以認不得的原因我們不編處置，照飛控原文列在上面。"}>
+                      → 還沒有對應的處置，請照上面那句原文處理
                     </div>}
               </div>
             );
@@ -1047,8 +1105,9 @@ export default function CommandPanel() {
           )}
           {unseen && (
             <div className="hint-line">指令服務尚未看到此機（sysid {sid}）。
-              <div className="cmd-fix">→ 它還沒收到這台機的 MAVLink。
-                確認代理在跑、而且地面站到機上的路是通的。</div>
+              <div className="cmd-fix">
+                → 它還沒收到這台機的 MAVLink。確認代理在跑、而且地面站到機上的路是通的。
+              </div>
             </div>
           )}
 
@@ -1075,10 +1134,11 @@ export default function CommandPanel() {
               不知道現在載的是什麼，按哪一顆都是猜的。 */}
           <div className="cmd-sec">任務</div>
           <div className="hint-line">
+            {/* JSX 的換行會塌成一個空格，中文標點後面就多出一個縫
+                （「沒上傳過， 或是」）——整句不折行 */}
             機上目前：{onboardName
               ? <b>{onboardName}</b>
-              : <span style={{ opacity: 0.6 }}>不知道（本系統沒上傳過，
-                  或是別的 GCS 傳的）</span>}
+              : <span style={{ opacity: 0.6 }}>不知道（本系統沒上傳過，或是別的 GCS 傳的）</span>}
             {inMission && "・執行中"}
             {holding && "・已暫停"}
           </div>
@@ -1098,16 +1158,13 @@ export default function CommandPanel() {
               {btn("上傳", "① 上傳到機", "/mission/upload",
                    { disabled: !missionId, body: { mission_id: missionId },
                      cap: "mission_upload", accent: true })}
-              <label className="cmd-alt" title="留空＝用任務自己的起飛高度">離地高度
-                <input type="number" min={1} max={100} step={1}
-                  placeholder="跟任務" value={flyAlt ?? ""}
-                  onChange={(e) => setFlyAlt(
-                    e.target.value === "" ? null : Number(e.target.value))} /> m
-              </label>
+              {/* **沒有「離地高度」這一格**（2026-09-07 使用者指示）：起飛高度
+                  跟著任務自己的 NAV_TAKEOFF 走，後端本來就是這樣算的。一個
+                  空白、預設「跟任務」的輸入格只是在問一個已經有答案的問題
+                  ——而填錯它就會讓實際飛行高度與規劃的那份 .plan 不一致。 */}
               {btn("起飛→任務", "② 開始任務（起飛→執行）", "/mission/fly",
                    { confirm: true, cap: "mission_fly", disabled: rcDown,
-                     body: { mission_id: missionId || undefined,
-                             takeoff_alt: flyAlt ?? undefined } })}
+                     body: { mission_id: missionId || undefined } })}
               {/* **換任務不該被迫用「上傳另一份蓋過去」來達成**——那是一個
                   更重、更容易出錯的動作（完整握手＋逐項讀回比對）。
                   兩段式確認：清掉機上航線是不可復原的 */}
@@ -1115,8 +1172,7 @@ export default function CommandPanel() {
                    { confirm: true, cap: "mission_upload", danger: true })}
               {rcDown && (
                 <div className="hint-line">
-                  · 遙控器未連線——自動起飛的前提是有人能隨時接管，
-                  請先確認遙控器開機並與飛控連上
+                  · 遙控器未連線——自動起飛的前提是有人能隨時接管，請先確認遙控器開機並與飛控連上
                 </div>
               )}
             </div>
@@ -1143,8 +1199,7 @@ export default function CommandPanel() {
               ——操作員有權在按下「繼續任務」之前知道這件事 */}
           {holding && agentHere?.mode_owner == null && (
             <div className="hint-line">
-              · 這個暫停<b>來源不明</b>——可能是本系統按的，也可能是飛手切到 LOITER。
-              指令仍可下達；按「繼續任務」之前請先確認沒有人正在手動飛它。
+              · 這個暫停<b>來源不明</b>——可能是本系統按的，也可能是飛手切到 LOITER。指令仍可下達；按「繼續任務」之前請先確認沒有人正在手動飛它。
             </div>
           )}
           {airborne && !inMission && !holding && (
@@ -1205,7 +1260,7 @@ export default function CommandPanel() {
               </div>
               {proposal.resume_wp ? (
                 <div className="hint-line" style={{ marginTop: 4 }}>
-                  續飛航點：**第 {proposal.resume_wp.index} 點**
+                  續飛航點：<b>第 {proposal.resume_wp.index} 點</b>
                   （{proposal.resume_wp.distance_m} m、方位 {proposal.resume_wp.bearing_deg}°
                   {proposal.resume_wp.alt_delta_m != null
                     && `、高度 ${proposal.resume_wp.alt_delta_m > 0 ? "+" : ""}${proposal.resume_wp.alt_delta_m} m`}）
@@ -1223,7 +1278,7 @@ export default function CommandPanel() {
                   <li key={i} className="hint-line">{t}</li>)}
               </ol>
               <div className="hint-line" style={{ marginTop: 6 }}>
-                每一步都會讀回機端確認；任何一步沒過就**停在懸停**，不會繼續飛。
+                每一步都會讀回機端確認；任何一步沒過就<b>停在懸停</b>，不會繼續飛。
               </div>
               {(proposal.warnings ?? []).map((w: string, i: number) =>
                 <div key={i} className="form-err" style={{ marginTop: 6 }}>⚠ {w}</div>)}

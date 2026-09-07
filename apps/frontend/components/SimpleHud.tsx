@@ -363,7 +363,7 @@ export default function SimpleHud() {
           這條不會消失，因為它描述的是**畫面現在的性質**，不是一個事件。 */}
       {lv === "old" && (
         <div className="hud-stale">
-          ⚠ 這些是**最後已知**的數值，{ageText(live?.telem_age_s)}——不是現在的狀態
+          ⚠ 這些是<b>最後已知</b>的數值，{ageText(live?.telem_age_s)}——不是現在的狀態
         </div>
       )}
 

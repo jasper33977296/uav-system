@@ -349,8 +349,7 @@ export default function AbCompare() {
           <div className="empty">
             這兩趟沒有共同的里程區間——可能其中一趟未沿此路徑飛行。
             <div className="hint-line" style={{ marginTop: 6 }}>
-              前：{res.summary.a.n} 筆樣本、後：{res.summary.b.n} 筆；
-              分箱 {res.binM} m，兩趟皆有樣本的區間 0 個。
+              前：{res.summary.a.n} 筆樣本、後：{res.summary.b.n} 筆；分箱 {res.binM} m，兩趟皆有樣本的區間 0 個。
             </div>
           </div>
         </div>
@@ -376,8 +375,8 @@ export default function AbCompare() {
                 （依據：SINR 逐段差值中位數 {f1(verdict.dS)} dB
                 {verdict.dR != null && `、RSRP 逐段差值中位數 ${f1(verdict.dR)} dB`}
                 {verdict.dP50 != null && `、整體 P50 差 ${f1(verdict.dP50)} dB`}
-                {verdict.dP5 != null && `、Δp5 ${f1(verdict.dP5)} dB`}；
-                持平門檻 ±2 dB、表列顯著門檻 ±3 dB）
+                {verdict.dP5 != null && `、Δp5 ${f1(verdict.dP5)} dB`}
+                {"；持平門檻 ±2 dB、表列顯著門檻 ±3 dB）"}
               </span>
             </div>
           )}

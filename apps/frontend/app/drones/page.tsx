@@ -200,7 +200,7 @@ export default function Drones() {
                   </span>
                 ) : (
                   <span className="chip" style={{ opacity: 0.55 }}
-                    title="意圖通道斷了。這是**最後看到**的狀態，不是現在的狀態">
+                    title="意圖通道斷了。這是最後看到的狀態，不是現在的狀態">
                     最後：{txt}
                   </span>
                 );
@@ -395,8 +395,7 @@ export default function Drones() {
             與全部遙測、訊號量測、事件資料，<b>此操作無法復原</b>。
           </p>
           <p className="hint-line">
-            關聯的任務路徑不會被刪除，僅解除與此機的關聯（路徑不綁機）。
-            若要長期保留航線資料，請先逐航線「匯出」。
+            關聯的任務路徑不會被刪除，僅解除與此機的關聯（路徑不綁機）。若要長期保留航線資料，請先逐航線「匯出」。
           </p>
         </ConfirmModal>
       )}

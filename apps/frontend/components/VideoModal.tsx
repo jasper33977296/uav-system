@@ -85,10 +85,9 @@ export default function VideoModal({ droneId, name, color, onClose }: Props) {
               <div className="video-empty">
                 <p>這台機尚未設定影像串流位址。</p>
                 <p className="hint-line">
-                  到「無人機」頁按「影像」設定 video_url。瀏覽器不支援 RTSP——
-                  機上（或地面站）跑 MediaMTX 把 RTSP 轉 WHEP，
-                  填 <code>http://&lt;機IP&gt;:8889/&lt;路徑&gt;/whep</code>（延遲最低）；
-                  MJPEG／MP4 位址亦可直接播放。
+                  到「無人機」頁按「影像」設定 video_url。瀏覽器不支援 RTSP——機上（或地面站）跑 MediaMTX 把 RTSP 轉 WHEP，填{" "}
+                  <code>http://&lt;機IP&gt;:8889/&lt;路徑&gt;/whep</code>
+                  （延遲最低）；MJPEG／MP4 位址亦可直接播放。
                 </p>
               </div>
             )}

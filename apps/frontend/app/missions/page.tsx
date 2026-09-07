@@ -294,7 +294,7 @@ export default function Missions() {
       {report === "failed" && (
         <div className="plan-report">
           <div className="bad">
-            取不到這份航線的預檢結果——**不是「沒問題」**，是沒檢查到
+            取不到這份航線的預檢結果——<b>不是「沒問題」</b>，是沒檢查到
           </div>
         </div>
       )}

@@ -588,10 +588,19 @@ a:focus-visible, button:focus-visible, input:focus-visible, select:focus-visible
   width: 300px; background: var(--surface);
   border: 1px solid var(--hairline); border-radius: 14px;
   box-shadow: 0 4px 16px rgba(0, 0, 0, 0.35); font-size: 13px;
+  /* 撐不爆畫面：高度上限由 JS 逐次量（見 CommandPanel 的 fit()——面板
+     在流內／拖走後是兩種座標系，CSS 算不出可用高度），超過就自己捲。
+     max-width 顧的是另一個方向：視窗窄到 300px 以下時整片會被推出畫面 */
+  max-width: calc(100vw - 20px);
+  overflow-y: auto; overscroll-behavior: contain;
 }
 .cmd-head {
   display: flex; align-items: center; gap: 8px;
   padding: 10px 14px; cursor: grab; user-select: none; touch-action: none;
+  /* 內容捲動時標題列**釘在頂端**：那是唯一的拖曳把手，捲丟了就等於
+     面板搬不動（2026-09-07 回報的失效之一） */
+  position: sticky; top: 0; z-index: 1;
+  background: var(--surface); border-radius: 14px 14px 0 0;
 }
 /* 收合態：高度與隔壁 [▤][地圖|影像] 一致（32px），圓角同 10 */
 .cmd-panel.cmd-closed { border-radius: 10px; }
@@ -627,7 +636,7 @@ a:focus-visible, button:focus-visible, input:focus-visible, select:focus-visible
 /* 僅觀察鎖定：warn 黃底（刻意保護非故障，restyle §3）；安全橫幅不摺疊 */
 .cmd-ready.lock { color: var(--status-warn); background: var(--status-warn-bg); }
 
-/* 起飛高度輸入 */
+/* 數值輸入（編隊層距；任務起飛高度已無欄位——跟著任務的 NAV_TAKEOFF） */
 .cmd-alt { display: flex; align-items: center; gap: 4px; font-size: 12.5px; color: var(--ink-2); }
 .cmd-alt input {
   width: 52px; background: var(--page); color: var(--ink);
@@ -1248,3 +1257,5 @@ details.card summary { cursor: pointer; font-size: 14px; font-weight: 600; }
 }
 .cmd-fix b { color: var(--ink); }
 .cmd-fix-none { color: var(--muted); }
+/* 「還有補充，滑上去看」的記號。**淡到不搶戲**：處置那一行才是要讀的東西 */
+.cmd-fix-more { margin-left: 4px; color: var(--muted); cursor: help; }
