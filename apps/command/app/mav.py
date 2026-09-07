@@ -555,6 +555,64 @@ def job_get_params(r: MavRouter, sysid: int, names: list) -> dict:
             "missing": [n for n in names if n not in values]}
 
 
+#: 一次最多問幾個點。`TERRAIN_REPORT` 是 43 bytes 的 payload，跟 `PARAM_VALUE`
+#: 一樣得跟 27 種 4Hz 的遙測搶那條 57600 的序列埠——問太多點只會逾時。
+#: 8 個點 × 2.5 秒 ＝ 最壞 20 秒，留得下 `JOB_TIMEOUT_S` 的餘裕。
+TERRAIN_PROBE_MAX = 8
+TERRAIN_PROBE_TIMEOUT_S = 2.5
+
+
+def job_terrain_check(r: MavRouter, sysid: int, points: list) -> dict:
+    """問飛控「你認為這幾個點的地面多高」（issues/047 §2 的核對那一半）。
+
+    `points`：`[(lat, lon, 標籤), ...]`。逐點送 `TERRAIN_CHECK`，收
+    `TERRAIN_REPORT`。回每一點的 `terrain_height`（飛控認為的地面 AMSL）、
+    `pending`（它還缺幾格）、`loaded`（已載入幾格）、`spacing`（它的格距）。
+
+    **一次只有一個未回覆的請求。** `TERRAIN_REPORT` 不保證把問的座標原樣
+    回填——ArduPilot 會回它查表用的位置，可能已經吸附到格點上。同時問多點
+    再靠座標配對，會在航點相距小於格距（100 m）時配錯，而配錯的後果是
+    「用 A 點的地面高度去判斷 B 點安不安全」。慢一點換配得對。
+
+    **`pending > 0` 是一個獨立的結論，不是雜訊**：那代表飛控自己也沒有那塊
+    地形資料。ArduPilot 的地形圖磚來自 SD 卡或**會供圖的地面站**（Mission
+    Planner／MAVProxy），而本系統不供圖——所以缺的那塊不會自己補上，
+    那一段用地形跟隨飛就是在等失效返航。
+    """
+    out: list[dict] = []
+    seen_any = 0
+    for lat, lon, label in points[:TERRAIN_PROBE_MAX]:
+        r._sendto(sysid, lambda m, a=lat, o=lon: m.terrain_check_encode(
+            int(round(a * 1e7)), int(round(o * 1e7))))
+        rec = {"label": label, "lat": lat, "lon": lon}
+        deadline = time.monotonic() + TERRAIN_PROBE_TIMEOUT_S
+        while time.monotonic() < deadline:
+            msg = r._recv(0.3)
+            if msg is None:
+                continue
+            seen_any += 1
+            if msg.get_type() != "TERRAIN_REPORT" or msg.get_srcSystem() != sysid:
+                continue
+            rec.update({
+                "terrain_height_m": float(msg.terrain_height),
+                "current_height_m": float(msg.current_height),
+                "spacing_m": int(msg.spacing),
+                "pending": int(msg.pending), "loaded": int(msg.loaded),
+                # 飛控回的座標**照實記下來**：它跟我方問的差多少，就是
+                # 「這個高度其實是哪一點的」——差一格就是差 100 m
+                "reported_lat": msg.lat / 1e7, "reported_lon": msg.lon / 1e7,
+            })
+            break
+        out.append(rec)
+    answered = [x for x in out if "terrain_height_m" in x]
+    if not answered and seen_any:
+        raise CommandError(
+            f"飛控沒有回應地形查詢（這段期間收到 {seen_any} 則其他訊息，"
+            "鏈路是通的）。兩種可能：TERRAIN_ENABLE 是 0（它根本不做地形），"
+            "或 TERRAIN_REPORT 跟 PARAM_VALUE 一樣被塞滿的序列埠丟掉了")
+    return {"points": out, "answered": len(answered), "asked": len(out)}
+
+
 def job_set_params(r: MavRouter, sysid: int, items: dict) -> dict:
     """寫一批參數，**每一個都讀回來比對**。
 

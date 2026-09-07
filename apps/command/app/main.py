@@ -1048,6 +1048,115 @@ async def mission_clear(sysid: int):
     return await _run(sysid, "mission_clear", mav.job_clear_mission)
 
 
+def _terrain_probe_points(wps: list[dict], home) -> list:
+    """要問飛控哪幾個點 →`[(lat, lon, 標籤), ...]`。
+
+    **均勻取樣，而且一定含頭尾。** 問得到的點數有上限（`mav.TERRAIN_PROBE_MAX`
+    ——那條 57600 的序列埠一次問不了太多），取前 N 個會讓航線後半段完全沒被
+    問到，而地形出問題的地方不會挑前半段。
+    """
+    pts: list[tuple[float, float, str]] = []
+    if home and len(home) >= 2 and (home[0] or home[1]):
+        pts.append((float(home[0]), float(home[1]), "起飛點"))
+    nav = [w for w in wps if w.get("lat") and w.get("lon") and plan_check._is_nav(w)]
+    room = mav.TERRAIN_PROBE_MAX - len(pts)
+    if len(nav) > room and room > 1:
+        step = (len(nav) - 1) / (room - 1)
+        nav = [nav[int(round(i * step))] for i in range(room)]
+    return pts + [(w["lat"], w["lon"], f"seq {w['seq']}") for w in nav[:room]]
+
+
+#: 飛控與地面站兩份地形資料差多少算「對得上」。5 m 不是隨便取的：
+#: SRTM 的絕對誤差 LE90 約 16 m，而飛控那份多半也源自 SRTM——兩份同源時
+#: 差距應該很小；**差超過 5 m 就代表它們不同源，或有一邊沒有那塊資料**。
+TERRAIN_AGREE_M = 5.0
+
+
+@app.get("/api/command/{sysid}/terrain", tags=["任務"],
+         summary="跟飛控核對地形資料（issues/047 §2）")
+async def terrain_crosscheck(sysid: int, mission_id: str | None = None):
+    """問飛控「你認為這幾個點的地面多高」，跟地面站的 SRTM 對照。
+
+    **兩份不一致本身就是要報告的事實**，不是要挑一個當真相——飛機實際跟隨
+    的是它自己那份。地面站這份只決定「我們在畫面上警告什麼」。
+
+    `mission_id` 給了就沿那條航線取樣（含起飛點）；不給就只問飛機現在的位置。
+
+    三種要分開讀的結果：
+
+    * **`pending > 0`**：飛控自己缺那塊地形資料。ArduPilot 的圖磚來自 SD 卡
+      或會供圖的地面站，而本系統不供圖——**缺的不會自己補上**。
+    * **`diff` 大**：兩份資料不同源。照實列出來，不做平均。
+    * **沒回應**：`TERRAIN_REPORT` 跟 `PARAM_VALUE` 一樣會被塞滿的序列埠丟掉
+      ——**沒回應不等於沒有地形資料**，那是兩件事。
+    """
+    _require_enabled()
+    await _require_capability(sysid, "param_get")
+    dem = terrain.shared()
+    pts: list[tuple[float, float, str]] = []
+    if mission_id:
+        rows = await pool.fetch(
+            "SELECT seq, lat, lon, alt, action, params FROM waypoints "
+            "WHERE mission_id = $1 ORDER BY seq", mission_id)
+        if not rows:
+            raise HTTPException(404, "任務不存在或沒有航點")
+        meta = await pool.fetchrow("SELECT home FROM missions WHERE id = $1",
+                                   mission_id)
+        home = meta["home"] if meta else None
+        if isinstance(home, str):
+            home = json.loads(home)
+        pts = _terrain_probe_points([_with_command(r) for r in rows], home)
+    else:
+        d = (router.snapshot() if router else {}).get(str(sysid)) or {}
+        if not (d.get("lat") and d.get("lon")):
+            raise HTTPException(409, {
+                "msg": "沒給 mission_id，而且讀不到飛機現在的位置",
+                "how_to": ["帶上 mission_id 沿航線取樣"]})
+        pts.append((float(d["lat"]), float(d["lon"]), "現在位置"))
+
+    res = await _run(sysid, "terrain_check", mav.job_terrain_check, pts,
+                     params={"mission_id": mission_id, "points": len(pts)})
+
+    max_diff = 0.0
+    pending_total = 0
+    for rec in res["points"]:
+        gz = dem.elevation(rec["lat"], rec["lon"])
+        rec["gcs_dem_m"] = None if gz is None else round(gz, 1)
+        if "terrain_height_m" in rec:
+            pending_total += rec["pending"]
+            if gz is not None:
+                rec["diff_m"] = round(rec["terrain_height_m"] - gz, 1)
+                max_diff = max(max_diff, abs(rec["diff_m"]))
+            # 飛控回的座標離我方問的有多遠：差一格就是差一個 spacing
+            rec["offset_m"] = round(plan_check._dist_m(
+                rec["lat"], rec["lon"], rec["reported_lat"], rec["reported_lon"]), 1)
+
+    notes: list[str] = []
+    unanswered = res["asked"] - res["answered"]
+    if unanswered:
+        notes.append(
+            f"{unanswered}/{res['asked']} 個點沒有回應——**這不等於「那裡沒有"
+            "地形資料」**。TERRAIN_REPORT 跟 PARAM_VALUE 一樣會被塞滿的序列埠"
+            "丟掉，先重試一次再下結論")
+    if pending_total:
+        notes.append(
+            f"飛控還缺 {pending_total} 格地形資料。它的圖磚來自 SD 卡或會供圖的"
+            "地面站，**本系統不供圖**——缺的那塊不會自己補上，那一段用地形跟隨"
+            "飛就是在等失效返航")
+    if max_diff > TERRAIN_AGREE_M:
+        notes.append(
+            f"兩份地形資料最大差 {max_diff:.1f} m（門檻 {TERRAIN_AGREE_M:g} m）"
+            "——代表它們不同源。**飛機跟的是它自己那份**，地面站的預檢只能當參考")
+    return {
+        "asked": res["asked"], "answered": res["answered"],
+        "pending_total": pending_total,
+        "max_diff_m": round(max_diff, 1) if res["answered"] else None,
+        "agree": bool(res["answered"] == res["asked"] and not pending_total
+                      and max_diff <= TERRAIN_AGREE_M),
+        "points": res["points"], "notes": notes,
+    }
+
+
 @app.post("/api/command/{sysid}/mission/upload", tags=["任務"],
           summary="② 上傳任務到無人機（會逐項讀回比對）")
 async def mission_upload(sysid: int, body: UploadIn):
@@ -1147,6 +1256,35 @@ async def mission_upload(sysid: int, body: UploadIn):
         ready = plan_check.check_terrain_ready(
             vals, (report.get("terrain") or {}).get("max_rise_m") or 0.0)
         report["warnings"] = list(report.get("warnings") or []) + ready["warnings"]
+        # **順便把飛控自己的地形資料問清楚**（使用者裁定 2026-09-07：
+        # 「上傳前要跟無人機飛控要資料做檢查」）。只在地形跟隨的航線上做——
+        # frame 3 的航線根本不看飛控的地形庫，為它多花 8 次問答不划算，
+        # 而且那條序列埠的頻寬是實測過的稀缺資源。要對其他航線做的話，
+        # `GET /api/command/{sysid}/terrain?mission_id=…` 隨時可以單獨叫。
+        try:
+            tc = await terrain_crosscheck(sysid, body.mission_id)
+        except HTTPException:
+            raise
+        except Exception as e:                                  # noqa: BLE001
+            report["warnings"].append(f"問不到飛控的地形資料：{e}")
+        else:
+            report["terrain_fc"] = tc
+            report["warnings"] += tc["notes"]
+            if tc["pending_total"]:
+                await _audit(sysid, "mission_upload",
+                             {"mission_id": body.mission_id},
+                             "rejected_terrain_pending",
+                             f"pending={tc['pending_total']}")
+                raise HTTPException(409, {
+                    "msg": "飛控缺這一區的地形資料，未上傳",
+                    "problems": [
+                        f"飛控還缺 {tc['pending_total']} 格地形資料——地形跟隨"
+                        "飛到那裡就是在等失效返航（兩秒讀不到就轉返航）"],
+                    "how_to": [
+                        "用會供圖的地面站（Mission Planner／MAVProxy）連一次，"
+                        "讓飛控把這一區的圖磚補齊",
+                        "或把圖磚放進飛控 SD 卡的 Terrain 目錄",
+                        "或改用原本那份非地形跟隨的航線"]})
         if ready["problems"]:
             await _audit(sysid, "mission_upload", {"mission_id": body.mission_id},
                          "rejected_terrain_ready", "；".join(ready["problems"]))
