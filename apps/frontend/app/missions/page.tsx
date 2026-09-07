@@ -328,6 +328,20 @@ export default function Missions() {
                     }}>
                     {m.is_active ? "從即時頁隱藏" : "顯示於即時頁"}
                   </button>
+                  {/* 地形跟隨（issues/047 §1-A）：**存成新的一份**，不就地
+                      改寫。改寫之後高度的意思從「離起飛點」變成「離地面」
+                      ——那是另一份航線，該讓人先看到縮圖再決定要不要飛 */}
+                  <button className="btn-plain btn-sm" disabled={busy}
+                    title={"把每個航點的高度改寫成「離地面多少」（frame 10），"
+                      + "由飛控用自己的地形圖庫跟著地面飛。\n"
+                      + "起飛、降落、返航不改。查不到地形高程就整份不改。\n"
+                      + "會另存一份，原本這份不動。"}
+                    onClick={() => {
+                      setMenuId(null);
+                      call(`/api/missions/${m.id}/terrain-frame`, { method: "POST" });
+                    }}>
+                    改成地形跟隨
+                  </button>
                   {/* 刪除兩段式：卡上變紅「確定刪除？」（ui-spec §4.3） */}
                   <button className="btn-danger btn-sm" disabled={busy}
                     onClick={() => {

@@ -252,35 +252,44 @@ def check_terrain(nav: list[dict], home: dict, dem=None,
     # * **降落點用的是它前一點的高度**，不是 0。飛機是先平飛到降落點上方
     #   再往下——真正要檢查的是「平飛過去的那一段會不會撞到」，而降落點
     #   本身離地 0 是它的目的，不是錯誤。
-    pts: list[tuple[float, float, float, int]] = []   # lat, lon, amsl, seq
+    # `amsl` 是 None ＝**這一點的地面要量，但離地高度不歸這裡算**
+    # （`frame 10` 交給飛控自己跟）。地面起伏是地面的性質，跟高度用哪個
+    # 基準無關——而 `max_rise_m` 正是 `check_terrain_ready` 用來判斷
+    # 「地形資料失效時那次返航爬得夠不夠高」的依據，**不能因為航線改成
+    # 地形跟隨就變成 0**
+    pts: list[tuple[float, float, float | None, int]] = []
     skipped = 0
     for w in nav:
         lat, lon, alt = w.get("lat"), w.get("lon"), w.get("alt")
         fr = w.get("frame")
         fr = 3 if fr is None else int(fr)
-        if not lat or not lon or alt is None or fr not in _REL_FRAMES | _AMSL_FRAMES:
+        if not lat or not lon:
             skipped += 1
+            continue
+        if alt is None or fr not in _REL_FRAMES | _AMSL_FRAMES:
+            skipped += 1
+            pts.append((lat, lon, None, w.get("seq")))
             continue
         a = float(alt) if fr in _AMSL_FRAMES else ha + float(alt)
         if _cmd(w) in (_LAND, _RTL):
-            if not pts:
-                skipped += 1
-                continue
-            a = pts[-1][2]
+            a = pts[-1][2] if pts else None
         pts.append((lat, lon, a, w.get("seq")))
 
     worst = None      # (離地, 說法, 地面高程)
     below = []
     rise = 0.0
-    checked = 0
+    checked = ground_n = 0
 
     def look(lat, lon, amsl, where):
-        nonlocal worst, rise, checked
+        nonlocal worst, rise, checked, ground_n
         gz = dem.elevation(lat, lon)
         if gz is None:
             return
-        checked += 1
+        ground_n += 1
         rise = max(rise, gz - ha)
+        if amsl is None:          # 只量地面，不判離地
+            return
+        checked += 1
         rec = (amsl - gz, where, gz)
         if worst is None or rec[0] < worst[0]:
             worst = rec
@@ -293,12 +302,16 @@ def check_terrain(nav: list[dict], home: dict, dem=None,
             break
         lat2, lon2, a2, seq2 = pts[i + 1]
         leg = _dist_m(lat, lon, lat2, lon2)
+        if leg <= 0:
+            continue
         # 每段最多 200 個取樣點：一條 20 km 的航線不該讓預檢跑上千次查表
         step = max(DEM_STEP_M, leg / 200.0)
         n = int(leg // step)
         for k in range(1, n + 1):
             f = k * step / leg
-            look(lat + (lat2 - lat) * f, lon + (lon2 - lon) * f, a + (a2 - a) * f,
+            # 兩端有任一端不判離地（frame 10）時，中間也只量地面
+            mid = None if (a is None or a2 is None) else a + (a2 - a) * f
+            look(lat + (lat2 - lat) * f, lon + (lon2 - lon) * f, mid,
                  f"seq {seq}→{seq2} 之間（離 seq {seq} 約 {k * step:.0f} m）")
 
     out["terrain"] = {
@@ -315,7 +328,12 @@ def check_terrain(nav: list[dict], home: dict, dem=None,
         "notes": [],
     }
     if not checked:
+        # **「都是地形跟隨」與「查不到地形資料」是兩件事**，說錯了會讓人
+        # 以為自己剛做的改寫沒生效。分辨的依據是地面到底量到了沒
         out["warnings"].append(
+            "這份航線的高度是**離地面**（frame 10），跟著地面走的是飛控自己的"
+            "地形圖庫——地面站不重複判斷離地"
+            if ground_n else
             f"**離地高度沒有檢查**：這份航線沿線都查不到地形資料"
             f"（缺圖磚 {'、'.join(sorted(dem.missing)) or '未知'}）")
         return out
@@ -351,6 +369,141 @@ def check_terrain(nav: list[dict], home: dict, dem=None,
             "真的要貼地飛需要測距儀")
         notes.append(out["warnings"][-1])
     return out
+
+
+#: 地形跟隨（`frame 10`）要飛控自己有地形資料才成立。這幾個參數決定
+#: 「它有沒有」與「沒有的時候會怎樣」——後者才是危險的地方。
+TERRAIN_FRAME = 10
+
+
+def to_terrain_frame(nav: list[dict], home: dict, dem=None,
+                     home_amsl: float | None = None) -> dict:
+    """把 `frame 3`（相對起飛點）的航點改寫成 `frame 10`（相對地形）。
+
+    新高度就是地形預檢算的那個 `預期離地`：
+
+        地形高度 = (起飛點 AMSL + 相對高度) − DEM 高程(該點)
+
+    **不轉的項目，以及為什麼**
+
+    | 項目 | 保持原樣的理由 |
+    |---|---|
+    | 起飛（22）| ArduPilot 的起飛高度是相對 home，地形框在這裡沒有意義 |
+    | 降落（21）| LAND 本來就是降到地面 |
+    | RTL、DO_*、CONDITION_* | 不帶座標，frame 2 |
+
+    **查不到高程就整份不轉。** 一份一半 frame 3、一半 frame 10 的航線，
+    高度的意思在中途換了定義——那比不轉更危險。
+
+    回 `{ok, waypoints, problems, warnings, converted, kept}`。
+    `waypoints` 只在 `ok` 為真時有內容。
+    """
+    out = {"ok": False, "waypoints": [], "problems": [], "warnings": [],
+           "converted": 0, "kept": 0}
+    if dem is None or not dem.available:
+        out["problems"].append(
+            "地面站沒有地形資料，算不出每個航點該離地多少——無法改寫成地形跟隨")
+        return out
+    ha = home_amsl if home_amsl is not None else dem.elevation(
+        home["lat"], home["lon"])
+    if ha is None:
+        out["problems"].append("起飛點沒有地形資料，算不出基準高度")
+        return out
+
+    new: list[dict] = []
+    for w in nav:
+        c = _cmd(w)
+        lat, lon, alt = w.get("lat"), w.get("lon"), w.get("alt")
+        fr = w.get("frame")
+        fr = 3 if fr is None else int(fr)
+        if (c in (_TAKEOFF, _LAND, _RTL) or not lat or not lon or alt is None
+                or fr not in _REL_FRAMES):
+            new.append(dict(w))
+            out["kept"] += 1
+            continue
+        gz = dem.elevation(lat, lon)
+        if gz is None:
+            out["problems"].append(
+                f"seq {w.get('seq')}（{lat:.5f}, {lon:.5f}）查不到地形高程"
+                f"，缺圖磚 {'、'.join(sorted(dem.missing)) or '未知'}")
+            continue
+        agl = round(ha + float(alt) - gz, 1)
+        if agl <= 0:
+            out["problems"].append(
+                f"seq {w.get('seq')}：改寫後的地形高度是 {agl:.1f} m"
+                "——這個航點本來就在地面下，改 frame 不會讓它變得可飛")
+            continue
+        nw = dict(w)
+        nw["frame"] = TERRAIN_FRAME
+        nw["alt"] = agl
+        params = dict(nw.get("params") or {})
+        if params:
+            params["frame"] = TERRAIN_FRAME
+            nw["params"] = params
+        new.append(nw)
+        out["converted"] += 1
+
+    if out["problems"]:
+        return out
+    if not out["converted"]:
+        out["problems"].append("這份航線沒有可以改寫的航點（起飛/降落/RTL 不轉）")
+        return out
+    out["ok"] = True
+    out["waypoints"] = new
+    out["warnings"].append(
+        "改寫之後高度的意思變成**離地面**，而跟著地面走的是飛控自己的地形圖庫"
+        "——上傳前會檢查那台機的地形設定")
+    return out
+
+
+def check_terrain_ready(params: dict, max_rise_m: float = 0.0,
+                        min_clear: float = MIN_CLEARANCE_M) -> dict:
+    """這台機的設定撐不撐得住 `frame 10`。`params`＝飛控回報的參數值。
+
+    **最危險的一條不是「有沒有地形資料」，是「沒有的時候會怎樣」。**
+    ArduCopter 的地形資料失效處置是：兩秒讀不到就轉 RTL，而那次 RTL
+    **把 `RTL_ALT_M` 當成「離 home」在飛**（不是離地形，與 `RTL_ALT_TYPE`
+    無關）。所以一台 `RTL_ALT_M = 2` 的機在起伏地形上做地形跟隨，
+    失效處置本身就是撞地——這正是 2026-09-07 那趟的形狀。
+
+    回 `{problems, warnings}`；`problems` 非空就不該上傳 frame 10 的航線。
+    """
+    pr: list[str] = []
+    wn: list[str] = []
+
+    def g(name):
+        v = params.get(name)
+        return None if v is None else float(v)
+
+    en = g("TERRAIN_ENABLE")
+    if en is None:
+        wn.append("讀不到 TERRAIN_ENABLE——這台機是不是支援地形資料，無法確認")
+    elif en != 1:
+        pr.append(f"TERRAIN_ENABLE = {en:g}：飛控沒有開地形資料，"
+                  "frame 10 的航點它跟不了地面")
+
+    # 需要的返航高度＝沿線地面比起飛點高多少 ＋ 一份離地餘裕
+    need = max_rise_m + min_clear
+    rtl = g("RTL_ALT_M")
+    if rtl is None:
+        rtl = g("RTL_ALT")
+        rtl = None if rtl is None else rtl / 100.0     # 4.7 之前是 cm
+    if rtl is None:
+        wn.append("讀不到返航高度——地形資料失效時飛機會爬到多高，無法確認")
+    elif rtl < need:
+        pr.append(
+            f"**返航高度 {rtl:g} m 不夠**：地形資料一斷（兩秒讀不到）飛控就轉返航，"
+            f"而那次返航是照「離起飛點 {rtl:g} m」在飛。這條航線沿線的地面"
+            f"比起飛點高到 {max_rise_m:.1f} m，回程會撞上去——"
+            f"要用地形跟隨，返航高度至少 {need:.1f} m")
+
+    if g("RNGFND1_TYPE") in (0.0, None):
+        wn.append("這台機沒有測距儀，跟地面靠的是飛控裡的地形圖庫，不是實測")
+    sp = g("TERRAIN_SPACING")
+    if sp:
+        wn.append(f"飛控的地形格距是 {sp:g} m——**比地面站檢查用的 30 m 還粗**，"
+                  "它跟的是那個解析度下的地面")
+    return {"problems": pr, "warnings": wn}
 
 
 def check_group(paths: list[dict], vsep_m: float, lsep_m: float) -> dict:

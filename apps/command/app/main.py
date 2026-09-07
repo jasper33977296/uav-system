@@ -1121,6 +1121,41 @@ async def mission_upload(sysid: int, body: UploadIn):
                 "或改用地形跟隨（frame 10）讓飛控自己跟地面",
                 "地形資料在有樹的地方量到的是樹冠：確定是假警報就把 "
                 "TERRAIN_ENFORCE 設成 false（那一次會留痕）"]})
+    # **這份航線用地形跟隨（frame 10）→ 先問這台機撐不撐得住**
+    # （issues/047 §1-A）。危險的不是「有沒有地形資料」，是**沒有的時候
+    # 會怎樣**：ArduCopter 兩秒讀不到地形就轉返航，而那次返航把
+    # `RTL_ALT_M` 當「離起飛點」在飛。一台 RTL_ALT_M=2 的機在起伏地形上
+    # 做地形跟隨，失效處置本身就是撞地。
+    #
+    # 讀參數只在**這份航線真的有 frame 10** 時才做：那條 57600 的序列埠上
+    # 參數回覆的頻寬本來就窄，每次上傳都多問四個值不划算。
+    if settings.terrain_enforce and any(
+            int(it.get("frame") or 0) == plan_check.TERRAIN_FRAME
+            for it in build_items(wps)):
+        want = ["TERRAIN_ENABLE", "TERRAIN_SPACING", "RTL_ALT_M", "RNGFND1_TYPE"]
+        try:
+            got = await _run(sysid, "param_get", mav.job_get_params, want,
+                             params={"names": want, "why": "terrain_ready"})
+            vals = got["values"]
+        except Exception as e:                                  # noqa: BLE001
+            # **問不到就不放行。** 這裡不是「沒查到不判對錯」的場合——
+            # 失效處置是低空返航，而我方連它會爬到多高都不知道
+            raise HTTPException(409, {
+                "msg": f"這份航線是地形跟隨，但問不到飛機的地形設定：{e}",
+                "how_to": ["稍後再試一次（參數回覆在這條鏈路上本來就容易被丟）",
+                           "或改用原本那份非地形跟隨的航線"]}) from e
+        ready = plan_check.check_terrain_ready(
+            vals, (report.get("terrain") or {}).get("max_rise_m") or 0.0)
+        report["warnings"] = list(report.get("warnings") or []) + ready["warnings"]
+        if ready["problems"]:
+            await _audit(sysid, "mission_upload", {"mission_id": body.mission_id},
+                         "rejected_terrain_ready", "；".join(ready["problems"]))
+            raise HTTPException(409, {
+                "msg": "這台機的設定撐不住地形跟隨，未上傳",
+                "problems": ready["problems"], "warnings": ready["warnings"],
+                "how_to": ["先把返航高度（RTL_ALT_M）改到訊息說的值",
+                           "或改用原本那份非地形跟隨的航線"]})
+
     if not report["ok"] and settings.geofence_enforce:
         await _audit(sysid, "mission_upload", {"mission_id": body.mission_id},
                      "rejected_precheck", "；".join(report["problems"]))

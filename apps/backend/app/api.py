@@ -1669,6 +1669,81 @@ async def import_mission_from_vehicle(name: str | None = None):
                 settings.geofence_margin, dem=terrain.shared())}
 
 
+@router.post("/missions/{mission_id}/terrain-frame")
+async def make_terrain_frame(mission_id: str, name: str | None = None):
+    """把一份航線改寫成**地形跟隨**（`frame 10`）並**存成新的一份**
+    （issues/047 §1-A）。
+
+    **不就地改寫、也不在上傳時偷偷轉。** 兩個理由：
+
+    * MAVLink 保真度是這套系統的原則（見 `build_items`）——上傳時把使用者
+      顯式寫的 frame 換掉，等於飛的東西跟他看的那份不是同一份。
+    * 改寫之後高度的意思從「離起飛點」變成「離地面」。那是**另一份航線**，
+      操作員應該先看到它、比對過縮圖，再決定要不要飛。
+
+    新高度就是地形預檢算的離地高度；起飛、降落、RTL 不轉（理由見
+    `plan_check.to_terrain_frame`）。查不到高程就整份不轉。
+    """
+    row = await db.pool.fetchrow(
+        "SELECT name, fence, home, firmware_type, vehicle_type, "
+        "cruise_speed, hover_speed, rally FROM missions WHERE id = $1", mission_id)
+    if row is None:
+        raise HTTPException(404, "無此路徑")
+    rows = await db.pool.fetch(
+        "SELECT seq, lat, lon, alt, action, params FROM waypoints "
+        "WHERE mission_id = $1 ORDER BY seq", mission_id)
+    wps = []
+    for r in rows:
+        w = dict(r)
+        pm = w.get("params")
+        pm = json.loads(pm) if isinstance(pm, str) else (pm or {})
+        w["params"] = pm
+        w.update({k: pm.get(k) for k in ("command", "frame", "p1", "p2", "p3", "p4")})
+        wps.append(w)
+    home = row["home"]
+    if isinstance(home, str):
+        home = json.loads(home)
+    if not (home and len(home) >= 2 and (home[0] or home[1])):
+        home = next(({"lat": w["lat"], "lon": w["lon"]} for w in wps
+                     if w.get("lat") and w.get("lon")), None)
+    else:
+        home = {"lat": home[0], "lon": home[1]}
+    if home is None:
+        raise HTTPException(409, {"msg": "這份航線沒有起飛點座標，算不出基準高度"})
+
+    conv = plan_check.to_terrain_frame(wps, home, dem=terrain.shared())
+    if not conv["ok"]:
+        raise HTTPException(409, {"msg": "無法改寫成地形跟隨", **conv})
+
+    fence = row["fence"]
+    if isinstance(fence, str):
+        fence = json.loads(fence)
+    rally = row["rally"]
+    if isinstance(rally, str):
+        rally = json.loads(rally)
+    stored = [{"seq": w["seq"], "lat": w["lat"], "lon": w["lon"], "alt": w["alt"],
+               "action": w.get("action") or "waypoint",
+               "command": (w.get("params") or {}).get("command"),
+               "frame": w.get("frame"),
+               **{k: (w.get("params") or {}).get(k) for k in ("p1", "p2", "p3", "p4")}}
+              for w in conv["waypoints"]]
+    mid = await _store_mission(
+        name or f"{row['name']}（地形跟隨）", "terrain-frame", stored,
+        row["firmware_type"], row["vehicle_type"], fence,
+        json.loads(row["home"]) if isinstance(row["home"], str) else row["home"],
+        row["cruise_speed"], row["hover_speed"], rally)
+    return {"id": mid, "from": mission_id,
+            "converted": conv["converted"], "kept": conv["kept"],
+            "warnings": conv["warnings"],
+            # 新的那份再跑一次預檢：改寫之後 frame 10 的點不參加地形檢查
+            # （那正是重點——交給飛控了），報告要能看出剩下什麼
+            "check": plan_check.check_waypoints(
+                stored, settings.geofence_radius_m, settings.geofence_alt_m,
+                settings.geofence_margin, fence=fence,
+                autopilot=row["firmware_type"], home=home and [home["lat"], home["lon"]],
+                dem=terrain.shared())}
+
+
 @router.get("/missions/{mission_id}/check")
 async def check_mission(mission_id: str):
     """任務庫裡某一份的幾何預檢。**檢查不該只在匯入的那一刻做一次。**

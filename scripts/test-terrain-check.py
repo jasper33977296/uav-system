@@ -147,5 +147,71 @@ chk("1 m 航線在平地：warning 而非 problem", not r["problems"])
 chk("而且說明「不是地形造成的」",
     any("不是地形造成的" in w for w in r["warnings"]), r["warnings"])
 
+print("\n── 9. 改寫成地形跟隨（frame 10）────────────────────────")
+mix = [
+    {"seq": 0, "lat": 0, "lon": 0, "alt": 5, "command": 22, "frame": 3},
+    {"seq": 1, "lat": 0.5, "lon": 0.5, "alt": 5, "command": 16, "frame": 3},
+    {"seq": 2, "lat": 0.50111, "lon": 0.5, "alt": 20, "command": 16, "frame": 3},
+    {"seq": 3, "lat": 0, "lon": 0, "alt": 0, "command": 20, "frame": 2},
+]
+r = P.to_terrain_frame(mix, home, dem=dem)
+chk("轉得成", r["ok"], r["problems"])
+chk("起飛與 RTL 原樣保留（2 項）", r["kept"] == 2, r["kept"])
+got = {w["seq"]: (w.get("frame"), w.get("alt")) for w in r["waypoints"]}
+chk("平地那點：離起飛點 5 m → 離地 5 m", got[1] == (10, 5.0), got[1])
+chk("**土堤上那點：離起飛點 20 m → 離地 12 m**（地面高 8 m）",
+    got[2] == (10, 12.0), got[2])
+chk("起飛項沒被動到", got[0] == (3, 5), got[0])
+
+print("\n── 10. 半轉比不轉更危險：查不到就整份不轉 ────────────────")
+half = mix + [{"seq": 4, "lat": 40.5, "lon": 40.5, "alt": 5, "command": 16,
+               "frame": 3}]
+r = P.to_terrain_frame(half, home, dem=dem)
+chk("有一點查不到 → ok=False 且不回半套航線",
+    not r["ok"] and not r["waypoints"], r["problems"])
+under = [mix[0], {"seq": 1, "lat": 0.50111, "lon": 0.5, "alt": 5,
+                  "command": 16, "frame": 3}]
+r = P.to_terrain_frame(under, home, dem=dem)
+chk("本來就在地面下的點：說明改 frame 不會讓它可飛",
+    not r["ok"] and "不會讓它變得可飛" in r["problems"][0], r["problems"])
+
+print("\n── 11. 飛控設定撐不撐得住 frame 10 ────────────────────")
+real = {"TERRAIN_ENABLE": 1, "RTL_ALT_M": 2.0, "RNGFND1_TYPE": 0,
+        "TERRAIN_SPACING": 100}
+r = P.check_terrain_ready(real, max_rise_m=8.0)
+chk("**RTL_ALT_M=2 配 8 m 起伏 → problem**", len(r["problems"]) == 1,
+    r["problems"])
+chk("說得出至少要多少", "10.0 m" in r["problems"][0], r["problems"][0])
+chk("並且指出失效處置是照『離起飛點』在飛",
+    "離起飛點" in r["problems"][0])
+r = P.check_terrain_ready({**real, "RTL_ALT_M": 15}, max_rise_m=8.0)
+chk("返航高度夠就不擋", not r["problems"], r["problems"])
+chk("但仍說出沒測距儀與飛控格距 100 m",
+    any("測距儀" in w for w in r["warnings"])
+    and any("100 m" in w for w in r["warnings"]), r["warnings"])
+r = P.check_terrain_ready({**real, "TERRAIN_ENABLE": 0, "RTL_ALT_M": 15})
+chk("TERRAIN_ENABLE=0 → problem", len(r["problems"]) == 1, r["problems"])
+r = P.check_terrain_ready({"RTL_ALT": 1500}, max_rise_m=8.0)
+chk("4.7 之前的 RTL_ALT（cm）也讀得懂", not any(
+    "返航高度" in p for p in r["problems"]), r["problems"])
+
+print("\n── 12. 改成地形跟隨之後，地面起伏仍然要量得到 ──────────────")
+# **不能因為航線交給飛控跟地形，max_rise_m 就變成 0**：那是
+# check_terrain_ready 判斷「失效返航爬得夠不夠高」的依據
+conv = P.to_terrain_frame(mix, home, dem=dem)["waypoints"]
+r = P.check_terrain(conv, home, dem=dem)
+chk("frame 10 的航線不再報離地問題（交給飛控了）", not r["problems"],
+    r["problems"])
+chk("**但沿線地面起伏 8 m 照樣量得出來**",
+    r["terrain"]["max_rise_m"] == 8.0, r["terrain"])
+chk("離地判定的點數是 0（都不歸這裡管）", r["terrain"]["checked"] == 0,
+    r["terrain"]["checked"])
+chk("**而且說的是「交給飛控」，不是「查不到地形資料」**",
+    any("飛控自己的" in w for w in r["warnings"])
+    and not any("查不到" in w for w in r["warnings"]), r["warnings"])
+rd = P.check_terrain_ready(real, max_rise_m=r["terrain"]["max_rise_m"])
+chk("接起來：RTL_ALT_M=2 對這份地形跟隨航線仍然被擋",
+    len(rd["problems"]) == 1, rd["problems"])
+
 print("\n" + ("全部通過" if ok else "**有未通過項目**"))
 sys.exit(0 if ok else 1)

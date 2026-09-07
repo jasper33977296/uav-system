@@ -54,7 +54,13 @@ export function errText(detail: unknown, fallback: string): string {
   }
   if (typeof detail === "object") {
     const d = detail as Record<string, unknown>;
-    if (typeof d.msg === "string") return d.msg;
+    // **`problems` 要跟著 `msg` 出來。** 只回 msg 的話，被擋下的人看到的是
+    // 「無法改寫成地形跟隨」這種只講結論不講原因的句子，而原因就在旁邊
+    if (typeof d.msg === "string") {
+      const ps = Array.isArray(d.problems) ? d.problems.filter(
+        (x: unknown) => typeof x === "string") : [];
+      return ps.length ? `${d.msg}：${ps.join("；")}` : d.msg;
+    }
     return JSON.stringify(detail);
   }
   return String(detail);
