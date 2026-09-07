@@ -614,6 +614,17 @@ a:focus-visible, button:focus-visible, input:focus-visible, select:focus-visible
   display: flex; flex-direction: column; gap: 10px;
 }
 .cmd-row { display: flex; gap: 6px; align-items: center; flex-wrap: wrap; }
+/* 一列裡的按鈕**等寬等高**（使用者指示 2026-09-07）。標籤長短不一時，一排
+   大小不一的鈕讀起來像三種不同分量的操作，而它們是同一層級的東西。
+   `flex: 1 1 0` ＝平分整列（不是照字數分）；`align-items: stretch` 讓某一顆
+   因為字多而折行時，同列其餘的跟著一樣高。
+   **兩段式確認尤其需要這個**：標籤從「清除任務」變成「確認清除任務？」時
+   寬度不動，按鈕不會在你要按第二下的那一瞬間跳位。 */
+.cmd-panel .cmd-row { align-items: stretch; }
+.cmd-panel .cmd-row > button {
+  flex: 1 1 0; min-width: 0;
+  white-space: normal; line-height: 1.4;
+}
 .cmd-row select {
   flex: 1; min-width: 0; background: var(--page); color: var(--ink);
   border: 1px solid var(--hairline); border-radius: 6px; padding: 4px 6px;

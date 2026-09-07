@@ -661,6 +661,17 @@ export default function CommandPanel() {
     setBusy(null);
   }
 
+  // **一次只做一件事**（使用者指示 2026-09-07）：任何一個指令還在等回覆時，
+  // 面板上其餘會「送東西出去」的按鈕一律按不下去——連按兩顆的結果是兩條
+  // 指令在鏈路上交錯，而它們的先後順序沒有人保證得了。
+  //
+  // 界線畫在**會不會送出去**，不是「是不是按鈕」：取消提案、關掉通知、
+  // 退出編隊、返回設定都只改畫面狀態，鎖住它們只會讓人在等待的那幾秒裡
+  // 連退路都沒有。編隊入口例外地鎖住——它換掉的是指令的對象。
+  //
+  // 唯一不受這條規則管的是編隊的「中止」：那是緊急出口。
+  const inFlight = busy !== null || groupBusy;
+
   const btn = (action: string, label: string, path: string,
                opts: { confirm?: boolean; danger?: boolean; disabled?: boolean;
                        body?: Record<string, unknown>; cap?: CapKey;
@@ -669,7 +680,7 @@ export default function CommandPanel() {
       className={opts.danger ? "btn-danger btn-sm"
         : opts.accent ? "btn-accent btn-sm" : "btn-plain btn-sm"}
       title={opts.title}
-      disabled={!sid || busy !== null || !!opts.disabled || notAdmitted
+      disabled={!sid || inFlight || !!opts.disabled || notAdmitted
         || (opts.cap ? capState(opts.cap) !== "ok" : false)}
       onClick={() => exec(action, path, opts.confirm, opts.body)}
     >
@@ -900,7 +911,7 @@ export default function CommandPanel() {
                 {/* 兩段式（群組級一顆鈕）：變紅「確定起飛？」；未預檢先 disabled */}
                 <button
                   className={execConfirm ? "btn-danger btn-sm" : "btn-accent btn-sm"}
-                  disabled={!draftGroup || groupBusy}
+                  disabled={!draftGroup || inFlight}
                   title={!draftGroup ? "先建立群組＋預檢" : undefined}
                   onClick={executeGroup}>
                   {groupBusy ? "⋯" : execConfirm ? "確定起飛？" : "↑ 全部起飛"}
@@ -984,7 +995,7 @@ export default function CommandPanel() {
               {/* 先看再執行：建群組→後端展開＋conflict 預檢（013-B 前半） */}
               <div className="cmd-row">
                 <button className="btn-plain btn-sm"
-                  disabled={groupBusy || targetIds.length < 2
+                  disabled={inFlight || targetIds.length < 2
                     || (cfg.mode === "unified" ? !cfg.base
                         : targetIds.some((id) => !cfg.assign[id]))}
                   onClick={createGroup}>
@@ -1068,6 +1079,7 @@ export default function CommandPanel() {
             {/* 編隊入口（§2.5 漸進顯示）：≥2 機連線才出現，單機永遠看不到 */}
             {Object.values(fleet).filter((t) => t.connected).length >= 2 && (
               <button className="btn-plain btn-sm" title="進入編隊（多機）模式"
+                disabled={inFlight}
                 onClick={() => useUavStore.getState().setFormation(true,
                   Object.entries(fleet)
                     .filter(([, t]) => t.connected && t.mav_sysid != null)
@@ -1168,14 +1180,14 @@ export default function CommandPanel() {
               後端的守門也會擋。按了才知道不行，不如一開始就換成正確的入口 */}
           {!airborne && (
             <div className="cmd-row">
-              {btn("上傳", "① 上傳無人機", "/mission/upload",
+              {btn("上傳", "上傳無人機", "/mission/upload",
                    { disabled: !missionId, body: { mission_id: missionId },
                      cap: "mission_upload", accent: true })}
               {/* **沒有「離地高度」這一格**（2026-09-07 使用者指示）：起飛高度
                   跟著任務自己的 NAV_TAKEOFF 走，後端本來就是這樣算的。一個
                   空白、預設「跟任務」的輸入格只是在問一個已經有答案的問題
                   ——而填錯它就會讓實際飛行高度與規劃的那份 .plan 不一致。 */}
-              {btn("起飛→任務", "② 開始任務", "/mission/fly",
+              {btn("起飛→任務", "開始任務", "/mission/fly",
                    { confirm: true, cap: "mission_fly", disabled: rcDown,
                      title: rcDown
                        ? "遙控器未連線——自動起飛的前提是有人能隨時接管" : undefined,
@@ -1196,12 +1208,12 @@ export default function CommandPanel() {
               「繼續」、暫停中不給「中斷」，那兩顆按下去只會被守門擋回來 */}
           {airborne && (
             <div className="cmd-row">
-              {inMission && btn("中斷任務", "⏸ 中斷任務（原地懸停）",
-                                "/mode/hold", { cap: "hold" })}
+              {inMission && btn("中斷任務", "⏸ 中斷任務", "/mode/hold",
+                                { cap: "hold", title: "切到原地懸停，航線留在機上" })}
               {holding && btn("繼續任務", "▶ 繼續任務", "/mode/mission",
                               { confirm: true, cap: "mission_start" })}
               <button className="btn-plain btn-sm"
-                disabled={!missionId || busy !== null}
+                disabled={!missionId || inFlight}
                 title="飛行中換一份航線：先看系統打算怎麼調整（暫停→上傳→從最近的航點續飛），確認後才執行"
                 onClick={() => proposeChangeRoute()}>
                 {busy === "改航線" ? "⋯" : "⇄ 更換任務⋯"}
@@ -1307,7 +1319,7 @@ export default function CommandPanel() {
             </div>
             <div className="modal-actions">
               <button className="btn-plain" onClick={() => setProposal(null)}>取消</button>
-              <button className="btn-danger" disabled={!proposal.ok}
+              <button className="btn-danger" disabled={!proposal.ok || inFlight}
                 onClick={runChangeRoute}>執行三步序列</button>
             </div>
           </div>
