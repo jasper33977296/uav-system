@@ -1511,3 +1511,16 @@ details.card summary { cursor: pointer; font-size: 14px; font-weight: 600; }
 .fact-v { font-size: 12px; color: var(--ink); font-variant-numeric: tabular-nums; }
 .fact-v.dim { color: var(--muted); }
 .fact-v.rec-on { color: #d03b3b; font-weight: 600; }
+
+/* 機隊頁的一行全貌（app/drones/page.tsx，2026-09-08 對齊新版風格）。
+   色點實心＝在線、空心＝不在線：**形狀先於顏色**，而「離線」與「未連線」
+   靠文字分（§0.2e-2）。 */
+.drone-dot-off { background: none !important; border: 1.5px solid var(--muted); }
+.drone-state { font-size: 12px; color: var(--ink-2); white-space: nowrap; }
+.drone-state-flying { color: #d03b3b; font-weight: 600; }
+.drone-state-on { color: var(--status-ok); }
+.drone-state-off { color: var(--muted); }
+.drone-sub {
+  display: flex; flex-wrap: wrap; gap: 4px 12px; margin: 4px 0 0 18px;
+  font-size: 11px; color: var(--muted); font-variant-numeric: tabular-nums;
+}

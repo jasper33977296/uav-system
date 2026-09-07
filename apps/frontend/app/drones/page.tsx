@@ -3,10 +3,12 @@ import { useRouter } from "next/navigation";
 import { useCallback, useEffect, useState } from "react";
 
 import ConfirmModal from "@/components/ConfirmModal";
+import InfoTip from "@/components/InfoTip";
 import { Battery, SignalBars } from "@/components/SimpleHud";
 import { errText, getJson } from "@/lib/fetchJson";
 import { parseJsonb } from "@/lib/jsonb";
 import { API } from "@/lib/signal";
+import { ageText } from "@/lib/staleness";
 import { AgentState, useUavStore } from "@/lib/store";
 
 interface Drone {
@@ -47,6 +49,10 @@ interface Session {
 }
 
 const fmt = (v: number | null | undefined, d = 1) => (v == null ? "—" : v.toFixed(d));
+
+const shortWhen = (iso: string) =>
+  new Date(iso).toLocaleString("zh-TW", { month: "2-digit", day: "2-digit",
+    hour: "2-digit", minute: "2-digit", hour12: false });
 
 function duration(a: string, b: string | null): string {
   if (!b) return "進行中";
@@ -124,6 +130,41 @@ export default function Drones() {
 
   const [toDelete, setToDelete] = useState<Drone | null>(null);
 
+  /** 這台機現在是什麼狀態——**一句話，而且說得出根據**。
+   *
+   * 三種：飛行中（在線且已解鎖）／在線（連著、還沒解鎖）／未連線。
+   *
+   * **「曾經飛過」與「從來沒有」不另外分成兩種狀態**（使用者定案 2026-09-08）：
+   * 兩者現在都是「未連線」——差別在副行的「上次飛行」有沒有值，那是一個事實，
+   * 不必再變成一個要學的狀態名。 */
+  function statusOf(d: Drone, mine: Session[]) {
+    const t = fleet[d.id];
+    const ag = agents[d.id] ?? d.agent;
+    const pending = ag?.fresh ? ag.record_upload?.pending ?? 0 : 0;
+    const lastFlight = mine.length ? mine[0].started_at : null;
+    const online = !!t?.connected;
+    if (online && t?.armed) {
+      return { text: `飛行中${t.flight_mode ? ` ${t.flight_mode}` : ""}`,
+        tone: "flying", online, pending, lastFlight };
+    }
+    if (online) {
+      return { text: t?.telem_age_s != null && t.telem_age_s > 10
+        ? `在線 · 遙測 ${ageText(t.telem_age_s)}` : "在線",
+        tone: "on", online, pending, lastFlight };
+    }
+    return { text: "未連線", tone: "off", online, pending, lastFlight };
+  }
+
+  /** 排序鍵：需要注意的排前面。 */
+  function rank(d: Drone) {
+    const mine = sessions.filter((s) => s.drone_id === d.id);
+    const st = statusOf(d, mine);
+    if (st.tone === "flying") return 0;
+    if (st.tone === "on") return 1;
+    if (st.pending > 0) return 2;
+    return 3;
+  }
+
   // 人維護欄位的共用編輯（改名／機架序號／型號走同一條 PATCH）
   async function patch(d: Drone, body: Record<string, string>, what: string) {
     setErr(null);
@@ -163,27 +204,38 @@ export default function Drones() {
           錯誤訊息留下來：它不是說明，是這一頁剛剛發生的事。 */}
       {err && <div className="form-err">{err}</div>}
 
-      {drones.map((d) => {
+      <div className="drone-head">
+        <span className="name">機隊{drones.length ? `（${drones.length}）` : ""}</span>
+        <span className="spacer" />
+        <InfoTip tip="需要注意的排前面，不照註冊順序：飛行中 → 在線 → 有待回傳 → 未連線。副行的「上次飛行」說得出這台機最後一趟是什麼時候，沒有值就是還沒飛過。點一列展開那台機的架次與設定。" />
+      </div>
+
+      {/* 排序：**需要注意的排前面**，不照註冊順序（同回傳現況那張卡的規矩）。
+          飛行中 → 在線 → 有待回傳 → 離線 → 未連線 */}
+      {[...drones].sort((a, b) => rank(a) - rank(b)
+        || a.name.localeCompare(b.name)).map((d) => {
         const mine = sessions.filter((s) => s.drone_id === d.id);
         const isLive = live?.drone_id === d.id;
+        const st = statusOf(d, mine);
         return (
           <div className="card" key={d.id}>
-            {/* 一行全貌（simple-first）：色點(亮=連線/灰=離線)＋名＋訊號格＋
-                電池＋N 次。離線機沒有的資訊不畫、不放「—」；徽章全收展開 */}
+            {/* 一行全貌：色點＋名＋**狀態一句**＋訊號＋電量＋待回傳＋N 趟。
+                色點實心＝在線、空心＝不在線（形狀先於顏色）。
+                **「離線」與「未連線」不同形**（§0.2e-2）：前者曾經飛過、
+                說得出上次是什麼時候；後者沒有「最後已知」可言。
+                離線機沒有的資訊不畫、不放「—」。 */}
             <div className="drone-head drone-row" onClick={() => toggleOpen(d.id)}>
-              <span className="dot drone-dot" style={{
-                background: fleet[d.id]?.connected ? "var(--status-ok)" : "var(--hairline)",
-              }} />
+              <span className={`dot drone-dot${st.online ? "" : " drone-dot-off"}`}
+                style={st.online ? { background: "var(--status-ok)" } : undefined} />
               <span className="name">{d.name}</span>
-              {fleet[d.id]?.connected && (
-                <SignalBars sinr={fleet[d.id]?.link?.sinr} />
-              )}
-              {fleet[d.id]?.connected && (
-                <Battery pct={fleet[d.id]?.battery_pct} plain />
-              )}
-              {isLive && live?.armed && (
-                <span className="chip">
-                  <span className="dot" style={{ background: "#d03b3b" }} />飛行中
+              <span className={`drone-state${st.tone ? ` drone-state-${st.tone}` : ""}`}>
+                {st.text}
+              </span>
+              {st.online && <SignalBars sinr={fleet[d.id]?.link?.sinr} />}
+              {st.online && <Battery pct={fleet[d.id]?.battery_pct} plain />}
+              {st.pending > 0 && (
+                <span className="chip" title="機上錄好、還沒回傳成功的份數">
+                  ⚠ {st.pending} 待回傳
                 </span>
               )}
               {/* 代理狀態（意圖協定 §4.2 鏡像）。**權威在機上**，這裡只轉述。
@@ -215,8 +267,19 @@ export default function Drones() {
                 </span>
               )}
               <span className="spacer" />
-              <span className="meta">{mine.length} 次</span>
+              <span className="meta">{mine.length} 趟</span>
               <span className="meta">{open[d.id] ? "▾" : "▸"}</span>
+            </div>
+            {/* 副行＝身分與歷史（弱字）：**幾乎不變的欄位不搶主行**，
+                但要看得到，否則「這台是哪一台」得展開才知道 */}
+            <div className="drone-sub">
+              {d.mav_sysid != null && <span>sysid {d.mav_sysid}</span>}
+              {/* **只在認得的時候說機型**：`autopilot` 是 null 代表這筆記錄還沒
+                  見過 MAVLink 心跳——而主行的「未連線」已經講完那件事，副行再
+                  寫一次「未見 MAVLink 心跳」只是把同一個事實說兩遍 */}
+              {d.autopilot && apChip(d.autopilot) && <span>{apChip(d.autopilot)}</span>}
+              {d.flight_sw_version && <span>{d.flight_sw_version}</span>}
+              {st.lastFlight && <span>上次飛行 {shortWhen(st.lastFlight)}</span>}
             </div>
 
             {/* 展開＝工作區：徽章＋最近時間＋操作列＋架次表格
