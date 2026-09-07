@@ -91,12 +91,40 @@ def build_items(wps: list[dict]) -> list[dict]:
     return items
 
 
+async def _link_of(sysid: int):
+    """sysid → (drone_id, 進行中的 session_id)。查不到就 (None, None)。
+
+    **一次查詢解兩件事**：指令是熱路徑，每筆多兩次 round-trip 不划算。
+
+    為什麼要在寫入當下解而不是事後推：只靠 sysid＋時間戳回推「這筆指令
+    是哪台機、哪一趟」，得假設 sysid 從那時到現在沒被重新配過號——**而
+    sysid 正是會被重新配號的那個東西**（issues/040）。當下解出來的是事實，
+    事後推出來的是推論。
+    """
+    row = await pool.fetchrow(
+        """SELECT d.id::text AS drone_id,
+                  (SELECT s.id::text FROM flight_sessions s
+                    WHERE s.drone_id = d.id AND s.ended_at IS NULL
+                    ORDER BY s.started_at DESC LIMIT 1) AS session_id
+             FROM drones d WHERE d.mav_sysid = $1""", sysid)
+    return (row["drone_id"], row["session_id"]) if row else (None, None)
+
+
 async def _audit(sysid: int, action: str, params, result: str, detail: str = ""):
+    # 2026-09-06：原本只寫 sysid，於是「這趟飛行下了什麼指令」在系統裡
+    # 連不起來——307 筆歷史紀錄裡 drone_id 填了 0 筆（欄位 9/2 就加了，
+    # 但沒有任何寫入端在填）。解不出來就留 NULL：**空著代表「不知道」**。
+    try:
+        did, sid = await _link_of(sysid)
+    except Exception:
+        log.warning("指令留痕解不出機／架次（不影響指令）", exc_info=True)
+        did = sid = None
     await pool.execute(
-        "INSERT INTO command_log (sysid, action, params, result, detail, client) "
-        "VALUES ($1, $2, $3, $4, $5, $6)",
+        "INSERT INTO command_log "
+        "(sysid, action, params, result, detail, client, drone_id, session_id) "
+        "VALUES ($1, $2, $3, $4, $5, $6, $7, $8)",
         sysid, action, json.dumps(params, default=str), result, detail[:500],
-        _client_var.get())
+        _client_var.get(), did, sid)
 
 
 async def _refused(sysid: int, action: str, gate: str, reason: str, extra=None):
@@ -134,7 +162,13 @@ def _require_enabled():
 # 後把該鍵開 "ok"，前後端同時放行。
 async def _require_capability(sysid: int, endpoint_key: str):
     if sysid not in router.drones:
-        raise HTTPException(409, f"sysid {sysid} 未連線（心跳未見）")
+        # **第四道門**（2026-09-06）。9/2 補留痕時盤點出三道（入列 403／
+        # 能力 501／機上守門 409），漏了這一道——它排在最前面，所以
+        # 「機不在線」這個最常見的擋法反而是唯一一個不留痕的。
+        # 症狀正是使用者當時抱怨的：擋了，但事後查不到擋過。
+        why = f"sysid {sysid} 未連線（心跳未見）"
+        await _refused(sysid, endpoint_key, "連線", why)
+        raise HTTPException(409, why)
     # **入列檢查排在能力檢查之前**（issues/040 A2）：「這台機是不是我們的」
     # 比「這台機做不做得到」更根本——對一台身分不明的機談能力沒有意義。
     info = await admission.state_of(sysid)

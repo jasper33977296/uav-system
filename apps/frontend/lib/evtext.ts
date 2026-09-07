@@ -46,6 +46,30 @@ export function evText(
           typeof verb === "string" ? verb : null, opts.mixed === true);
       return `模式 ${m(d.from, d.from_verb)} → ${m(d.to, d.to_verb)}`;
     }
+    // ── 任務進度（2026-09-06）────────────────────────────────────────
+    // **說「機上第 N 項」不說「第 N 個航點」**：這是機端的 seq，ArduPilot
+    // 把 home 算成 seq 0，跟我方航點索引差 1。換算是驅動層的事，在這裡
+    // 直接寫「航點」等於把一個錯誤的數字講得很肯定（state.ts 同一條紀律）。
+    case "mission_progress": {
+      const tot = typeof d.total === "number" ? `，共 ${d.total} 項` : "";
+      if (d.first_sight === true)
+        return `連上時任務已在機上第 ${d.to ?? "?"} 項${tot}`;
+      return `任務進度：機上第 ${d.from ?? "?"} 項 → 第 ${d.to ?? "?"} 項${tot}`;
+    }
+    case "waypoint_reached":
+      return `已到達機上第 ${d.seq ?? "?"} 項`
+        + `${typeof d.total === "number" ? `（共 ${d.total} 項）` : ""}`;
+    case "mission_state": {
+      // **不猜沒見過的值**：認不得就照原文顯示（後端存的是數字，翻譯在這裡，
+      // 韌體新增狀態時寧可顯示原字串也不要翻錯）
+      const N: Record<string, string> = {
+        unknown: "不明", no_mission: "無任務", not_started: "未開始",
+        active: "執行中", paused: "暫停", complete: "已完成",
+      };
+      const n = (v: unknown) =>
+        typeof v === "string" ? (N[v] ?? v) : "不明";
+      return `任務狀態：${n(d.from)} → ${n(d.to)}`;
+    }
     // sysid 位址變更（47a384d 後 note 已是完整中文句，補來源位址即可）
     case "sysid_addr_change":
       return `${d.note ?? "sysid 來源位址變更"}`

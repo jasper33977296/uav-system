@@ -36,6 +36,8 @@ export interface AgentState {
   state: string | null;    // FLYING_MISSION / HOLDING / PILOT_CONTROL…
   since: string | null;
   mission_seq?: number | null; mission_total?: number | null;
+  /** 機端對任務現況的說法（見後端 state.MISSION_STATE）。null＝舊韌體沒這欄 */
+  mission_state?: string | null;
   derived?: Record<string, unknown> | null;
   /** 遙控器連上了沒有（039 複裁 A）。**null＝不知道**（舊版代理還沒開始送），
    * 與 false＝確定沒連上是兩件事——畫面要分開講，不能把「不知道」畫成「沒有」。

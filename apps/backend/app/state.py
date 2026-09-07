@@ -25,6 +25,18 @@ _IMU_KEYS = (
 #: 「時間到了」**：只要它還在講，那一項就還在。
 PREARM_TTL_S = 180.0
 
+#: `MISSION_CURRENT.mission_state`（MAV_MISSION_STATE）→ 名字。**存的是數字、
+#: 顯示才翻譯**：數字是機端說的原始事實，翻譯是我方的解讀，兩者分開放，
+#: 日後翻錯了還原得回去（與 `mission_seq` 不換算是同一條紀律）。
+MISSION_STATE = {
+    0: "unknown",        # 機端沒說
+    1: "no_mission",     # 沒有任務
+    2: "not_started",    # 有任務，還沒開始
+    3: "active",         # 正在飛
+    4: "paused",         # 暫停
+    5: "complete",       # 列在 MAV_MISSION_STATE 裡，但本機韌體實測不送
+}
+
 
 @dataclass
 class LiveState:
@@ -77,6 +89,14 @@ class LiveState:
     #: 換算是驅動層的事，這裡只忠實記錄機端說的數字。
     mission_seq: int | None = None
     mission_total: int | None = None       # 機端任務總項數（新韌體才有）
+    #: 機端對「這個任務現在怎麼了」的說法（`MISSION_CURRENT.mission_state`，
+    #: ArduPilot 4.5+／PX4 新韌體才有）。None＝舊韌體沒這欄。
+    #:
+    #: **實測本機（9/2 七趟，912 則 MISSION_CURRENT）從來沒有送過 5=complete。**
+    #: 飛完的樣子是 `active → not_started`＋最後一項有 MISSION_ITEM_REACHED。
+    #: 所以「飛完了」不是靠某一個欄位認出來的，是靠三件事湊出來的——這也是
+    #: 為什麼三種事件都要記，少一種就湊不出來。
+    mission_state: int | None = None
     autopilot_raw: int | None = None      # MAV_AUTOPILOT_*（方言分表；issue 015）
     #: 這台機的身分對得上這筆記錄嗎（issues/038 比對半邊）。False＝sysid 撞號、
     #: 新來的機不是這筆記錄原本那台。**資料從此不記在這筆記錄名下**——
@@ -255,6 +275,7 @@ class LiveState:
             # 才拿得到，還沒問到時是 None（誠實的「不知道」）
             "mission_seq": self.mission_seq,
             "mission_total": self.mission_total,
+            "mission_state": MISSION_STATE.get(self.mission_state),
             "board_uid": self.board_uid,
             "flight_sw_version": self.flight_sw_version,
             "mav_sysid": self.sysid,          # 前端：選中機（drone_id）→ 指令對象（sysid）

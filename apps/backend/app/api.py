@@ -1102,9 +1102,14 @@ async def session_track(session_id: str):
         "SELECT * FROM telemetry WHERE session_id = $1 ORDER BY time", session_id)
     link = await db.pool.fetch(
         "SELECT * FROM link_metrics WHERE session_id = $1 ORDER BY time", session_id)
+    # 回放要看得到「這一刻是誰下的指令」——尤其是被擋下的那些
+    commands = await db.pool.fetch(
+        "SELECT time, action, result, detail, client FROM command_log "
+        "WHERE session_id = $1 ORDER BY time", session_id)
     return {"session": dict(sess) if sess else None,
             "telemetry": [dict(r) for r in telemetry],
-            "link": [dict(r) for r in link]}
+            "link": [dict(r) for r in link],
+            "commands": [dict(r) for r in commands]}
 
 
 @router.get("/sessions/{session_id}/export")
@@ -1129,6 +1134,12 @@ async def export_session(session_id: str):
             "SELECT * FROM link_metrics WHERE session_id = $1 ORDER BY time", session_id)],
         "events": [dict(r) for r in await db.pool.fetch(
             "SELECT * FROM events WHERE session_id = $1 ORDER BY time", session_id)],
+        # 2026-09-06：匯出檔原本沒有這一段，於是「這趟飛行我下了什麼指令、
+        # 系統擋了我幾次」在封存資料裡等於不存在——而 9/2 才剛補上「被系統
+        # 擋下的也要留痕」，那些痕當時掛不到任何一趟飛行上。
+        "commands": [dict(r) for r in await db.pool.fetch(
+            "SELECT * FROM command_log WHERE session_id = $1 ORDER BY time",
+            session_id)],
     }
     started = sess["started_at"].strftime("%Y%m%d-%H%M")
     from fastapi.responses import JSONResponse
@@ -1434,7 +1445,14 @@ async def mission_waypoints(mission_id: str):
         mission_id)
     if not wps:
         raise HTTPException(404, "無此路徑或無航點")
-    return {"waypoints": [dict(w) for w in wps]}
+    # **home 也要回**：起飛項與 RTL／LAND 在 .plan 裡可以沒有座標（意思是
+    # 「從 home 起飛」「回 home」），少了它取用端畫不出起飛爬升段與返航段。
+    # `/missions/active` 一直有回，回放頁走的是這條端點、於是同一份任務在
+    # 即時頁與回放頁上是兩個形狀（2026-09-07）。
+    home = await db.pool.fetchval("SELECT home FROM missions WHERE id = $1", mission_id)
+    if isinstance(home, str):
+        home = json.loads(home)
+    return {"waypoints": [dict(w) for w in wps], "home": home}
 
 
 @router.post("/missions")

@@ -31,7 +31,7 @@ from pymavlink import mavutil
 from . import db, dialect, msg_registry, px4_events, video_rec
 from .capture import Recorder
 from .config import settings
-from .state import LiveState, fleet, live
+from .state import MISSION_STATE, LiveState, fleet, live
 from .ws import manager
 
 log = logging.getLogger(__name__)
@@ -457,8 +457,19 @@ class MavlinkRx:
             # 於是「飛機正在飛第幾個航點」這件事在系統裡不存在（issues/039 需要它）。
             # 忠實記錄機端的 seq，**不在這裡換算成我方索引**：ArduPilot 的 home
             # 佔 seq 0，換算是驅動層的職責，在 ingest 就換會讓原始事實消失。
+            await self._mission_progress(st, msg)
             st.mission_seq = msg.seq
             st.mission_total = getattr(msg, "total", None)
+            st.mission_state = getattr(msg, "mission_state", None)
+        elif t == "MISSION_ITEM_REACHED":
+            # 「我到第 N 點了」。**與 MISSION_CURRENT 是兩件事**：後者說的是
+            # 「正在飛向第幾項」，這則說的是「已經到了第幾項」。任務事後要
+            # 回答「每個航點幾點到的」，只有這則答得出來。
+            ev = await db.insert_event(
+                st.drone_id, st.session_id, "info", "waypoint_reached",
+                {"seq": msg.seq, "total": st.mission_total}, source="vehicle")
+            ev["drone"] = st.drone_name
+            await manager.broadcast({"type": "event", "event": ev})
         elif t == "AUTOPILOT_VERSION":
             # 038：板子身分。**只收不請求**——請求要送 COMMAND_LONG，那是個
             # 通用信封（同一型別可以裝 arm），把它加進 SEND_WHITELIST 等於在
@@ -613,6 +624,45 @@ class MavlinkRx:
             if d:
                 await self._event_gap(st, ent, d["seq"],
                                       bool(d["flags"] & _EVT_SEQ_RESET), "411")
+
+    # ── 任務進度 → 事件流（2026-09-06）────────────────────────────────
+    # `MISSION_CURRENT` 每秒都來，**只有變化才落盤**：不然一趟飛行會多出幾千
+    # 筆一模一樣的列，把事件流淹掉——那等於沒記。
+    #
+    # 為什麼一定要落盤：原本 seq 只更新 live state，而 live state 是**現在**，
+    # 不是**歷史**。任務飛完之後回頭看，「第幾秒到第幾點」在系統裡不存在，
+    # 只能拿軌跡點去跟航點座標算距離用猜的——那是推論不是紀錄。
+    async def _mission_progress(self, st: LiveState, msg) -> None:
+        seq = msg.seq
+        state = getattr(msg, "mission_state", None)
+        total = getattr(msg, "total", None)
+        first = st.mission_seq is None            # 這條連線第一次看到
+        # **第一次看到也可能是有意義的**：失聯回來時「它已經飛到第 5 點」是
+        # 新資訊。但沒有任務時每次連線都報一次就是噪音，所以要求機端說得出
+        # 「有任務」（總項數 > 0，或狀態不是無任務／不知道）才記。
+        loaded = bool(total) or state not in (None, 0, 1)
+        if seq != st.mission_seq and (not first or loaded):
+            ev = await db.insert_event(
+                st.drone_id, st.session_id, "info", "mission_progress",
+                {"from": st.mission_seq, "to": seq, "total": total,
+                 "state": MISSION_STATE.get(state),
+                 **({"first_sight": True} if first else {})}, source="vehicle")
+            ev["drone"] = st.drone_name
+            await manager.broadcast({"type": "event", "event": ev})
+        # 任務狀態另外記一筆。**光看 seq 分不出「飛完了」與「被切走」**：
+        # 兩者都是 seq 停在某一項不動。實測本機飛完的樣子是
+        # `active → not_started`（不是 5=complete，那個值本機從來不送），
+        # 中途被切走則是 active 之後沒有最後一項的 MISSION_ITEM_REACHED。
+        if state is not None and state != st.mission_state and not (
+                first and state in (0, 1)):
+            ev = await db.insert_event(
+                st.drone_id, st.session_id,
+                "info" if state != 5 else "notice", "mission_state",
+                {"from": MISSION_STATE.get(st.mission_state),
+                 "to": MISSION_STATE.get(state), "seq": seq, "total": total},
+                source="vehicle")
+            ev["drone"] = st.drone_name
+            await manager.broadcast({"type": "event", "event": ev})
 
     # ── STATUSTEXT → 事件流（issue 014 Phase A）───────────────────────
     # 自駕儀的 log。三件事：長訊息**分段重組**（MAVLink2 STATUSTEXT 切 50 字

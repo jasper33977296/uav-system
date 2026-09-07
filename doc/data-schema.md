@@ -218,10 +218,29 @@ mission_groups ─< group_assignments                (CASCADE)
 | `time` | timestamptz NOT NULL | |
 | `drone_id` / `session_id` | uuid | 無 FK |
 | `severity` | text NOT NULL | info／warning／critical |
-| `type` | text NOT NULL | link_degraded／link_lost／link_recovered／mode_change／low_battery／sysid_addr_change／vehicle_event… |
+| `type` | text NOT NULL | link_degraded／link_lost／link_recovered／mode_change／low_battery／sysid_addr_change／vehicle_event／**mission_progress／waypoint_reached／mission_state**… |
 | `source` | text NOT NULL | `system`＝backend 推導；`vehicle`＝自駕儀自己吐的 log（STATUSTEXT／PX4 EVENT） |
 | `detail` | jsonb | vehicle 事件帶 `{text,count}`／`{event_id,args,count}` |
 | `acked_at` | timestamptz | 操作員確認 |
+
+**任務進度三型別**（2026-09-06 補；原本任務執行過程在系統裡完全沒有紀錄）：
+
+| type | 來源 | 回答的問題 |
+|---|---|---|
+| `mission_progress` | `MISSION_CURRENT.seq` 變化 | 現在飛向第幾項、什麼時候換的 |
+| `waypoint_reached` | `MISSION_ITEM_REACHED` | **每一項幾點到的** |
+| `mission_state` | `MISSION_CURRENT.mission_state` 變化 | 未開始／執行中／暫停 |
+
+`seq` 存的是**機端的編號**，不換算成我方航點索引（ArduPilot 把 home 算成
+seq 0，兩者差 1）——換算是驅動層的職責，在入庫就換會讓原始事實消失。
+
+**只有變化才落盤**：實測 9/2 七趟真飛共 1060 則 `MISSION_CURRENT` → 36 筆
+事件。每則都寫的話一趟會多出幾千筆一模一樣的列，把事件流淹掉＝等於沒記。
+
+**「飛完了」認不出來是靠單一欄位**：實測本機韌體從來不送
+`mission_state=5 (complete)`，飛完的樣子是 `active → not_started` ＋最後一項
+有 `waypoint_reached`；中途被切走則是 active 之後沒有那一則。三種事件缺一
+就湊不出這個判斷——這是三種都要記的原因，不是為了完整而完整。
 
 ### 3.8 `mission_groups` — 編隊任務（013）
 
@@ -272,6 +291,15 @@ mission_groups ─< group_assignments                (CASCADE)
 | `result` | text NOT NULL | **含被拒與逾時**（失敗也留痕） |
 | `detail` | text | 拒絕原因原文 |
 | `client` | text | 誰下的：`frontend`／`acceptance-rig`／…（MCP 落地後加 agent 身分，019） |
+| `drone_id` | uuid FK→drones ON DELETE SET NULL | 寫入當下由 sysid 解出 |
+| `session_id` | uuid FK→flight_sessions ON DELETE SET NULL | **哪一趟飛行**；當時沒有進行中的架次＝NULL |
+
+**`drone_id`／`session_id` 在寫入當下解，不事後推**（2026-09-06）：只靠
+sysid＋時間戳回推得假設「sysid 從那時到現在沒被重新配過號」，而 sysid 正是
+會被重新配號的那個東西（[040](../issues/040-sysid-must-be-assigned.md)）。
+
+**歷史 307 筆一律留空，不回填。** 空著代表「不知道」——那是實話；用今天的
+sysid 猜出當時是哪一台，正是這兩個欄位要防的錯誤。
 
 ---
 

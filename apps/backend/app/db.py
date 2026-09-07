@@ -330,6 +330,28 @@ async def migrate() -> None:
           END IF;
         END $$;""")
 
+    # ④ 指令與「哪一趟飛行」之間原本沒有任何欄位相連（2026-09-06）。
+    # 只剩 sysid＋時間戳，要對起來得假設「時間落在 started_at/ended_at 之間，
+    # 且 sysid 對得上那台機」——**而 sysid 正是會被重新配號的那個東西**。
+    # 於是「這趟飛行我下了什麼、系統擋了我幾次」在匯出檔裡等於不存在。
+    #
+    # **舊資料一樣不回填**（同 ③ 的理由）：session 是從 drone_id＋時間推出來的，
+    # 而歷史列的 drone_id 就是空的。拿今天的 sysid 去反推當時是誰，正是這兩個
+    # 欄位要防的錯誤。空著代表「不知道」——那是實話，猜出來的不是。
+    await pool.execute(
+        "ALTER TABLE command_log ADD COLUMN IF NOT EXISTS session_id UUID")
+    await pool.execute("""
+        DO $$ BEGIN
+          IF NOT EXISTS (SELECT 1 FROM pg_constraint
+                         WHERE conname = 'command_log_session_id_fkey') THEN
+            ALTER TABLE command_log ADD CONSTRAINT command_log_session_id_fkey
+              FOREIGN KEY (session_id) REFERENCES flight_sessions(id)
+              ON DELETE SET NULL;
+          END IF;
+        END $$;""")
+    await pool.execute("CREATE INDEX IF NOT EXISTS idx_command_log_session "
+                       "ON command_log (session_id, time)")
+
     # ══ 大檔案：DB 記路徑，內容留在磁碟 ═══════════════════════════════
     # （2026-09-02 使用者裁定）**資料本身很大的時候，SQL 欄位記路徑，
     # 要內容再到那個路徑下去看。**
