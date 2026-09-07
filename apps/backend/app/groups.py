@@ -49,7 +49,7 @@ async def _lookup_drones(ids: list[str]) -> dict[str, dict]:
 
 
 async def create_group(name: str, mode: str, base_mission_id, drones: list[dict],
-                       params: dict | None) -> dict:
+                       params: dict | None, squad_id: str | None = None) -> dict:
     """drones：[{drone_id, layer_index?, mission_id?}]。unified＝從 base 依 layer
     展開、separate＝用各自 mission_id。**單一交易原子性**（失敗全回滾、不留
     半群組/孤兒任務）。回群組＋跨路徑衝突預檢。"""
@@ -73,10 +73,13 @@ async def create_group(name: str, mode: str, base_mission_id, drones: list[dict]
     assignments, paths = [], []
     async with db.pool.acquire() as con:
         async with con.transaction():
+            # squad_id＝這次是哪一隊派出去的（可為 NULL：直接勾機的老路）。
+            # 小隊日後被刪也不影響這一筆——name 已經是當時的隊名快照
             g = await con.fetchrow(
-                """INSERT INTO mission_groups (name, base_mission_id, mode, params)
-                   VALUES ($1, $2, $3, $4) RETURNING id""",
-                name, base_mission_id, mode, jdumps(used_params))
+                """INSERT INTO mission_groups (name, base_mission_id, mode, params,
+                                               squad_id)
+                   VALUES ($1, $2, $3, $4, $5::uuid) RETURNING id""",
+                name, base_mission_id, mode, jdumps(used_params), squad_id)
             gid = str(g["id"])
             base_wps = await _wps(con, base_mission_id) if mode == "unified" else None
             for i, d in enumerate(drones):

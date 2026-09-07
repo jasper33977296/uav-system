@@ -148,6 +148,38 @@ async def migrate() -> None:
         phase TEXT NOT NULL DEFAULT 'idle',              -- 見 §7.1 assignment.phase
         PRIMARY KEY (group_id, drone_id))""")
     await pool.execute("ALTER TABLE flight_sessions ADD COLUMN IF NOT EXISTS group_id UUID")
+    # ── 小隊＝常設編組（doc/squads-design.md，2026-09-08 使用者核准）────────
+    #
+    # **與 mission_groups 分開**：後者是一次群飛的執行實例（status／phase／
+    # materialized 任務），一次飛行一筆、飛完就是歷史；小隊是跨飛行存在的名單。
+    # 塞進同一張表會長出「status 永遠是 draft 的群組」，而且刪一次飛行紀錄
+    # ＝刪掉編組——兩者的生命週期不同。
+    await pool.execute("""CREATE TABLE IF NOT EXISTS squads (
+        id         UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+        name       TEXT NOT NULL,
+        note       TEXT,
+        created_at TIMESTAMPTZ NOT NULL DEFAULT now())""")
+    # **名稱唯一（不分大小寫）**：小隊是拿來喊的（「等一下派 A 隊出去」），
+    # 兩隊同名時畫面分得出（有 id）、人喊出來分不出
+    await pool.execute("CREATE UNIQUE INDEX IF NOT EXISTS idx_squads_name "
+                       "ON squads (lower(name))")
+    # **多對多，不是 drones.squad_id**：同一台機在不同實驗扮不同角色是常事，
+    # 一欄外鍵會逼人二選一。`position` 是顯示順序與 layer_index 的**預設種子**，
+    # 不是 layer_index 本身——分層要看 vsep／航線高度／地形，那是派任務當下的決定
+    await pool.execute("""CREATE TABLE IF NOT EXISTS squad_members (
+        squad_id UUID NOT NULL REFERENCES squads(id) ON DELETE CASCADE,
+        drone_id UUID NOT NULL REFERENCES drones(id) ON DELETE CASCADE,
+        position INT NOT NULL DEFAULT 0,
+        PRIMARY KEY (squad_id, drone_id))""")
+    # 這一次群飛是哪一隊派出去的。**ON DELETE SET NULL**：刪小隊不刪歷史；
+    # 而 mission_groups.name 在派任務時就寫入當時的隊名快照，所以即使 FK 斷了，
+    # 歷史仍說得出當時是哪一隊飛的（不另外加 squad_name 欄位）
+    await pool.execute(
+        "ALTER TABLE mission_groups ADD COLUMN IF NOT EXISTS squad_id UUID")
+    await pool.execute("""DO $$ BEGIN
+        ALTER TABLE mission_groups ADD CONSTRAINT mission_groups_squad_fk
+          FOREIGN KEY (squad_id) REFERENCES squads(id) ON DELETE SET NULL;
+    EXCEPTION WHEN duplicate_object THEN NULL; END $$;""")
     # issue 013-B：執行期即時態。phase 已在建表；補 error（異常態的
     # {msg,hint,autopilot_notes}，§7.1）與 updated_at（前端 1s 輪詢看新鮮度）。
     await pool.execute("ALTER TABLE group_assignments ADD COLUMN IF NOT EXISTS error JSONB")

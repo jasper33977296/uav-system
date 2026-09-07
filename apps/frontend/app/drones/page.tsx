@@ -4,6 +4,7 @@ import { useCallback, useEffect, useState } from "react";
 
 import ConfirmModal from "@/components/ConfirmModal";
 import InfoTip from "@/components/InfoTip";
+import Squads, { type Squad } from "@/components/Squads";
 import { Battery, SignalBars } from "@/components/SimpleHud";
 import { errText, getJson } from "@/lib/fetchJson";
 import { parseJsonb } from "@/lib/jsonb";
@@ -129,6 +130,11 @@ export default function Drones() {
   );
 
   const [toDelete, setToDelete] = useState<Drone | null>(null);
+  // 機列上的小隊 chip：**一台機可以在多隊**，所以是清單不是單一值
+  const [squads, setSquads] = useState<Squad[]>([]);
+  useEffect(() => {
+    getJson<Squad[]>(`${API}/api/squads`).then(setSquads).catch(() => setSquads([]));
+  }, []);
 
   /** 這台機現在是什麼狀態——**一句話，而且說得出根據**。
    *
@@ -204,7 +210,9 @@ export default function Drones() {
           錯誤訊息留下來：它不是說明，是這一頁剛剛發生的事。 */}
       {err && <div className="form-err">{err}</div>}
 
-      <div className="drone-head">
+      <Squads drones={drones.map((d) => ({ id: d.id, name: d.name }))} />
+
+      <div className="drone-head" style={{ marginTop: 14 }}>
         <span className="name">機隊{drones.length ? `（${drones.length}）` : ""}</span>
         <span className="spacer" />
         <InfoTip tip="需要注意的排前面，不照註冊順序：飛行中 → 在線 → 有待回傳 → 未連線。副行的「上次飛行」說得出這台機最後一趟是什麼時候，沒有值就是還沒飛過。點一列展開那台機的架次與設定。" />
@@ -233,6 +241,10 @@ export default function Drones() {
               </span>
               {st.online && <SignalBars sinr={fleet[d.id]?.link?.sinr} />}
               {st.online && <Battery pct={fleet[d.id]?.battery_pct} plain />}
+              {squads.filter((q) => q.members.some((m) => m.drone_id === d.id))
+                .map((q) => (
+                  <span className="chip" key={q.id} title="所屬小隊">{q.name}</span>
+                ))}
               {st.pending > 0 && (
                 <span className="chip" title="機上錄好、還沒回傳成功的份數">
                   ⚠ {st.pending} 待回傳

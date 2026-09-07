@@ -1,8 +1,10 @@
 import bisect
 import asyncio
+
+import asyncpg
 import json
 import time
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from uuid import UUID
 
 from fastapi import APIRouter, HTTPException, Request, Response
@@ -1104,7 +1106,10 @@ class GroupIn(BaseModel):
     name: str
     mode: str = "unified"             # unified / separate
     base_mission_id: str | None = None
-    drones: list[GroupDroneIn] = Field(min_length=1, max_length=8)
+    #: 直接給機（既有用法），或給 `squad_id` 讓後端展開成員（小隊）。
+    #: **展開之後走的是同一條路**——預檢、衝突檢查、gate 全部不變
+    drones: list[GroupDroneIn] = Field(default_factory=list, max_length=8)
+    squad_id: str | None = None
     params: dict | None = None
 
     @field_validator("base_mission_id")
@@ -1117,17 +1122,189 @@ class GroupIn(BaseModel):
 async def create_group(g: GroupIn):
     """建群組任務（issue 013-A）：unified 從 base 展開 per-drone 具體任務、
     separate 用各自任務。回 assignments＋跨路徑衝突預檢（capability 嚴格
-    gate 在 execute／command 服務，此處只做幾何互檢＋materialize）。"""
+    gate 在 execute／command 服務，此處只做幾何互檢＋materialize）。
+
+    **小隊只是選機的捷徑**（doc/squads-design.md）：給 `squad_id` 時把成員依
+    `position` 展開成 `drones`，其餘一律照舊——不新增第二條執行路徑。
+    `name` 預設帶隊名快照，所以日後小隊被刪掉，這一筆仍說得出當時是哪一隊。
+    """
+    name, squad_id = g.name, None
+    drones = list(g.drones)
+    if g.squad_id:
+        squad_id = _require_uuid(g.squad_id)
+        row = await db.pool.fetchrow(
+            "SELECT name FROM squads WHERE id = $1::uuid", squad_id)
+        if row is None:
+            raise HTTPException(404, "無此小隊")
+        mem = await db.pool.fetch(
+            "SELECT drone_id::text AS drone_id FROM squad_members "
+            "WHERE squad_id = $1::uuid ORDER BY position", squad_id)
+        if not mem:
+            # **空小隊不是「零台的隊」，是還沒編好**——這裡不猜，直接說
+            raise HTTPException(422, f"小隊「{row['name']}」還沒有成員")
+        if drones:
+            raise HTTPException(422, "同時給了 squad_id 與 drones——"
+                                     "指定哪幾台飛只能有一個來源")
+        # position 是**預設種子**，不是 layer_index：這裡當起始順序用，
+        # 派任務頁仍可逐台調整（doc/squads-design.md 決定②）
+        drones = [GroupDroneIn(drone_id=m["drone_id"]) for m in mem]
+        if not (name or "").strip():
+            stamp = datetime.now(timezone(timedelta(hours=8))).strftime("%m/%d %H:%M")
+            name = f"{row['name']} · {stamp}"
+    if not drones:
+        raise HTTPException(422, "至少要指定一台機（或給 squad_id）")
     if g.mode == "unified" and not g.base_mission_id:
         raise HTTPException(422, "unified 模式需要 base_mission_id")
-    if g.mode == "separate" and any(d.mission_id is None for d in g.drones):
+    if g.mode == "separate" and any(d.mission_id is None for d in drones):
         raise HTTPException(422, "separate 模式每台需要 mission_id")
     try:
         return await groups.create_group(
-            g.name, g.mode, g.base_mission_id,
-            [d.model_dump() for d in g.drones], g.params)
+            name, g.mode, g.base_mission_id,
+            [d.model_dump() for d in drones], g.params, squad_id=squad_id)
     except groups.GroupError as e:
         raise HTTPException(422, str(e))
+
+
+# ── 小隊：常設編組（doc/squads-design.md）──────────────────────
+#
+# **小隊是一份名單，不是任務設定。** 隊形、高度分層、航線一律在派任務時決定
+# ——否則同一個決定會有兩個家，而它們遲早不一致。
+# **也不影響任何飛安判定**：入列、預檢、守門、能力 gate 全部照舊逐機判定，
+# 小隊只是選機的捷徑，不是繞過檢查的捷徑。
+
+
+class SquadIn(BaseModel):
+    name: str
+    note: str | None = None
+    members: list[str] = Field(min_length=1)     # drone_id；一隊至少一台
+
+
+class SquadPatch(BaseModel):
+    name: str | None = None
+    note: str | None = None
+    #: 給了就是**整份取代**。差異比對在前端做——「加一台」與「換一批」混在
+    #: 同一支端點裡，日後一定會有人只送了一台就把整隊洗掉
+    members: list[str] | None = None
+
+
+async def _squad_rows() -> list[dict]:
+    """全部小隊＋成員＋群飛統計。**成員只回 id**——狀態（在線／訊號／電量）
+    前端 store 已經有，join 在畫面做；這裡回一份快照只會過期。"""
+    squads = await db.pool.fetch(
+        """SELECT s.id::text AS id, s.name, s.note, s.created_at,
+                  (SELECT max(g.created_at) FROM mission_groups g
+                    WHERE g.squad_id = s.id AND g.status <> 'draft') AS last_flight,
+                  (SELECT count(*) FROM mission_groups g
+                    WHERE g.squad_id = s.id AND g.status <> 'draft') AS flights
+             FROM squads s ORDER BY s.created_at""")
+    mem = await db.pool.fetch(
+        """SELECT m.squad_id::text AS squad_id, m.drone_id::text AS drone_id,
+                  m.position, d.name AS drone_name
+             FROM squad_members m JOIN drones d ON d.id = m.drone_id
+            ORDER BY m.position, d.name""")
+    by: dict[str, list] = {}
+    for r in mem:
+        by.setdefault(r["squad_id"], []).append(
+            {"drone_id": r["drone_id"], "position": r["position"],
+             "drone_name": r["drone_name"]})
+    out = []
+    for s in squads:
+        d = dict(s)
+        d["created_at"] = s["created_at"].isoformat()
+        d["last_flight"] = s["last_flight"].isoformat() if s["last_flight"] else None
+        d["members"] = by.get(d["id"], [])
+        out.append(d)
+    return out
+
+
+async def _check_drones(ids: list[str]) -> None:
+    """成員必須是真的機。**不做部分成功**：找不到就整批 422 並列出是哪幾個。"""
+    if not ids:
+        raise HTTPException(422, "一隊至少要有一台機")
+    if len(set(ids)) != len(ids):
+        raise HTTPException(422, "同一台機在同一隊裡只能出現一次")
+    rows = await db.pool.fetch(
+        "SELECT id::text AS id FROM drones WHERE id = ANY($1::uuid[])", ids)
+    known = {r["id"] for r in rows}
+    missing = [i for i in ids if i not in known]
+    if missing:
+        raise HTTPException(422, f"名單裡有 {len(missing)} 台機的記錄不存在："
+                                 + "、".join(missing))
+
+
+@router.get("/squads")
+async def list_squads():
+    """全部小隊。`flights`＝**這一隊一起飛過幾次**（group 數），不是架次數
+    ——三台一起飛一次會產生三個架次，顯示成「6 趟」會被讀成飛了六次。"""
+    return await _squad_rows()
+
+
+@router.post("/squads", status_code=201)
+async def create_squad(body: SquadIn):
+    name = body.name.strip()
+    if not name:
+        raise HTTPException(422, "小隊要有名字")
+    await _check_drones(body.members)
+    try:
+        async with db.pool.acquire() as con:
+            async with con.transaction():
+                row = await con.fetchrow(
+                    "INSERT INTO squads (name, note) VALUES ($1, $2) RETURNING id::text",
+                    name, (body.note or "").strip() or None)
+                sid = row["id"]
+                await con.executemany(
+                    "INSERT INTO squad_members (squad_id, drone_id, position) "
+                    "VALUES ($1::uuid, $2::uuid, $3)",
+                    [(sid, d, i) for i, d in enumerate(body.members)])
+    except asyncpg.UniqueViolationError:
+        # **撞名要說撞到哪一個名字**：小隊是拿來喊的，同名等於現場叫不動
+        raise HTTPException(409, f"已經有一隊叫「{name}」")
+    return {"id": sid}
+
+
+@router.patch("/squads/{squad_id}")
+async def patch_squad(squad_id: str, body: SquadPatch):
+    """改名、改備註、換成員。**改名不影響歷史**——過去的群飛紀錄留的是當時的
+    隊名快照（`mission_groups.name`）。"""
+    sid = _require_uuid(squad_id)
+    if body.members is not None:
+        await _check_drones(body.members)
+    try:
+        async with db.pool.acquire() as con:
+            async with con.transaction():
+                if body.name is not None:
+                    name = body.name.strip()
+                    if not name:
+                        raise HTTPException(422, "小隊要有名字")
+                    r = await con.execute(
+                        "UPDATE squads SET name = $2 WHERE id = $1::uuid", sid, name)
+                    if r.endswith(" 0"):
+                        raise HTTPException(404, "無此小隊")
+                if body.note is not None:
+                    await con.execute(
+                        "UPDATE squads SET note = $2 WHERE id = $1::uuid",
+                        sid, body.note.strip() or None)
+                if body.members is not None:
+                    await con.execute(
+                        "DELETE FROM squad_members WHERE squad_id = $1::uuid", sid)
+                    await con.executemany(
+                        "INSERT INTO squad_members (squad_id, drone_id, position) "
+                        "VALUES ($1::uuid, $2::uuid, $3)",
+                        [(sid, d, i) for i, d in enumerate(body.members)])
+    except asyncpg.UniqueViolationError:
+        raise HTTPException(409, f"已經有一隊叫「{(body.name or '').strip()}」")
+    return {"ok": True}
+
+
+@router.delete("/squads/{squad_id}")
+async def delete_squad(squad_id: str):
+    """只刪編組。**不動任何一台機與其紀錄**，過去的群飛也留著
+    （`mission_groups.squad_id` 置 NULL，隊名快照仍在 `name` 裡）。"""
+    r = await db.pool.execute("DELETE FROM squads WHERE id = $1::uuid",
+                              _require_uuid(squad_id))
+    if r.endswith(" 0"):
+        raise HTTPException(404, "無此小隊")
+    return {"ok": True}
 
 
 @router.get("/groups/{group_id}")

@@ -1,6 +1,6 @@
 # 小隊（常設編組）設計
 
-- 狀態：**設計待核准**（2026-09-08 提出）。使用者需求原話：
+- 狀態：**已核准並實作完成**（核准：使用者 2026-09-08；實作：後端六條驗收全過、前端落地同日）。使用者需求原話：
   「我想要多一個群組的功能，先在這把無人機組成小隊，要分派群飛任務時比較方便」
 - 原型：[drones-redesign-proto.html](drones-redesign-proto.html)（機隊管理頁上半）
 - 相關：[group-missions-design.md](group-missions-design.md)（一次群飛的執行模型）、
@@ -81,9 +81,14 @@ mission_groups
 
 ### 遷移
 
-照專案既有做法：`db.migrate()` 加冪等的 `CREATE TABLE IF NOT EXISTS` 與
-`ALTER TABLE ... ADD COLUMN IF NOT EXISTS`（啟動時跑），`db/init/01_schema.sql`
-同步一份給全新 volume。**沒有資料要回填**——這是純新增，舊資料不受影響。
+照專案既有做法：**全部寫在 `db.migrate()`**（啟動時跑的冪等
+`CREATE TABLE IF NOT EXISTS` / `ALTER TABLE ... ADD COLUMN IF NOT EXISTS`）。
+`db/init/01_schema.sql` 只有最早那批表，`mission_groups`、`blackouts`、
+`video_segments` 都在 migrate 裡——小隊照同一條路，不動 init 檔。
+**沒有資料要回填**：這是純新增，舊資料不受影響。
+
+外鍵 `mission_groups.squad_id` 用 `DO $$ … EXCEPTION WHEN duplicate_object`
+包起來——`ADD CONSTRAINT` 沒有 `IF NOT EXISTS`，而 migrate 每次啟動都會跑。
 
 ## 4. 「上次群飛 · 共 N 趟」怎麼算
 
