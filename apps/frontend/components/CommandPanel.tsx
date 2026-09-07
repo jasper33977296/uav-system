@@ -12,6 +12,7 @@ import { useEffect, useRef, useState } from "react";
 import { colorFor } from "@/components/droneLayer";
 import { modeLabel } from "@/lib/modeVerb";
 import { API, CLIENT_HEADERS, COMMAND_API } from "@/lib/signal";
+import { emph } from "@/lib/emph";
 import { armFix, armNote } from "@/lib/prearm";
 import { useUavStore } from "@/lib/store";
 
@@ -627,20 +628,28 @@ export default function CommandPanel() {
         const how = d?.how_to?.length
           ? `｜合法做法：${d.how_to.map((t: string, i: number) => `${i + 1}. ${t}`).join(" → ")}`
           : "";
-        const text = typeof d === "string" ? d
+        // **失敗一定要說得出原因**（使用者指示 2026-09-07）。四種來源依序試，
+        // 最後才退回狀態碼——而退回時給的是一句話，不是 `JSON.stringify` 的
+        // 結果：後者在 detail 缺席時會產生**帶引號的** `"失敗（HTTP 502）"`，
+        // 在 detail 是物件時則是一坨沒有人讀得懂的 JSON
+        const fallback = `${action}失敗（HTTP ${res.status}）`;
+        const text = typeof d === "string" && d ? d
           : d?.problems?.length ? `${d.msg ?? "被拒"}：${d.problems.join("；")}`
           : d?.msg ? `${d.msg}${d.hint ? `——${d.hint}` : ""}${notes}${how}`
-          : JSON.stringify(d ?? `失敗（HTTP ${res.status}）`);
+          : d != null && typeof d === "object"
+            ? `${fallback}：${JSON.stringify(d)}`   // 認不得的結構：原文照列
+            : fallback;
         setResult({ ok: false, text });
         // **每一次被拒都要浮出來，不只起飛。** 原本只有 `/takeoff` 會通知 HUD，
         // 所以按「解鎖」「切模式」被 403 擋下時，面板收起來的人什麼都看不到。
         // 而且送的是**那句話本身**，不是一個時間戳——理由後端一直都有給
         useUavStore.getState().noticeDenied(action, text);
       } else {
-        setResult({
-          ok: true,
-          text: `${action} ✓${body.verified ? "（回讀比對通過）" : ""}`,
-        });
+        // 「上傳 ✓（回讀比對通過）」→「上傳成功」（2026-09-07 使用者指示）。
+        // 回讀比對是**上傳成功的定義**，不是額外的好消息：比對不過在後端
+        // 就已經是 CommandError／不會走到這裡，所以那句括號永遠都在、
+        // 永遠都對，也就永遠沒有告訴任何人任何事。
+        setResult({ ok: true, text: `${action}成功` });
         // 顯示到即時頁的事**已經搬到後端**（指令服務在上傳／啟動／改航線成功
         // 後呼叫 /missions/{id}/show，前端由 mission_shown 事件觸發重畫）。
         // 原因：上傳的呼叫端不只有這個畫面——驗收 rig、MCP、curl 都會上傳，
@@ -1240,7 +1249,11 @@ export default function CommandPanel() {
           </>)}
 
           {result && (
-            <div className={`cmd-result ${result.ok ? "ok" : "err"}`}>{result.text}</div>
+            <div className={`cmd-result ${result.ok ? "ok" : "err"}`}>
+              {/* 後端文案用 `**` 當強調記號（逾時那句 hint 就有），
+                  而畫面不解析 Markdown——見 ui-spec §0.3c */}
+              {emph(result.text)}
+            </div>
           )}
         </div>
       )}

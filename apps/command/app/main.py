@@ -246,14 +246,30 @@ async def _run(sysid: int, action: str, fn, *args, params=None):
         raise HTTPException(500, {"code": "internal", "msg": f"內部錯誤（{detail}）",
                                   "hint": "這一則會進 command_log，"
                                           "細節欄有完整的例外"})
-    ok = res.get("accepted", True) and res.get("verified", True)
+    accepted = res.get("accepted", True)
+    ok = accepted and res.get("verified", True)
     await _audit(sysid, action, params, "accepted" if ok else "rejected", json.dumps(res))
     if not ok:
-        # 結構化拒絕：result code＋操作指引＋PX4 的解釋文字（實戰教訓：
-        # 只給 code 操作員無從排查——"Arming denied: ..." 那行才是答案）
+        # **「被拒絕」與「做了但沒能確認」不是同一件事**（2026-09-07）。
+        # 兩者原本共用一句 `機端拒絕（{result}）`，於是清除任務讀不回筆數時
+        # （mav.job_clear_mission 回 accepted=True／verified=False，並在 `note`
+        # 裡寫清楚為什麼）操作員看到的是 **「機端拒絕（None）」**——一句
+        # 說錯了事實、又沒有理由的話。那個 None 正是「這裡根本沒有 result」。
+        #
+        # 兩者都維持 409（未確認一律當成沒成功，安全方向），但話要各自說對。
+        if not accepted:
+            # 結構化拒絕：result code＋操作指引＋PX4 的解釋文字（實戰教訓：
+            # 只給 code 操作員無從排查——"Arming denied: ..." 那行才是答案）
+            raise HTTPException(409, {
+                "msg": f"機端拒絕（{res.get('result')}）",
+                "hint": res.get("hint", ""),
+                "autopilot_notes": res.get("autopilot_notes", []),
+            })
         raise HTTPException(409, {
-            "msg": f"機端拒絕（{res.get('result')}）",
-            "hint": res.get("hint", ""),
+            "code": "unverified",
+            "msg": f"{action} 送出去了，但沒能讀回確認",
+            "hint": res.get("note") or res.get("hint", "")
+                    or "機端沒有回應讀回查詢——請自行確認機上的狀態",
             "autopilot_notes": res.get("autopilot_notes", []),
         })
     return res
