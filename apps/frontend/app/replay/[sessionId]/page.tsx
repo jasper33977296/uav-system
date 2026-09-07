@@ -14,6 +14,7 @@ import { SignalBars } from "@/components/SimpleHud";
 import { routeLayer } from "@/lib/deckRoute";
 import { useBasemap } from "@/lib/basemap";
 import { DRONE_ICON_SIZE, droneIconUrl } from "@/lib/droneIcon";
+import { unemph } from "@/lib/emph";
 import { evText } from "@/lib/evtext";
 import { eventDetail } from "@/lib/jsonb";
 import { CANVAS, groundGrid, pathArrows, planPath, ribbon, trailLineString } from "@/lib/geo";
@@ -95,8 +96,9 @@ function Chart({
             // modal（§2.7：modal 接手細節職責；title 保留 hover 摘要）
             onClick={() => onEvent?.(e)}
           >
-            <title>{evText({ type: e.type, detail: e.detail,
-              severity: e.severity as "info" | "warning" | "critical" })}</title>
+            {/* SVG <title> 只吃字串，放不了 <b>——記號拿掉而不是印出來 */}
+            <title>{unemph(evText({ type: e.type, detail: e.detail,
+              severity: e.severity as "info" | "warning" | "critical" }))}</title>
           </polygon>
         ))}
         <line x1={cx} x2={cx} y1={0} y2={height} stroke="var(--ink)" strokeWidth="1"

@@ -1040,7 +1040,8 @@ async def delete_group(group_id: str):
 @router.get("/sessions")
 async def list_sessions(limit: int = 50, mission_id: str | None = None,
                         since: str | None = None, min_samples: int | None = None,
-                        include_test: bool = False):
+                        include_test: bool = False, drone_id: str | None = None,
+                        with_events: bool = False):
     """架次清單。可選 mission_id（綁定任務）／since（ISO 時間窗）／min_samples／include_test。
 
     `min_samples`：只回鏈路樣本數 ≥ 此值的架次（場域訊號頁用，避免空/測試殘留架次
@@ -1048,13 +1049,22 @@ async def list_sessions(limit: int = 50, mission_id: str | None = None,
     篩，不掃 link_metrics；未結束（summary NULL）視為 0、min_samples≥1 時自然排除。
 
     `include_test`：預設 False＝隱藏 origin='test' 的架次（測試殘留混研究庫的治理；
-    見 backfill-session-origin.sql）；True 顯示全部。'unknown'／'research'／NULL 一律顯示。"""
+    見 backfill-session-origin.sql）；True 顯示全部。'unknown'／'research'／NULL 一律顯示。
+
+    `drone_id`：只看這一台機。
+
+    `with_events`：多回三個計數（事件總數／警告／危急）。**預設關掉**——
+    它要對 events 逐架次數一次，而只想列架次的呼叫端不該替資訊頁付這個代價。
+    有了它，「哪一趟出過事」在清單上就看得出來，不必逐趟點進去才知道。"""
     conds, args = [], []
     if not include_test:
         conds.append("COALESCE(s.origin, 'unknown') <> 'test'")
     if mission_id:
         args.append(mission_id)
         conds.append(f"s.mission_id = ${len(args) + 1}")
+    if drone_id:
+        args.append(drone_id)
+        conds.append(f"s.drone_id = ${len(args) + 1}")
     if since:
         args.append(since)
         conds.append(f"s.started_at >= ${len(args) + 1}::text::timestamptz")
@@ -1063,8 +1073,14 @@ async def list_sessions(limit: int = 50, mission_id: str | None = None,
         conds.append(
             f"COALESCE((s.summary->>'samples_total')::int, 0) >= ${len(args) + 1}")
     where = ("WHERE " + " AND ".join(conds)) if conds else ""
+    ev = """,
+          (SELECT count(*) FROM events e WHERE e.session_id = s.id) AS events_total,
+          (SELECT count(*) FROM events e WHERE e.session_id = s.id
+             AND e.severity = 'warning') AS events_warning,
+          (SELECT count(*) FROM events e WHERE e.session_id = s.id
+             AND e.severity = 'critical') AS events_critical""" if with_events else ""
     q = f"""
-        SELECT s.*, d.name AS drone_name, m.name AS mission_name
+        SELECT s.*, d.name AS drone_name, m.name AS mission_name{ev}
         FROM flight_sessions s
         JOIN drones d ON d.id = s.drone_id
         LEFT JOIN missions m ON m.id = s.mission_id
@@ -1073,6 +1089,27 @@ async def list_sessions(limit: int = 50, mission_id: str | None = None,
         """
     rows = await db.pool.fetch(q, limit, *args)
     return [dict(r) for r in rows]
+
+
+@router.get("/sessions/{session_id}")
+async def get_session(session_id: str):
+    """單一架次。清單抓得到就不必打這支；**深連結（重整、貼網址）需要它**
+    ——那時候手上只有一個 id，而清單可能根本沒載到那一頁。"""
+    row = await db.pool.fetchrow(
+        """SELECT s.*, d.name AS drone_name, m.name AS mission_name,
+                  (SELECT count(*) FROM events e WHERE e.session_id = s.id)
+                    AS events_total,
+                  (SELECT count(*) FROM events e WHERE e.session_id = s.id
+                     AND e.severity = 'warning') AS events_warning,
+                  (SELECT count(*) FROM events e WHERE e.session_id = s.id
+                     AND e.severity = 'critical') AS events_critical
+           FROM flight_sessions s
+           JOIN drones d ON d.id = s.drone_id
+           LEFT JOIN missions m ON m.id = s.mission_id
+           WHERE s.id = $1""", session_id)
+    if row is None:
+        raise HTTPException(404, "無此架次")
+    return dict(row)
 
 
 class SessionPatch(BaseModel):
@@ -1250,12 +1287,83 @@ async def video_segment_file(segment_id: str):
 
 
 @router.get("/events")
-async def list_events(limit: int = 100, session_id: str | None = None):
+async def list_events(limit: int = 100, session_id: str | None = None,
+                      drone_id: str | None = None, severity: str | None = None,
+                      source: str | None = None, type: str | None = None,
+                      q: str | None = None,
+                      since: str | None = None, until: str | None = None,
+                      before_id: int | None = None):
+    """事件查詢。無參數＝最新 N 則（即時頁開頁補歷史用，行為不變）。
+
+    資訊頁（歷史檢視）要的是**往回翻得完**，所以多了篩選與游標：
+
+    * `session_id`：這一趟的事件（時間**正序**——讀一趟飛行是從頭讀到尾）。
+    * 其餘篩選（`drone_id`／`severity`／`source`／`type`／`q`／`since`／`until`）
+      走跨架次檢視，時間**倒序**（最近的先看）。
+    * `before_id`：游標分頁。**用 id 不用 offset**——事件是持續寫入的，
+      offset 會在新事件進來時把同一則推到下一頁去（或跳過一則）。
+
+    `q` 比對 `type` 與 `detail` 的文字，讓「搜 failsafe」這種事做得到；
+    比對的是 detail 的 JSON 文字表示，**認不得的欄位也搜得到**。"""
+    conds: list[str] = []
+    args: list = []
+
+    def arg(v) -> str:
+        args.append(v)
+        return f"${len(args)}"
+
     if session_id:
-        rows = await db.pool.fetch(
-            "SELECT * FROM events WHERE session_id = $1 ORDER BY time LIMIT $2", session_id, limit)
-    else:
-        rows = await db.pool.fetch("SELECT * FROM events ORDER BY time DESC LIMIT $1", limit)
+        conds.append(f"session_id = {arg(session_id)}")
+    if drone_id:
+        conds.append(f"drone_id = {arg(drone_id)}")
+    if severity:
+        conds.append(f"severity = {arg(severity)}")
+    if source:
+        conds.append(f"source = {arg(source)}")
+    if type:
+        conds.append(f"type = {arg(type)}")
+    if since:
+        conds.append(f"time >= {arg(since)}::text::timestamptz")
+    if until:
+        conds.append(f"time <= {arg(until)}::text::timestamptz")
+    if before_id is not None:
+        conds.append(f"id < {arg(before_id)}")
+    if q and q.strip():
+        needle = f"%{q.strip()}%"
+        conds.append(f"(type ILIKE {arg(needle)} "
+                     f"OR COALESCE(detail::text, '') ILIKE {arg(needle)})")
+    where = ("WHERE " + " AND ".join(conds)) if conds else ""
+    # 一趟飛行正序讀、跨架次倒序讀（見 docstring）。**排序鍵一律附帶 id**：
+    # 同一毫秒寫進去的兩則事件若只用 time 排序，分頁游標會在它們之間打結
+    order = "time ASC, id ASC" if session_id and not before_id else "time DESC, id DESC"
+    rows = await db.pool.fetch(
+        f"SELECT * FROM events {where} ORDER BY {order} LIMIT {arg(min(limit, 1000))}",
+        *args)
+    return [dict(r) for r in rows]
+
+
+@router.get("/event-types")
+async def event_types(days: int = 30):
+    """出現過哪些事件型別（給資訊頁的篩選下拉用）。
+
+    **不寫死清單**：型別是後端與韌體一起長出來的，硬編一份下拉選單等於
+    每加一種事件就多一個「查不到」的死角。照資料庫裡實際有的列。"""
+    rows = await db.pool.fetch(
+        """SELECT type, source, count(*) AS n, max(time) AS last_seen
+           FROM events WHERE time >= now() - ($1 || ' days')::interval
+           GROUP BY type, source ORDER BY n DESC""", str(days))
+    return [dict(r) for r in rows]
+
+
+@router.get("/sessions/{session_id}/commands")
+async def session_commands(session_id: str):
+    """這一趟下了什麼指令、哪些被擋下來。
+
+    `/sessions/{id}/track` 也回這一段，但它同時拖著整條遙測——資訊頁只要
+    指令那一列時，不該為此把幾萬筆 telemetry 拉過網路。"""
+    rows = await db.pool.fetch(
+        "SELECT time, action, result, detail, client, params FROM command_log "
+        "WHERE session_id = $1 ORDER BY time", session_id)
     return [dict(r) for r in rows]
 
 

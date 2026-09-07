@@ -124,6 +124,13 @@ async def migrate() -> None:
     # （link_lost/cell_change/session…）。前端據此分「機上訊息」與「系統事件」兩流。
     await pool.execute(
         "ALTER TABLE events ADD COLUMN IF NOT EXISTS source TEXT NOT NULL DEFAULT 'system'")
+    # 資訊頁（2026-09-07）：事件要能**按架次讀完**、也要能跨架次往回翻。
+    # 原本只有 `idx_events_time`——問「這一趟發生了什麼」得掃全表，而事件表
+    # 是全系統寫得最兇的一張。逐架次數事件（/sessions?with_events）走同一支索引
+    await pool.execute("CREATE INDEX IF NOT EXISTS idx_events_session "
+                       "ON events (session_id, time)")
+    await pool.execute("CREATE INDEX IF NOT EXISTS idx_events_drone_time "
+                       "ON events (drone_id, time DESC)")
     # issue 013-A：群組任務資料模型（doc/group-missions-design.md）
     await pool.execute("""CREATE TABLE IF NOT EXISTS mission_groups (
         id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),

@@ -1,6 +1,7 @@
 "use client";
 import { useEffect, useState } from "react";
 
+import { emph } from "@/lib/emph";
 import { evText } from "@/lib/evtext";
 import type { UavEvent } from "@/lib/store";
 
@@ -86,7 +87,9 @@ export default function EventModal({ ev, onClose, mixed = false }: {
         aria-label="事件詳情" onClick={(e) => e.stopPropagation()}>
         <div className="evm-head">
           <span className={`evm-title${d.parse_failed ? " ev-unreadable" : ""}`}>
-            {evText(ev as Parameters<typeof evText>[0], { mixed })}</span>
+            {/* `**` 是後端文案的強調記號，畫面不解析 Markdown（ui-spec §0.3c）
+                ——在讀的這一端畫成粗體，不要把星號印給使用者看 */}
+            {emph(evText(ev as Parameters<typeof evText>[0], { mixed }))}</span>
           <span className="chip">
             <span className="dot" style={{ background: sev.color }} />{sev.label}
           </span>

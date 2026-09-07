@@ -103,18 +103,14 @@ export default function CommandPanel() {
   // toast「點這裡看原因」喚起（ui-spec §2.4）
   const cmdOpenReq = useUavStore((s) => s.cmdOpenReq);
   useEffect(() => { if (cmdOpenReq) setOpen(true); }, [cmdOpenReq]);
-  // 這個 alt 同時餵「起飛」（監督式起飛）與編隊 hold_alt，兩者都是操作員
-  // 自己指定的高度，維持原本的 10／下限 3。**任務起飛不用它**——任務的
-  // 起飛高度一律跟著任務自己的 NAV_TAKEOFF（見下面「起飛→任務」）
+  // 編隊的 hold_alt（分層起飛的基準高度）。**單機起飛已經沒有這個數字**：
+  // 收合列的「↑ 起飛」在 2026-09-07 移除，任務起飛跟著航線的 NAV_TAKEOFF
+  // ——這裡剩下的是編隊那條路，它的基準高度確實由操作員指定
   const [alt, setAltState] = useState(10);
   useEffect(() => {
     const saved = Number(localStorage.getItem("takeoff-alt"));
     if (saved >= 3 && saved <= 100) setAltState(saved);
   }, []);
-  const setAlt = (v: number) => {
-    setAltState(v);
-    if (v >= 3 && v <= 100) localStorage.setItem("takeoff-alt", String(v));
-  };
   // 「起飛→任務」的離地高度**沒有前端欄位**：後端跟著任務自己的 NAV_TAKEOFF
   // 走。曾經有一格預設 10、下限 3，於是一份 takeoff 2 m、航點 3 m 的低空航線
   // 會先被拉到 10 m 才切任務——實際飛行高度是規劃的三倍以上，而那個 10 不在
@@ -659,10 +655,11 @@ export default function CommandPanel() {
   const btn = (action: string, label: string, path: string,
                opts: { confirm?: boolean; danger?: boolean; disabled?: boolean;
                        body?: Record<string, unknown>; cap?: CapKey;
-                       accent?: boolean } = {}) => (
+                       accent?: boolean; title?: string } = {}) => (
     <button
       className={opts.danger ? "btn-danger btn-sm"
         : opts.accent ? "btn-accent btn-sm" : "btn-plain btn-sm"}
+      title={opts.title}
       disabled={!sid || busy !== null || !!opts.disabled || notAdmitted
         || (opts.cap ? capState(opts.cap) !== "ok" : false)}
       onClick={() => exec(action, path, opts.confirm, opts.body)}
@@ -701,20 +698,21 @@ export default function CommandPanel() {
         {health.enabled && noChannel && <span className="meta">無指令通道</span>}
         {routerDead && <span className="meta meta-dead">指令服務失效</span>}
         <span className="spacer" />
-        {health.enabled && !routerDead && !formation && sid && dh && !observeOnly && (
+        {/* **收合列上只留「返航」**（2026-09-07 使用者指示：外層的起飛鈕刪掉）。
+            起飛的入口是任務區的「起飛→任務」——它跟著航線的 NAV_TAKEOFF 飛；
+            原本這顆「↑ 起飛」送的是寫死的 10 m，**而畫面上沒有任何地方寫著
+            那個 10**（同 §2.3a 拿掉起飛高度欄位的理由）。返航留著：它是緊急
+            出口，收合狀態下也必須按得到。 */}
+        {health.enabled && !routerDead && !formation && sid && dh && !observeOnly
+          && airborne && (
           <span onPointerDown={(e) => e.stopPropagation()}
             onPointerUp={(e) => e.stopPropagation()}>
-            {/* **用同一個 `airborne`**：原本這裡各寫一份判準，而
-                「在空中」的判斷在邊界上分歧會讓標頭顯示返航、
-                本體顯示起飛——同一個畫面上兩個互相矛盾的答案 */}
-            {airborne
-              ? btn("RTL", "⌂ 返航", "/mode/rtl", { danger: true, cap: "rtl" })
-              : btn("起飛", "↑ 起飛", "/takeoff",
-                    { confirm: true, body: { alt }, cap: "takeoff", accent: true,
-                      disabled: rcDown })}
+            {btn("RTL", "⌂ 返航", "/mode/rtl", { danger: true, cap: "rtl" })}
           </span>
         )}
-        <span className="meta">{open ? "▾" : "▸"}</span>
+        {/* 箭頭＝**現在是什麼狀態**，不是「按下去會怎樣」（使用者指示
+            2026-09-07）：展開↓、收起↑ */}
+        <span className="meta">{open ? "▾" : "▴"}</span>
       </div>
 
       {open && !health.enabled && (
@@ -1134,11 +1132,15 @@ export default function CommandPanel() {
               不知道現在載的是什麼，按哪一顆都是猜的。 */}
           <div className="cmd-sec">任務</div>
           <div className="hint-line">
-            {/* JSX 的換行會塌成一個空格，中文標點後面就多出一個縫
-                （「沒上傳過， 或是」）——整句不折行 */}
+            {/* 「未知」兩個字就夠（使用者指示 2026-09-07）。成因（本系統沒
+                上傳過／別的 GCS 傳的）搬進 tooltip：**要處置的人只需要知道
+                「我不知道機上載的是哪一份」**，成因不改變他下一步要做什麼 */}
             機上目前：{onboardName
               ? <b>{onboardName}</b>
-              : <span style={{ opacity: 0.6 }}>不知道（本系統沒上傳過，或是別的 GCS 傳的）</span>}
+              : <span style={{ opacity: 0.6 }}
+                  title="本系統沒有上傳過這台機的任務——可能是別的地面站傳的，或機上本來就有一份">
+                  未知
+                </span>}
             {inMission && "・執行中"}
             {holding && "・已暫停"}
           </div>
@@ -1164,17 +1166,18 @@ export default function CommandPanel() {
                   ——而填錯它就會讓實際飛行高度與規劃的那份 .plan 不一致。 */}
               {btn("起飛→任務", "② 開始任務（起飛→執行）", "/mission/fly",
                    { confirm: true, cap: "mission_fly", disabled: rcDown,
+                     title: rcDown
+                       ? "遙控器未連線——自動起飛的前提是有人能隨時接管" : undefined,
                      body: { mission_id: missionId || undefined } })}
               {/* **換任務不該被迫用「上傳另一份蓋過去」來達成**——那是一個
                   更重、更容易出錯的動作（完整握手＋逐項讀回比對）。
                   兩段式確認：清掉機上航線是不可復原的 */}
               {btn("清除任務", "清掉機上那份任務", "/mission/clear",
                    { confirm: true, cap: "mission_upload", danger: true })}
-              {rcDown && (
-                <div className="hint-line">
-                  · 遙控器未連線——自動起飛的前提是有人能隨時接管，請先確認遙控器開機並與飛控連上
-                </div>
-              )}
+              {/* 「遙控器未連線」那一行刪掉（2026-09-07 使用者指示：上面講過了）
+                  ——沒有 RC 時飛控的預檢原因（`RC not found`）已經逐條列在
+                  狀態列下方，同一件事在同一個面板裡說兩次只是把版面吃掉。
+                  按鈕仍然按不下去，理由改掛在鈕上（title），不另起一行 */}
             </div>
           )}
 
@@ -1227,7 +1230,9 @@ export default function CommandPanel() {
             {btn("Hold", "懸停", "/mode/hold", { cap: "hold" })}
             {btn("降落", "降落", "/mode/land", { confirm: true, danger: true, cap: "land" })}
           </div>
-          {capHints(["arm", "takeoff", "rtl", "hold", "land"])}
+          {/* "takeoff" 不列：收合列的起飛鈕已移除，沒有按鈕的能力提示
+              指不到任何東西 */}
+          {capHints(["arm", "rtl", "hold", "land"])}
 
           </>)}
           </>)}

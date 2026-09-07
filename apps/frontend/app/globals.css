@@ -1259,3 +1259,96 @@ details.card summary { cursor: pointer; font-size: 14px; font-weight: 600; }
 .cmd-fix-none { color: var(--muted); }
 /* 「還有補充，滑上去看」的記號。**淡到不搶戲**：處置那一行才是要讀的東西 */
 .cmd-fix-more { margin-left: 4px; color: var(--muted); cursor: help; }
+
+/* ── 資訊頁（app/info）─────────────────────────────────────────
+   歷史檢視的版面。**左清單／右詳情**（架次分頁）：一趟飛行是骨架，
+   事件、指令、錄製都掛在它下面——四張並排的表會逼讀的人自己對時間軸。 */
+.info-tabs { display: flex; gap: 6px; border-bottom: 1px solid var(--hairline); }
+.info-tabs button {
+  font: inherit; font-size: 13px; background: none; border: 0; cursor: pointer;
+  color: var(--muted); padding: 9px 16px; border-bottom: 2px solid transparent;
+  margin-bottom: -1px;
+}
+.info-tabs button:hover { color: var(--ink-2); }
+.info-tabs button[aria-selected="true"] {
+  color: var(--accent); border-bottom-color: var(--accent); font-weight: 600;
+}
+
+/* 左窄右寬；窄視窗改上下堆疊（清單在上，選了往下讀） */
+.info-split { display: grid; grid-template-columns: minmax(220px, 300px) minmax(0, 1fr); gap: 14px; align-items: start; }
+@media (max-width: 900px) { .info-split { grid-template-columns: 1fr; } }
+.info-detail { display: flex; flex-direction: column; gap: 14px; min-width: 0; }
+
+/* 篩選列：label 內含控制項，換行不拆 */
+.info-filters { display: flex; flex-wrap: wrap; gap: 10px 14px; align-items: center; }
+.info-filters label {
+  display: inline-flex; align-items: center; gap: 6px;
+  font-size: 12px; color: var(--muted);
+}
+.info-filters select, .info-filters input[type="text"], .info-filters input:not([type]) {
+  font: inherit; font-size: 12.5px; color: var(--ink); background: var(--page);
+  border: 1px solid var(--hairline); border-radius: 6px; padding: 4px 6px;
+  max-width: 220px;
+}
+.info-filters-tight { gap: 8px; margin-bottom: 10px; }
+.info-check { cursor: pointer; }
+.info-search input { min-width: 160px; }
+
+/* 架次清單：一列一趟。**清單內部捲動**，右側詳情不跟著被推長 */
+.info-rows { display: flex; flex-direction: column; gap: 2px; max-height: 60vh; overflow-y: auto; }
+.info-srow {
+  display: grid; grid-template-columns: auto 1fr auto auto auto; gap: 8px;
+  align-items: baseline; text-align: left; width: 100%;
+  font: inherit; font-size: 12.5px; color: var(--ink-2);
+  background: none; border: 0; border-radius: 6px; padding: 6px 8px; cursor: pointer;
+}
+.info-srow:hover { background: var(--surface-2); }
+.info-srow.on { background: var(--accent-bg); color: var(--ink); }
+.info-sday { font-variant-numeric: tabular-nums; color: var(--muted); }
+.info-srow.on .info-sday { color: var(--ink-2); }
+.info-sname { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.info-sdur { font-size: 11px; color: var(--muted); font-variant-numeric: tabular-nums; }
+/* 「這趟出過事嗎」在清單上就看得出來——形狀先於顏色：有徽章＝有事 */
+.info-badge {
+  font-size: 10px; font-weight: 700; line-height: 1.6;
+  min-width: 16px; text-align: center; border-radius: 999px; padding: 0 4px;
+}
+.info-badge.bad { background: var(--status-danger); color: #fff; }
+.info-badge.warn { background: var(--status-warn); color: #2a2620; }
+
+.info-metrics { grid-template-columns: repeat(4, minmax(0, 1fr)); }
+@media (max-width: 720px) { .info-metrics { grid-template-columns: repeat(2, minmax(0, 1fr)); } }
+.info-metrics .value { font-size: 15px; }
+.info-actions { margin-top: 10px; align-items: baseline; }
+
+/* 指令列：時間｜動作｜下場｜原文 */
+.info-cmds { display: flex; flex-direction: column; gap: 4px; }
+.info-cmd {
+  display: grid; grid-template-columns: auto auto auto minmax(0, 1fr);
+  gap: 8px; align-items: baseline; font-size: 12px;
+}
+.info-cmd time { color: var(--muted); font-variant-numeric: tabular-nums; }
+.info-cmdact { font-weight: 600; color: var(--ink); }
+.info-cmddetail {
+  color: var(--muted); overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+.info-sevents { max-height: 340px; }
+
+/* 事件分頁：一列一則，整列可點 */
+.info-evlist { display: flex; flex-direction: column; gap: 1px; }
+.info-evrow {
+  display: grid; grid-template-columns: auto auto auto auto minmax(0, 1fr) auto;
+  gap: 8px; align-items: baseline; text-align: left; width: 100%;
+  font: inherit; font-size: 12px; color: var(--ink-2);
+  background: none; border: 0; border-radius: 6px; padding: 5px 6px; cursor: pointer;
+}
+.info-evrow:hover { background: var(--surface-2); }
+.info-evrow time { color: var(--muted); font-variant-numeric: tabular-nums; flex: none; }
+.info-evsrc { font-size: 11px; color: var(--muted); }
+.info-evdrone { font-size: 11px; color: var(--muted); max-width: 120px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.info-evtext { color: var(--ink); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.info-evflag {
+  font-size: 10px; color: var(--muted);
+  border: 1px solid var(--hairline); border-radius: 999px; padding: 0 6px;
+}
+.info-more { margin-top: 10px; text-align: center; }

@@ -10,6 +10,7 @@
 import { useEffect, useRef, useState } from "react";
 
 import EventModal from "@/components/EventModal";
+import { emph } from "@/lib/emph";
 import { evText } from "@/lib/evtext";
 import { armFix } from "@/lib/prearm";
 import { classifySinr } from "@/lib/signal";
@@ -193,7 +194,7 @@ export function EventsCard() {
                   : e.severity === "warning" ? "#fab219" : "#8f8b80" }} />
               <time>{evTime(e.time)}</time>
               <span className={`detail${e.detail?.parse_failed
-                ? " ev-unreadable" : ""}`}>{evText(e, { mixed })}</span>
+                ? " ev-unreadable" : ""}`}>{emph(evText(e, { mixed }))}</span>
               {/* mismatch 一律逐事件標（本來就有區辨力）；unknown 只在混合態
                   逐事件標，形狀與顏色都與 mismatch 分開（? 不是 ⚠、次要色
                   不是警告色）——未確認不是異常 */}
@@ -353,7 +354,7 @@ export default function SimpleHud() {
             if (toast.expand) useUavStore.getState().requestCmdPanel();
             dismiss();
           }}>
-          {toast.sev === "ok" ? "✓" : "⚠"} {toast.t}
+          {toast.sev === "ok" ? "✓" : "⚠"} {emph(toast.t)}
           <span className="hud-toast-x" aria-label="關閉">✕</span>
         </div>
       )}

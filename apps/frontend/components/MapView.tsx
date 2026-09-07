@@ -677,6 +677,19 @@ export default function MapView() {
                 const st = useUavStore.getState();
                 if (st.formation) st.toggleTarget(id);
                 else st.select(id);
+                // **選了誰就飛去看誰**（使用者指示 2026-09-07）。原本切機只換
+                // HUD／影像／指令對象，鏡頭留在原地——多機分散在場域兩端時，
+                // 「我選了它」與「我看得到它」是兩件事，而選機的目的正是要看它。
+                //
+                // 兩條分寸：
+                //  1. **沒有座標就不動鏡頭。** 那台機的位置我方不知道（GPS 未鎖、
+                //     剛連上、只有 0,0），飛去一個猜的位置比留在原地更糟。
+                //  2. **不改縮放。** 使用者自己調的視野是他的決定；這裡只平移。
+                const t = st.fleet[id];
+                const map = mapRef.current;
+                if (map && t?.lat != null && t?.lon != null) {
+                  map.easeTo({ center: [t.lon, t.lat], duration: 600 });
+                }
               }}>
               {/* §0.1：色點一律配機身文字——3 台內是冗餘保險，超過 3 台
                   色盤耗盡（第 4 台起同一灰）時文字是唯一識別依據 */}

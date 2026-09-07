@@ -79,6 +79,73 @@ export function evText(
       return `serving cell 換手：PCI ${d.from_pci ?? "?"}`
         + `${d.from_band ? `（${d.from_band}）` : ""} → PCI ${d.to_pci ?? "?"}`
         + `${d.to_band ? `（${d.to_band}）` : ""}`;
-    default:              return `${e.type} ${JSON.stringify(d)}`;
+
+    // ── 以下為資訊頁（2026-09-07）補上的型別 ──────────────────────
+    // 這些事件一直都在寫，只是從來沒有人回頭讀——**歷史檢視一上線，
+    // 它們就成了畫面上最常出現的那幾種**，而它們原本全部落到 default
+    // 的 JSON 傾印。一頁的 JSON 就是一頁沒有人會讀的東西。
+    case "failsafe":
+      return `機上進入緊急狀態${d.state ? `（${d.state}）` : ""}`;
+    case "rc_link":
+      // detail.text 是機上代理寫好的整句（「⚠ 遙控器離線——此時不得起飛」）
+      return typeof d.text === "string" && d.text
+        ? d.text
+        : d.rc_link === false ? "遙控器離線" : "遙控器連上了";
+    case "mission_shown":
+      return `任務「${d.mission ?? "未命名"}」${d.why ? `：${d.why}` : ""}`;
+    case "intent_sent":
+      return `意圖 ${intentLabel(d.action)} 已下達`
+        + `${d.executor ? `（${execLabel(d.executor)}）` : ""}`
+        + `${d.reason ? `——${d.reason}` : ""}`;
+    case "intent_cleared":
+      return `意圖 ${intentLabel(d.action)} 結束`
+        + `${d.reason ? `——${d.reason}` : ""}`;
+    case "intent_guard_refused":
+      // reason 很長（守門會把「該怎麼辦」一起講完）；清單截斷、modal 看全文
+      return `守門擋下 ${intentLabel(d.action)}`
+        + `${d.state ? `（當時 ${d.state}）` : ""}${d.reason ? `：${d.reason}` : ""}`;
+    case "sysid_claimed":
+      return `sysid ${d.sysid ?? "?"} 由「${d.drone ?? "?"}」認領`
+        + `${d.how ? `（${d.how}）` : ""}`;
+    case "sysid_reassign_needed":
+    case "identity_mismatch":
+      return typeof d.reason === "string" && d.reason ? d.reason : e.type;
+    case "vehicle_ack":
+      return typeof d.text === "string" && d.text
+        ? d.text
+        : `飛控回應 ${d.command_name ?? d.command ?? "指令"}`
+          + `${d.result_name ? `：${d.result_name}` : ""}`;
+    case "driver_disagreement": {
+      const n = Array.isArray(d.fields) ? (d.fields as unknown[]).length : 0;
+      return `機上與地面站對同一份遙測算出不同結果${n ? `（${n} 項）` : ""}`;
+    }
+
+    // **認不得的型別：先找它自己帶的那句話，再退回傾印。**
+    // `text`／`reason`／`note` 是後端寫事件時的慣例欄位（多半已經是整句中文）。
+    // 型別名照留在前面——**不知道那是什麼事件時，代號是唯一的線索**，
+    // 把它藏起來只會讓人查不到源頭。
+    default: {
+      const said = [d.text, d.reason, d.note].find(
+        (v): v is string => typeof v === "string" && v.length > 0);
+      return said ? `${e.type}：${said}` : `${e.type} ${JSON.stringify(d)}`;
+    }
   }
+}
+
+/** 意圖協定的動作 → 人話。**照枚舉列，不猜字串**（與 CommandPanel 的
+ * INTENT_LABELS 同一份說法；漏一個就顯示原代號）。 */
+function intentLabel(a: unknown): string {
+  const L: Record<string, string> = {
+    start_mission: "開始任務", pause: "中斷任務", resume: "繼續任務",
+    change_route: "更換任務", rtl: "返航", land: "降落",
+    abort: "中止（原地懸停）", disarm: "上鎖", takeoff: "起飛", arm: "解鎖",
+  };
+  return typeof a === "string" ? (L[a] ?? a) : "?";
+}
+
+/** 誰執行的。`agent`＝機上代理自己動手、`ground`＝地面站下的。
+ * **這一格不能省**：同一個動作由誰做，事後追責與除錯的方向完全不同。 */
+function execLabel(x: unknown): string {
+  const L: Record<string, string> = { agent: "機上代理執行", ground: "地面站執行" };
+  return typeof x === "string" ? (L[x] ?? x) : "?";
 }
