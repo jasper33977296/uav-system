@@ -459,8 +459,8 @@ class MavlinkRx:
             # 佔 seq 0，換算是驅動層的職責，在 ingest 就換會讓原始事實消失。
             await self._mission_progress(st, msg)
             st.mission_seq = msg.seq
-            st.mission_total = getattr(msg, "total", None)
-            st.mission_state = getattr(msg, "mission_state", None)
+            st.mission_total = self._said(getattr(msg, "total", None))
+            st.mission_state = self._said(getattr(msg, "mission_state", None))
         elif t == "MISSION_ITEM_REACHED":
             # 「我到第 N 點了」。**與 MISSION_CURRENT 是兩件事**：後者說的是
             # 「正在飛向第幾項」，這則說的是「已經到了第幾項」。任務事後要
@@ -632,10 +632,19 @@ class MavlinkRx:
     # 為什麼一定要落盤：原本 seq 只更新 live state，而 live state 是**現在**，
     # 不是**歷史**。任務飛完之後回頭看，「第幾秒到第幾點」在系統裡不存在，
     # 只能拿軌跡點去跟航點座標算距離用猜的——那是推論不是紀錄。
+    #: `MISSION_CURRENT` 的 `total`／`mission_state` 是 MAVLink 擴充欄位
+    #: （ArduPilot 4.5+ 才送）。**pymavlink 對缺席的擴充欄位填 0，不是 None**
+    #: ——照收就會把「韌體沒說」記成「總共 0 項」，畫面上寫出「共 0 項」，
+    #: 而那趟任務明明有 5 項（2026-09-07 用 ArduPilot 4.0.3 的 SITL 抓到）。
+    @staticmethod
+    def _said(v):
+        """擴充欄位：0＝沒說（None），不是 0 這個數值。"""
+        return v if v else None
+
     async def _mission_progress(self, st: LiveState, msg) -> None:
         seq = msg.seq
-        state = getattr(msg, "mission_state", None)
-        total = getattr(msg, "total", None)
+        state = self._said(getattr(msg, "mission_state", None))
+        total = self._said(getattr(msg, "total", None))
         first = st.mission_seq is None            # 這條連線第一次看到
         # **第一次看到也可能是有意義的**：失聯回來時「它已經飛到第 5 點」是
         # 新資訊。但沒有任務時每次連線都報一次就是噪音，所以要求機端說得出

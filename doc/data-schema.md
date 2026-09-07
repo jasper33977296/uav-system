@@ -237,6 +237,11 @@ seq 0，兩者差 1）——換算是驅動層的職責，在入庫就換會讓�
 **只有變化才落盤**：實測 9/2 七趟真飛共 1060 則 `MISSION_CURRENT` → 36 筆
 事件。每則都寫的話一趟會多出幾千筆一模一樣的列，把事件流淹掉＝等於沒記。
 
+**舊韌體不送的欄位要記成 NULL 不是 0**：`total` 與 `mission_state` 是
+MAVLink 擴充欄位（ArduPilot 4.5+ 才送），而 **pymavlink 對缺席的擴充欄位
+填 0 不是 None**。照收就會把「韌體沒說」記成「共 0 項」，畫面上寫出
+「共 0 項」——2026-09-07 用 ArduPilot 4.0.3 的 SITL 飛一趟五項任務時抓到。
+
 **「飛完了」認不出來是靠單一欄位**：實測本機韌體從來不送
 `mission_state=5 (complete)`，飛完的樣子是 `active → not_started` ＋最後一項
 有 `waypoint_reached`；中途被切走則是 active 之後沒有那一則。三種事件缺一

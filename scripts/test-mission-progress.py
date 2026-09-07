@@ -153,6 +153,36 @@ async def main():
     chk("飛完的樣子是 active → not_started（實測，非推測）",
         ("active", "not_started") in states, states)
 
+    # ── 擴充欄位缺席 ≠ 0（2026-09-07，用 ArduPilot 4.0.3 的 SITL 抓到）──
+    # `total`／`mission_state` 是 MAVLink 擴充欄位，舊韌體不送；而 pymavlink
+    # **對缺席的擴充欄位填 0 不是 None**。照收就會把「韌體沒說」記成「共 0
+    # 項」，畫面上寫出「共 0 項」——那趟任務明明有 5 項。
+    print("\n── 舊韌體：沒說的欄位不可以記成 0 ──────────────────")
+
+    class Old:                    # 4.0.3 的 MISSION_CURRENT：只有 seq
+        def __init__(self, seq):
+            self.seq, self.total, self.mission_state = seq, 0, 0
+
+    cap.evs.clear()
+    rx = mavlink_rx.MavlinkRx.__new__(mavlink_rx.MavlinkRx)
+    st = LiveState()
+    st.drone_id, st.drone_name, st.session_id = "d", "test", None
+    for q in (0, 1, 2):
+        await rx._mission_progress(st, Old(q))
+        st.mission_seq = q
+        st.mission_total = rx._said(0)
+        st.mission_state = rx._said(0)
+    prog = [d for t, d in cap.evs if t == "mission_progress"]
+    chk("舊韌體照樣記得到進度（seq 是必填欄位，一定有）", len(prog) >= 2, len(prog))
+    chk("**`total` 記成 None 不是 0**——「沒說」與「共 0 項」是兩件事",
+        all(d["total"] is None for d in prog), [d["total"] for d in prog])
+    chk("`mission_state` 同理：沒送就是 None，不是 unknown 事件",
+        all(d["state"] is None for d in prog)
+        and not any(t == "mission_state" for t, _ in cap.evs),
+        [d["state"] for d in prog])
+    chk("**反向驗證**：真有值時照樣收得到（不是一律轉 None）",
+        rx._said(6) == 6 and rx._said(3) == 3, (rx._said(6), rx._said(3)))
+
     print("\n" + ("全部通過" if ok else "**有未通過項目**"))
     return 0 if ok else 1
 
