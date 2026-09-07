@@ -257,9 +257,8 @@ export default function SidePanel() {
   const cls = link?.sinr != null ? classifySinr(link.sinr) : null;
   // **分得出「模組報的」與「我方算的」**：後端在 raw._derived 記下解了哪幾欄
   // （app/modem_raw.py）。舊資料沒有這個鍵＝那些值本來就是模組填的
-  const derived = new Set<string>(
-    (((link?.raw as Record<string, unknown> | null | undefined)?.
-      _derived as { fields?: string[] } | undefined)?.fields) ?? []);
+  const rawLink = link?.raw as { _derived?: { fields?: string[] } } | null | undefined;
+  const derived = new Set<string>(rawLink?._derived?.fields ?? []);
   const effective = selectedId ?? primaryId;
 
   // 5G 詳細摺疊：展開狀態記 localStorage（IA 定案配套，同起飛高度前例）
