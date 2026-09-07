@@ -35,6 +35,7 @@ _client_var: contextvars.ContextVar = contextvars.ContextVar("client", default=N
 
 from . import capabilities as caps
 import plan_check          # libs/ 的共用實作（PYTHONPATH=/srv/libs）
+import terrain             # 地形圖磚（issues/047 §1-B）
 
 from . import admission, group_exec, guard_client, mav, params as fcparams, plans
 from .config import settings
@@ -655,6 +656,12 @@ def _with_command(row) -> dict:
     p = w.get("params")
     p = json.loads(p) if isinstance(p, str) else (p or {})
     w["command"] = p.get("command")
+    # **`frame` 也要解出來。** 原本只解 `command`，於是 plan_check 的
+    # frame 方言檢查（無座標項的 frame）在「上傳到機」這條路上**從來沒生效
+    # 過**——它讀 `w["frame"]`，而這裡沒放。backend 的 /missions/{id}/check
+    # 有解，所以同一份航線在畫面上會被擋、按上傳卻不會，兩邊說法不一致。
+    # 地形預檢也要靠它分辨 frame 3（離起飛點）與 frame 10（跟地形）
+    w["frame"] = p.get("frame")
     return w
 
 
@@ -1073,7 +1080,7 @@ async def mission_upload(sysid: int, body: UploadIn):
     ap = router.autopilot_of(sysid) if router else None
     report = plan_check.check_waypoints(
         wps, settings.geofence_radius_m, settings.geofence_alt_m,
-        settings.geofence_margin, fence=mf,
+        settings.geofence_margin, fence=mf, dem=terrain.shared(),
         autopilot=ap if ap is not None else (meta["firmware_type"] if meta else None),
         home=json.loads(meta["home"]) if meta and isinstance(meta["home"], str)
         else (meta["home"] if meta else None))
@@ -1098,6 +1105,22 @@ async def mission_upload(sysid: int, body: UploadIn):
                                   "how_to": ["切 hold 並確認進入",
                                              "上傳新航線",
                                              "切回 mission 並指定續飛航點"]})
+    # **地形是自己一道門**（issues/047 §1-B）：不掛在 GEOFENCE_ENFORCE 底下。
+    # 圍欄擋下來多半是「系統預設值跟你的場地無關」，地形擋下來是「這條航線
+    # 穿過地面」——後者是 2026-09-07 摔機的形狀，預設就該擋。
+    terr_bad = [p for p in (report.get("terrain") or {}).get("notes") or []
+                if p in report["problems"]]
+    if terr_bad and settings.terrain_enforce:
+        await _audit(sysid, "mission_upload", {"mission_id": body.mission_id},
+                     "rejected_terrain", "；".join(terr_bad))
+        raise HTTPException(409, {
+            "msg": "航線會穿過地面，未上傳", **report,
+            "how_to": [
+                f"把相對高度拉高——最低那一點還差 "
+                f"{-(report['terrain'].get('min_clearance_m') or 0):.1f} m",
+                "或改用地形跟隨（frame 10）讓飛控自己跟地面",
+                "地形資料在有樹的地方量到的是樹冠：確定是假警報就把 "
+                "TERRAIN_ENFORCE 設成 false（那一次會留痕）"]})
     if not report["ok"] and settings.geofence_enforce:
         await _audit(sysid, "mission_upload", {"mission_id": body.mission_id},
                      "rejected_precheck", "；".join(report["problems"]))
@@ -1205,7 +1228,8 @@ async def _resolve_mission(ref: str) -> dict:
 
 def _check(wps: list[dict]) -> dict:
     return plan_check.check_waypoints(
-        wps, settings.geofence_radius_m, settings.geofence_alt_m, settings.geofence_margin)
+        wps, settings.geofence_radius_m, settings.geofence_alt_m,
+        settings.geofence_margin, dem=terrain.shared())
 
 
 def _resolve_sysid(sysid: int | None) -> int:

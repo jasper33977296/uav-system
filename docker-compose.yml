@@ -64,6 +64,10 @@ services:
               "--host", "0.0.0.0", "--port", "${BACKEND_PORT:-38000}"]
     volumes:
       - ./reference/px4-events:/srv/reference/px4-events:ro   # PX4 事件字典（014）
+      # 地形圖磚（issues/047 §1-B）。**唯讀、而且不進映像**：一塊 1 弧秒
+      # SRTM 是 25 MB，塞進映像會讓每次建置都拖著它跑，而它一年也不會變。
+      # 目錄不存在或空的 → 預檢會說「離地高度沒有檢查」，不會假裝通過
+      - ./data/dem:/srv/dem:ro
       # 簽章金鑰（issues/040 A5-b）。**獨立 volume、不與位址表共用**：
       # 一個是設定、一個是秘密，混在一起的下場是備份與除錯時一起被帶走。
       # **不放映像**（映像會被推到 registry）、**不放資料庫**（DB 會被 dump）。
@@ -76,6 +80,7 @@ services:
       # 全部由根目錄 .env 供值（見 .env.example）——新環境只改 .env
       DATABASE_URL: postgresql://uav:uav@localhost:${DB_PORT:-35432}/uav
       PYTHONPATH: /srv/libs        # 共用驅動層（libs/autopilot）
+      DEM_DIR: ${DEM_DIR:-/srv/dem}   # 地形圖磚目錄（libs/terrain）
       MAVLINK_URL: ${MAVLINK_URL:-udpin://0.0.0.0:14540}
       LINK_SOURCE: ${LINK_SOURCE:-simulated}
       AUTOREGISTER_SIMULATED: ${AUTOREGISTER_SIMULATED:-false}   # SITL/dev true：自動註冊標假機
@@ -130,6 +135,7 @@ services:
               "--host", "0.0.0.0", "--port", "${COMMAND_PORT:-38001}"]
     volumes:
       - ./missions:/srv/missions:ro   # 航線檔（外部觸發 GET /api/plans、POST /api/start）；唯讀
+      - ./data/dem:/srv/dem:ro        # 地形圖磚（issues/047 §1-B）；唯讀
       # 位址表：本服務寫、uav-heartbeat 讀（issues/033 §4.2.1）。心跳搬出去之後
       # 「每台機的來源位址」是唯一還需要跨行程傳的東西——而它只有正在收包的
       # 這個服務知道
@@ -137,6 +143,7 @@ services:
     environment:
       DATABASE_URL: postgresql://uav:uav@localhost:${DB_PORT:-35432}/uav
       PYTHONPATH: /srv/libs        # 共用驅動層（libs/autopilot）
+      DEM_DIR: ${DEM_DIR:-/srv/dem}   # 地形圖磚目錄（libs/terrain）
       MISSIONS_DIR: ${MISSIONS_DIR:-/srv/missions}
       COMMAND_MAVLINK_URL: ${COMMAND_MAVLINK_URL:-udpin://0.0.0.0:14541}
       ENABLE_COMMANDS: ${ENABLE_COMMANDS:-false}

@@ -114,7 +114,9 @@ function failText(action: string, status: number, d: any): string {
     : "";
   const fallback = `${action}失敗（HTTP ${status}）`;
   return typeof d === "string" && d ? d
-    : d?.problems?.length ? `${d.msg ?? "被拒"}：${d.problems.join("；")}`
+    // **`problems` 這條也要帶 how_to**：地形擋門兩者都有，而原本這一支先
+    // 命中就把合法做法丟了——被擋的人只看到「會穿過地面」，不知道差多少
+    : d?.problems?.length ? `${d.msg ?? "被拒"}：${d.problems.join("；")}${how}`
     : d?.msg ? `${d.msg}${d.hint ? `——${d.hint}` : ""}${notes}${how}`
     : d != null && typeof d === "object"
       ? `${fallback}：${JSON.stringify(d)}`   // 認不得的結構：原文照列
@@ -126,7 +128,10 @@ export default function CommandPanel() {
   const [missions, setMissions] = useState<Mission[]>([]);
   const [missionId, setMissionId] = useState("");
   const [busy, setBusy] = useState<string | null>(null);
-  const [result, setResult] = useState<{ ok: boolean; text: string } | null>(null);
+  // `notes`＝成功了但**還是要看一眼**的話（目前是地形預檢）。成功不等於
+  // 沒事：一份離地只剩 0.6 m 的航線上得去，而那正是要在起飛前知道的事
+  const [result, setResult] = useState<
+    { ok: boolean; text: string; notes?: string[] } | null>(null);
   const [confirm, setConfirm] = useState<string | null>(null);
   const confirmTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const [open, setOpen] = useState(false);   // 預設收合（使用者 2026-08-11 指示）
@@ -662,7 +667,11 @@ export default function CommandPanel() {
         // 回讀比對是**上傳成功的定義**，不是額外的好消息：比對不過在後端
         // 就已經是 CommandError／不會走到這裡，所以那句括號永遠都在、
         // 永遠都對，也就永遠沒有告訴任何人任何事。
-        setResult({ ok: true, text: `${action}成功` });
+        // 地形預檢的話跟著上傳結果一起回（`check.terrain.notes`）。
+        // **只挑地形那幾句**：`warnings` 裡還有圍欄、機種、frame 方言，
+        // 全列會變成沒人讀的一大段（使用者：字太多）
+        setResult({ ok: true, text: `${action}成功`,
+                    notes: body?.check?.terrain?.notes });
         // 顯示到即時頁的事**已經搬到後端**（指令服務在上傳／啟動／改航線成功
         // 後呼叫 /missions/{id}/show，前端由 mission_shown 事件觸發重畫）。
         // 原因：上傳的呼叫端不只有這個畫面——驗收 rig、MCP、curl 都會上傳，
@@ -1355,6 +1364,11 @@ export default function CommandPanel() {
               {/* 後端文案用 `**` 當強調記號（逾時那句 hint 就有），
                   而畫面不解析 Markdown——見 ui-spec §0.3c */}
               {emph(result.text)}
+              {(result.notes ?? []).map((n, i) => (
+                <div key={i} className="hint-line" style={{ marginTop: 4 }}>
+                  ⚠ {emph(n)}
+                </div>
+              ))}
             </div>
           )}
         </div>

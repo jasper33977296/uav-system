@@ -13,6 +13,7 @@ import logging
 
 import mission_time        # libs/ 的共用實作（PYTHONPATH=/srv/libs）
 import plan_check
+import terrain
 
 from . import (agent_link, captures, chainage, db, groups,
                mavlink_rx, signing)
@@ -1642,7 +1643,7 @@ async def save_mission(m: MissionIn):
     return {"id": mid, "check": plan_check.check_waypoints(
         wps, settings.geofence_radius_m, settings.geofence_alt_m,
         settings.geofence_margin, fence=m.fence,
-        autopilot=m.firmware_type, home=m.home)}
+        autopilot=m.firmware_type, home=m.home, dem=terrain.shared())}
 
 
 @router.post("/missions/from-vehicle")
@@ -1665,7 +1666,7 @@ async def import_mission_from_vehicle(name: str | None = None):
     return {"id": mid, "waypoint_count": len(wps),
             "check": plan_check.check_waypoints(
                 stored, settings.geofence_radius_m, settings.geofence_alt_m,
-                settings.geofence_margin)}
+                settings.geofence_margin, dem=terrain.shared())}
 
 
 @router.get("/missions/{mission_id}/check")
@@ -1700,7 +1701,8 @@ async def check_mission(mission_id: str):
         settings.geofence_margin, fence=fence,
         # frame 規則是方言，要知道是給哪一家寫的才判得了（沒宣告時只警告）
         autopilot=row["firmware_type"],
-        home=json.loads(row["home"]) if isinstance(row["home"], str) else row["home"])
+        home=json.loads(row["home"]) if isinstance(row["home"], str) else row["home"],
+        dem=terrain.shared())
 
 
 @router.post("/missions/{mission_id}/activate")

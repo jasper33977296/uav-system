@@ -26,6 +26,15 @@ class Settings(BaseSettings):
     geofence_radius_m: float = 50.0
     geofence_alt_m: float = 15.0
     geofence_margin: float = 0.7
+    # 地形預檢（issues/047 §1-B）：**預設會擋**，而且**與 GEOFENCE_ENFORCE
+    # 分開**。理由是兩者的性質不同：圍欄的系統預設值是「這套系統只在一個
+    # 場地飛」才成立的假設，擋下來多半是假錯誤；而「預期離地是負的」講的是
+    # 航線本身穿過地面，那是 2026-09-07 那一趟摔機的形狀。
+    #
+    # **但留得下退路。** SRTM 在有樹的地方量到的是樹冠不是地面，所以
+    # 「地面比航線高」有可能是樹造成的假警報——被擋住的時候有兩條路：
+    # 把高度拉高，或把這個開關關掉（關掉的那一次會進 command_log 留痕）。
+    terrain_enforce: bool = True
     # 外部觸發（POST /api/start / GET /api/plans）：repo 的 missions/ 掛進容器唯讀
     missions_dir: str = "/srv/missions"
 

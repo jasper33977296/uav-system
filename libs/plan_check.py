@@ -35,6 +35,20 @@ NAV_CMDS = {16, 17, 18, 19, 20, 21, 22}
 _TAKEOFF, _RTL, _LAND = 22, 20, 21
 
 
+#: 離地高度的警戒線（m）。**低於 0 是「會撞地」，0～這個值之間是「太貼了」**——
+#: 分成兩級是因為 SRTM 的相對高程誤差本來就有數公尺，把 1.5 m 的餘裕報成
+#: 「安全」跟報成「會撞」一樣不誠實。
+MIN_CLEARANCE_M = 2.0
+
+#: 帶相對高度的 frame：高度的意思是「離起飛點」，**不是離地**。
+#: 10（`GLOBAL_TERRAIN_ALT`）是飛控自己跟地形，不在這裡檢查。
+_REL_FRAMES = {3, 6}
+_AMSL_FRAMES = {0, 5}
+
+#: 沿線取樣步長（m）＝ DEM 的解析度。SRTM 1 弧秒約 30 m，
+#: 取得比它密只是把同一格內插出來的值再讀一次。
+DEM_STEP_M = 30.0
+
 def _cmd(w: dict) -> int | None:
     """航點的 MAV_CMD：新資料帶原始 command；舊資料從 action 推回。"""
     if w.get("command") is not None:
@@ -81,9 +95,14 @@ def _is_nav(w: dict) -> bool:
 def check_waypoints(wps: list[dict], fence_r: float, fence_alt: float,
                     margin: float = 0.7, fence: dict | None = None,
                     autopilot: int | None = None,
-                    home: list[float] | None = None) -> dict:
+                    home: list[float] | None = None,
+                    dem=None, min_clear: float = MIN_CLEARANCE_M) -> dict:
     """wps：本系統 waypoints 模型 [{seq, lat, lon, alt, action, command?}]。
-    DO_* 設定類不計距離；回傳 {ok, problems, warnings, max_dist_m, ...}。"""
+    DO_* 設定類不計距離；回傳 {ok, problems, warnings, max_dist_m, ...}。
+
+    `dem` 給了才做地形預檢（`libs.terrain.Dem`）——**不給不等於通過**，
+    報告裡會有一句「離地高度沒有檢查」。
+    """
     problems: list[str] = []
     warnings: list[str] = []
     if not wps:
@@ -138,7 +157,9 @@ def check_waypoints(wps: list[dict], fence_r: float, fence_alt: float,
     if home is None:
         return {"ok": False, "problems": problems + ["找不到帶座標的導航項"],
                 "warnings": warnings, "max_dist_m": 0.0, "max_alt_m": 0.0,
-                "fence_source": fence_src}
+                # 這裡原本回 `fence_src`，而它要到下面才指派——這條路徑一走就
+                # NameError，等於「沒有帶座標的導航項」這個錯誤永遠報不出來
+                "fence_source": "none"}
 
     # **圍欄優先用航線自己宣告的**（QGC .plan 的 geoFence）。系統預設值是
     # 「這套系統只在一個場地飛」才成立的假設，而測繪任務與定點巡檢的合理範圍
@@ -173,11 +194,163 @@ def check_waypoints(wps: list[dict], fence_r: float, fence_alt: float,
             f"最遠航點離起飛點 {max_d:.0f} m、最高 {max_alt:.0f} m，"
             "**系統不替你設一個範圍**，這條航線適不適合這個場地要你自己判斷。"
             "要讓系統幫你擋，在 QGC 的 Plan 頁畫一個 GeoFence 再存檔")
+    # 地形預檢（issues/047 §1-B）。擺在最後：它需要上面解出來的起飛點，
+    # 而且它的發現要跟圍欄/機種的發現混在同一組 problems/warnings 裡
+    # ——前端已經會顯示那兩組，多開一個顯示點就多一個沒人接的欄位（issues/037）
+    terr = check_terrain(nav, home, dem=dem, min_clear=min_clear)
+    problems += terr["problems"]
+    warnings += terr["warnings"]
+
     return {"ok": not problems, "problems": problems, "warnings": warnings,
             "max_dist_m": round(max_d, 1), "max_alt_m": round(max_alt, 1),
+            "terrain": terr["terrain"],
             # **量測用的是哪一份圍欄，要跟著報告走**：同一句「超出圍欄」在
             # 兩種來源下的處置完全不同
             "fence_source": fence_src}
+
+
+
+def check_terrain(nav: list[dict], home: dict, dem=None,
+                  min_clear: float = MIN_CLEARANCE_M,
+                  home_amsl: float | None = None) -> dict:
+    """地形預檢（issues/047 §1-B）：沿著整條航線算 `預期離地`，不足的指名報出來。
+
+        預期離地 = (起飛點 AMSL + 相對高度) − DEM 高程(該點)
+
+    **不是只檢查航點，是檢查整條線**：兩個航點之間隔著一個土坡，
+    兩端各有 5 m 餘裕、中間是 −2 m ——只看航點的檢查會說「通過」。
+    取樣步長跟著 DEM 的解析度走（30 m），取更密只是把同一格內插出來的
+    數字再讀一次，不會多知道任何事。
+
+    `home_amsl` 給定時用它（上傳前跟飛控核對的那條路），否則用 DEM 查起飛點
+    ——後者會讓 DEM 的**絕對**誤差在相減時消掉，見 `libs/terrain` 的說明。
+
+    回 `{problems, warnings, terrain}`；`terrain` 是給畫面用的結構化結果，
+    `source` 說得出這次到底是**查了**還是**沒得查**。
+    """
+    out = {"problems": [], "warnings": [],
+           "terrain": {"source": "none", "checked": 0, "skipped": 0}}
+    if dem is None or not dem.available:
+        out["warnings"].append(
+            "**離地高度沒有檢查**：地面站沒有地形資料。航點的相對高度是"
+            "「離起飛點」，地面沿路往上抬多少就吃掉多少離地空間")
+        return out
+
+    ha = home_amsl if home_amsl is not None else dem.elevation(
+        home["lat"], home["lon"])
+    if ha is None:
+        out["warnings"].append(
+            f"**離地高度沒有檢查**：起飛點（{home['lat']:.5f}, "
+            f"{home['lon']:.5f}）沒有地形資料，缺圖磚 "
+            f"{'、'.join(sorted(dem.missing)) or '未知'}")
+        return out
+
+    # ── 把航線攤成「一條有高度的折線」，全部換算成 AMSL ────────────
+    #
+    # * `frame 10`（跟地形）不參加：那是飛控自己在跟地面，這裡的算法會
+    #   把它的高度誤讀成「離起飛點」。
+    # * **降落點用的是它前一點的高度**，不是 0。飛機是先平飛到降落點上方
+    #   再往下——真正要檢查的是「平飛過去的那一段會不會撞到」，而降落點
+    #   本身離地 0 是它的目的，不是錯誤。
+    pts: list[tuple[float, float, float, int]] = []   # lat, lon, amsl, seq
+    skipped = 0
+    for w in nav:
+        lat, lon, alt = w.get("lat"), w.get("lon"), w.get("alt")
+        fr = w.get("frame")
+        fr = 3 if fr is None else int(fr)
+        if not lat or not lon or alt is None or fr not in _REL_FRAMES | _AMSL_FRAMES:
+            skipped += 1
+            continue
+        a = float(alt) if fr in _AMSL_FRAMES else ha + float(alt)
+        if _cmd(w) in (_LAND, _RTL):
+            if not pts:
+                skipped += 1
+                continue
+            a = pts[-1][2]
+        pts.append((lat, lon, a, w.get("seq")))
+
+    worst = None      # (離地, 說法, 地面高程)
+    below = []
+    rise = 0.0
+    checked = 0
+
+    def look(lat, lon, amsl, where):
+        nonlocal worst, rise, checked
+        gz = dem.elevation(lat, lon)
+        if gz is None:
+            return
+        checked += 1
+        rise = max(rise, gz - ha)
+        rec = (amsl - gz, where, gz)
+        if worst is None or rec[0] < worst[0]:
+            worst = rec
+        if rec[0] < min_clear:
+            below.append(rec)
+
+    for i, (lat, lon, a, seq) in enumerate(pts):
+        look(lat, lon, a, f"seq {seq}")
+        if i + 1 >= len(pts):
+            break
+        lat2, lon2, a2, seq2 = pts[i + 1]
+        leg = _dist_m(lat, lon, lat2, lon2)
+        # 每段最多 200 個取樣點：一條 20 km 的航線不該讓預檢跑上千次查表
+        step = max(DEM_STEP_M, leg / 200.0)
+        n = int(leg // step)
+        for k in range(1, n + 1):
+            f = k * step / leg
+            look(lat + (lat2 - lat) * f, lon + (lon2 - lon) * f, a + (a2 - a) * f,
+                 f"seq {seq}→{seq2} 之間（離 seq {seq} 約 {k * step:.0f} m）")
+
+    out["terrain"] = {
+        "source": "srtm" if home_amsl is None else "srtm+fc",
+        "home_amsl_m": round(ha, 1), "checked": checked, "skipped": skipped,
+        "step_m": DEM_STEP_M, "max_rise_m": round(rise, 1),
+        "min_clearance_m": round(worst[0], 1) if worst else None,
+        "min_clearance_at": worst[1] if worst else None,
+        "below_count": len(below),
+        # **要顯示的句子跟著結構走。** 上傳成功那條路上，前端只拿得到
+        # 一個 `check`，而 `warnings` 裡混著圍欄、機種、frame 方言的話——
+        # 全部顯示會變成沒人讀的一大段（使用者：字太多）。把地形這幾句
+        # 單獨列出來，畫面才挑得出「這次真正該看的是哪幾行」
+        "notes": [],
+    }
+    if not checked:
+        out["warnings"].append(
+            f"**離地高度沒有檢查**：這份航線沿線都查不到地形資料"
+            f"（缺圖磚 {'、'.join(sorted(dem.missing)) or '未知'}）")
+        return out
+    if below:
+        notes = out["terrain"]["notes"]
+        c, where, gz = min(below)
+        d = gz - ha
+        more = f"，另有 {len(below) - 1} 處同樣不足" if len(below) > 1 else ""
+        rel = (f"地面比起飛點高 {d:.1f} m" if d >= 0.05 else
+               f"地面比起飛點低 {-d:.1f} m" if d <= -0.05 else "地面與起飛點齊平")
+        if c < 0:
+            out["problems"].append(
+                f"{where}：{rel}，**預期離地 {c:.1f} m——這一段會撞地**{more}")
+            notes.append(out["problems"][-1])
+        elif d < min_clear / 2:
+            # **餘裕不足，但不是地形造成的**：地形在這裡是平的，是航線
+            # 自己就規劃在這個高度。這兩件事的處置完全不同（一個是改航線
+            # 繞開地形，一個是「你要用比資料誤差還小的餘裕飛」），
+            # 混成同一句話會讓真正的地形警告被當成雜訊忽略
+            out["warnings"].append(
+                f"{where}：**預期離地只有 {c:.1f} m**{more}。{rel}——"
+                f"**這不是地形造成的**，是航線本身就規劃在這個高度")
+            notes.append(out["warnings"][-1])
+        else:
+            out["warnings"].append(
+                f"{where}：{rel}，**預期離地只有 {c:.1f} m**{more}")
+            notes.append(out["warnings"][-1])
+        # 誠實話**跟著發現走**，不是每次都念一遍：有東西可報的時候，
+        # 操作員才需要知道這份資料的解析度撐不撐得住他要做的決定
+        out["warnings"].append(
+            "地形資料是 SRTM（水平約 30 m、只有地形不含樹木電線）——"
+            "它能防「整片地高了幾公尺」，防不了「前面有個 1 m 土堆」。"
+            "真的要貼地飛需要測距儀")
+        notes.append(out["warnings"][-1])
+    return out
 
 
 def check_group(paths: list[dict], vsep_m: float, lsep_m: float) -> dict:
