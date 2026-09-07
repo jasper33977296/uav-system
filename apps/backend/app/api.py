@@ -963,6 +963,44 @@ async def live_snapshot():
     return live.telemetry_dict()
 
 
+#: 對外的即時快照白名單（`doc/external-api.html` §5）。**白名單而不是黑名單**：
+#: 內部欄位日後只會愈加愈多，用排除法的話每加一個欄位就會**默默流到外部系統**，
+#: 而且外部整合的形狀會跟著我方的內部演進一起變。列舉法讓「對外承諾的形狀」
+#: 是一個看得見、改得動的東西。
+EXT_LIVE_KEYS = ("drone_name", "mav_sysid", "connected", "armed",
+                 "lat", "lon", "alt_rel", "alt_msl",
+                 "ground_speed", "vertical_speed", "heading",
+                 "telem_age_s", "link_state", "link_age_s")
+#: 5G 鏈路指標（同上，白名單）。**不含 `raw`**——那是 modem 的原始 AT 回應，
+#: 給我方事後追查用，對外沒有意義而且量很大
+EXT_LINK_KEYS = ("time", "rsrp", "rsrq", "sinr", "cqi", "pci", "cell_id",
+                 "band", "nr_mode", "rtt_ms", "jitter_ms", "packet_loss_pct",
+                 "throughput_up_kbps", "throughput_down_kbps")
+
+
+@router.get("/ext/live")
+async def ext_live(sysid: int | None = None):
+    """**對外**的即時快照：位置、高度、速度、5G 鏈路指標。
+
+    與 `/api/live` 同一份資料，但只回上面白名單裡的欄位——外部系統不需要
+    知道 EKF、預檢、板號、任務索引這些內部狀態，而它們本來就會隨我方演進而變。
+
+    `sysid` 省略＝主機；指定就回那一台（`/api/live` 只回主機，多機時外部
+    無從指定，那正是這個參數存在的理由）。
+    """
+    from .state import fleet
+    st = live
+    if sysid is not None:
+        st = next((s for s in fleet.values() if s.sysid == sysid), None)
+        if st is None:
+            raise HTTPException(404, f"sysid {sysid} 沒有遙測——查 GET /api/ext/live 或指令服務的機隊清單")
+    d = st.telemetry_dict()
+    out = {k: d.get(k) for k in EXT_LIVE_KEYS}
+    lk = d.get("link") or {}
+    out["link"] = {k: lk.get(k) for k in EXT_LINK_KEYS}
+    return out
+
+
 def _require_uuid(v: str | None) -> str | None:
     """群組任務的 mission/drone id 必須是合法 UUID。擋掉截斷／亂填字串，否則會一路
     帶到建群 DDL 的 ::uuid cast 才炸 asyncpg DataError → 500（該回 422 才對）。

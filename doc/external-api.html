@@ -1,0 +1,627 @@
+<title>無人機管理系統 API</title>
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=IBM+Plex+Sans:wght@400;500;600&family=IBM+Plex+Mono:wght@400;500&family=Noto+Sans+TC:wght@400;500;700&display=swap">
+<style>
+:root{
+  --paper:#eceff1; --surface:#ffffff; --surface-2:#f4f7f8;
+  --ink:#0d1519; --ink-2:#33454e; --muted:#697c86;
+  --line:#d4dde0; --line-hard:#b4c3c8;
+  --accent:#0a6a8b; --accent-ink:#0a6a8b; --accent-wash:#e0eff4;
+  --ok:#25735a; --ok-wash:#e0f0e9;
+  --warn:#8f5606; --warn-wash:#f8ecda;
+  --danger:#a02f24; --danger-wash:#f8e5e2;
+  --readout-bg:#0d181d; --readout-ink:#dbe7ec; --readout-line:#26383f;
+  --k-key:#6fc0d9; --k-str:#bcd992; --k-num:#e5b273; --k-lit:#e08f8f; --k-pun:#7f949d;
+}
+@media (prefers-color-scheme: dark){
+  :root:not([data-theme="light"]){
+    --paper:#0b1114; --surface:#121b20; --surface-2:#0f171b;
+    --ink:#e4edf0; --ink-2:#b3c3ca; --muted:#8698a1;
+    --line:#223037; --line-hard:#31434c;
+    --accent:#4bb6d8; --accent-ink:#79cde8; --accent-wash:#102a35;
+    --ok:#63c39c; --ok-wash:#11291f;
+    --warn:#d59a4a; --warn-wash:#2b2113;
+    --danger:#e08276; --danger-wash:#2e1714;
+    --readout-bg:#080f13; --readout-ink:#d5e3e9; --readout-line:#1d2a31;
+  }
+}
+:root[data-theme="dark"]{
+  --paper:#0b1114; --surface:#121b20; --surface-2:#0f171b;
+  --ink:#e4edf0; --ink-2:#b3c3ca; --muted:#8698a1;
+  --line:#223037; --line-hard:#31434c;
+  --accent:#4bb6d8; --accent-ink:#79cde8; --accent-wash:#102a35;
+  --ok:#63c39c; --ok-wash:#11291f;
+  --warn:#d59a4a; --warn-wash:#2b2113;
+  --danger:#e08276; --danger-wash:#2e1714;
+  --readout-bg:#080f13; --readout-ink:#d5e3e9; --readout-line:#1d2a31;
+}
+
+*{box-sizing:border-box}
+body{
+  margin:0; background:var(--paper); color:var(--ink);
+  font-family:"IBM Plex Sans","Noto Sans TC",system-ui,-apple-system,"Microsoft JhengHei",sans-serif;
+  font-size:15px; line-height:1.75; -webkit-font-smoothing:antialiased;
+}
+code,pre,.mono{font-family:"IBM Plex Mono","Noto Sans TC",ui-monospace,SFMono-Regular,Menlo,monospace}
+
+.wrap{max-width:1120px; margin:0 auto; padding:0 28px 96px;
+      display:grid; grid-template-columns:212px minmax(0,1fr); gap:52px; align-items:start}
+@media (max-width:900px){ .wrap{grid-template-columns:minmax(0,1fr); gap:0} }
+
+.masthead{border-bottom:1px solid var(--line); background:var(--surface)}
+.masthead-in{max-width:1120px; margin:0 auto; padding:32px 28px 26px;
+             display:flex; flex-wrap:wrap; gap:24px; align-items:center; justify-content:space-between}
+h1{font-size:28px; line-height:1.25; margin:0; font-weight:600; letter-spacing:-.01em; text-wrap:balance}
+.hostbox{display:flex; flex-direction:column; gap:6px; min-width:236px}
+.hostbox label{font-size:11.5px; letter-spacing:.14em; text-transform:uppercase; color:var(--muted)}
+.hostbox input{
+  font-family:"IBM Plex Mono",monospace; font-size:14px; padding:9px 11px;
+  background:var(--surface-2); color:var(--ink);
+  border:1px solid var(--line-hard); border-radius:3px; width:100%;
+}
+.hostbox input:focus{outline:2px solid var(--accent); outline-offset:1px; border-color:var(--accent)}
+.hostbox .hint{font-size:12.5px; color:var(--muted)}
+
+nav.toc{position:sticky; top:20px; padding-top:34px}
+@media (max-width:900px){ nav.toc{position:static; padding:24px 0 6px; border-bottom:1px solid var(--line)} }
+nav.toc ol{list-style:none; margin:0; padding:0; display:flex; flex-direction:column; gap:1px}
+nav.toc a{
+  display:grid; grid-template-columns:20px 1fr; gap:8px; align-items:baseline;
+  text-decoration:none; color:var(--ink-2); padding:5px 8px; border-radius:3px; font-size:14px;
+}
+nav.toc a:hover{background:var(--accent-wash); color:var(--accent-ink)}
+nav.toc a:focus-visible{outline:2px solid var(--accent); outline-offset:1px}
+nav.toc .n{font-family:"IBM Plex Mono",monospace; font-size:12px; color:var(--muted)}
+
+main{padding-top:34px; min-width:0}
+section{margin:0 0 54px; scroll-margin-top:20px}
+h2{font-size:20px; font-weight:600; margin:0 0 4px; letter-spacing:-.005em;
+   display:flex; align-items:baseline; gap:11px; text-wrap:balance}
+h2 .n{font-family:"IBM Plex Mono",monospace; font-size:13px; color:var(--accent-ink); font-weight:500}
+section > p, .prose{max-width:66ch; color:var(--ink-2); margin:8px 0}
+section > p strong, .prose strong{color:var(--ink); font-weight:600}
+.rule{height:1px; background:var(--line); border:0; margin:0 0 20px}
+
+.ep{border-left:2px solid var(--line-hard); padding:2px 0 2px 18px; margin:26px 0 0}
+.ep + .ep{margin-top:32px}
+.ep-head{display:flex; flex-wrap:wrap; align-items:center; gap:9px; margin-bottom:5px}
+.verb{
+  font-family:"IBM Plex Mono",monospace; font-size:11px; font-weight:500; letter-spacing:.08em;
+  padding:3px 7px; border-radius:2px; border:1px solid currentColor; line-height:1.2;
+}
+.verb.get{color:var(--accent)} .verb.post{color:var(--warn)}
+.url{font-size:13.5px; word-break:break-all; color:var(--ink)}
+.url .host{color:var(--muted)}
+.url .var{color:var(--accent-ink)}
+.ep-sum{margin:0 0 10px; max-width:64ch; color:var(--ink-2)}
+.ep-sum strong{color:var(--ink)}
+
+.lbl{font-size:11.5px; letter-spacing:.13em; text-transform:uppercase; color:var(--muted);
+     margin:14px 0 5px; font-weight:500}
+
+.tablewrap{overflow-x:auto; margin:0 0 4px; border:1px solid var(--line); border-radius:4px; background:var(--surface)}
+table{border-collapse:collapse; width:100%; font-size:13.5px}
+th,td{text-align:left; padding:8px 12px; border-bottom:1px solid var(--line); vertical-align:top}
+thead th{font-size:11.5px; letter-spacing:.1em; text-transform:uppercase; color:var(--muted);
+         font-weight:500; background:var(--surface-2); white-space:nowrap}
+tbody tr:last-child td{border-bottom:0}
+td code, th code, li code, p code{font-size:12.6px; background:var(--surface-2);
+  border:1px solid var(--line); border-radius:2px; padding:.5px 4px; white-space:nowrap}
+.num{font-variant-numeric:tabular-nums}
+td.fmt{white-space:nowrap; color:var(--ink-2); font-size:12.8px}
+td.none{font-family:"IBM Plex Mono",monospace; color:var(--muted); font-size:13px}
+.section-table{margin:14px 0 4px}
+
+.panel{margin:0; border:1px solid var(--readout-line); border-radius:4px; overflow:hidden; background:var(--readout-bg)}
+.panel-bar{
+  display:flex; align-items:center; justify-content:space-between; gap:12px;
+  padding:6px 12px; background:rgba(255,255,255,.04); border-bottom:1px solid var(--readout-line);
+}
+.panel-bar span{font-family:"IBM Plex Mono",monospace; font-size:11px; letter-spacing:.1em;
+                text-transform:uppercase; color:#8fa7b1}
+.copy{
+  font-family:"IBM Plex Mono",monospace; font-size:11px; letter-spacing:.06em; color:#8fa7b1;
+  background:transparent; border:1px solid var(--readout-line); border-radius:2px;
+  padding:2px 8px; cursor:pointer;
+}
+.copy:hover{color:#dbe7ec; border-color:#4a6570}
+.copy:focus-visible{outline:2px solid var(--accent); outline-offset:1px}
+pre{margin:0; padding:12px 14px; overflow-x:auto; color:var(--readout-ink);
+    font-size:12.9px; line-height:1.65; tab-size:2}
+pre .k{color:var(--k-key)} pre .s{color:var(--k-str)} pre .n{color:var(--k-num)}
+pre .l{color:var(--k-lit)} pre .p{color:var(--k-pun)} pre .c{color:#6d8894; font-style:italic}
+
+.note{border-left:2px solid var(--accent); background:var(--accent-wash);
+      padding:10px 15px; margin:14px 0; border-radius:0 3px 3px 0; max-width:70ch}
+.note.warn{border-color:var(--warn); background:var(--warn-wash)}
+.note p{margin:0; color:var(--ink)}
+.chip{display:inline-block; font-family:"IBM Plex Mono",monospace; font-size:11.5px;
+      padding:1px 7px; border-radius:2px; border:1px solid; white-space:nowrap}
+.chip.ok{color:var(--ok); border-color:var(--ok); background:var(--ok-wash)}
+.chip.bad{color:var(--danger); border-color:var(--danger); background:var(--danger-wash)}
+a{color:var(--accent-ink)}
+.testbar{display:flex; flex-wrap:wrap; gap:9px; align-items:center; margin:12px 0 0}
+.test{
+  font-family:"IBM Plex Sans","Noto Sans TC",sans-serif; font-size:13px; font-weight:500;
+  color:var(--surface); background:var(--accent); border:1px solid var(--accent);
+  border-radius:3px; padding:5px 14px; cursor:pointer;
+}
+.test:hover{filter:brightness(1.12)}
+.test:disabled{opacity:.55; cursor:progress}
+.test:focus-visible{outline:2px solid var(--accent); outline-offset:2px}
+.test.danger{background:var(--warn); border-color:var(--warn)}
+.testbar .hintline{font-size:12.5px; color:var(--muted)}
+.testbar select{
+  font-family:"IBM Plex Mono",monospace; font-size:13px; padding:5px 8px;
+  background:var(--surface-2); color:var(--ink); border:1px solid var(--line-hard); border-radius:3px;
+}
+textarea.req-body{
+  width:100%; min-height:62px; resize:vertical; margin:0;
+  font-family:"IBM Plex Mono",monospace; font-size:12.9px; line-height:1.6;
+  background:var(--surface-2); color:var(--ink);
+  border:1px solid var(--line-hard); border-radius:3px; padding:9px 11px;
+}
+textarea.req-body:focus{outline:2px solid var(--accent); outline-offset:1px}
+.result{margin-top:11px; display:none}
+.result.on{display:block}
+.result .ok{color:#7fc9a4} .result .err{color:#e2938a}
+@media (prefers-reduced-motion:reduce){*{animation:none !important; transition:none !important}}
+</style>
+
+<header class="masthead">
+  <div class="masthead-in">
+    <div>
+      <h1>無人機管理系統 API</h1>
+    </div>
+    <div class="hostbox">
+      <label for="host">地面站位址</label>
+      <input id="host" value="10.141.2.21" spellcheck="false" autocomplete="off">
+      <span class="hint">本頁所有 URL 會跟著改。</span>
+    </div>
+    <div class="hostbox" style="min-width:96px">
+      <label for="sysid">sysid</label>
+      <input id="sysid" value="1" spellcheck="false" autocomplete="off">
+      <span class="hint">測試對象</span>
+    </div>
+  </div>
+</header>
+
+<div class="wrap">
+<nav class="toc" aria-label="章節">
+  <ol>
+    <li><a href="#s0"><span class="n">0</span><span>header</span></a></li>
+    <li><a href="#s1"><span class="n">1</span><span>有哪些無人機可控</span></a></li>
+    <li><a href="#s2"><span class="n">2</span><span>有哪些規劃檔</span></a></li>
+    <li><a href="#s3"><span class="n">3</span><span>上傳規劃檔</span></a></li>
+    <li><a href="#s4"><span class="n">4</span><span>執行任務</span></a></li>
+    <li><a href="#s5"><span class="n">5</span><span>拿訊號資料</span></a></li>
+    <li><a href="#s6"><span class="n">6</span><span>中斷任務</span></a></li>
+    <li><a href="#s7"><span class="n">7</span><span>失敗時的狀態碼</span></a></li>
+  </ol>
+</nav>
+
+<main>
+
+
+<!-- ══════════ 0 ══════════ -->
+<section id="s0">
+  <h2><span class="n">00</span>header</h2>
+  <hr class="rule">
+  <div class="tablewrap">
+    <table>
+      <thead><tr><th>key</th><th>value</th><th>說明</th></tr></thead>
+      <tbody>
+        <tr><td><code>Content-Type</code></td><td><code>application/json</code></td><td>有 payload 的 POST 必帶</td></tr>
+        <tr><td><code>X-Client</code></td><td><code>your-system-name</code></td><td>選填；會寫進指令紀錄，用來辨識是誰下的指令</td></tr>
+      </tbody>
+    </table>
+  </div>
+</section>
+
+<!-- ══════════ 1 ══════════ -->
+<section id="s1">
+  <h2><span class="n">01</span>有哪些無人機可控</h2>
+  <hr class="rule">
+  <p>指令用 <strong><code>sysid</code></strong>（整數）定址無人機。這一支同時回答「哪些機在線」與「哪一台現在指得動」。</p>
+
+  <article class="ep">
+    <div class="ep-head"><span class="verb get">GET</span><code class="url mono"><span class="host" data-host="c">http://10.141.2.21:38001</span>/api/ext/drones</code></div>
+    <p class="ep-sum">機隊清單。<strong><code>controllable</code> 是 <code>true</code> 才可以對它下指令</strong>。</p>
+    <p class="lbl">payload</p>
+    <div class="tablewrap"><table>
+      <thead><tr><th>key</th><th>value</th><th>資料格式</th></tr></thead>
+      <tbody><tr><td class="none" colspan="3">none</td></tr></tbody>
+    </table></div>
+    <p class="lbl">回應</p>
+    <div class="panel">
+      <div class="panel-bar"><span>200</span><button class="copy" type="button">複製</button></div>
+<pre class="json">{
+  "drones": [{
+    "sysid": 1,                     // 指令都用這個號碼定址
+    "name": "pi5-sdmodelh7v2-ardu",
+    "online": true,                 // 心跳還在
+    "age_s": 0.0,                   // 距最後一則心跳的秒數
+    "armed": false,
+    "controllable": true            // false 時會多一個 reason 說明是什麼擋住
+  }]
+}</pre>
+    </div>
+  </article>
+</section>
+
+<!-- ══════════ 2 ══════════ -->
+<section id="s2">
+  <h2><span class="n">02</span>有哪些規劃檔</h2>
+  <hr class="rule">
+  <p>所有可用的航線都在<strong>任務庫</strong>裡——前端規劃的、匯入的、從機上讀回的都會存進來。清單回的 <code>id</code> 就是後面上傳與執行要用的 <code>mission_id</code>。</p>
+
+  <article class="ep">
+    <div class="ep-head"><span class="verb get">GET</span><code class="url mono"><span class="host" data-host="c">http://10.141.2.21:38001</span>/api/missions</code></div>
+    <p class="ep-sum">可以飛的航線清單。</p>
+    <p class="lbl">payload</p>
+    <div class="tablewrap"><table>
+      <thead><tr><th>key</th><th>value</th><th>資料格式</th></tr></thead>
+      <tbody><tr><td class="none" colspan="3">none</td></tr></tbody>
+    </table></div>
+    <p class="lbl">回應</p>
+    <div class="panel">
+      <div class="panel-bar"><span>200</span><button class="copy" type="button">複製</button></div>
+<pre class="json">{
+  "missions": [{
+    "id": "de58a69b-a418-4a08-a08e-58009c50a457",
+    "name": "circle-ardupilot-fence-rally",
+    "nav_count": 4            // 帶座標的航點數
+  }]
+}</pre>
+    </div>
+  </article>
+
+</section>
+
+<!-- ══════════ 3 ══════════ -->
+<section id="s3">
+  <h2><span class="n">03</span>上傳規劃檔到無人機</h2>
+  <hr class="rule">
+
+  <article class="ep" data-body='{"mission_id": "b488cf1d-a263-4a26-bb03-209c91b84874"}'>
+    <div class="ep-head"><span class="verb post">POST</span><code class="url mono"><span class="host" data-host="c">http://10.141.2.21:38001</span>/api/command/<span class="var">{sysid}</span>/mission/upload</code></div>
+    <p class="ep-sum">把任務庫的一份航線寫進飛控，並逐項讀回比對。</p>
+    <p class="lbl">payload</p>
+    <div class="tablewrap"><table>
+      <thead><tr><th>key</th><th>value</th><th>資料格式</th></tr></thead>
+      <tbody>
+        <tr><td><code>mission_id</code></td><td><code>"de58a69b-a418-4a08-a08e-58009c50a457"</code></td><td class="fmt">string · 必填</td></tr>
+      </tbody>
+    </table></div>
+    <p class="lbl">回應</p>
+    <div class="panel">
+      <div class="panel-bar"><span>200</span><button class="copy" type="button">複製</button></div>
+<pre class="json">{
+  "uploaded": 7,        // 寫進飛控的航點數
+  "verified": true      // true 才算上傳成功
+}</pre>
+    </div>
+    <div class="note warn">
+      <p><strong>飛行中不能上傳。</strong>飛控收到新航線的那一刻就會照它飛，所以機在空中執行任務時這支會回 409。要在空中換航線，先用 <a href="#s6">§6</a> 切 <code>hold</code> 懸停，再上傳。</p>
+    </div>
+  </article>
+</section>
+
+<!-- ══════════ 4 ══════════ -->
+<section id="s4">
+  <h2><span class="n">04</span>執行任務</h2>
+  <hr class="rule">
+  <p>一般用 <code>/api/start</code> 一支就好：<strong>上傳 → 解鎖 → 起飛 → 開始飛任務</strong>，每步確認過才往下走。</p>
+
+  <article class="ep" data-body='{"mission": "b488cf1d-a263-4a26-bb03-209c91b84874", "sysid": 1}'>
+    <div class="ep-head"><span class="verb post">POST</span><code class="url mono"><span class="host" data-host="c">http://10.141.2.21:38001</span>/api/start</code></div>
+    <p class="ep-sum">從地面直接起飛執行一份航線。</p>
+    <p class="lbl">payload</p>
+    <div class="tablewrap"><table>
+      <thead><tr><th>key</th><th>value</th><th>資料格式</th></tr></thead>
+      <tbody>
+        <tr><td><code>mission</code></td><td><code>"de58a69b-a418-…"</code> 或 <code>"circle-ardupilot"</code></td><td class="fmt">string · 必填<br>任務庫的 <code>id</code> 或 <code>name</code></td></tr>
+        <tr><td><code>sysid</code></td><td><code>1</code></td><td class="fmt">int · 選填<br>只有一台在線時可省略</td></tr>
+        <tr><td><code>takeoff_alt</code></td><td><code>5</code></td><td class="fmt">float · 選填（公尺）<br>省略＝跟著航線自己的起飛高度</td></tr>
+      </tbody>
+    </table></div>
+    <p class="lbl">回應</p>
+    <div class="panel">
+      <div class="panel-bar"><span>200</span><button class="copy" type="button">複製</button></div>
+<pre class="json">{
+  "ok": true,           // true = 已經在飛任務
+  "sysid": 1,
+  "mission_id": "de58a69b-a418-…",
+  "name": "circle-ardupilot-fence-rally"
+}</pre>
+    </div>
+    <div class="note">
+      <p>失敗時回 4xx／5xx，body 的 <code>steps</code> 會說明停在哪一步，機體停在安全狀態（懸停或還在地面）。</p>
+    </div>
+  </article>
+
+  <article class="ep">
+    <div class="ep-head"><span class="verb post">POST</span><code class="url mono"><span class="host" data-host="c">http://10.141.2.21:38001</span>/api/command/<span class="var">{sysid}</span>/mission/start</code></div>
+    <p class="ep-sum">只在<strong>機已經解鎖並在空中</strong>時用：叫它開始飛機上現有的那份任務。地面上的機請用上面那支。</p>
+    <p class="lbl">payload</p>
+    <div class="tablewrap"><table>
+      <thead><tr><th>key</th><th>value</th><th>資料格式</th></tr></thead>
+      <tbody><tr><td class="none" colspan="3">none</td></tr></tbody>
+    </table></div>
+    <p class="lbl">回應</p>
+    <div class="panel">
+      <div class="panel-bar"><span>200</span><button class="copy" type="button">複製</button></div>
+<pre class="json">{"accepted": true}</pre>
+    </div>
+  </article>
+</section>
+
+<!-- ══════════ 5 ══════════ -->
+<section id="s5">
+  <h2><span class="n">05</span>拿訊號資料</h2>
+  <hr class="rule">
+  <p>用 <code>/api/ext/live</code> 輪詢。伺服器端每秒更新，<strong>輪詢頻率建議 1–5 次/秒</strong>，再高也拿不到更新的資料。</p>
+
+  <article class="ep">
+    <div class="ep-head"><span class="verb get">GET</span><code class="url mono"><span class="host" data-host="b">http://10.141.2.21:38000</span>/api/ext/live</code></div>
+    <p class="ep-sum">即時快照：訊號、經緯度、高度、速度。<br>預設回主機那一台；要指定機體加 <code>?sysid=1</code>。</p>
+    <p class="lbl">payload</p>
+    <div class="tablewrap"><table>
+      <thead><tr><th>key</th><th>value</th><th>資料格式</th></tr></thead>
+      <tbody><tr><td class="none" colspan="3">none</td></tr></tbody>
+    </table></div>
+    <p class="lbl">回應</p>
+    <div class="panel">
+      <div class="panel-bar"><span>200</span><button class="copy" type="button">複製</button></div>
+<pre class="json">{
+  "drone_name": "pi5-sdmodelh7v2-ardu",
+  "mav_sysid": 1,
+  "connected": true,
+  "armed": false,
+  "lat": 25.055412, "lon": 121.506537,
+  "alt_rel": 6.19, "alt_msl": 0.02,
+  "ground_speed": 0.01, "vertical_speed": 0.01, "heading": 252.8,
+  "telem_age_s": 0.4,          // 這些數字幾秒前收到的
+  "link_state": "ok",
+  "link_age_s": 1.2,           // 訊號量測幾秒前收到的
+  "link": {
+    "time": "2026-09-07T04:54:35.572369Z",
+    "rsrp": -72.0, "rsrq": -10.5, "sinr": 29.5, "cqi": null,
+    "pci": 85, "cell_id": 2179073, "band": "n79", "nr_mode": "SA",
+    "rtt_ms": 28.5, "jitter_ms": null, "packet_loss_pct": null,
+    "throughput_up_kbps": null, "throughput_down_kbps": null
+  }
+}</pre>
+    </div>
+  </article>
+
+
+  <p class="lbl" style="margin-top:26px">訊號指標（<code>link</code> 物件）</p>
+  <div class="tablewrap section-table" style="margin-top:0">
+    <table>
+      <thead><tr><th>key</th><th>單位</th><th>意義</th></tr></thead>
+      <tbody>
+        <tr><td><code>rsrp</code></td><td class="fmt">dBm</td><td>參考訊號接收功率（訊號多強）</td></tr>
+        <tr><td><code>rsrq</code></td><td class="fmt">dB</td><td>參考訊號接收品質</td></tr>
+        <tr><td><code>sinr</code></td><td class="fmt">dB</td><td>訊號干擾雜訊比</td></tr>
+        <tr><td><code>cqi</code></td><td class="fmt">0–15</td><td>通道品質指示</td></tr>
+        <tr><td><code>pci</code></td><td class="fmt">—</td><td>Physical Cell ID（會重複，只在鄰區內唯一）</td></tr>
+        <tr><td><code>cell_id</code></td><td class="fmt">—</td><td>全域 cell 識別碼（NCI/CGI）</td></tr>
+        <tr><td><code>band</code></td><td class="fmt">—</td><td>頻段，如 <code>n79</code></td></tr>
+        <tr><td><code>nr_mode</code></td><td class="fmt">—</td><td><code>SA</code> / <code>NSA</code> / <code>LTE</code></td></tr>
+        <tr><td><code>rtt_ms</code></td><td class="fmt">ms</td><td>來回時間</td></tr>
+        <tr><td><code>jitter_ms</code></td><td class="fmt">ms</td><td>抖動</td></tr>
+        <tr><td><code>packet_loss_pct</code></td><td class="fmt">%</td><td>封包遺失率</td></tr>
+        <tr><td><code>throughput_up_kbps</code></td><td class="fmt">kbps</td><td>上行吞吐</td></tr>
+        <tr><td><code>throughput_down_kbps</code></td><td class="fmt">kbps</td><td>下行吞吐</td></tr>
+        <tr><td><code>time</code></td><td class="fmt">ISO 8601</td><td>這筆量測的採樣時刻</td></tr>
+      </tbody>
+    </table>
+  </div>
+  <p class="prose">量測不到的欄位是 <code>null</code>，不會補假值。<code>link_age_s</code> 太大代表<strong>量測送不回來</strong>，這與「訊號很差」是兩件事。</p>
+
+  <p class="lbl" style="margin-top:26px">位置、高度、速度</p>
+  <div class="tablewrap section-table" style="margin-top:0">
+    <table>
+      <thead><tr><th>key</th><th>單位</th><th>意義</th></tr></thead>
+      <tbody>
+        <tr><td><code>lat</code> / <code>lon</code></td><td class="fmt">十進位度</td><td>WGS84；<code>null</code> = 尚未定位</td></tr>
+        <tr><td><code>alt_rel</code></td><td class="fmt">m</td><td>相對起飛點高度</td></tr>
+        <tr><td><code>alt_msl</code></td><td class="fmt">m</td><td>海拔高度</td></tr>
+        <tr><td><code>ground_speed</code></td><td class="fmt">m/s</td><td>對地速度</td></tr>
+        <tr><td><code>vertical_speed</code></td><td class="fmt">m/s</td><td>垂直速度（正 = 上升）</td></tr>
+        <tr><td><code>heading</code></td><td class="fmt">度</td><td>機頭方位，0 = 正北</td></tr>
+        <tr><td><code>telem_age_s</code></td><td class="fmt">秒</td><td>這些數字多舊。<strong>斷線時數值不會消失，只會變舊</strong></td></tr>
+      </tbody>
+    </table>
+  </div>
+</section>
+
+<!-- ══════════ 6 ══════════ -->
+<section id="s6">
+  <h2><span class="n">06</span>中斷任務</h2>
+  <hr class="rule">
+
+  <article class="ep" data-vars="mode:hold,rtl,land,mission">
+    <div class="ep-head"><span class="verb post">POST</span><code class="url mono"><span class="host" data-host="c">http://10.141.2.21:38001</span>/api/command/<span class="var">{sysid}</span>/mode/<span class="var">{mode}</span></code></div>
+    <p class="ep-sum">中斷任務。<code>mode</code> 寫在網址裡：<code>hold</code> 原地懸停（可續飛）、<code>rtl</code> 返航降落、<code>land</code> 就地降落、<code>mission</code> 繼續飛任務。</p>
+    <p class="lbl">payload</p>
+    <div class="tablewrap"><table>
+      <thead><tr><th>key</th><th>value</th><th>資料格式</th></tr></thead>
+      <tbody><tr><td class="none" colspan="3">none</td></tr></tbody>
+    </table></div>
+    <p class="lbl">回應</p>
+    <div class="panel">
+      <div class="panel-bar"><span>200</span><button class="copy" type="button">複製</button></div>
+<pre class="json">{"mode_engaged": true}   // true 才代表飛機真的切過去了</pre>
+    </div>
+  </article>
+
+
+
+</section>
+
+<!-- ══════════ 7 ══════════ -->
+<section id="s7">
+  <h2><span class="n">07</span>失敗時的狀態碼</h2>
+  <hr class="rule">
+  <p>失敗一律回 4xx／5xx，body 的 <code>detail.msg</code> 是可以直接顯示給人看的原因。</p>
+  <div class="tablewrap">
+    <table>
+      <thead><tr><th>狀態</th><th>意思</th><th>怎麼辦</th></tr></thead>
+      <tbody>
+        <tr><td><span class="chip bad">403</span></td><td>這台機不接受指揮，或系統的指令功能沒開</td><td>先查 <a href="#s1">§1</a> 的 <code>controllable</code> 與 <code>reason</code></td></tr>
+        <tr><td><span class="chip bad">404</span></td><td>找不到這份任務／航線檔</td><td>用 <a href="#s2">§2</a> 重新取清單</td></tr>
+        <tr><td><span class="chip bad">409</span></td><td>當下狀態不允許（例如飛行中上傳、機在地面卻叫它開始任務）</td><td>照 <code>msg</code> 的指示換做法</td></tr>
+        <tr><td><span class="chip bad">422</span></td><td>payload 欄位缺漏或型別不對</td><td>對照該端點的 payload 表</td></tr>
+        <tr><td><span class="chip bad">501</span></td><td>這個機型的這個動作尚未支援</td><td>換動作或換機</td></tr>
+        <tr><td><span class="chip bad">502 / 504</span></td><td>指令送不到飛機（鏈路問題）</td><td>可重試；連續失敗代表通訊中斷</td></tr>
+        <tr><td><span class="chip bad">503</span></td><td>沒有任何無人機在線</td><td>查 <a href="#s1">§1</a></td></tr>
+      </tbody>
+    </table>
+  </div>
+</section>
+
+</main>
+</div>
+
+
+<script>
+(function(){
+  function esc(s){return s.replace(/&/g,"&amp;").replace(/</g,"&lt;").replace(/>/g,"&gt;");}
+  var TOK = /("(?:\\.|[^"\\])*")(\s*:)?|\/\/[^\n]*|\b(true|false|null)\b|-?\d+(?:\.\d+)?(?:[eE][+-]?\d+)?/g;
+  document.querySelectorAll("pre.json").forEach(function(pre){
+    pre.innerHTML = esc(pre.textContent).replace(TOK, function(m, str, colon){
+      if(m.indexOf("//")===0) return '<span class="c">'+m+'</span>';
+      if(str) return colon ? '<span class="k">'+str+'</span><span class="p">'+colon+'</span>'
+                           : '<span class="s">'+str+'</span>';
+      if(m==="true"||m==="false"||m==="null") return '<span class="l">'+m+'</span>';
+      return '<span class="n">'+m+'</span>';
+    });
+  });
+
+  var input = document.getElementById("host");
+  var PORTS = {b:"http://%h:38000", c:"http://%h:38001"};
+  function apply(h){
+    h = (h || "10.141.2.21").trim().replace(/^\w+:\/\//,"").replace(/\/+$/,"") || "10.141.2.21";
+    document.querySelectorAll("[data-host]").forEach(function(el){
+      var t = PORTS[el.getAttribute("data-host")];
+      if(t) el.textContent = t.replace("%h", h);
+    });
+  }
+  try{ var saved = localStorage.getItem("uav-api-host-v2"); if(saved){ input.value = saved; } }catch(e){}
+  apply(input.value);
+  input.addEventListener("input", function(){
+    apply(input.value);
+    try{ localStorage.setItem("uav-api-host-v2", input.value); }catch(e){}
+  });
+
+  // ── 測試鈕：對真實地面站送出請求 ──
+  var sysidEl = document.getElementById("sysid");
+  function esc2(t){return t.replace(/&/g,"&amp;").replace(/</g,"&lt;").replace(/>/g,"&gt;");}
+
+  document.querySelectorAll(".ep").forEach(function(ep){
+    var verbEl = ep.querySelector(".verb"), urlEl = ep.querySelector(".url");
+    if(!verbEl || !urlEl) return;
+    var method = verbEl.textContent.trim();
+    var bodyTpl = (method === "GET" || method === "HEAD") ? null : ep.getAttribute("data-body");
+
+    var ta = null;
+    if(bodyTpl){
+      var lbl = document.createElement("p");
+      lbl.className = "lbl"; lbl.textContent = "測試用 body（可修改）";
+      ta = document.createElement("textarea");
+      ta.className = "req-body"; ta.spellcheck = false;
+      try{ ta.value = JSON.stringify(JSON.parse(bodyTpl), null, 2); }catch(e){ ta.value = bodyTpl; }
+      ep.appendChild(lbl); ep.appendChild(ta);
+    }
+
+    var bar = document.createElement("div");
+    bar.className = "testbar";
+    var selects = [];
+    var vars = ep.getAttribute("data-vars");
+    if(vars){
+      vars.split(";").forEach(function(v){
+        var name = v.split(":")[0], opts = v.split(":")[1].split(",");
+        var sel = document.createElement("select");
+        sel.setAttribute("data-var", name);
+        sel.setAttribute("aria-label", name);
+        opts.forEach(function(o){
+          var op = document.createElement("option"); op.value = o; op.textContent = name + " = " + o;
+          sel.appendChild(op);
+        });
+        bar.appendChild(sel); selects.push(sel);
+      });
+    }
+    var btn = document.createElement("button");
+    btn.type = "button";
+    btn.className = "test" + (method === "POST" ? " danger" : "");
+    btn.textContent = method === "POST" ? "測試（會動到飛機）" : "測試";
+    bar.appendChild(btn);
+    var hint = document.createElement("span");
+    hint.className = "hintline";
+    bar.appendChild(hint);
+    ep.appendChild(bar);
+
+    var res = document.createElement("div");
+    res.className = "result";
+    res.innerHTML = '<div class="panel"><div class="panel-bar"><span class="rstat"></span></div><pre class="rbody"></pre></div>';
+    ep.appendChild(res);
+
+    function target(){
+      var u = urlEl.textContent.trim().replace("{sysid}", (sysidEl.value || "1").trim());
+      selects.forEach(function(sel){ u = u.replace("{" + sel.getAttribute("data-var") + "}", sel.value); });
+      return u;
+    }
+    function show(cls, head, text){
+      res.classList.add("on");
+      res.querySelector(".rstat").className = "rstat " + cls;
+      res.querySelector(".rstat").textContent = head;
+      res.querySelector(".rbody").textContent = text;
+    }
+
+    btn.addEventListener("click", function(){
+      var url = target();
+      if(method === "POST" && !window.confirm(
+          "這會對真實的無人機送出指令：\n\n" + method + " " + url +
+          "\n\n確定送出？")) return;
+      var opt = {method: method, headers: {"X-Client": "api-doc-test"}};
+      if(ta){
+        try{ JSON.parse(ta.value); }
+        catch(e){ show("err", "body 不是合法 JSON", String(e)); return; }
+        opt.headers["Content-Type"] = "application/json";
+        opt.body = ta.value;
+      }
+      btn.disabled = true; hint.textContent = "送出中…";
+      var t0 = Date.now();
+      fetch(url, opt).then(function(r){
+        return r.text().then(function(t){ return {status: r.status, text: t}; });
+      }).then(function(o){
+        var body = o.text;
+        try{ body = JSON.stringify(JSON.parse(o.text), null, 2); }catch(e){}
+        show(o.status < 400 ? "ok" : "err", "HTTP " + o.status + " · " + (Date.now() - t0) + " ms",
+             body || "（沒有內容）");
+      }).catch(function(e){
+        show("err", "連不到地面站",
+             url + "\n\n" + e + "\n\n可能原因：\n" +
+             "1. 這個頁面是從 claude.ai 開的——沙箱不允許外連，請改用本機的 HTML 檔\n" +
+             "2. 這台電腦連不到上方那個位址（不同網段／防火牆）\n" +
+             "3. 地面站的服務沒有啟動");
+      }).then(function(){ btn.disabled = false; hint.textContent = ""; });
+    });
+  });
+
+  document.querySelectorAll(".copy").forEach(function(btn){
+    btn.addEventListener("click", function(){
+      var pre = btn.closest(".panel").querySelector("pre");
+      var done = function(ok){
+        btn.textContent = ok ? "已複製" : "請手動選取";
+        setTimeout(function(){ btn.textContent = "複製"; }, 1600);
+      };
+      try{
+        navigator.clipboard.writeText(pre.textContent).then(function(){done(true);}, function(){done(false);});
+      }catch(e){ done(false); }
+    });
+  });
+})();
+</script>

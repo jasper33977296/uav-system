@@ -1260,6 +1260,40 @@ async def _store_plan(name: str, wps: list[dict],
     return str(row["id"])
 
 
+@app.get("/api/ext/drones", tags=["任務"], summary="外部：現在有哪些無人機、可不可以指揮")
+async def ext_drones():
+    """**對外**的機隊清單：一次回答「有哪些機、哪些現在指得動」。
+
+    外部系統原本要打兩支（本服務的 `/healthz` 拿在線清單、backend 的
+    `/api/admission/{sysid}` 逐台問可不可以指揮），而那兩支都是**內部端點**
+    ——它們回的模式編號、板號、能力四態是給我方 UI 與排查用的，形狀也會
+    隨內部演進而變。這一支只回外部真正要用的四件事，並且把兩個問題合成一次
+    往返（見 `doc/external-api.html` §1）。
+
+    `controllable` 為 true 才可以下指令；為 false 時 `reason` 一定說得出
+    是什麼擋住了（沿用 `admission.why_blocked`，與指令被擋時的說法同一份）。
+    """
+    snap = router.snapshot() if router is not None else {}
+    out = []
+    for key in sorted(snap, key=int):
+        sysid, d = int(key), snap[key]
+        online = d["age_s"] <= STALE_S
+        info = await admission.state_of(sysid)
+        ok = online and info.get("state") in admission.COMMANDABLE
+        row = {"sysid": sysid, "name": info.get("drone"),
+               "online": online, "age_s": d["age_s"], "armed": d.get("armed"),
+               "controllable": bool(ok and settings.enable_commands)}
+        if not row["controllable"]:
+            # **擋下的理由要說得出下一步**：三種擋法各自的話不一樣，
+            # 混成一句「不可用」等於什麼都沒說
+            row["reason"] = ("這台地面站目前只觀察不指揮（ENABLE_COMMANDS=false）"
+                             if not settings.enable_commands else
+                             f"sysid {sysid} 心跳已 {d['age_s']:.0f} 秒沒更新——視為斷線"
+                             if not online else admission.why_blocked(info))
+        out.append(row)
+    return {"drones": out}
+
+
 @app.get("/api/missions", tags=["任務"], summary="① 選任務：列出任務庫")
 async def ext_list_missions():
     """任務庫總表。**唯讀、不吃 `ENABLE_COMMANDS`**——只是看有哪些航線，
