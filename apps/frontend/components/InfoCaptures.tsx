@@ -3,6 +3,7 @@ import { useCallback, useEffect, useState } from "react";
 
 import CoverageCard, { type Coverage } from "@/components/InfoCoverage";
 import InfoTip from "@/components/InfoTip";
+import LogIndexSheet from "@/components/LogIndexSheet";
 import { errText, getJson } from "@/lib/fetchJson";
 import { API } from "@/lib/signal";
 import { AgentState, RecordUpload, useUavStore } from "@/lib/store";
@@ -131,6 +132,9 @@ export default function InfoCaptures() {
   const [covSession, setCovSession] = useState<Session | null>(null);
   const [err, setErr] = useState<string | null>(null);
   const [tab, setTab] = useState<"onboard" | "ground">("onboard");
+  // **在網頁上打開一份 tlog**（使用者定案 2026-09-07：「log 只能下載來看」）。
+  // 單一 sheet、新點替換——同事件詳情 modal 的慣例
+  const [look, setLook] = useState<{ url: string; title: string } | null>(null);
 
   const load = useCallback(async () => {
     try {
@@ -233,9 +237,14 @@ export default function InfoCaptures() {
           </button>
         </div>
         {tab === "onboard"
-          ? <OnboardTable list={onboard} err={err} />
-          : <GroundTable list={ground} err={err} />}
+          ? <OnboardTable list={onboard} err={err} onLook={setLook} />
+          : <GroundTable list={ground} err={err} onLook={setLook} />}
       </div>
+
+      {look && (
+        <LogIndexSheet url={look.url} title={look.title}
+          onClose={() => setLook(null)} />
+      )}
     </>
   );
 }
@@ -257,7 +266,11 @@ const STATUS_CHIP: Record<OnboardFile["status"], { text: string; tone: string }>
   lost: { text: "已遺失", tone: "danger" },
 };
 
-function OnboardTable({ list, err }: { list: OnboardList | null; err: string | null }) {
+type Look = (v: { url: string; title: string } | null) => void;
+
+function OnboardTable({ list, err, onLook }: {
+  list: OnboardList | null; err: string | null; onLook: Look;
+}) {
   if (err) return <div className="form-err">{err}</div>;
   if (!list) return <div className="empty">載入中…</div>;
   if (!list.files.length) {
@@ -296,9 +309,14 @@ function OnboardTable({ list, err }: { list: OnboardList | null; err: string | n
                   ? `${hhmm(f.covers.from)} – ${hhmm(f.covers.to)}`
                   : <span className="cap-dim">不知道</span>}</td>
                 <td>{f.status === "lost" ? clock(f.lost_at) : clock(f.received)}</td>
-                <td className="num">{f.url
-                  ? <a className="btn-plain btn-sm" href={`${API}${f.url}`}>下載</a>
-                  : <span className="cap-dim">—</span>}</td>
+                <td className="num cap-acts">{f.url ? <>
+                  {/* **看得到才叫拿得到。** 下載留著（QGC／mavlogdump 照樣讀），
+                      但「這份檔裡有什麼」不該先付一次下載的代價 */}
+                  <button className="btn-plain btn-sm"
+                    onClick={() => onLook({ url: `${API}${f.url}/index`,
+                      title: `${f.name} · ${f.drone_name ?? "—"}` })}>檢視</button>
+                  <a className="btn-plain btn-sm" href={`${API}${f.url}`}>下載</a>
+                </> : <span className="cap-dim">—</span>}</td>
               </tr>
             );
           })}
@@ -308,7 +326,9 @@ function OnboardTable({ list, err }: { list: OnboardList | null; err: string | n
   );
 }
 
-function GroundTable({ list, err }: { list: GroundList | null; err: string | null }) {
+function GroundTable({ list, err, onLook }: {
+  list: GroundList | null; err: string | null; onLook: Look;
+}) {
   if (err) return <div className="form-err">{err}</div>;
   if (!list) return <div className="empty">載入中…</div>;
   if (!list.files.length) return <div className="empty">地面站沒有在錄（檢查 CAPTURE_* 設定）。</div>;
@@ -322,7 +342,10 @@ function GroundTable({ list, err }: { list: GroundList | null; err: string | nul
               <td><span className="cap-fname">{f.name}</span></td>
               <td className="num">{mb(f.bytes)}</td>
               <td>{clock(f.received)}</td>
-              <td className="num">
+              <td className="num cap-acts">
+                <button className="btn-plain btn-sm"
+                  onClick={() => onLook({ url: `${API}${f.url}/index`,
+                    title: `${f.name} · 地面站錄製` })}>檢視</button>
                 <a className="btn-plain btn-sm" href={`${API}${f.url}`}>下載</a>
               </td>
             </tr>

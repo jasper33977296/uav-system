@@ -6,7 +6,7 @@ from datetime import datetime, timezone
 from uuid import UUID
 
 from fastapi import APIRouter, HTTPException, Request, Response
-from fastapi.responses import FileResponse
+from fastapi.responses import FileResponse, JSONResponse
 from pydantic import BaseModel, Field, field_validator
 
 import logging
@@ -15,7 +15,7 @@ import mission_time        # libs/ 的共用實作（PYTHONPATH=/srv/libs）
 import plan_check
 import terrain
 
-from . import (agent_link, captures, chainage, db, groups,
+from . import (agent_link, captures, chainage, db, groups, logindex,
                mavlink_rx, signing)
 from .config import settings
 from .ws import manager
@@ -345,6 +345,50 @@ async def get_onboard_capture(drone_id: str, name: str):
         raise HTTPException(404, f"沒有這份機上錄製：{drone_id}/{name}")
     return FileResponse(str(f), media_type="application/octet-stream",
                         filename=f.name)
+
+
+# ── 錄製檔的摘要索引（2026-09-07）─────────────────────────────
+#
+# **推翻了 `/captures` 上那句「取得檔案就是取得全部，不需要我們再做一套
+# 檢視器」。** 那句話在「要不要重做一個回放器」上仍然是對的，但它擋掉了一個
+# 每次飛完都會問的問題：這份檔裡有什麼？而回答它現在的代價是下載 116 MB、
+# 裝 pymavlink、記得 mavlogdump 的參數——**能力沒有缺，只是遠**。
+#
+# 兩層共用同一支解析（`logindex.py`）：白名單一樣是「它必須是 captures 表裡
+# 的一列」，路徑從那一列讀出來，不把使用者給的字串拼進路徑。
+
+
+async def _index_response(f, refresh: bool):
+    """共用的索引回應：做好了回 200，還在做回 202＋進度。"""
+    if refresh:
+        logindex.cache_path(f).unlink(missing_ok=True)
+    try:
+        status, data = await logindex.get_or_start(f)
+    except Exception as e:                       # 解析炸掉要說出是哪一份
+        log.exception("索引失敗：%s", f)
+        raise HTTPException(500, f"這份檔的索引做不出來（{f.name}）：{e}")
+    if status == "ready":
+        return data
+    # **202 不是錯誤**：大檔要 35 秒，前端據此顯示進度並回頭再問一次
+    return JSONResponse(status_code=202, content={"status": "building", **data})
+
+
+@router.get("/captures/{name}/index", tags=["原始層"])
+async def ground_capture_index(name: str, refresh: bool = False):
+    """地面站錄製的摘要索引（訊息型別／頻率／分布、STATUSTEXT、模式、曲線）。"""
+    f = await captures.find("ground", name)
+    if f is None:
+        raise HTTPException(404, f"沒有這份錄製檔：{name}")
+    return await _index_response(f, refresh)
+
+
+@router.get("/onboard-captures/{drone_id}/{name}/index", tags=["原始層"])
+async def onboard_capture_index(drone_id: str, name: str, refresh: bool = False):
+    """機上錄製的摘要索引。內容與地面站那支相同——**兩層本來就該用同一把尺**。"""
+    f = await captures.find("onboard", name, drone_id)
+    if f is None:
+        raise HTTPException(404, f"沒有這份機上錄製：{drone_id}/{name}")
+    return await _index_response(f, refresh)
 
 
 @router.get("/compare/chainage")
