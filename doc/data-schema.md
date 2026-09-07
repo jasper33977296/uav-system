@@ -210,6 +210,10 @@ mission_groups ─< group_assignments                (CASCADE)
 
 唯一索引 `(drone_id, time)`：機上補傳是 at-least-once，靠它冪等去重。
 
+**什麼時候有資料**：只有**離地期間**（2026-09-07 使用者裁定）。閘門在機上，
+判準是 `landed_state`（退回高度＋地速），**不知道就記**——飛行中的量測補不
+回來。停在地面上不入庫，即時畫面照樣看得到。見 `doc/onboard-telemetry.md`。
+
 ### 3.7 `events` — 事件
 
 | 欄位 | 型別 | 說明 |
