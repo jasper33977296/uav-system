@@ -44,7 +44,8 @@ export function droneBall(lat: number, lon: number, alt: number): GeoJSON.Featur
 }
 
 /** 把一串帶高度的點串成懸浮絲帶（FeatureCollection of 平面段）。
-    props(a, b) 決定每一節的屬性（顏色分級等）；厚度 1m、預設寬 3m。
+    props(a, b) 決定每一節的屬性（顏色分級等）；預設寬 3m、厚度＝寬度的一半
+    （窄帶配等厚的板會從側面看成立鰭，厚度得跟著寬度走）。
 
     相鄰段**共用 miter join 頂點**（issue 017 P1）：每個樣本點的左右
     offset 沿角平分線計算，整條水平鏈是連續三角帶——轉角不再有逐段獨立
@@ -57,6 +58,7 @@ export function ribbon<T extends { lat: number | null; lon: number | null; alt: 
   halfW = 1.5,
 ): GeoJSON.FeatureCollection {
   const feats: GeoJSON.Feature[] = [];
+  const halfT = halfW / 2;                            // 垂直半厚（見上）
 
   // 一條「水平鏈」＝連續且水平位移 ≥0.3m 的樣本序列，整鏈做 miter join
   const emitChain = (chain: T[]) => {
@@ -87,7 +89,7 @@ export function ribbon<T extends { lat: number | null; lon: number | null; alt: 
       const alt = ((a.alt ?? 0) + (b.alt ?? 0)) / 2;
       feats.push({
         type: "Feature",
-        properties: { base: Math.max(alt - 0.5, 0), top: Math.max(alt + 0.5, 0.5), ...props(a, b) },
+        properties: { base: Math.max(alt - halfT, 0), top: Math.max(alt + halfT, halfT), ...props(a, b) },
         geometry: { type: "Polygon", coordinates: [[
           pt(i - 1, 1), pt(i, 1), pt(i, -1), pt(i - 1, -1), pt(i - 1, 1),
         ]] },
@@ -122,34 +124,41 @@ export function ribbon<T extends { lat: number | null; lon: number | null; alt: 
   return { type: "FeatureCollection", features: feats };
 }
 
-/** 路徑方向箭頭：沿飛行方向的小三角形，浮在絲帶上方一點。
-    每 everyN 個樣本放一枚；水平位移太小的段落跳過（垂直段方向無意義）。 */
+/** 路徑方向箭頭的**落點與航向**（幾何交給 deck IconLayer，見
+    lib/arrowIcon）。每 everyN 個樣本放一枚。
+
+    為什麼不再回傳三角形多邊形：世界座標的三角形大小固定在公尺，
+    縮放到近處就變成一片大白板（使用者反饋「箭頭太大」）。改成回傳
+    點＋角度後，尺寸由 IconLayer 的 `sizeUnits/size*Pixels` 決定——
+    隨縮放連續變化、兩端有界（同 deckRoute 的路徑寬度原則）。
+
+    航向取「往後找到第一個水平位移 ≥1m 的樣本」而非固定下一點：
+    1Hz 資料在低速/懸停時相鄰兩點的差幾乎全是 GPS 抖動，直接用會讓
+    箭頭亂指。找不到（懸停到底）就不放這一枚——方向不明時不指。 */
 export function pathArrows<T extends { lat: number | null; lon: number | null; alt: number | null }>(
-  pts: T[], everyN = 12, sizeM = 6,
-): GeoJSON.FeatureCollection {
-  const feats: GeoJSON.Feature[] = [];
+  pts: T[], everyN = 12,
+): { pos: [number, number, number]; deg: number }[] {
+  const out: { pos: [number, number, number]; deg: number }[] = [];
   for (let i = everyN; i < pts.length - 1; i += everyN) {
-    const a = pts[i], b = pts[i + 1];
-    if (a.lat == null || a.lon == null || b.lat == null || b.lon == null) continue;
+    const a = pts[i];
+    if (a.lat == null || a.lon == null) continue;
     const k = mLon(a.lat);
-    const dx = (b.lon - a.lon) * k, dy = (b.lat - a.lat) * M_LAT;
-    const len = Math.hypot(dx, dy);
-    if (len < 0.5) continue;
-    const ux = dx / len, uy = dy / len;              // 前進方向單位向量
-    const px = -uy, py = ux;                          // 垂直向
-    const c = (sx: number, sy: number): [number, number] =>
-      [a.lon! + sx / k, a.lat! + sy / M_LAT];
-    const tip = c(ux * sizeM * 0.6, uy * sizeM * 0.6);
-    const l = c(-ux * sizeM * 0.4 + px * sizeM * 0.35, -uy * sizeM * 0.4 + py * sizeM * 0.35);
-    const r = c(-ux * sizeM * 0.4 - px * sizeM * 0.35, -uy * sizeM * 0.4 - py * sizeM * 0.35);
-    const alt = a.alt ?? 0;
-    feats.push({
-      type: "Feature",
-      properties: { base: alt + 0.7, top: alt + 1.2 },
-      geometry: { type: "Polygon", coordinates: [[tip, l, r, tip]] },
+    let dx = 0, dy = 0;
+    for (let j = i + 1; j < Math.min(pts.length, i + everyN); j++) {
+      const b = pts[j];
+      if (b.lat == null || b.lon == null) continue;
+      dx = (b.lon - a.lon) * k; dy = (b.lat - a.lat) * M_LAT;
+      if (Math.hypot(dx, dy) >= 1) break;
+      dx = 0; dy = 0;
+    }
+    if (dx === 0 && dy === 0) continue;                 // 懸停段：方向不明
+    out.push({
+      pos: [a.lon, a.lat, a.alt ?? 0],
+      // 羅盤方位（自北順時針）；IconLayer 的 getAngle 是逆時針，呼叫端取負
+      deg: (Math.atan2(dx, dy) * 180) / Math.PI,
     });
   }
-  return { type: "FeatureCollection", features: feats };
+  return out;
 }
 
 /** 地面投影線：一串點 → LineString。逐點圓點在 1Hz 資料下是一串顆粒，

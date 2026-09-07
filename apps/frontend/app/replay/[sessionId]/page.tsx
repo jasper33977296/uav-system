@@ -11,6 +11,7 @@ import { colorFor } from "@/components/droneLayer";
 import EventModal from "@/components/EventModal";
 import ReplayVideo, { type SessionVideo } from "@/components/ReplayVideo";
 import { SignalBars } from "@/components/SimpleHud";
+import { ARROW_ICON_SIZE, arrowIconUrl } from "@/lib/arrowIcon";
 import { routeLayer } from "@/lib/deckRoute";
 import { useBasemap } from "@/lib/basemap";
 import { DRONE_ICON_SIZE, droneIconUrl } from "@/lib/droneIcon";
@@ -240,7 +241,7 @@ export default function Replay() {
       // 預計任務路徑（航線開的當下所關聯的任務）：灰絲帶＋地面虛線
       if (plan.length >= 2) {
         map.addSource("plan3d", { type: "geojson",
-          data: ribbon(plan.map((w) => ({ lat: w.lat, lon: w.lon, alt: w.alt })), () => ({}), 1.0) });
+          data: ribbon(plan.map((w) => ({ lat: w.lat, lon: w.lon, alt: w.alt })), () => ({}), 0.45) });
         map.addLayer({ id: "plan3d", type: "fill-extrusion", source: "plan3d",
           paint: { "fill-extrusion-color": "#8f8b80",
             "fill-extrusion-height": ["get", "top"], "fill-extrusion-base": ["get", "base"],
@@ -253,14 +254,6 @@ export default function Replay() {
                    "line-dasharray": [3, 3], "line-opacity": 0.6 } }, "track");
       }
 
-      // 方向箭頭：浮在絲帶上方的小三角形，指出飛行方向
-      map.addSource("arrows", { type: "geojson",
-        data: pathArrows(rows.map((r) => ({ lat: r.lat, lon: r.lon, alt: r.alt_rel }))) });
-      map.addLayer({ id: "arrows", type: "fill-extrusion", source: "arrows",
-        paint: { "fill-extrusion-color": "#e8eaed",
-          "fill-extrusion-height": ["get", "top"], "fill-extrusion-base": ["get", "base"],
-          "fill-extrusion-opacity": 0.9 } });
-
       // ⚠ 順序同即時頁（§2.4c）：計畫路徑必須先建，deck overlay 後掛——
       // 否則灰色計畫路徑會蓋住實測軌跡與游標圖示（產出不得被輸入遮蔽）
       // 懸浮航跡：deck.gl PathLayer（route-render-tool-eval，取代 fill-extrusion）
@@ -269,6 +262,9 @@ export default function Replay() {
       ovRef.current = ov;
       map.addControl(ov as unknown as maplibregl.IControl);
       pushLayersRef.current();
+      // 貼地圖示（箭頭、游標）的俯角補償係數是推送當下算的——轉動視角
+      // 後不重推就會停在舊係數，傾斜看時箭頭被壓扁
+      map.on("pitchend", () => pushLayersRef.current());
 
       // 回放游標：與即時頁同一套 2D 機體圖示（§2.4b 一致化裁定）——
       // 朝向是真實記錄的資料，回放不因此降級呈現。白色外圈作強調，
@@ -289,6 +285,9 @@ export default function Replay() {
     .map((r) => ({ lat: r.lat!, lon: r.lon!,
                    sinr: r.sinr ?? null, alt: r.alt_rel ?? null })), [rows]);
 
+  const arrowPts = useMemo(() => pathArrows(
+    rows.map((r) => ({ lat: r.lat, lon: r.lon, alt: r.alt_rel }))), [rows]);
+
   // scrub → 游標圖示（§2.4b：與即時頁同一套機體圖示、隨當時 heading 旋轉）
   const pushLayersRef = useRef<() => void>(() => {});
   useEffect(() => {
@@ -298,6 +297,38 @@ export default function Replay() {
         // 每次推送都建新實例（deck 靠 id 比對做差異更新；data 參考不變時
         // 不會重算屬性，所以成本只有物件配置）
         ...routeLayer("track3d", { track: trackPts }),
+        // 方向箭頭：**貼在航跡線正上方**（同一個 3D 座標、排在航跡之後
+        // 畫），不再是浮在絲帶上方一公尺的獨立三角板。
+        //   - 尺寸：公尺錨定＋像素夾限（2–14px）——隨縮放連續變化，
+        //     縮到近處不再是一片大白板（使用者反饋「箭頭太大」），
+        //     縮遠也不會消失。線寬是 4–5px，箭頭上限取其約 3 倍
+        //   - `billboard:false`：箭頭有方向語意，帶面必須貼著地面才會
+        //     指向真正的地面方位（§2.4c #1 同一條理由）；傾斜視角的
+        //     透視壓縮用與機體圖示同一套 cos^-0.75 補償
+        //   - 深度：不比較也不寫入——箭頭與它所貼的航跡線同座標，
+        //     做深度比較就會與線互相穿插閃爍
+        ...(arrowPts.length ? [new IconLayer({
+          id: "track-arrows",
+          data: arrowPts,
+          getPosition: (d: { pos: [number, number, number] }) => d.pos,
+          getAngle: (d: { deg: number }) => -d.deg,   // 羅盤順時針 → deck 逆時針
+          getIcon: () => ({
+            url: arrowIconUrl, width: ARROW_ICON_SIZE, height: ARROW_ICON_SIZE,
+            anchorX: ARROW_ICON_SIZE / 2, anchorY: ARROW_ICON_SIZE / 2, mask: false,
+          }),
+          // 1.2m 的物理尺寸讓常用縮放落在夾限**之間**（回放頁預設約
+          // 11px/m → 約 18px）：太大的公尺數會整段貼在上限，等於固定
+          // 螢幕尺寸、縮放沒有反應
+          getSize: 1.2, sizeUnits: "meters",
+          sizeMinPixels: 7, sizeMaxPixels: 22,
+          billboard: false,
+          // 往螢幕上方推 6px：**貼著線的上緣**而不是壓在線上。
+          // 壓在線上時箭頭被分級色包住，小尺寸下看不出是箭頭
+          getPixelOffset: [0, -6],
+          sizeScale: Math.min(2.2, Math.pow(Math.max(0.2,
+            Math.cos(((mapRef.current?.getPitch() ?? 55) * Math.PI) / 180)), -0.75)),
+          parameters: { depthCompare: "always" as const, depthWriteEnabled: false },
+        })] : []),
         ...(r && r.lat != null && r.lon != null ? [new IconLayer({
           id: "cursor-icon",
           data: [{ pos: [r.lon, r.lat, r.alt_rel ?? 0] as [number, number, number] }],
@@ -317,7 +348,7 @@ export default function Replay() {
       ] });
     };
     pushLayersRef.current();
-  }, [idx, rows, trackPts]);
+  }, [idx, rows, trackPts, arrowPts]);
 
   // 播放（ui-spec §5）：1Hz 樣本 → 每 1000/speed ms 前進一格；到底自停
   const [playing, setPlaying] = useState(false);

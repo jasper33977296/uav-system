@@ -66,65 +66,39 @@ export function sinrRuns(pts: TrailPoint[]): RouteRun[] {
   return runs.filter((r) => r.path.length >= 2);
 }
 
-const VERT_M = 1.0;   // 水平位移小於此值的段＝視為垂直段（爬升/下降）
-
-/** 依幾何把 run 拆成「斜/平段」與「垂直段」兩組（相鄰保留交界點）。
- *
- * 為什麼要拆（§2.4c #2/#4 的耦合）：
- *   - `billboard:false`＝寬度只在水平面展開。**斜/平段**因此有正確的帶面
- *     與明確的分級色；但**垂直段**的水平位移趨近零，展開方向由 GPS 抖動
- *     決定＝帶面亂跳（2026-08-11 使用者反饋的「垂直段顆粒」）。
- *   - `billboard:true`＝帶面永遠正對相機。垂直段因此看得見，但斜向段被
- *     拉平成灰白扁帶、**分級色被亮邊吃掉**（2026-08-12 使用者反饋的「粗糙」）。
- * 兩個模式各自只在一種幾何上正確——所以不是二選一，是**依幾何分流**。
- */
-function splitByGeometry(runs: RouteRun[]): { flat: RouteRun[]; vert: RouteRun[] } {
-  const flat: RouteRun[] = [], vert: RouteRun[] = [];
-  for (const run of runs) {
-    let cur: [number, number, number][] = [];
-    let curVert: boolean | null = null;
-    const flush = () => {
-      if (cur.length >= 2) (curVert ? vert : flat).push({ ...run, path: cur });
-    };
-    for (let i = 1; i < run.path.length; i++) {
-      const a = run.path[i - 1], b = run.path[i];
-      const k = 111320 * Math.cos((b[1] * Math.PI) / 180);
-      const horiz = Math.hypot((b[0] - a[0]) * k, (b[1] - a[1]) * 110574);
-      const isVert = horiz < VERT_M;
-      if (curVert === null) { cur = [a, b]; curVert = isVert; continue; }
-      if (isVert === curVert) { cur.push(b); continue; }
-      flush();
-      cur = [a, b];          // 交界點兩邊共用，視覺不斷開
-      curVert = isVert;
-    }
-    flush();
-  }
-  return { flat, vert };
-}
-
 const PATH_BASE = {
   getPath: (d: RouteRun) => d.path,
   getColor: (d: RouteRun) => d.color,
   getWidth: (d: RouteRun) => d.width ?? 3,   // 公尺（與原絲帶同寬）
   widthUnits: "meters" as const,
   // 縮放自適應（使用者第四輪）：物理錨定＋螢幕像素夾限——中間隨縮放
-  // 連續變化保留距離感，兩端有界（近看不肥帶、遠看不消失）
+  // 連續變化保留距離感，兩端有界（近看不肥帶、遠看不消失）。
+  // 上限 8→5（使用者第五輪「粗細不一」）：8px 的餘裕在常用縮放下只有
+  // 近端段吃得到，遠端段被壓到 4px——同一條線因此忽粗忽細。上下界收到
+  // 4–5px 後，整條線在任何縮放下的螢幕寬度幾乎一致
   widthMinPixels: 4,     // §2.4c：3→4，遠看仍有帶感
-  widthMaxPixels: 8,
+  widthMaxPixels: 5,
   jointRounded: true,
   capRounded: true,
 };
 
 /** 泛用路徑層：per-path 色/寬（identity、dim、分級 run 都用它）。
- * 回傳**兩層**——斜/平段（billboard:false，保分級色）與垂直段
- * （billboard:true，否則看不見），呼叫端展開進 layers 陣列。 */
+ *
+ * **全段 `billboard: true`（帶面永遠正對相機）**——使用者第五輪反饋
+ * 「路徑線有些地方粗、有些地方細」的解。先前依幾何分流（斜/平段
+ * billboard:false、垂直段 billboard:true）的兩層寫法，粗細不一有三個來源，
+ * 而三個都出在 `billboard: false`：
+ *   1. 寬度只在水平面展開，投影到螢幕後被俯角壓縮——**壓縮量取決於航向**：
+ *      朝向相機的段是滿寬，橫過畫面的段被壓成細線。同一條航跡因此忽粗忽細。
+ *   2. 圓形 joint/cap 躺在水平面上，橫向段的線被壓細、接點卻仍是滿徑的
+ *      橢圓——就是截圖上那一顆顆比線還粗的瘤。
+ *   3. 兩層各自的規則不同，交界處必然對不齊。
+ * 代價：帶面不再表達「這段在空中怎麼躺」。但那個資訊本來就被 §1 的
+ * 俯角壓縮扭曲得讀不出來，換到的是一條寬度處處相同、看得出分級色的線。
+ * 垂直段可見（原本分流的目的）由 billboard 一併保住。 */
 export function pathsLayer(id: string, data: RouteRun[], pickable = false) {
-  const { flat, vert } = splitByGeometry(data);
   return [
-    new PathLayer<RouteRun>({ ...PATH_BASE, id, data: flat,
-      billboard: false, pickable }),
-    new PathLayer<RouteRun>({ ...PATH_BASE, id: `${id}-vert`, data: vert,
-      billboard: true, pickable }),
+    new PathLayer<RouteRun>({ ...PATH_BASE, id, data, billboard: true, pickable }),
   ];
 }
 

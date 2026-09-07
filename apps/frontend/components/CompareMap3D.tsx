@@ -134,7 +134,7 @@ export default function CompareMap3D({
       if (wps.length >= 2) {
         map.addSource("plan3d", { type: "geojson",
           data: ribbon(wps.map((w) => ({ lat: w.lat, lon: w.lon, alt: w.alt ?? 0 })),
-                       () => ({}), 1.0) });
+                       () => ({}), 0.45) });
         map.addLayer({ id: "plan3d", type: "fill-extrusion", source: "plan3d",
           paint: { "fill-extrusion-color": MUTED,
                    "fill-extrusion-height": ["get", "top"],

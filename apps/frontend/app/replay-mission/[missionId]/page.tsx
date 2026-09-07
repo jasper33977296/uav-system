@@ -183,7 +183,7 @@ export default function MissionReplay() {
         paint: { "line-color": "#262624", "line-width": 1 } });
 
       map.addSource("plan3d", { type: "geojson",
-        data: ribbon(plan.map((w) => ({ lat: w.lat, lon: w.lon, alt: w.alt })), () => ({}), 1.0) });
+        data: ribbon(plan.map((w) => ({ lat: w.lat, lon: w.lon, alt: w.alt })), () => ({}), 0.45) });
       map.addLayer({ id: "plan3d", type: "fill-extrusion", source: "plan3d",
         paint: { "fill-extrusion-color": "#8f8b80",
           "fill-extrusion-height": ["get", "top"], "fill-extrusion-base": ["get", "base"],

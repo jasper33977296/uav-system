@@ -360,9 +360,12 @@ export default function MapView() {
             wps = planPath(plan.waypoints ?? [], plan.home);
           }
           const has = wps.length >= 2;
+          // 半寬 1.0→0.45m（使用者反饋「投影上去的預計路線太粗」）：計畫是
+          // 參照、不是主角——實測航跡（deck 路徑層）才是。計畫帶比航跡窄
+          // 一截，兩條疊在一起時看得出誰是誰
           (map.getSource("plan3d") as maplibregl.GeoJSONSource | undefined)?.setData(
             has ? ribbon(wps.map((w: any) => ({ lat: w.lat, lon: w.lon, alt: w.alt })),
-                         () => ({}), 1.0) : EMPTY);
+                         () => ({}), 0.45) : EMPTY);
           (map.getSource("plan-ground") as maplibregl.GeoJSONSource | undefined)?.setData(
             has ? {
               type: "FeatureCollection",
