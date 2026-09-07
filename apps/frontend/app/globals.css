@@ -623,12 +623,6 @@ a:focus-visible, button:focus-visible, input:focus-visible, select:focus-visible
 .cmd-result.ok { color: var(--status-ok); }
 .cmd-result.err { color: var(--status-serious); }
 
-/* .plan 匯入的幾何預檢報告 */
-.plan-report { margin-top: 8px; font-size: 12.5px; line-height: 1.7; }
-.plan-report .ok { color: var(--status-ok); }
-.plan-report .bad { color: var(--status-serious); }
-.plan-report .warn { color: var(--status-warn); }
-
 /* 飛行就緒橫幅（QGC Ready To Fly 同源） */
 .cmd-ready { font-size: 12.5px; line-height: 1.6; padding: 6px 8px; border-radius: 6px; }
 .cmd-ready.ok { color: var(--status-ok); background: var(--status-ok-bg); }

@@ -80,14 +80,6 @@ function planTarget(m: Mission): { text: string; declared: boolean } {
     ? { text: parts.join(" · "), declared: true }
     : { text: "未宣告目標機種", declared: false };
 }
-interface PlanCheck {
-  ok: boolean; problems: string[]; warnings: string[];
-  max_dist_m: number; max_alt_m?: number;
-  //: 圍欄從哪來。plan＝這份航線自己宣告的（超出就是真的超出）；
-  //: none＝**這份沒宣告，系統也不替它設一個**——一個全域數字只對一個場地
-  //: 成立，拿它去判會產生看起來很具體的假錯誤
-  fence_source?: "plan" | "none";
-}
 interface Sess {
   id: string; drone_id: string; drone_name: string; mission_id: string | null;
   started_at: string; ended_at: string | null;
@@ -162,26 +154,11 @@ export default function Missions() {
   const [err, setErr] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
   const [openId, setOpenId] = useState<string | null>(null);
-  // **每次點開一份航線就重檢一次**，不是只在匯入的那一刻檢查一次。
-  // 匯入時看到的報告會隨畫面關掉就消失，而使用者是在**要飛之前**才需要它；
-  // 而且圍欄的系統預設值可能在匯入之後被改過，那時舊報告就是過期的。
-  // **報告只有一個顯示點**（頁面最上方）。上傳完的報告與點開卡片的報告
-  // 各自顯示一次時，同一份航線的同一句話會在畫面上出現兩遍——重複的訊息
-  // 會讓人開始略過它們，而這是唯一會說「這份不能飛」的地方
-  const [report, setReport] =
-    useState<PlanCheck | "loading" | "failed" | null>(null);
-  const [reportOf, setReportOf] = useState<string | null>(null);   // 這份報告在講誰
-  useEffect(() => {
-    if (!openId) return;
-    let dead = false;
-    setReport("loading"); setReportOf(openId);
-    getJson<PlanCheck>(`${API}/api/missions/${openId}/check`)
-      .then((c) => { if (!dead) setReport(c); })
-      // 取不到就說取不到——**空白會被讀成「檢查過了、沒問題」**，
-      // 而那是這份報告最不能給錯的方向
-      .catch(() => { if (!dead) setReport("failed"); });
-    return () => { dead = true; };
-  }, [openId]);
+  // 幾何預檢報告在這一頁**不顯示**（2026-09-07 使用者指示）。
+  // `GET /api/missions/{id}/check` 與上傳回應裡的 `check` 都還在，
+  // **真正的守門也還在**：指令服務上傳到機上之前會自己檢查，沒過就是
+  // `rejected_precheck`，理由會出現在任務控制面板上。這一頁拿掉的是
+  // 「還沒要飛之前先讀一遍報告」那一層，不是安全網本身。
   const [menuId, setMenuId] = useState<string | null>(null);
   const [deleting, setDeleting] = useState<string | null>(null);
   const delTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -224,20 +201,13 @@ export default function Missions() {
   }, []);
   useEffect(reload, [reload]);
 
-  async function call(path: string, init?: RequestInit, showCheck = false) {
+  async function call(path: string, init?: RequestInit) {
     setErr(null); setBusy(true);
-    if (showCheck) setReport(null);
     try {
       const res = await fetch(`${API}${path}`, init);
       const body = await res.json().catch(() => null);
       if (!res.ok) setErr(errText(body?.detail, `失敗（${res.status}）`));
-      else {
-        // 讀回的任務同樣要出預檢報告：機上那份可能違反現行圍欄/高度上限，
-        // 回應裡帶了 check 卻不顯示＝把已知問題藏起來（上傳 .plan 有顯示，
-        // 讀回沒有＝同一種資料兩套待遇）
-        if (showCheck) setReport(body?.check ?? null);
-        reload();
-      }
+      else reload();
     } catch (e) {
       setErr(String(e));
     } finally {
@@ -247,7 +217,7 @@ export default function Missions() {
 
 
   async function uploadPlan(f: File) {
-    setErr(null); setReport(null);
+    setErr(null);
     let parsed;
     try {
       parsed = parsePlan(await f.text());
@@ -274,7 +244,7 @@ export default function Missions() {
       });
       const body = await res.json();
       if (!res.ok) setErr(errText(body.detail, `失敗（${res.status}）`));
-      else { setReport(body.check ?? null); reload(); }
+      else reload();
     } catch (e) {
       setErr(String(e));
     } finally {
@@ -285,37 +255,6 @@ export default function Missions() {
   return (
     <div className="page-pad">
       {err && <div className="form-err">{err}</div>}
-      {report === "loading" && <div className="plan-report">檢查中⋯</div>}
-      {report === "failed" && (
-        <div className="plan-report">
-          <div className="bad">
-            取不到這份航線的預檢結果——<b>不是「沒問題」</b>，是沒檢查到
-          </div>
-        </div>
-      )}
-      {report && report !== "loading" && report !== "failed" && (
-        <div className="plan-report">
-          {/* **報告要指名在講誰**：它是點卡片換內容的，不寫清楚就會出現
-              「看著 A 的卡片、讀著 B 的報告」 */}
-          {reportOf && (
-            <div className="hint-line">
-              「{missions.find((m) => m.id === reportOf)?.name ?? "—"}」的幾何預檢
-            </div>
-          )}
-          {report.ok && report.warnings.length === 0 && (
-            <div className="ok">✅ 幾何預檢通過（最遠航點 {report.max_dist_m} m
-              {report.max_alt_m != null && `／最高 ${report.max_alt_m} m`}
-              {report.fence_source === "plan" && "／圍欄用這份航線自帶的"}）
-            </div>
-          )}
-          {report.problems.map((p, i) => (
-            <div className="bad" key={`p${i}`}>❌ {p}</div>
-          ))}
-          {report.warnings.map((w, i) => (
-            <div className="warn" key={`w${i}`}>⚠️ {w}</div>
-          ))}
-        </div>
-      )}
 
       {/* 縮圖卡格（§4 v3）：點卡＝展開使用紀錄；「顯示於即時頁」改由
           任務開始自動 activate，手動切換降級收 ⋯ */}
@@ -415,13 +354,9 @@ export default function Missions() {
         <input ref={fileRef} type="file" accept=".plan,application/json" hidden
           onChange={(e) => { const f = e.target.files?.[0]; if (f) uploadPlan(f); e.target.value = ""; }} />
       </div>
-      {/* 技術操作：從機上讀回（全域動作，不屬於任一卡） */}
-      <div>
-        <button className="btn-plain btn-sm" disabled={busy}
-          onClick={() => call("/api/missions/from-vehicle", { method: "POST" }, true)}>
-          從機上讀回
-        </button>
-      </div>
+      {/* 「從機上讀回」按鈕移除（2026-09-07 使用者指示）。
+          `POST /api/missions/from-vehicle` 還在，rig 與 curl 叫得到——
+          拿掉的是這一頁的入口 */}
 
       {missions.length === 0 && (
         <div className="card">

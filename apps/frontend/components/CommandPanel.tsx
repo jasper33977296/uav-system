@@ -1137,7 +1137,7 @@ export default function CommandPanel() {
             {/* 「未知」兩個字就夠（使用者指示 2026-09-07）。成因（本系統沒
                 上傳過／別的 GCS 傳的）搬進 tooltip：**要處置的人只需要知道
                 「我不知道機上載的是哪一份」**，成因不改變他下一步要做什麼 */}
-            機上目前：{onboardName
+            機上任務：{onboardName
               ? <b>{onboardName}</b>
               : <span style={{ opacity: 0.6 }}
                   title="本系統沒有上傳過這台機的任務——可能是別的地面站傳的，或機上本來就有一份">
@@ -1159,14 +1159,14 @@ export default function CommandPanel() {
               後端的守門也會擋。按了才知道不行，不如一開始就換成正確的入口 */}
           {!airborne && (
             <div className="cmd-row">
-              {btn("上傳", "① 上傳到機", "/mission/upload",
+              {btn("上傳", "① 上傳無人機", "/mission/upload",
                    { disabled: !missionId, body: { mission_id: missionId },
                      cap: "mission_upload", accent: true })}
               {/* **沒有「離地高度」這一格**（2026-09-07 使用者指示）：起飛高度
                   跟著任務自己的 NAV_TAKEOFF 走，後端本來就是這樣算的。一個
                   空白、預設「跟任務」的輸入格只是在問一個已經有答案的問題
                   ——而填錯它就會讓實際飛行高度與規劃的那份 .plan 不一致。 */}
-              {btn("起飛→任務", "② 開始任務（起飛→執行）", "/mission/fly",
+              {btn("起飛→任務", "② 開始任務", "/mission/fly",
                    { confirm: true, cap: "mission_fly", disabled: rcDown,
                      title: rcDown
                        ? "遙控器未連線——自動起飛的前提是有人能隨時接管" : undefined,
@@ -1174,7 +1174,7 @@ export default function CommandPanel() {
               {/* **換任務不該被迫用「上傳另一份蓋過去」來達成**——那是一個
                   更重、更容易出錯的動作（完整握手＋逐項讀回比對）。
                   兩段式確認：清掉機上航線是不可復原的 */}
-              {btn("清除任務", "清掉機上那份任務", "/mission/clear",
+              {btn("清除任務", "清除任務", "/mission/clear",
                    { confirm: true, cap: "mission_upload", danger: true })}
               {/* 「遙控器未連線」那一行刪掉（2026-09-07 使用者指示：上面講過了）
                   ——沒有 RC 時飛控的預檢原因（`RC not found`）已經逐條列在
