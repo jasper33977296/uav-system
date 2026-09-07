@@ -458,7 +458,7 @@ class ParamWrite(BaseModel):
 
 @app.get("/api/command/{sysid}/params", tags=["參數"],
          summary="讀回可修改的飛控參數（現值）")
-async def get_params(sysid: int):
+async def get_params(sysid: int, names: str | None = None):
     """**現值一律直接跟飛控要，不查資料庫。**
 
     後端確實存了整份參數快照（`param_sets`），但那是「某一趟飛行當時是什麼」。
@@ -467,11 +467,20 @@ async def get_params(sysid: int):
     """
     _require_enabled()
     await _require_capability(sysid, "param_get")
-    res = await _run(sysid, "param_get", mav.job_get_params,
-                     list(fcparams.ALLOWED), params={"names": len(fcparams.ALLOWED)})
+    # `names`（逗號分隔）＝只讀這幾個。**一次問少一點是有意義的**：
+    # ArduPilot 收到 PARAM_REQUEST_READ 是排進一個很小的佇列，滿了就
+    # **安靜地丟掉**；而這條 57600 的序列埠上同時跑著約 27 種 4Hz 的遙測，
+    # 排到參數回覆的頻寬本來就很窄
+    want = [n.strip() for n in names.split(",")] if names else list(fcparams.ALLOWED)
+    unknown = [n for n in want if n not in fcparams.ALLOWED]
+    if unknown:
+        raise HTTPException(400, {"msg": f"不在可讀清單裡：{', '.join(unknown)}"})
+    res = await _run(sysid, "param_get", mav.job_get_params, want,
+                     params={"names": want})
     return {
         "values": res["values"],
         "missing": res["missing"],
+        "elapsed_s": res.get("elapsed_s"),
         # 畫面要有範圍與單位才畫得出可用的輸入格（白名單存在的理由之一）
         "meta": {k: {"label": p.label, "unit": p.unit, "lo": p.lo, "hi": p.hi,
                      "why": p.why, "is_int": p.is_int}

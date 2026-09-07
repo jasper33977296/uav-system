@@ -501,6 +501,7 @@ def job_get_params(r: MavRouter, sysid: int, names: list) -> dict:
     values: dict[str, float] = {}
     other = 0                 # 期間收到的其他訊息數：用來分辨「鏈路斷了」與
                               # 「鏈路通、但參數對話被丟掉」
+    t0 = time.monotonic()
     for attempt in range(3):
         pending = [n for n in names if n not in values]
         if not pending:
@@ -508,8 +509,11 @@ def job_get_params(r: MavRouter, sysid: int, names: list) -> dict:
         for n in pending:
             r._sendto(sysid, lambda m, e=want[n]: m.param_request_read_encode(
                 sysid, 1, e, -1))
-        # 一輪收 3 秒：**收到誰算誰**，不管順序（飛控回覆的順序不保證）
-        deadline = time.monotonic() + 3.0
+        # 一輪收 8 秒：**收到誰算誰**，不管順序（飛控回覆的順序不保證）。
+        # 8 秒不是隨便取的：飛控與 Pi 之間是 57600 的序列埠，上面同時跑著
+        # 約 27 種、每種 4Hz 的遙測（實測 ~110 msg/s，約線路容量的一半），
+        # 而 ArduPilot 的參數回覆優先權低於遙測串流——它會排在後面慢慢送。
+        deadline = time.monotonic() + 8.0
         while time.monotonic() < deadline and len(values) < len(names):
             msg = r._recv(0.3)
             if msg is None:
@@ -523,15 +527,29 @@ def job_get_params(r: MavRouter, sysid: int, names: list) -> dict:
             if pid in names:
                 values[pid] = float(msg.param_value)
     # **一個都沒回來、但這條 socket 明明在收東西**——那不是「這台機沒有這些
-    # 參數」，是**問句或答句在半路被丟掉了**。兩者在回應上完全同形，而處置
-    # 完全不同（前者去查機型，後者去查機上代理的轉發清單），所以這裡分開講。
+    # 參數」，而且**不是我們這條路的問題**。2026-09-07 查到底的結論寫在這裡，
+    # 免得下一個人再查一次：
+    #
+    #   * 請求確實送到飛控：機上代理的 `fwd_to_fc` 在觸發前後差 37 則（我方
+    #     送了 24 則請求＋心跳），代理兩個方向都不按型別過濾。
+    #   * 飛控**答得出來**：代理自己開機時讀 FS_GCS_ENABLE／FS_GCS_TIMEOUT，
+    #     **4 毫秒**就拿到答案——那一刻遙測串流還沒開始跑。
+    #   * 現在讀不到，是因為**飛控↔Pi 的序列埠塞滿了**：SERIAL1 是 57600，
+    #     上面跑著約 27 種、每種 4Hz 的串流（實測 98 msg/s，約線路容量六成）。
+    #     ArduPilot 送 PARAM_VALUE 之前會檢查 `HAVE_PAYLOAD_SPACE`，**沒空間
+    #     就安靜地丟掉，而且單筆讀取不排隊重試**。COMMAND_ACK 塞得進去（它小），
+    #     PARAM_VALUE 塞不進去（25 bytes payload）——所以切模式會成功、讀參數不會。
+    #
+    # 機上那支 set-fc-params.py 的用法本身就是這個結論的旁證：它要求
+    # **先停掉代理**再跑，那正是把串流關掉、把線路讓出來。
     if not values and other > 0:
         raise CommandError(
             f"飛控沒有回任何 PARAM_VALUE（這段期間這條鏈路收到 {other} 則其他"
-            "訊息，所以鏈路是通的）。問句或答句其中一個在半路被丟掉了——"
-            "先確認機上代理的上行／下行轉發有沒有把 PARAM_REQUEST_READ 與 "
-            "PARAM_VALUE 放行")
-    return {"values": values,
+            "訊息，所以鏈路與轉發都是通的）。原因是**飛控到 Pi 的序列埠被遙測"
+            "串流佔滿**——57600 上跑著約 4Hz × 27 種，ArduPilot 沒有空間送"
+            "PARAM_VALUE 時會安靜丟掉。要讀寫參數，得先把那條線讓出來："
+            "提高 SERIAL1_BAUD、調低串流率、或由機上代理在交換參數期間暫停串流")
+    return {"values": values, "elapsed_s": round(time.monotonic() - t0, 1),
             "missing": [n for n in names if n not in values]}
 
 
