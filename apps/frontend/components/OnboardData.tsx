@@ -53,7 +53,7 @@ function InspectorSheet({ droneId, onClose }: { droneId: string; onClose: () => 
         <div className="evm-head">
           <span className="evm-title">機上資料 — {name}</span>
           <span className="spacer" />
-          <button className="btn-plain btn-sm" aria-label="關閉" onClick={onClose}>✕</button>
+          <button className="modal-close" aria-label="關閉（Esc）" title="關閉（Esc）" onClick={onClose}>✕</button>
         </div>
         <input className="insp-search" placeholder="搜尋訊息型別…"
           value={q} onChange={(e) => setQ(e.target.value)} />

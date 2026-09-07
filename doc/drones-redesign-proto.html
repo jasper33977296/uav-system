@@ -1,0 +1,462 @@
+<title>UAV 機隊管理 v2</title>
+<style>
+/* tokens 同 doc/design-tokens.md（深色為預設與設計基準） */
+:root{
+  color-scheme:dark;
+  --page:#1b1a17; --surface:#262624; --surface-2:#30302c;
+  --ink:#f0eee6; --ink-2:#c2bfb3; --muted:#8f8b80; --hairline:#3a3833;
+  --border:rgba(240,238,230,.1);
+  --accent:#d97757; --accent-bg:rgba(217,119,87,.12);
+  --series-1:#3987e5;
+  --ok:#0ca30c; --warn:#fab219; --serious:#e05e0e; --danger:#a01818;
+  --danger-ink:#e05e5e; --rec:#d03b3b;
+  --sinr-good:#0ca30c; --sinr-fair:#fab219; --sinr-bad:#e05e0e; --sinr-crit:#a01818;
+  --mono:ui-monospace,"SF Mono","JetBrains Mono",Menlo,Consolas,monospace;
+}
+*{margin:0;padding:0;box-sizing:border-box}
+html,body{height:100%}
+body{font-family:system-ui,-apple-system,"Noto Sans TC","Segoe UI",sans-serif;
+  background:var(--page);color:var(--ink);font-size:13px;line-height:1.5;
+  -webkit-font-smoothing:antialiased}
+button,input,select{font:inherit;color:inherit}
+button{background:none;border:none;cursor:pointer}
+:focus-visible{outline:2px solid var(--accent);outline-offset:1px}
+.num{font-variant-numeric:tabular-nums}
+.spacer{flex:1}
+
+/* ── shell ─────────────────────────────────────────── */
+.shell{min-height:100dvh;display:flex;flex-direction:column}
+.nav{flex:none;height:46px;display:flex;align-items:center;gap:14px;padding:0 14px;
+  background:var(--surface);border-bottom:1px solid var(--hairline);position:sticky;top:0;z-index:20}
+.brand{font-size:13px;font-weight:700;letter-spacing:.02em}
+.navtabs{display:flex;gap:2px}
+.navtabs button{padding:5px 9px;border-radius:6px;color:var(--muted);display:grid;place-items:center}
+.navtabs button[aria-current="true"]{color:var(--accent);background:var(--accent-bg)}
+.navtabs button:hover{color:var(--ink)}
+.reclight{display:inline-flex;align-items:center;gap:6px;color:var(--muted);font-size:12px}
+.recdot{width:11px;height:11px;border-radius:50%;background:var(--muted)}
+.page{padding:14px;display:flex;flex-direction:column;gap:9px;max-width:1500px;width:100%}
+
+/* ⓘ：解釋只住這裡 */
+.info{width:15px;height:15px;border-radius:50%;border:1px solid var(--hairline);
+  color:var(--muted);font-size:10px;display:inline-grid;place-items:center;position:relative;
+  flex:none;cursor:help;line-height:1}
+.info:hover,.info:focus-visible{color:var(--ink);border-color:var(--border)}
+.info::after{content:attr(data-tip);position:absolute;right:-2px;top:20px;width:260px;z-index:40;
+  background:var(--surface-2);color:var(--ink-2);border:1px solid var(--border);border-radius:8px;
+  padding:8px 10px;font-size:11px;line-height:1.65;text-align:left;font-weight:400;
+  box-shadow:0 8px 24px rgba(0,0,0,.45);opacity:0;visibility:hidden;transition:opacity .12s}
+.info:hover::after,.info:focus-visible::after{opacity:1;visibility:visible}
+
+/* ── 頁首 ──────────────────────────────────────────── */
+.head{display:flex;align-items:center;gap:9px;padding:2px 2px 0}
+.head h1{font-size:15px;font-weight:700}
+.head .sub{font-size:12px;color:var(--muted)}
+.notice{display:flex;align-items:center;gap:8px;padding:6px 10px;border-radius:8px;
+  background:rgba(250,178,25,.09);border:1px solid rgba(250,178,25,.3);
+  font-size:11.5px;color:var(--ink-2)}
+.notice b{color:var(--warn);font-weight:600}
+
+/* ── 機列 ──────────────────────────────────────────── */
+.card{background:var(--surface);border:1px solid var(--border);border-radius:12px}
+.row{display:flex;align-items:center;gap:10px;padding:10px 12px;width:100%;text-align:left;
+  border-radius:12px}
+.row:hover{background:var(--surface-2)}
+.dot{width:9px;height:9px;border-radius:50%;flex:none}
+.dot.off{background:none;border:1.5px solid var(--muted)}
+.nm{font-size:14px;font-weight:700;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.state{font-size:12px;white-space:nowrap}
+.state.flying{color:var(--rec);font-weight:600}
+.state.on{color:var(--ok)}
+.state.off{color:var(--muted)}
+.bars{display:inline-flex;align-items:flex-end;gap:2px;height:14px}
+.bars i{width:3px;border-radius:1px;display:block}
+.sig-n{font-family:var(--mono);font-size:12px;color:var(--ink-2)}
+.batt{width:24px;height:11px;border:1.5px solid var(--ink-2);border-radius:3px;padding:1px;position:relative}
+.batt::after{content:"";position:absolute;right:-4px;top:3px;width:2px;height:3px;background:var(--ink-2)}
+.batt i{display:block;height:100%;border-radius:1px}
+.chip{display:inline-flex;align-items:center;gap:5px;padding:1px 8px;border-radius:999px;
+  background:var(--surface-2);font-size:11px;color:var(--ink-2);white-space:nowrap}
+.chip.warn{background:rgba(250,178,25,.12);color:var(--warn);border:1px solid rgba(250,178,25,.3)}
+.chip.dan{background:rgba(160,24,24,.16);color:#f0a5a5;border:1px solid rgba(224,94,94,.35)}
+.count{font-size:12px;color:var(--muted);font-variant-numeric:tabular-nums;white-space:nowrap}
+.caret{color:var(--muted);font-size:11px;width:12px;text-align:center}
+.sub{display:flex;flex-wrap:wrap;gap:3px 12px;padding:0 12px 9px 31px;
+  font-size:11px;color:var(--muted);font-variant-numeric:tabular-nums}
+
+/* ── 展開工作區 ────────────────────────────────────── */
+.work{border-top:1px solid var(--hairline);padding:11px 12px 12px;
+  display:flex;flex-direction:column;gap:11px}
+.sect{display:flex;flex-direction:column;gap:7px}
+.sect h3{font-size:12px;font-weight:600;color:var(--ink-2);display:flex;align-items:center;gap:7px}
+.grid2{display:grid;grid-template-columns:repeat(auto-fit,minmax(230px,1fr));gap:9px}
+.box{background:var(--page);border:1px solid var(--hairline);border-radius:10px;padding:9px 11px;
+  display:flex;flex-direction:column;gap:6px}
+.box .cap{font-size:11px;color:var(--muted);display:flex;align-items:center;gap:6px}
+.kv{display:grid;grid-template-columns:76px minmax(0,1fr) auto;gap:4px 10px;align-items:baseline;font-size:12px}
+.kv .k{color:var(--muted);font-size:11px}
+.kv .v{color:var(--ink);font-family:var(--mono);word-break:break-all}
+.kv .v.empty{color:var(--muted);font-family:inherit}
+.mini{font-size:11px;color:var(--muted);border:1px solid var(--hairline);border-radius:6px;
+  padding:1px 7px}
+.mini:hover{color:var(--ink);border-color:var(--border)}
+.btn{padding:4px 11px;border:1px solid var(--hairline);border-radius:7px;color:var(--ink-2);
+  background:var(--surface-2);font-size:12px}
+.btn:hover{color:var(--ink);border-color:var(--border)}
+.btn.danger{color:var(--danger-ink);border-color:rgba(224,94,94,.4);background:transparent}
+.btn.danger:hover{background:rgba(208,59,59,.12)}
+.btn:disabled{opacity:.45;cursor:not-allowed}
+.actions{display:flex;gap:7px;flex-wrap:wrap;align-items:center}
+
+/* 架次表 */
+.tablewrap{overflow-x:auto}
+table{width:100%;border-collapse:collapse;font-size:12px}
+th{text-align:left;font-size:10.5px;font-weight:600;color:var(--muted);letter-spacing:.04em;
+  padding:0 8px 6px;border-bottom:1px solid var(--hairline);white-space:nowrap}
+td{padding:6px 8px;border-bottom:1px solid rgba(58,56,51,.55);color:var(--ink-2);white-space:nowrap}
+td.n{font-family:var(--mono);text-align:right;font-variant-numeric:tabular-nums}
+tr.tap{cursor:pointer}
+tr.tap:hover td{background:var(--surface-2)}
+.sdot{width:7px;height:7px;border-radius:50%;display:inline-block;margin-right:6px;vertical-align:1px}
+.evc{font-size:11px;color:var(--muted)}
+.evc b{color:#f0a5a5;font-weight:600}
+.rowacts{display:flex;gap:6px;justify-content:flex-end}
+.empty{color:var(--muted);font-size:12px;padding:10px 2px}
+.hint{font-size:11px;color:var(--muted);line-height:1.7}
+
+/* ── modal（全站同形：✕ 固定右上、label 靠左邊）──────── */
+.mask{position:fixed;inset:0;background:rgba(12,11,9,.62);z-index:60;display:grid;place-items:center;padding:20px}
+.mask[hidden]{display:none}
+.modal{background:var(--surface);border:1px solid var(--border);border-radius:14px;
+  width:min(560px,94vw);max-height:88dvh;display:flex;flex-direction:column;
+  box-shadow:0 24px 64px rgba(0,0,0,.55);overflow:hidden}
+.mhead{display:flex;align-items:center;gap:9px;padding:13px 15px 10px;flex:none}
+.mhead .t{font-size:14.5px;font-weight:600}
+.mhead .meta{font-size:11.5px;color:var(--muted)}
+.mbody{padding:0 15px 12px;overflow-y:auto;display:flex;flex-direction:column;gap:9px}
+.mfoot{display:flex;gap:8px;justify-content:flex-end;padding:10px 15px 13px;
+  border-top:1px solid var(--hairline)}
+label.field{display:flex;flex-direction:column;gap:4px;font-size:11px;color:var(--muted)}
+label.field input{background:var(--page);border:1px solid var(--hairline);border-radius:7px;
+  padding:6px 9px;font-size:13px;color:var(--ink)}
+</style>
+
+<div class="shell">
+  <nav class="nav">
+    <span class="brand">UAV 監控</span>
+    <div class="navtabs">
+      <button title="即時監控"><svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><circle cx="12" cy="12" r="3.2"/><path d="M12 2.5v4M12 17.5v4M2.5 12h4M17.5 12h4"/></svg></button>
+      <button aria-current="true" title="無人機"><svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><circle cx="5.5" cy="5.5" r="2.4"/><circle cx="18.5" cy="5.5" r="2.4"/><circle cx="5.5" cy="18.5" r="2.4"/><circle cx="18.5" cy="18.5" r="2.4"/><rect x="10" y="10" width="4" height="4" rx="1.4"/></svg></button>
+      <button title="路徑管理"><svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M4 19c6 0 2-10 8-10 5 0 3 7 8 5"/></svg></button>
+      <button title="比較"><svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M3 16l5-6 4 3 6-8"/><path d="M3 20l5-4 4 2 6-6" opacity=".5"/></svg></button>
+      <button title="資訊"><svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M3 7.5l9-4.5 9 4.5-9 4.5-9-4.5z"/><path d="M3 12l9 4.5 9-4.5"/><path d="M3 16.5l9 4.5 9-4.5"/></svg></button>
+    </div>
+    <span class="spacer"></span>
+    <span class="reclight" id="reclight"><span class="recdot"></span>未記錄</span>
+  </nav>
+
+  <div class="page">
+    <div class="head">
+      <h1>機隊<span id="n"></span></h1>
+      <span class="spacer"></span>
+      <span class="info" tabindex="0" data-tip="需要注意的排前面，不照註冊順序：飛行中 → 在線 → 有待回傳 → 未連線。副行的「上次飛行」說得出這台機最後一趟是什麼時候，沒有值就是還沒飛過。點一列展開那台機的身分、回傳與架次。">ⓘ</span>
+    </div>
+    <div class="notice">
+      <span><b>原型</b>　第一列套用 09/07 16:28 那趟的真實遙測當「飛行中」示範；實際此刻三台都未連線。其餘數字（架次、SINR、機上檔案）全部是資料庫現況。</span>
+    </div>
+    <div id="fleet"></div>
+  </div>
+</div>
+
+<div class="mask" id="mask" hidden>
+  <div class="modal" role="dialog" aria-modal="true" aria-label="編輯">
+    <div class="mhead">
+      <span class="t" id="mTitle">編輯</span>
+      <span class="spacer"></span>
+      <span class="meta" id="mMeta"></span>
+      <span class="info" tabindex="0" id="mTip" data-tip="">ⓘ</span>
+      <button class="btn" id="mClose" aria-label="關閉（Esc）" title="關閉（Esc）">✕</button>
+    </div>
+    <div class="mbody" id="mBody"></div>
+    <div class="mfoot" id="mFoot"></div>
+  </div>
+</div>
+
+<script>__DATA__</script>
+<script>
+(function(){
+"use strict";
+const P = window.PROTO, $ = (s)=>document.querySelector(s);
+const el=(t,c,x)=>{const n=document.createElement(t); if(c)n.className=c; if(x!=null)n.textContent=x; return n;};
+
+/* ── 格式 ─────────────────────────────────────────── */
+const TZ={timeZone:"Asia/Taipei",hour12:false};
+const when=(iso)=>new Date(iso).toLocaleString("zh-TW",{...TZ,month:"2-digit",day:"2-digit",hour:"2-digit",minute:"2-digit"});
+const whenFull=(iso)=>new Date(iso).toLocaleString("zh-TW",{...TZ,year:"numeric",month:"2-digit",day:"2-digit",hour:"2-digit",minute:"2-digit",second:"2-digit"});
+const dur=(a,b)=>{ if(!b) return "進行中";
+  const s=Math.round((new Date(b)-new Date(a))/1000);
+  return s>=60 ? `${Math.floor(s/60)} 分 ${String(s%60).padStart(2,"0")} 秒` : `${s} 秒`; };
+const num=(v,d=1)=> v==null ? "—" : v.toFixed(d);
+
+/* SINR 分級：門檻與 backend 事件門檻同一出處 */
+const CLS=[{k:"good",l:"良好",c:"var(--sinr-good)",min:13},{k:"fair",l:"尚可",c:"var(--sinr-fair)",min:5},
+           {k:"bad",l:"劣化",c:"var(--sinr-bad)",min:-2},{k:"crit",l:"瀕斷",c:"var(--sinr-crit)",min:-Infinity}];
+const cls=(v)=>CLS.find(c=>v>=c.min)||CLS[3];
+const BARS={good:4,fair:3,bad:2,crit:1};
+
+/** 結束方式：**「上鎖」與「我們看不到它了」是兩件事** */
+const END={disarmed:"上鎖（正常結束）",telemetry_lost:"遙測中斷（不代表飛行結束）",
+  telemetry_lost_backfilled:"遙測中斷，事後由機上補回"};
+
+/* ── 狀態：三種，不特別區分曾經飛過與從來沒有 ────────── */
+function statusOf(d){
+  if(d.demo) return {text:`飛行中 ${P.demo.mode}`, tone:"flying", online:true, rank:0};
+  return {text:"未連線", tone:"off", online:false, rank:3};
+}
+
+function bars(sinr){
+  const c=sinr!=null?cls(sinr):null, lvl=c?BARS[c.k]:0;
+  const s=el("span","bars");
+  for(let i=1;i<=4;i++){
+    const b=el("i"); b.style.height=(3+i*3)+"px";
+    b.style.background = i<=lvl ? c.c : "var(--hairline)";
+    s.appendChild(b);
+  }
+  return s;
+}
+
+/* ── 機列 ─────────────────────────────────────────── */
+const open = new Set([P.drones.find(d=>d.sysid===1)?.id]);   // 開頁即示範展開態
+
+function render(){
+  const box=$("#fleet"); box.textContent="";
+  const list=[...P.drones].map(d=>({d, st:statusOf(d)}))
+    .sort((a,b)=>a.st.rank-b.st.rank || a.d.name.localeCompare(b.d.name));
+  $("#n").textContent = `（${P.drones.length}）`;
+  const flying = list.some(x=>x.st.tone==="flying");
+  $("#reclight").innerHTML = flying
+    ? `<span class="recdot" style="background:var(--rec)"></span><span style="color:var(--rec);font-weight:600">記錄中</span>`
+    : `<span class="recdot"></span>未記錄`;
+
+  for(const {d,st} of list){
+    const card=el("div","card");
+    const row=el("button","row");
+    const dot=el("span","dot"+(st.online?"":" off"));
+    if(st.online) dot.style.background="var(--ok)";
+    row.appendChild(dot);
+    row.appendChild(el("span","nm",d.name));
+    row.appendChild(el("span","state "+st.tone, st.text));
+    if(d.demo){
+      row.appendChild(bars(P.demo.sinr));
+      row.appendChild(el("span","sig-n", `${P.demo.sinr.toFixed(1)} dB`));
+      const b=el("span","batt"); const i=el("i");
+      i.style.width=P.demo.batt+"%"; i.style.background=P.demo.batt<=20?"var(--serious)":"var(--ink-2)";
+      b.appendChild(i); row.appendChild(b);
+      row.appendChild(el("span","sig-n", Math.round(P.demo.batt)+"%"));
+    }
+    if(d.pending>0){
+      const c=el("span","chip warn", `⚠ ${d.pending} 待回傳`);
+      c.title="機上錄好、還沒回傳成功的份數"; row.appendChild(c);
+    }
+    row.appendChild(el("span","spacer"));
+    row.appendChild(el("span","count", `${d.flights} 趟`));
+    row.appendChild(el("span","caret", open.has(d.id)?"▾":"▸"));
+    row.onclick=()=>{ open.has(d.id)?open.delete(d.id):open.add(d.id); render(); };
+    card.appendChild(row);
+
+    // 副行：身分與歷史（弱字）。**幾乎不變的欄位不搶主行**
+    const sub=el("div","sub");
+    if(d.sysid!=null) sub.appendChild(el("span",null,`sysid ${d.sysid}`));
+    if(d.autopilot) sub.appendChild(el("span",null,d.autopilot));
+    if(d.fw) sub.appendChild(el("span",null,d.fw));
+    if(d.last) sub.appendChild(el("span",null,`上次飛行 ${when(d.last)}`));
+    if(!d.sysid && !d.fw && !d.last) sub.appendChild(el("span",null,"還沒有飛過，也還沒收到心跳"));
+    card.appendChild(sub);
+
+    if(open.has(d.id)) card.appendChild(work(d, st));
+    box.appendChild(card);
+  }
+}
+
+/* ── 展開工作區 ────────────────────────────────────── */
+function work(d, st){
+  const w=el("div","work");
+
+  // ① 身分：**兩層可信度分開**（機器覆核 vs 人填）
+  const s1=el("div","sect");
+  const h1=el("h3",null,"身分");
+  h1.appendChild(tip("上排是機器每次連線都會覆核的事實（板子 UID 是飛控板的身分，換機架時它會跟著板子走）；下排是人打的字，代理問不到。兩者可信度不同，所以分開放。留空就是「未填」，不預設值。"));
+  s1.appendChild(h1);
+  const g=el("div","grid2");
+
+  const mach=el("div","box");
+  mach.appendChild(el("div","cap","機器覆核"));
+  const kv1=el("div","kv");
+  kvRow(kv1,"sysid", d.sysid!=null?String(d.sysid):null, "尚未收到心跳");
+  kvRow(kv1,"板子 UID", d.board? d.board.slice(-12):null, "無板子 UID（身分較弱）");
+  kvRow(kv1,"韌體", d.fw, "尚未回報");
+  kvRow(kv1,"自駕儀", d.autopilot, "未見 MAVLink 心跳");
+  kvRow(kv1,"機上代理", d.agent_version, "無機上代理");
+  mach.appendChild(kv1);
+  g.appendChild(mach);
+
+  const human=el("div","box");
+  human.appendChild(el("div","cap","人維護"));
+  const kv2=el("div","kv");
+  kvRow(kv2,"名稱", d.name, null, ()=>edit(d,"名稱","name",d.name,"畫面上到處都用這個名字。改名不影響已經記下的架次。"));
+  kvRow(kv2,"機架序號", d.serial, "未填", ()=>edit(d,"機架序號","serial",d.serial,"機身上的序號，用來對應實體機架。**板子換機時要更新**——板子帶著記錄走，只有人知道它現在裝在哪台機上。"));
+  kvRow(kv2,"型號", d.model, "未填", ()=>edit(d,"型號","model",d.model,"機架型號，如 X500 V2、S500。代理讀得到的是飛控機型（四旋翼／固定翼），不是這個。"));
+  kvRow(kv2,"影像位址", d.video, "未設定", ()=>edit(d,"影像位址","video",d.video,"地圖點機體時開的串流。瀏覽器不支援 RTSP：機上跑 MediaMTX 轉 WHEP，填 http://<機IP>:8889/<路徑>/whep；MJPEG／MP4 亦可。"));
+  human.appendChild(kv2);
+  g.appendChild(human);
+  s1.appendChild(g);
+  w.appendChild(s1);
+
+  // ② 機上錄製與回傳
+  const s2=el("div","sect");
+  const h2=el("h3",null,"機上錄製");
+  h2.appendChild(tip("機上錄的是飛控送出的東西，地面站錄的是送到地面站的東西——**兩者相差的正是斷線那一段**，所以不合併成一份。回傳只在地面進行，一解鎖就停。"));
+  s2.appendChild(h2);
+  const rec=el("div","box");
+  const line=el("div","kv");
+  kvRow(line,"已回傳", d.onboard_files? `${d.onboard_files} 份`:null, "還沒有回傳過");
+  kvRow(line,"待回傳", d.pending? `${d.pending} 份`:null, d.agent_version?"沒有東西要傳":"沒有代理就沒有機上錄製");
+  rec.appendChild(line);
+  const acts=el("div","actions");
+  const b1=el("button","btn","看最近一份紀錄");
+  b1.disabled = !d.onboard_files;
+  b1.title = d.onboard_files? "在網頁上打開索引（訊息型別／機上訊息／模式與曲線）" : "這台機還沒有回傳過完整的機上錄製";
+  b1.onclick=()=>alert("原型：這裡會開紀錄索引 sheet（已在正式站上線）");
+  acts.appendChild(b1);
+  rec.appendChild(acts);
+  s2.appendChild(rec);
+  w.appendChild(s2);
+
+  // ③ 架次
+  const s3=el("div","sect");
+  const h3=el("h3",null,`架次　${d.flights} 趟`);
+  h3.appendChild(tip("一次飛行（解鎖到上鎖）＝一列。SINR 的色點是那一趟的平均落在哪一級。「結束方式」分得出「上鎖」與「我們看不到它了」——後者不代表飛行結束，只代表資料在那裡斷了。點一列開回放。"));
+  s3.appendChild(h3);
+  s3.appendChild(sessTable(d));
+  w.appendChild(s3);
+
+  // ④ 這台機的設定與危險操作
+  const s4=el("div","sect");
+  const h4=el("h3",null,"這台機");
+  s4.appendChild(h4);
+  const a=el("div","actions");
+  if(!d.primary){
+    const b=el("button","btn","設為主機");
+    b.title="MAVLink 收到的遙測記在這台名下（飛行中無法切換）";
+    a.appendChild(b);
+  } else {
+    a.appendChild(el("span","chip","主機"));
+  }
+  if(d.sim) a.appendChild(el("span","chip","模擬"));
+  a.appendChild(el("span","spacer"));
+  const del=el("button","btn danger","刪除這台機");
+  del.disabled = st.online;
+  del.title = st.online ? "連線中的無人機無法刪除" : `刪除記錄與其 ${d.flights} 趟的全部資料`;
+  del.onclick=()=>confirmDelete(d);
+  a.appendChild(del);
+  s4.appendChild(a);
+  w.appendChild(s4);
+  return w;
+}
+
+function kvRow(kv, k, v, emptyText, onEdit){
+  kv.appendChild(el("span","k",k));
+  const s=el("span","v"+(v?"":" empty"), v || emptyText || "—");
+  kv.appendChild(s);
+  if(onEdit){ const b=el("button","mini","編輯"); b.onclick=onEdit; kv.appendChild(b); }
+  else kv.appendChild(el("span"));
+}
+function tip(text){
+  const s=el("span","info","ⓘ"); s.tabIndex=0; s.dataset.tip=text.replace(/\*\*/g,""); return s;
+}
+
+function sessTable(d){
+  if(!d.sessions.length){
+    const e=el("div","empty","尚無架次——一次飛行（解鎖到上鎖）就會出現一列。");
+    return e;
+  }
+  const wrap=el("div","tablewrap");
+  const t=el("table");
+  t.innerHTML=`<thead><tr>
+    <th>開始</th><th>任務</th><th>時長</th>
+    <th style="text-align:right">樣本</th><th style="text-align:right">平均 SINR</th>
+    <th style="text-align:right">最低</th><th style="text-align:right">RTT</th>
+    <th style="text-align:right">最高高度</th><th>事件</th><th>結束方式</th><th></th>
+  </tr></thead>`;
+  const tb=el("tbody");
+  d.sessions.forEach(s=>{
+    const sm=s.sum||{};
+    const tr=el("tr","tap");
+    tr.title="點擊開回放";
+    const c = sm.avg_sinr!=null ? cls(sm.avg_sinr) : null;
+    tr.innerHTML=`
+      <td>${whenFull(s.start).slice(5)}${s.video==="off"?' <span class="evc">未錄影</span>':""}</td>
+      <td>${s.mission ?? "—"}</td>
+      <td>${dur(s.start,s.end)}</td>
+      <td class="n">${sm.samples_total ?? "—"}</td>
+      <td class="n">${c?`<span class="sdot" style="background:${c.c}"></span>`:""}${num(sm.avg_sinr)} dB</td>
+      <td class="n">${num(sm.min_sinr)} dB</td>
+      <td class="n">${num(sm.avg_rtt_ms,0)} ms</td>
+      <td class="n">${num(sm.max_alt_rel,0)} m</td>
+      <td class="evc">${s.ev ?? 0} 則${s.ev_crit?` · <b>${s.ev_crit} 危急</b>`:""}</td>
+      <td>${END[s.end_reason] ?? (s.end_reason ?? "—")}</td>
+      <td class="n"><span class="rowacts"><button class="mini">匯出</button></span></td>`;
+    tb.appendChild(tr);
+  });
+  t.appendChild(tb); wrap.appendChild(t);
+  return wrap;
+}
+
+/* ── modal：✕ 固定右上、label 靠它左邊 ───────────────── */
+const mask=$("#mask");
+function openModal({title, meta, tipText, body, foot}){
+  $("#mTitle").textContent=title;
+  $("#mMeta").textContent=meta||"";
+  const tp=$("#mTip");
+  if(tipText){ tp.hidden=false; tp.dataset.tip=tipText.replace(/\*\*/g,""); } else tp.hidden=true;
+  const b=$("#mBody"); b.textContent=""; b.appendChild(body);
+  const f=$("#mFoot"); f.textContent=""; foot.forEach(x=>f.appendChild(x));
+  mask.hidden=false;
+}
+function closeModal(){ mask.hidden=true; }
+$("#mClose").onclick=closeModal;
+mask.onclick=(e)=>{ if(e.target===mask) closeModal(); };
+document.addEventListener("keydown",(e)=>{ if(e.key==="Escape") closeModal(); });
+
+/** 編輯：**取代 window.prompt**——prompt 放不下說明，也帶不了「留空＝清除」
+ *  這種語意，而這幾個欄位恰恰需要說清楚 */
+function edit(d, label, key, value, tipText){
+  const body=el("div");
+  const f=el("label","field");
+  f.appendChild(el("span",null,label));
+  const inp=el("input"); inp.value=value||""; inp.placeholder="留空＝清除";
+  f.appendChild(inp); body.appendChild(f);
+  body.appendChild(el("div","hint","留空並儲存＝清除這個欄位。這幾個欄位代理問不到，只有人知道。"));
+  const cancel=el("button","btn","取消"); cancel.onclick=closeModal;
+  const save=el("button","btn","儲存");
+  save.onclick=()=>{ d[key]=inp.value.trim()||null; closeModal(); render(); };
+  openModal({title:`編輯${label}`, meta:d.name, tipText, body, foot:[cancel,save]});
+}
+
+/** 刪除：兩段式在 modal 裡完成，**先說會失去什麼** */
+function confirmDelete(d){
+  const body=el("div");
+  body.innerHTML=`<div style="font-size:12.5px;color:var(--ink-2);line-height:1.75">
+    將刪除其 <b>${d.flights} 趟</b>與全部遙測、訊號量測、事件資料，<b>此操作無法復原</b>。<br>
+    關聯的任務路徑不會被刪除，僅解除與此機的關聯。要長期保留就先逐趟「匯出」。
+    ${d.onboard_files?`<br>機上回傳的 <b>${d.onboard_files} 份</b>錄製檔也會一起刪掉。`:""}
+  </div>`;
+  const cancel=el("button","btn","取消"); cancel.onclick=closeModal;
+  const ok=el("button","btn danger","確認刪除");
+  ok.onclick=()=>{ closeModal(); alert("原型：不會真的刪"); };
+  openModal({title:`刪除「${d.name}」？`, meta:"", tipText:null, body, foot:[cancel,ok]});
+}
+
+render();
+})();
+</script>

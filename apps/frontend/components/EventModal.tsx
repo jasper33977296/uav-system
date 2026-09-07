@@ -100,7 +100,7 @@ export default function EventModal({ ev, onClose, mixed = false }: {
           <span className="chip">
             <span className="dot" style={{ background: sev.color }} />{sev.label}
           </span>
-          <button className="btn-plain btn-sm" aria-label="關閉" onClick={onClose}>✕</button>
+          <button className="modal-close" aria-label="關閉（Esc）" title="關閉（Esc）" onClick={onClose}>✕</button>
         </div>
         <div className="evm-body">
         {/* meta 併成一行：時刻 · 來源 ·（有機名才有機名）。

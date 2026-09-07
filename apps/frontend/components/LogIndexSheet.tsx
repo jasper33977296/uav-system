@@ -128,7 +128,7 @@ export default function LogIndexSheet({ url, title, onClose }: {
             </span>
           )}
           <InfoTip tip="欄位值與單位都是線上原樣，沒有換算（cdegC、degE7 那些就是機上送出來的形式）。曲線是原始樣本的抽樣，不做平滑也不插值。只有振動畫參考線——30／60 是 PX4 與 ArduPilot 共用的判讀門檻，其餘幾條沒有權威門檻就不畫。" />
-          <button className="btn-plain btn-sm" aria-label="關閉" onClick={onClose}>✕</button>
+          <button className="modal-close" aria-label="關閉（Esc）" title="關閉（Esc）" onClick={onClose}>✕</button>
         </div>
 
         {err && <div className="form-err">{err}</div>}

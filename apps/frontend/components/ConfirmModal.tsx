@@ -29,8 +29,7 @@ export default function ConfirmModal({
         <div className="modal-head">
           <span className="name">{title}</span>
           <span className="spacer" />
-          <button className="btn-plain btn-sm" aria-label="關閉（Esc）"
-            title="關閉（Esc）" onClick={onClose}>✕</button>
+          <button className="modal-close" aria-label="關閉（Esc）" title="關閉（Esc）" onClick={onClose}>✕</button>
         </div>
         <div className="modal-text">{children}</div>
         <div className="modal-actions">

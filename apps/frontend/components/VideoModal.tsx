@@ -63,8 +63,7 @@ export default function VideoModal({ droneId, name, color, onClose }: Props) {
             </button>
           )}{" "}
           {/* ✕ 固定右上，其餘 label／切換鈕在它左邊（全站 modal 同形） */}
-          <button className="btn-plain btn-sm" aria-label="關閉（Esc）"
-            title="關閉（Esc）" onClick={onClose}>✕</button>
+          <button className="modal-close" aria-label="關閉（Esc）" title="關閉（Esc）" onClick={onClose}>✕</button>
         </div>
 
         {showAll ? (

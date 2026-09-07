@@ -1524,3 +1524,20 @@ details.card summary { cursor: pointer; font-size: 14px; font-weight: 600; }
   display: flex; flex-wrap: wrap; gap: 4px 12px; margin: 4px 0 0 18px;
   font-size: 11px; color: var(--muted); font-variant-numeric: tabular-nums;
 }
+
+/* ── modal 的關閉鍵：**貼齊卡片右上角**（使用者定案 2026-09-08）───────
+   原本它是 head 那一列的最後一個 flex 子元素，於是被 head 的 padding
+   往內推了 15px——「在右邊」不等於「在右上角」。改成絕對定位釘住角落，
+   其餘 label（嚴重度、檔案 meta、切換鈕、ⓘ）排在它左邊。
+   head 留出右側空間，內容不會滑到它底下。 */
+.evm, .logx, .insp, .modal { position: relative; }
+.modal-close {
+  position: absolute; top: 8px; right: 8px; z-index: 3;
+  width: 26px; height: 26px; padding: 0; display: grid; place-items: center;
+  border: 1px solid var(--hairline); border-radius: 7px;
+  background: var(--surface); color: var(--muted);
+  font-size: 12px; line-height: 1; cursor: pointer;
+}
+.modal-close:hover { color: var(--ink); border-color: var(--border); background: var(--surface-2); }
+.evm-head, .modal-head { padding-right: 42px; }
+.insp .evm-head { padding-right: 42px; }
