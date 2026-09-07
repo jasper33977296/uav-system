@@ -97,16 +97,38 @@ for r in rows[::step]:
     bar = "█" * int(max(0, (v - a.cutoff) / max(v0 - a.cutoff, 0.01)) * 30)
     print(f"  {t:5.2f}h  {v:6.3f} V  {v / a.cells:.3f}/格  {bar}")
 
-print(f"""
-── 結束前一定要做的事 ────────────────────────────────────
-**拔電之前先讀飛控的累積消耗 mAh**：那是 RAM 裡的累加器，斷電就歸零，
-而它正是電流刻度校正的一半。在機上跑：
+# ── 電流與累積消耗：從地面站的原始層讀 ──────────────────────────────
+# **不必上機、不必停代理。** `BATTERY_STATUS` 每秒都在進地面站的 tlog
+# （014 原始層逐框架落盤），裡面就有 `current_consumed` 與 `current_battery`。
+# 停代理的理由只是序列埠獨佔，而地面站這邊本來就有同一份資料。
+import datetime
+import pathlib as _pl
 
-    sudo systemctl stop uav-agent
-    ./venv/bin/python calibrate-battery.py --check --check-seconds 60
-    sudo systemctl start uav-agent
+day = datetime.datetime.now(datetime.timezone.utc).strftime("%Y%m%d")
+helper = _pl.Path(__file__).with_name("_tlog_battery.py").read_text()
+r = subprocess.run(["docker", "exec", "-i", "uav-backend", "python", "-",
+                    f"/data/mavcap/{day}.tlog"],
+                   input=helper, capture_output=True, text=True)
+out = (r.stdout or "").strip().split()
+print("\n── 飛控的電流積分（來自地面站原始層）────────────────")
+if len(out) == 3:
+    mah, amp, rem = int(out[0]), float(out[1]), int(out[2])
+    print(f"  已耗 {mah} mAh｜當下電流 {amp:.2f} A｜飛控算的剩餘 {rem}%")
+    if amp > 0.01:
+        print(f"  依此電流，4200 mAh 放完約 {4200 / (amp * 1000):.1f} 小時")
+    print("  ⚠ **這個電流本身還沒校正過**（BATT_AMP_PERVLT=59.5 從未驗證）——"
+          "所以它與上面的電壓外推**互為佐證**，兩者差很多就是刻度有問題")
+else:
+    why = (r.stdout or r.stderr or "?").strip()[:120]
+    print(f"  讀不到（{why}）")
 
-充回去之後，用充電器顯示的 mAh 與上面讀到的數字做校正：
+print("""
+── 結束時要做的事 ────────────────────────────────────────
+**拔電前先跑一次這支**，把最後的「已耗 mAh」記下來——那是 RAM 裡的累加器，
+斷電就歸零，而它正是電流刻度校正的一半。（不必停代理：上面那個數字是從
+地面站的原始層讀的。）
+
+充回去之後，用充電器顯示的 mAh 與它做校正：
 
     ./venv/bin/python calibrate-battery.py --charged-mah <充電器> --reported-mah <飛控>
 """)
