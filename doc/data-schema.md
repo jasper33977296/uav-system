@@ -195,7 +195,7 @@ mission_groups ─< group_assignments                (CASCADE)
 | 狀態 | `flight_mode` text、`armed` bool |
 | 原始 | `raw` jsonb（不常用訊息，需求變更不必一直 migrate） |
 
-### 3.6 `link_metrics` — 5G 鏈路品質（hypertable，1Hz）**研究核心**
+### 3.6 `link_metrics` — 5G 鏈路品質（hypertable，取樣率見下）**研究核心**
 
 | 欄位群 | 欄位 | 說明 |
 |---|---|---|
@@ -213,6 +213,11 @@ mission_groups ─< group_assignments                (CASCADE)
 **什麼時候有資料**：只有**離地期間**（2026-09-07 使用者裁定）。閘門在機上，
 判準是 `landed_state`（退回高度＋地速），**不知道就記**——飛行中的量測補不
 回來。停在地面上不入庫，即時畫面照樣看得到。見 `doc/onboard-telemetry.md`。
+
+**取樣率**：由機上 `--modem-interval` 決定（預設 1.0s）。**這裡原本寫死
+「1Hz」，而實際是 0.38 Hz**——2026-09-07 修掉兩個計時錯誤之後才真的是設定值
+（見 `onboard-telemetry.md`）。取樣與即時傳送已分家：**取樣可以更密，
+`/live` 仍是每秒一次**，所以這張表的密度不再被畫面的需求綁住。
 
 ### 3.7 `events` — 事件
 
