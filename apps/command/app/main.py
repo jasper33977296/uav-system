@@ -36,7 +36,7 @@ _client_var: contextvars.ContextVar = contextvars.ContextVar("client", default=N
 from . import capabilities as caps
 import plan_check          # libs/ 的共用實作（PYTHONPATH=/srv/libs）
 
-from . import admission, group_exec, guard_client, mav, plans
+from . import admission, group_exec, guard_client, mav, params as fcparams, plans
 from .config import settings
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(name)s %(message)s")
@@ -449,6 +449,76 @@ async def set_mode(sysid: int, mode: str, skip_guard: bool = False):
     if not skip_guard:
         await guard_client.ask_guard(sysid, f"mode:{mode}")
     return await _run(sysid, f"mode:{mode}", mav.job_set_mode, mode)
+
+
+class ParamWrite(BaseModel):
+    #: {參數名: 值}。只接受 params.ALLOWED 裡的名字
+    params: dict[str, float]
+
+
+@app.get("/api/command/{sysid}/params", tags=["參數"],
+         summary="讀回可修改的飛控參數（現值）")
+async def get_params(sysid: int):
+    """**現值一律直接跟飛控要，不查資料庫。**
+
+    後端確實存了整份參數快照（`param_sets`），但那是「某一趟飛行當時是什麼」。
+    有人用 QGC 改過之後那份就是舊的，而這個畫面接下來要拿它當「改之前的值」
+    ——**拿一個舊值當現值，比不顯示更糟**。
+    """
+    _require_enabled()
+    await _require_capability(sysid, "param_get")
+    res = await _run(sysid, "param_get", mav.job_get_params,
+                     list(fcparams.ALLOWED), params={"names": len(fcparams.ALLOWED)})
+    return {
+        "values": res["values"],
+        "missing": res["missing"],
+        # 畫面要有範圍與單位才畫得出可用的輸入格（白名單存在的理由之一）
+        "meta": {k: {"label": p.label, "unit": p.unit, "lo": p.lo, "hi": p.hi,
+                     "why": p.why, "is_int": p.is_int}
+                 for k, p in fcparams.ALLOWED.items()},
+    }
+
+
+@app.post("/api/command/{sysid}/params", tags=["參數"],
+          summary="改飛控參數（白名單、只在未解鎖時）")
+async def set_params(sysid: int, body: ParamWrite):
+    """**白名單 ＋ 只在未解鎖時 ＋ 逐個讀回比對。**（2026-09-07 使用者裁定）
+
+    在這之前本系統一個參數都不寫。改的是「參數編輯是 QGC 的職權」那一層；
+    **後端那條 socket 維持唯讀**——它是遙測與錄製的路，永遠不該成為指令的
+    來源，所以寫入做在這裡而不是那裡。
+
+    三道自己的門（都在共用的入列／能力門之外另外加的）：
+
+    1. **名字不在白名單就 400**，連送都不送（見 `params.ALLOWED`）。
+    2. **超出範圍就 400**，附上那個參數為什麼有範圍。
+    3. **解鎖中一律 409**：參數在飛行中生效的時點難以預測，而改錯的後果
+       在天上才出現。要在飛行中調的東西不該走這條路。
+
+    寫入後**逐個讀回比對**（同任務上傳的紀律）。飛控會自己夾值而且不告訴你，
+    所以夾過的情況照實回報在 `clamped` 裡——那不是失敗（它確實接受了一個值），
+    但也不是成功（那不是你要的值）。
+    """
+    _require_enabled()
+    if not body.params:
+        raise HTTPException(422, "沒有要改的參數")
+    bad = [msg for n, v in body.params.items()
+           if (msg := fcparams.validate(n, v)) is not None]
+    if bad:
+        await _refused(sysid, "param_set", "白名單", "；".join(bad),
+                       {"params": body.params})
+        raise HTTPException(400, {"msg": "參數不能改", "problems": bad})
+    await _require_capability(sysid, "param_set")
+    # **解鎖中不寫。** 這一道排在入列／能力之後：先確認是我們的機、
+    # 再談它現在的狀態
+    if (router.drones.get(sysid) or {}).get("armed"):
+        why = "解鎖中不改參數——參數生效的時點難以預測，而改錯的後果在天上才出現"
+        await _refused(sysid, "param_set", "解鎖", why, {"params": body.params})
+        raise HTTPException(409, {"code": "armed", "msg": why,
+                                  "hint": "先上鎖再改；要在飛行中調整的東西不該走這條路"})
+    res = await _run(sysid, "param_set", mav.job_set_params, body.params,
+                     params=body.params)
+    return res
 
 
 @app.post("/api/command/{sysid}/emergency/land", tags=["操作"],

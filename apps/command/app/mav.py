@@ -470,6 +470,112 @@ def job_mission_goto(r: MavRouter, sysid: int, index: int) -> dict:
             "verified_by": "MISSION_CURRENT 讀回"}
 
 
+def _param_read(r: MavRouter, sysid: int, name: str, timeout: float = 1.5):
+    """讀一個參數的**現值與型別**。回 `PARAM_VALUE` 或 None。
+
+    型別要讀回來不能猜：`PARAM_SET` 的 `param_value` 一律是 float，但
+    `param_type` 得對——用浮點型別去寫一個整數參數，ArduPilot 存進去的
+    會是**別的數字**。所以流程一定是「先讀（拿型別）→ 再寫 → 再讀（驗證）」。
+    """
+    enc = name.encode()[:16]
+    for _ in range(3):
+        r._sendto(sysid, lambda m: m.param_request_read_encode(sysid, 1, enc, -1))
+        msg = r._wait(sysid, ("PARAM_VALUE",),
+                      lambda x: x.param_id.strip("\x00") == name, timeout)
+        if msg is not None:
+            return msg
+    return None
+
+
+def job_get_params(r: MavRouter, sysid: int, names: list) -> dict:
+    """讀一批參數。讀不到的**列在 `missing` 裡，不填 0**——「這台機沒有這個
+    參數」與「這個參數是 0」是完全不同的兩件事，而 0 在這裡多半是合法值。
+
+    **先把請求全部送出去，再一起收。** 逐個「送→等 3 秒」在 8 個參數上就是
+    最壞 24 秒，已經超過 `JOB_TIMEOUT_S`（實測 2026-09-07 真的逾時了）。
+    參數讀取本來就是一問一答的獨立對話，沒有順序需求。
+    """
+    # **param_id 必須是 bytes。** pymavlink 2.4.49 對 str 直接
+    # `TypeError: must be str or None, not bytes`（2026-09-07 在容器裡實測）
+    want = {n: n.encode()[:16] for n in names}
+    values: dict[str, float] = {}
+    other = 0                 # 期間收到的其他訊息數：用來分辨「鏈路斷了」與
+                              # 「鏈路通、但參數對話被丟掉」
+    for attempt in range(3):
+        pending = [n for n in names if n not in values]
+        if not pending:
+            break
+        for n in pending:
+            r._sendto(sysid, lambda m, e=want[n]: m.param_request_read_encode(
+                sysid, 1, e, -1))
+        # 一輪收 3 秒：**收到誰算誰**，不管順序（飛控回覆的順序不保證）
+        deadline = time.monotonic() + 3.0
+        while time.monotonic() < deadline and len(values) < len(names):
+            msg = r._recv(0.3)
+            if msg is None:
+                continue
+            other += 1
+            if msg.get_type() != "PARAM_VALUE" or msg.get_srcSystem() != sysid:
+                continue
+            pid = msg.param_id
+            pid = pid.decode() if isinstance(pid, bytes) else pid
+            pid = pid.strip("\x00")
+            if pid in names:
+                values[pid] = float(msg.param_value)
+    # **一個都沒回來、但這條 socket 明明在收東西**——那不是「這台機沒有這些
+    # 參數」，是**問句或答句在半路被丟掉了**。兩者在回應上完全同形，而處置
+    # 完全不同（前者去查機型，後者去查機上代理的轉發清單），所以這裡分開講。
+    if not values and other > 0:
+        raise CommandError(
+            f"飛控沒有回任何 PARAM_VALUE（這段期間這條鏈路收到 {other} 則其他"
+            "訊息，所以鏈路是通的）。問句或答句其中一個在半路被丟掉了——"
+            "先確認機上代理的上行／下行轉發有沒有把 PARAM_REQUEST_READ 與 "
+            "PARAM_VALUE 放行")
+    return {"values": values,
+            "missing": [n for n in names if n not in values]}
+
+
+def job_set_params(r: MavRouter, sysid: int, items: dict) -> dict:
+    """寫一批參數，**每一個都讀回來比對**。
+
+    比對不過就 `CommandError`——與任務上傳同一條紀律：**沒有讀回確認就不算
+    寫成功**。飛控對 `PARAM_SET` 不回 ACK，它回的是一則 `PARAM_VALUE`；
+    那則可能因為丟包而收不到，也可能因為值被飛控自己夾過而與送出的不同
+    （ArduPilot 會夾，而且不會告訴你）。兩種情況都必須讓操作員看見。
+
+    **逐個寫、逐個驗**，不批次：一批裡有一個沒過時，說得出是哪一個。
+    """
+    written, clamped = {}, []
+    for name, want in items.items():
+        cur = _param_read(r, sysid, name)
+        if cur is None:
+            raise CommandError(f"讀不到參數 {name}——這台機可能沒有這個參數")
+        ptype = cur.param_type
+        enc = name.encode()[:16]
+        got = None
+        for _ in range(3):
+            r._sendto(sysid, lambda m, e=enc, w=want, t=ptype:
+                      m.param_set_encode(sysid, 1, e, float(w), t))
+            msg = r._wait(sysid, ("PARAM_VALUE",),
+                          lambda x, n=name: x.param_id.strip("\x00") == n, 3.0)
+            if msg is not None:
+                got = float(msg.param_value)
+                break
+        if got is None:
+            # 再主動讀一次：PARAM_VALUE 的回覆可能在路上掉了，而參數其實寫進去了
+            re = _param_read(r, sysid, name)
+            if re is None:
+                raise CommandError(f"{name} 寫出去了，但讀不回來——現在的值不明")
+            got = float(re.param_value)
+        if abs(got - float(want)) > 1e-4:
+            # **飛控把值夾掉了**。不是失敗（它確實接受了一個值），但也不是
+            # 成功（那不是你要的值）——照實回報，讓操作員自己判斷
+            clamped.append(f"{name}：送出 {want:g}，飛控存成 {got:g}")
+        written[name] = got
+    return {"written": written, "clamped": clamped,
+            "verified": not clamped, "accepted": True}
+
+
 def job_set_mode(r: MavRouter, sysid: int, mode: str,
                  retries: int = 3, verify_timeout: float = 3.0) -> dict:
     """切模式 → ACK → **驗證真的切了**（HEARTBEAT.custom_mode 轉到目標）。
