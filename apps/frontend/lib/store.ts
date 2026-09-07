@@ -262,8 +262,14 @@ export const useUavStore = create<UavStore>((set) => ({
     }),
   events: [],
   sinrHistories: {},
-  panelOpen: false,
-  setPanelOpen: (v) => set({ panelOpen: v }),
+  // **常駐**（使用者定案 2026-09-08，推翻 08-04「開頁即全幅地圖」）：
+  // 訊號、事件、紀錄是飛行中一直要掃的東西，藏在抽屜後面等於每次都要先點一下。
+  // ▤ 仍可收起（要全幅地圖時），而且記得使用者的選擇
+  panelOpen: true,
+  setPanelOpen: (v) => {
+    try { localStorage.setItem("panel-open", v ? "1" : "0"); } catch { /* 隱私模式 */ }
+    set({ panelOpen: v });
+  },
   denial: null,
   noticeDenied: (action, text) =>
     set({ denial: { at: Date.now(), action, text } }),

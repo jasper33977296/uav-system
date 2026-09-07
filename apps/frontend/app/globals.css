@@ -1481,3 +1481,12 @@ details.card summary { cursor: pointer; font-size: 14px; font-weight: 600; }
 .logx-chart h4 span { font-weight: 400; font-size: 11px; color: var(--muted); }
 .logx-chart svg { width: 100%; height: 104px; display: block; }
 .logx-band { height: 38px; }
+
+/* 機況／紀錄卡的一行式事實（components/SidePanel.tsx）：label 弱、值強，
+   同一列可容納多組，過舊時整格換成「—」（不是變灰）。 */
+.facts { display: flex; flex-wrap: wrap; gap: 4px 14px; }
+.fact { display: flex; align-items: baseline; gap: 5px; }
+.fact-k { font-size: 11px; color: var(--muted); }
+.fact-v { font-size: 12px; color: var(--ink); font-variant-numeric: tabular-nums; }
+.fact-v.dim { color: var(--muted); }
+.fact-v.rec-on { color: #d03b3b; font-weight: 600; }

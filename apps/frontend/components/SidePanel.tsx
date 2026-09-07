@@ -2,9 +2,11 @@
 import { useEffect, useRef, useState } from "react";
 
 import InfoTip from "@/components/InfoTip";
+import LogIndexSheet from "@/components/LogIndexSheet";
 import OnboardDataCard from "@/components/OnboardData";
 import { EventsCard } from "@/components/SimpleHud";
-import { classifySinr } from "@/lib/signal";
+import { API, classifySinr } from "@/lib/signal";
+import { ageText, staleLevel } from "@/lib/staleness";
 import { type ImuData, type Telemetry, useUavStore } from "@/lib/store";
 
 function Metric({ label, value, unit, derived }: {
@@ -251,6 +253,129 @@ function PosRow({ live }: { live: Telemetry | null }) {
   </>);
 }
 
+/** ① 機況：**只放「會變、且看一眼就要知道」的事實**（原型第一張卡）。
+ *
+ * 機型、板號、韌體版本這類幾乎不變的欄位在無人機頁，不佔即時畫面。
+ * 過舊的數值不留在畫面上（`staleLevel`）——一個灰色的「LOITER」還是一個模式，
+ * 人讀到的仍然是「它在 LOITER」。 */
+function StatusCard({ live }: { live: Telemetry | null }) {
+  const lv = staleLevel(live?.telem_age_s);
+  const old = lv === "old" || lv === "never";
+  const F = ({ k, v, dim }: { k: string; v: string; dim?: boolean }) => (
+    <div className="fact">
+      <span className="fact-k">{k}</span>
+      <span className={`fact-v${dim ? " dim" : ""}`}>{v}</span>
+    </div>
+  );
+  return (
+    <div className="card">
+      <h3>{live?.drone_name ?? "無人機"}
+        <span className="spacer" />
+        <InfoTip tip="這一列只放會變、而且看一眼就要知道的事實。機型、板號、韌體版本那些幾乎不變的欄位在無人機頁。數值過舊時整格換成「—」——灰色的數字讀起來還是一個數字。" />
+      </h3>
+      {!live ? (
+        // **這句話說的是我方**：還沒收到任何一筆。它不宣告「沒有機在線」——
+        // 那是另一件事，而且我們沒有依據（§0.2e）
+        <div className="empty">還沒有收到任何遙測。</div>
+      ) : (
+        <div className="facts">
+          <F k="模式" v={old || !live.flight_mode ? "—" : live.flight_mode} dim={old} />
+          <F k="鎖" v={old ? "—" : live.armed ? "已解鎖" : "上鎖"} dim={old} />
+          <F k="GPS" v={old || live.gps_fix == null ? "—"
+            : `fix ${live.gps_fix}${live.satellites != null ? ` · ${live.satellites} 顆` : ""}`}
+            dim={old} />
+          <F k="電壓" v={old || live.battery_voltage == null ? "—"
+            : `${live.battery_voltage.toFixed(2)} V`} dim={old} />
+          <F k="最後遙測" v={ageText(live.telem_age_s)} dim={lv !== "live"} />
+        </div>
+      )}
+    </div>
+  );
+}
+
+/** ④ 紀錄：**現在有沒有在記、機上那份回來了沒、要看就在這裡打開**。
+ *
+ * 這張卡不輪詢清單端點（`/api/captures` 會掃目錄，它的 docstring 明說「是人
+ * 按出來的，不是熱路徑」）——回傳現況直接讀代理推上來的狀態（WS），檔案清單
+ * 只在按下「看最近一份」時抓一次。 */
+function RecordCard({ live }: { live: Telemetry | null }) {
+  const agents = useUavStore((s) => s.agents);
+  const [sheet, setSheet] = useState<{ url: string; title: string } | null>(null);
+  const [busy, setBusy] = useState(false);
+  const [note, setNote] = useState<string | null>(null);
+  const rec = Boolean(live?.armed && live?.session_id);
+  const ag = live?.drone_id ? agents[live.drone_id] : undefined;
+  const up = ag?.record_upload;
+
+  const openLatest = async () => {
+    setBusy(true); setNote(null);
+    try {
+      const r = await fetch(`${API}/api/onboard-captures`);
+      if (!r.ok) throw new Error(`HTTP ${r.status}`);
+      const d = await r.json();
+      const files = (d.files ?? []).filter((f: { drone_id: string; status: string }) =>
+        f.status === "complete" && (!live?.drone_id || f.drone_id === live.drone_id));
+      if (!files.length) {
+        // **「還沒有回傳」與「取不到」不同形**：這句話說的是前者
+        setNote("這台機還沒有回傳過完整的機上錄製——飛一趟落地後再看。");
+      } else {
+        const f = files[0];
+        setSheet({ url: `${API}${f.url}/index`, title: `${f.name} · ${f.drone_name ?? ""}` });
+      }
+    } catch (e) {
+      setNote(`取不到錄製清單：${(e as Error).message}`);
+    }
+    setBusy(false);
+  };
+
+  return (
+    <div className="card">
+      <h3>紀錄
+        <span className="spacer" />
+        <InfoTip tip="「記錄中」的語意是現在的資料有沒有被寫進資料庫（armed 且已建立架次——待機時系統刻意不入庫）。機上錄製是另一份：飛控送出的東西，斷線那幾段只有它有。回傳要落地才會開始。" />
+      </h3>
+      <div className="facts">
+        <div className="fact">
+          <span className="fact-k">遙測</span>
+          <span className={`fact-v${rec ? " rec-on" : " dim"}`}>
+            {rec ? "記錄中" : "未記錄"}
+          </span>
+        </div>
+        {live?.video_mode && (
+          <div className="fact">
+            <span className="fact-k">影像</span>
+            <span className="fact-v">
+              {live.video_mode === "on" ? "有錄"
+                : live.video_mode === "off" ? "未錄影" : "沒有影像源"}
+            </span>
+          </div>
+        )}
+        <div className="fact">
+          <span className="fact-k">機上</span>
+          <span className={`fact-v${ag ? "" : " dim"}`}>
+            {!ag ? "沒有代理"
+              : !ag.fresh ? "不知道（代理沒在推）"
+                : !up ? "看不到回傳狀況"
+                  : up.current ? `回傳中 ${up.current}`
+                    : up.pending > 0 ? `待回傳 ${up.pending} 份`
+                      : "已同步"}
+          </span>
+        </div>
+      </div>
+      <div className="cmd-row" style={{ marginTop: 8 }}>
+        <button className="btn-plain btn-sm" disabled={busy} onClick={openLatest}>
+          {busy ? "查詢中…" : "看最近一份紀錄"}
+        </button>
+      </div>
+      {note && <div className="hint-line">{note}</div>}
+      {sheet && (
+        <LogIndexSheet url={sheet.url} title={sheet.title}
+          onClose={() => setSheet(null)} />
+      )}
+    </div>
+  );
+}
+
 export default function SidePanel() {
   const { live, primaryId, selectedId, sinrHistories } = useUavStore();
   const link = live?.link;
@@ -275,6 +400,8 @@ export default function SidePanel() {
   // 不與畫面上任何元素重複
   return (
     <aside className="panel">
+      <StatusCard live={live} />
+
       <div className="card">
         <h3>訊號品質<InfoTip tip="大字＝最新一筆 SINR。走勢圖裡細線是原始樣本、粗線是 2 秒滑動平均——只畫平滑線會產生量測點之間沒有量到的值。分級門檻與 backend 的事件門檻同一出處。" /></h3>
         <div className="hero">
@@ -327,17 +454,17 @@ export default function SidePanel() {
         {/* 圖例回歸地圖左下常駐（ui-spec §2 使用者定案）——不在卡內 */}
       </div>
 
-      {/* IMU 卡（§2.6，原專業數值卡改造）：就緒/模式/GPS 與面板狀態列重複
-          已刪；機型 chip 移任務控制面板對象行；航向併入 Yaw */}
-      <ImuCard live={live} />
-
-      {/* 事件卡（使用者二次修訂）：住抽屜、IMU 卡下方 */}
+      {/* 事件卡：**訊號之後就是它**（原型第③段，使用者核准 2026-09-08 常駐版）。
+          原本排在 IMU 之下——而 IMU 是排查用的原始層、不是飛行中一直在變的東西，
+          把每次都要掃的事件流擠到第三張卡以下 */}
       <EventsCard />
 
-      {/* 機上資料（§2.8）**排到事件卡下面**（使用者指示 2026-09-07：
-          「這個沒那重要」）。感測健康位與訊息統計是**排查用的原始層**，
-          不是飛行中要盯的東西；擺在事件卡上方等於每次開抽屜都先讀一排
-          點點，把真正會變化的事件擠到下面去 */}
+      {/* 紀錄（原型第④段）：現在有沒有在記、機上那份回來了沒、要看就在這裡開 */}
+      <RecordCard live={live} />
+
+      {/* 以下是排查層，順序照使用者 2026-09-07 的指示：IMU 在上、機上資料最後
+          （「這個沒那重要」）*/}
+      <ImuCard live={live} />
       <OnboardDataCard />
     </aside>
   );
