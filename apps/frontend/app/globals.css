@@ -1580,3 +1580,37 @@ details.card summary { cursor: pointer; font-size: 14px; font-weight: 600; }
   display: grid; place-items: center; font-size: 10px; color: var(--accent); flex: none;
 }
 .squad-pickname { font-size: 12.5px; color: var(--ink); }
+
+/* ── 機隊頁展開後的工作區（app/drones/page.tsx DroneWork）─────────
+   四段：身分／機上錄製／架次／這台機。kv 用固定標籤欄，值靠左對齊成一欄
+   ——標籤寬度不一時值會參差，讀起來像每列都在不同位置。 */
+.dw { display: flex; flex-direction: column; gap: 12px; padding: 10px 2px 2px; }
+.dw-sect { display: flex; flex-direction: column; gap: 7px; }
+.dw-sect h3 {
+  font-size: 12px; font-weight: 600; color: var(--ink-2);
+  display: flex; align-items: center; gap: 7px;
+}
+.dw-box {
+  background: var(--page); border: 1px solid var(--hairline); border-radius: 10px;
+  padding: 9px 11px; display: flex; flex-direction: column; gap: 5px;
+}
+.dw-kv {
+  display: grid; grid-template-columns: 84px minmax(0, 1fr) auto;
+  gap: 4px 12px; align-items: baseline; font-size: 12.5px;
+}
+.dw-k { font-size: 11px; color: var(--muted); }
+.dw-v {
+  color: var(--ink); font-variant-numeric: tabular-nums;
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace; word-break: break-all;
+}
+.dw-empty { color: var(--muted); font-family: inherit; }
+.dw-acts { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; margin-top: 4px; }
+.dw-acts .spacer { flex: 1; }
+.dw-tablewrap { overflow-x: auto; }
+.dw-sdot {
+  width: 7px; height: 7px; border-radius: 50%; display: inline-block;
+  margin-right: 6px; vertical-align: 1px;
+}
+.dw-ev { font-size: 11px; color: var(--muted); }
+.dw-ev b { color: #f0a5a5; font-weight: 600; }
+.btn-xs { font-size: 11px; padding: 1px 7px; }
