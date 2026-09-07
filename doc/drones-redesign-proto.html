@@ -65,8 +65,11 @@ button{background:none;border:none;cursor:pointer}
 .dot{width:9px;height:9px;border-radius:50%;flex:none}
 .dot.off{background:none;border:1.5px solid var(--muted)}
 .nm{font-size:14px;font-weight:700;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
-.state{font-size:12px;white-space:nowrap}
-.state.flying{color:var(--rec);font-weight:600}
+.state{font-size:12.5px;white-space:nowrap;letter-spacing:.01em}
+/* 飛行中用亮一階的紅（#d03b3b 在暖炭黑上偏糊）；模式另外一格，不併進狀態句 */
+.state.flying{color:#e05e5e;font-weight:700}
+.mode{font-family:var(--mono);font-size:11.5px;color:var(--ink-2);
+  background:var(--surface-2);border-radius:5px;padding:1px 7px;white-space:nowrap}
 .state.on{color:var(--ok)}
 .state.off{color:var(--muted)}
 .bars{display:inline-flex;align-items:flex-end;gap:2px;height:14px}
@@ -124,6 +127,26 @@ tr.tap:hover td{background:var(--surface-2)}
 .empty{color:var(--muted);font-size:12px;padding:10px 2px}
 .hint{font-size:11px;color:var(--muted);line-height:1.7}
 
+/* ── 小隊 ──────────────────────────────────────────── */
+.grp{padding:10px 12px;display:flex;flex-direction:column;gap:7px}
+.grp-head{display:flex;align-items:center;gap:9px;flex-wrap:wrap}
+.grp-name{font-size:13.5px;font-weight:700}
+.grp-meta{font-size:11px;color:var(--muted);font-variant-numeric:tabular-nums}
+.grp-members{display:flex;gap:6px;flex-wrap:wrap}
+.member{display:inline-flex;align-items:center;gap:6px;padding:3px 9px;border-radius:8px;
+  background:var(--page);border:1px solid var(--hairline);font-size:12px;color:var(--ink-2)}
+.member .dot{width:7px;height:7px}
+.grp-empty{font-size:12px;color:var(--muted)}
+.pickrow{display:flex;align-items:center;gap:9px;padding:7px 9px;border-radius:8px;
+  border:1px solid var(--hairline);background:var(--page);cursor:pointer;width:100%;text-align:left}
+.pickrow:hover{background:var(--surface-2)}
+.pickrow[aria-pressed="true"]{border-color:var(--accent);background:var(--accent-bg)}
+.pickbox{width:15px;height:15px;border-radius:4px;border:1.5px solid var(--muted);
+  display:grid;place-items:center;font-size:10px;color:var(--accent);flex:none}
+/* 小隊 chip 用中性色：**accent 只准互動 chrome**（design-tokens 鐵則），
+   而這是一個標籤不是按鈕 */
+.chip.grp{background:var(--surface-2);color:var(--ink-2);border:1px solid var(--hairline)}
+
 /* ── modal（全站同形：✕ 固定右上、label 靠左邊）──────── */
 .mask{position:fixed;inset:0;background:rgba(12,11,9,.62);z-index:60;display:grid;place-items:center;padding:20px}
 .mask[hidden]{display:none}
@@ -159,10 +182,18 @@ label.field input{background:var(--page);border:1px solid var(--hairline);border
     <div class="head">
       <h1>機隊<span id="n"></span></h1>
       <span class="spacer"></span>
-      <span class="info" tabindex="0" data-tip="需要注意的排前面，不照註冊順序：飛行中 → 在線 → 有待回傳 → 未連線。副行的「上次飛行」說得出這台機最後一趟是什麼時候，沒有值就是還沒飛過。點一列展開那台機的身分、回傳與架次。">ⓘ</span>
+      <span class="info" tabindex="0" data-tip="需要注意的排前面，不照註冊順序：飛行中 → 在線 → 有待回傳 → 未連線。副行的「上次飛行」說得出這台機最後一趟是什麼時候，沒有值就是還沒飛過。點一列展開那台機的身分、回傳與架次。（原型：第一列套用 09/07 16:28 那趟的真實遙測示範飛行中；小隊是示範資料，後端還沒有這張表。其餘數字都是資料庫現況。）">ⓘ</span>
     </div>
-    <div class="notice">
-      <span><b>原型</b>　第一列套用 09/07 16:28 那趟的真實遙測當「飛行中」示範；實際此刻三台都未連線。其餘數字（架次、SINR、機上檔案）全部是資料庫現況。</span>
+    <div class="head" style="margin-top:4px">
+      <h1 style="font-size:13.5px">小隊<span id="gn"></span></h1>
+      <button class="btn" id="gAdd">＋ 新增小隊</button>
+      <span class="spacer"></span>
+      <span class="info" tabindex="0" data-tip="小隊＝固定編組，在這裡先組好，要派群飛任務時直接選一隊，不必每次重新勾機。一台機可以在多個小隊裡（同一台機在不同實驗扮不同角色是常事）。小隊只是名單，不會替你決定隊形或高度分層——那些在派任務時才決定。">ⓘ</span>
+    </div>
+    <div id="groups"></div>
+
+    <div class="head" style="margin-top:8px">
+      <h1 style="font-size:13.5px">全部無人機</h1>
     </div>
     <div id="fleet"></div>
   </div>
@@ -182,7 +213,7 @@ label.field input{background:var(--page);border:1px solid var(--hairline);border
   </div>
 </div>
 
-<script>__DATA__</script>
+<script>window.PROTO={"drones":[{"id":"9b4c4ca0-2491-4b0b-afad-fc407c75e940","name":"ai-model-rb5 [啪 沒了]","sysid":null,"fw":null,"board":null,"primary":false,"sim":false,"model":null,"serial":null,"video":"http://10.141.2.32:8889/uav-1/whep","autopilot":null,"flights":23,"last":"2026-08-13T08:37:35.735446+00:00","onboard_files":0,"sessions":[{"id":"a0e8bf4c-6324-42df-9428-d47dcbbce732","start":"2026-08-13T08:37:35.735446+00:00","end":"2026-08-13T17:15:56.413221+00:00","mission":null,"end_reason":null,"video":"on","ev":32,"ev_crit":0,"ev_warn":8,"sum":{"avg_sinr":6.161637931034483,"min_sinr":-2,"avg_rtt_ms":106.49022185570736,"max_alt_rel":13.294,"samples_total":464,"samples_in_zone":0}},{"id":"a2434885-fdf4-4dcd-b692-af7b617a29da","start":"2026-08-11T08:49:38.803708+00:00","end":"2026-08-11T08:51:20.799717+00:00","mission":null,"end_reason":null,"video":"off","ev":16,"ev_crit":0,"ev_warn":5,"sum":{"avg_sinr":5.198019801980198,"min_sinr":-1.0,"avg_rtt_ms":38.69895047480517,"max_alt_rel":12.319000244140625,"samples_total":101,"samples_in_zone":0}},{"id":"cd4c4ab0-fdb4-4b10-a8f3-fdca33ab2461","start":"2026-08-11T08:46:20.798399+00:00","end":"2026-08-11T08:48:37.721147+00:00","mission":null,"end_reason":null,"video":"off","ev":13,"ev_crit":0,"ev_warn":4,"sum":{"avg_sinr":9.97080291970803,"min_sinr":0.0,"avg_rtt_ms":49.51278832707092,"max_alt_rel":6.283999919891357,"samples_total":137,"samples_in_zone":0}},{"id":"45839299-5462-4d74-865c-3b271e146dac","start":"2026-08-11T08:31:11.771976+00:00","end":"2026-08-11T08:34:28.723744+00:00","mission":null,"end_reason":null,"video":"off","ev":24,"ev_crit":0,"ev_warn":10,"sum":{"avg_sinr":6.928571428571429,"min_sinr":-2.0,"avg_rtt_ms":38.34628569349951,"max_alt_rel":25.902000427246094,"samples_total":196,"samples_in_zone":0}},{"id":"4c5f8a67-9128-4ec8-bed7-ee6624c03e51","start":"2026-08-11T08:28:51.556242+00:00","end":"2026-08-11T08:29:50.815685+00:00","mission":null,"end_reason":null,"video":"off","ev":1,"ev_crit":0,"ev_warn":1,"sum":{"avg_sinr":2.6842105263157894,"min_sinr":-1.0,"avg_rtt_ms":37.384736813996966,"max_alt_rel":2.49399995803833,"samples_total":19,"samples_in_zone":0}},{"id":"3b212564-c346-4ba8-9753-4ef437aa0fad","start":"2026-08-11T08:22:37.661532+00:00","end":"2026-08-11T08:26:05.563408+00:00","mission":null,"end_reason":null,"video":"off","ev":17,"ev_crit":1,"ev_warn":7,"sum":{"avg_sinr":10.10576923076923,"min_sinr":-3.0,"avg_rtt_ms":32.66158171800467,"max_alt_rel":10.513999938964844,"samples_total":208,"samples_in_zone":0}},{"id":"cc12aad7-ee9a-4948-89c2-39c752671730","start":"2026-08-11T08:18:32.794513+00:00","end":"2026-08-11T08:20:41.803891+00:00","mission":null,"end_reason":null,"video":"off","ev":20,"ev_crit":0,"ev_warn":6,"sum":{"avg_sinr":7.263565891472868,"min_sinr":0.0,"avg_rtt_ms":40.08457353872846,"max_alt_rel":11.072999954223633,"samples_total":129,"samples_in_zone":0}},{"id":"dd13b689-2330-492d-9eb5-565971c8d38b","start":"2026-08-11T08:16:51.975706+00:00","end":"2026-08-11T08:17:34.860805+00:00","mission":null,"end_reason":null,"video":"off","ev":7,"ev_crit":0,"ev_warn":2,"sum":{"avg_sinr":5.928571428571429,"min_sinr":2.0,"avg_rtt_ms":52.96523825327555,"max_alt_rel":6.736000061035156,"samples_total":42,"samples_in_zone":0}},{"id":"8fdd860d-34f7-48d6-b558-f62a733bf78f","start":"2026-08-11T08:15:00.965566+00:00","end":"2026-08-11T08:15:37.959712+00:00","mission":null,"end_reason":null,"video":"off","ev":1,"ev_crit":0,"ev_warn":0,"sum":{"avg_sinr":10.837837837837839,"min_sinr":9.0,"avg_rtt_ms":55.74124310467694,"max_alt_rel":0.35199999809265137,"samples_total":37,"samples_in_zone":0}},{"id":"ee8a1d3a-b21f-4598-acd7-7bb03a2f1f7c","start":"2026-08-11T08:12:09.977827+00:00","end":"2026-08-11T08:14:34.020039+00:00","mission":null,"end_reason":null,"video":"off","ev":17,"ev_crit":0,"ev_warn":5,"sum":{"avg_sinr":7.8125,"min_sinr":0.0,"avg_rtt_ms":36.96251392364502,"max_alt_rel":7.013000011444092,"samples_total":144,"samples_in_zone":0}},{"id":"4dbfb46b-cf9c-4973-bdae-563734a80610","start":"2026-08-11T08:07:09.368211+00:00","end":"2026-08-11T08:10:44.072966+00:00","mission":null,"end_reason":null,"video":"off","ev":2,"ev_crit":0,"ev_warn":1,"sum":{"avg_sinr":3.7333333333333334,"min_sinr":1.0,"avg_rtt_ms":58.358133188883464,"max_alt_rel":1.6449999809265137,"samples_total":15,"samples_in_zone":0}},{"id":"091a642e-807c-443d-926f-fc6176771709","start":"2026-08-11T08:03:30.353841+00:00","end":"2026-08-11T08:06:15.377308+00:00","mission":null,"end_reason":null,"video":"off","ev":12,"ev_crit":1,"ev_warn":4,"sum":{"avg_sinr":5.866666666666666,"min_sinr":-4.0,"avg_rtt_ms":42.05884853709828,"max_alt_rel":27.33300018310547,"samples_total":165,"samples_in_zone":0}},{"id":"b1276825-20e7-4788-9291-87ebe80b8193","start":"2026-08-11T08:02:40.359977+00:00","end":"2026-08-11T08:02:48.362815+00:00","mission":null,"end_reason":null,"video":"off","ev":1,"ev_crit":0,"ev_warn":1,"sum":{"avg_sinr":3.0,"min_sinr":0.0,"avg_rtt_ms":37.28499960899353,"max_alt_rel":0.20900000631809235,"samples_total":8,"samples_in_zone":0}},{"id":"195c8a5e-dfec-4f91-aae8-0054bc8a68e8","start":"2026-08-11T08:01:23.379412+00:00","end":"2026-08-11T08:02:00.358899+00:00","mission":null,"end_reason":null,"video":"off","ev":6,"ev_crit":0,"ev_warn":2,"sum":{"avg_sinr":3.8378378378378377,"min_sinr":-1.0,"avg_rtt_ms":71.90924397030392,"max_alt_rel":7.928999900817871,"samples_total":37,"samples_in_zone":0}},{"id":"91403b96-932a-4057-b79a-16a49da0c794","start":"2026-08-11T07:59:54.344248+00:00","end":"2026-08-11T07:59:57.347226+00:00","mission":null,"end_reason":null,"video":"off","ev":0,"ev_crit":0,"ev_warn":0,"sum":{"avg_sinr":6.333333333333333,"min_sinr":6.0,"avg_rtt_ms":35.777666091918945,"max_alt_rel":1.6109999418258667,"samples_total":3,"samples_in_zone":0}},{"id":"070c2601-3208-4b63-98de-b44454dba7ec","start":"2026-08-11T07:48:33.934396+00:00","end":"2026-08-11T07:49:49.820674+00:00","mission":null,"end_reason":null,"video":"off","ev":4,"ev_crit":0,"ev_warn":2,"sum":{"avg_sinr":7.802631578947368,"min_sinr":-2.0,"avg_rtt_ms":43.63789465552882,"max_alt_rel":1.4329999685287476,"samples_total":76,"samples_in_zone":0}},{"id":"91c3d4d9-5c3a-4909-ad29-45357d40603f","start":"2026-08-10T08:43:35.072534+00:00","end":"2026-08-10T08:45:02.108076+00:00","mission":null,"end_reason":null,"video":"off","ev":7,"ev_crit":0,"ev_warn":2,"sum":{"avg_sinr":6.367816091954023,"min_sinr":3.0,"avg_rtt_ms":44.2959195279527,"max_alt_rel":1.6369999647140503,"samples_total":87,"samples_in_zone":0}},{"id":"c75efc42-e9e7-4556-851c-014f303de88f","start":"2026-08-10T08:40:38.693231+00:00","end":"2026-08-10T08:42:01.051241+00:00","mission":null,"end_reason":null,"video":"off","ev":4,"ev_crit":0,"ev_warn":1,"sum":{"avg_sinr":9.487804878048781,"min_sinr":3.0,"avg_rtt_ms":46.79928049227087,"max_alt_rel":5.269999980926514,"samples_total":82,"samples_in_zone":0}},{"id":"68d7fb1d-11e7-4e46-8632-f624e8dec42e","start":"2026-08-10T08:39:42.762121+00:00","end":"2026-08-10T08:40:22.684669+00:00","mission":null,"end_reason":null,"video":"off","ev":8,"ev_crit":0,"ev_warn":2,"sum":{"avg_sinr":8.025,"min_sinr":3.0,"avg_rtt_ms":45.97055015563965,"max_alt_rel":1.9869999885559082,"samples_total":40,"samples_in_zone":0}},{"id":"b6ca2c24-4570-42cc-9e20-446ca31feb17","start":"2026-08-10T08:34:08.112581+00:00","end":"2026-08-10T08:35:13.058440+00:00","mission":null,"end_reason":null,"video":"off","ev":6,"ev_crit":0,"ev_warn":0,"sum":{"avg_sinr":13.415384615384616,"min_sinr":6.0,"avg_rtt_ms":44.571015079204855,"max_alt_rel":4.23199987411499,"samples_total":65,"samples_in_zone":0}},{"id":"4420e64e-1c7b-4ce2-afae-23ccc48527ef","start":"2026-08-10T08:29:44.040117+00:00","end":"2026-08-10T08:32:36.050357+00:00","mission":null,"end_reason":null,"video":"off","ev":18,"ev_crit":1,"ev_warn":5,"sum":{"avg_sinr":7.046511627906977,"min_sinr":-3.0,"avg_rtt_ms":45.41966293024462,"max_alt_rel":12.305000305175781,"samples_total":172,"samples_in_zone":0}},{"id":"c30ae9f6-f3c7-4769-a885-dcc8ace63a04","start":"2026-08-10T08:28:26.028325+00:00","end":"2026-08-10T08:29:21.088466+00:00","mission":null,"end_reason":null,"video":"off","ev":5,"ev_crit":0,"ev_warn":2,"sum":{"avg_sinr":4.4,"min_sinr":0.0,"avg_rtt_ms":32.80549084056508,"max_alt_rel":6.400000095367432,"samples_total":55,"samples_in_zone":0}},{"id":"d0a74178-8a91-4229-88de-815409bea0c0","start":"2026-08-10T08:19:15.033933+00:00","end":"2026-08-10T08:21:17.037699+00:00","mission":null,"end_reason":null,"video":"off","ev":10,"ev_crit":0,"ev_warn":4,"sum":{"avg_sinr":5.524590163934426,"min_sinr":-1.0,"avg_rtt_ms":46.009918025282566,"max_alt_rel":5.271999835968018,"samples_total":122,"samples_in_zone":0}}],"demo":false,"pending":0,"agent_version":null},{"id":"1d2f19b1-a979-4f90-ad63-3d50a9ebad11","name":"pi5-sdmodelh7v2-ardu","sysid":1,"fw":"4.7.0 (official)","board":"2a0020001151333139383538","primary":true,"sim":false,"model":null,"serial":null,"video":null,"autopilot":null,"flights":12,"last":"2026-09-07T08:28:21.124932+00:00","onboard_files":35,"sessions":[{"id":"eeb4e6de-3793-418b-b636-f6688757b5e0","start":"2026-09-07T08:28:21.124932+00:00","end":"2026-09-07T08:29:50.150256+00:00","mission":"lowspeed-test-260907-v4","end_reason":"disarmed","video":"no_source","ev":24,"ev_crit":0,"ev_warn":0,"sum":{"avg_sinr":21.006493506493506,"min_sinr":11.5,"avg_rtt_ms":28.546753103082832,"max_alt_rel":3.6659998893737793,"samples_total":77,"samples_in_zone":0}},{"id":"4505b6cd-8cbf-4258-9124-bdf5a7c80c4b","start":"2026-09-07T08:18:52.983957+00:00","end":"2026-09-07T08:19:09.994967+00:00","mission":"lowspeed-test-260907-v3","end_reason":"disarmed","video":"no_source","ev":11,"ev_crit":1,"ev_warn":0,"sum":{"avg_sinr":15.409090909090908,"min_sinr":9.5,"avg_rtt_ms":23.29090864008123,"max_alt_rel":2.1510000228881836,"samples_total":11,"samples_in_zone":0}},{"id":"4f002974-3921-4104-b3a9-9ba5f1e59ff9","start":"2026-09-07T08:18:41.618731+00:00","end":"2026-09-07T08:18:51.001342+00:00","mission":"lowspeed-test-260907-v3","end_reason":"disarmed","video":"no_source","ev":2,"ev_crit":0,"ev_warn":0,"sum":{"avg_sinr":null,"min_sinr":null,"avg_rtt_ms":null,"max_alt_rel":0.01600000075995922,"samples_total":0,"samples_in_zone":0}},{"id":"2cc60be1-134e-4088-8ac0-1ea19a3fa24f","start":"2026-09-07T08:08:31.909931+00:00","end":"2026-09-07T08:08:37.946225+00:00","mission":"lowspeed-test-260907-v3","end_reason":"disarmed","video":"no_source","ev":1,"ev_crit":1,"ev_warn":0,"sum":{"avg_sinr":null,"min_sinr":null,"avg_rtt_ms":null,"max_alt_rel":0.04500000178813934,"samples_total":0,"samples_in_zone":0}},{"id":"9d1e98b3-f2ab-42e7-951e-f9e44699c6b3","start":"2026-09-07T07:58:56.476909+00:00","end":"2026-09-07T07:59:09.253231+00:00","mission":"lowspeed-test-260907-v2","end_reason":"disarmed","video":"no_source","ev":11,"ev_crit":1,"ev_warn":0,"sum":{"avg_sinr":16.61111111111111,"min_sinr":15.5,"avg_rtt_ms":30.05555470784505,"max_alt_rel":1.128999948501587,"samples_total":9,"samples_in_zone":0}},{"id":"d6d52b2c-1d5d-40c1-88c0-18cc8828b5c0","start":"2026-09-07T07:39:22.273282+00:00","end":"2026-09-07T07:41:14.720706+00:00","mission":"lowspeed-test-260907","end_reason":"telemetry_lost","video":"no_source","ev":11,"ev_crit":0,"ev_warn":1,"sum":{"avg_sinr":22.5,"min_sinr":22.5,"avg_rtt_ms":23.600000381469727,"max_alt_rel":1.222000002861023,"samples_total":1,"samples_in_zone":0}},{"id":"e98bb4a3-97ec-48ff-a4bd-e2e49d7d8222","start":"2026-09-02T08:34:50.629212+00:00","end":"2026-09-02T08:35:27.644352+00:00","mission":null,"end_reason":"disarmed","video":"no_source","ev":0,"ev_crit":0,"ev_warn":0,"sum":{"avg_sinr":null,"min_sinr":null,"avg_rtt_ms":null,"max_alt_rel":0.4779999852180481,"samples_total":0,"samples_in_zone":0}},{"id":"3cd9ad43-a034-403e-916d-6078c9442006","start":"2026-09-02T08:18:00.930573+00:00","end":"2026-09-02T08:18:06.929928+00:00","mission":null,"end_reason":"disarmed","video":"no_source","ev":1,"ev_crit":1,"ev_warn":0,"sum":{"avg_sinr":null,"min_sinr":null,"avg_rtt_ms":null,"max_alt_rel":0.05400000140070915,"samples_total":0,"samples_in_zone":0}},{"id":"069e6341-5be5-4e0d-912a-3af00cfd4043","start":"2026-09-02T07:58:40.939495+00:00","end":"2026-09-02T07:59:05.955574+00:00","mission":null,"end_reason":"disarmed","video":"no_source","ev":7,"ev_crit":0,"ev_warn":1,"sum":{"avg_sinr":null,"min_sinr":null,"avg_rtt_ms":null,"max_alt_rel":9.95300006866455,"samples_total":0,"samples_in_zone":0}},{"id":"973bfd69-f705-44b7-8c1d-7bfedba33bd6","start":"2026-09-02T07:47:03.974806+00:00","end":"2026-09-02T07:47:52.981806+00:00","mission":null,"end_reason":"disarmed","video":"no_source","ev":14,"ev_crit":0,"ev_warn":1,"sum":{"avg_sinr":null,"min_sinr":null,"avg_rtt_ms":null,"max_alt_rel":9.751999855041504,"samples_total":0,"samples_in_zone":0}},{"id":"4a954e11-737f-4c97-8f7d-8c94ac398a9f","start":"2026-09-02T07:37:13.385307+00:00","end":"2026-09-02T07:39:09.379531+00:00","mission":null,"end_reason":"disarmed","video":"no_source","ev":1,"ev_crit":0,"ev_warn":0,"sum":{"avg_sinr":null,"min_sinr":null,"avg_rtt_ms":null,"max_alt_rel":2.869999885559082,"samples_total":0,"samples_in_zone":0}},{"id":"5a3a4d5f-3d7a-4ba2-bd84-68af90fc3b46","start":"2026-09-02T07:15:09.634752+00:00","end":"2026-09-02T07:15:31.626364+00:00","mission":null,"end_reason":"disarmed","video":"no_source","ev":8,"ev_crit":1,"ev_warn":0,"sum":{"avg_sinr":null,"min_sinr":null,"avg_rtt_ms":null,"max_alt_rel":1.7050000429153442,"samples_total":0,"samples_in_zone":0}}],"demo":true,"pending":0,"agent_version":null},{"id":"1ed3fc09-c44f-4152-bffc-c4b0a850073c","name":"uav-s2","sysid":2,"fw":null,"board":null,"primary":false,"sim":false,"model":null,"serial":null,"video":null,"autopilot":null,"flights":0,"last":null,"onboard_files":0,"sessions":[],"demo":false,"pending":0,"agent_version":null}],"demo":{"mode":"AUTO","armed":true,"alt":3.22,"batt":93.0,"volt":14.991999626159668,"sinr":27.5,"rtt":24.0,"sats":27,"fix":4,"clock":"16:29:09"},"gen":"2026-09-08T00:41:15+08:00","groups":[{"id":"g1","name":"測試小隊","members":["1d2f19b1-a979-4f90-ad63-3d50a9ebad11","1ed3fc09-c44f-4152-bffc-c4b0a850073c"],"note":"低速測線用","last":"2026-09-02T07:47:03.974806+00:00","flights":2}]};</script>
 <script>
 (function(){
 "use strict";
@@ -209,9 +240,15 @@ const END={disarmed:"上鎖（正常結束）",telemetry_lost:"遙測中斷（�
   telemetry_lost_backfilled:"遙測中斷，事後由機上補回"};
 
 /* ── 狀態：三種，不特別區分曾經飛過與從來沒有 ────────── */
+/** 狀態三種，**模式不併進狀態句**。
+ *
+ * 原本是 `飛行中 ${mode}`，於是在降落那一刻長出「飛行中 LAND」——兩個都對，
+ * 串在一起卻自相矛盾。狀態說的是「這台機現在算不算在飛」，模式說的是「飛控
+ * 在做什麼」，各自一格。模式名照原廠不翻譯（PX4 HOLD 與 ArduPilot LOITER
+ * 是不同的字、同一件事，翻譯會讓事後對 log 對不上）。 */
 function statusOf(d){
-  if(d.demo) return {text:`飛行中 ${P.demo.mode}`, tone:"flying", online:true, rank:0};
-  return {text:"未連線", tone:"off", online:false, rank:3};
+  if(d.demo) return {text:"飛行中", mode:P.demo.mode, tone:"flying", online:true, rank:0};
+  return {text:"未連線", mode:null, tone:"off", online:false, rank:3};
 }
 
 function bars(sinr){
@@ -224,6 +261,111 @@ function bars(sinr){
   }
   return s;
 }
+
+/* ── 小隊：**固定編組**，派群飛任務時直接選一隊 ───────────── */
+function renderGroups(){
+  const box=$("#groups"); box.textContent="";
+  $("#gn").textContent = P.groups.length ? `（${P.groups.length}）` : "";
+  if(!P.groups.length){
+    const c=el("div","card"); const e=el("div","grp");
+    e.appendChild(el("div","grp-empty","還沒有小隊。組一隊之後，派群飛任務時就不必每次重新勾機。"));
+    c.appendChild(e); box.appendChild(c); return;
+  }
+  for(const g of P.groups){
+    const card=el("div","card"); const w=el("div","grp");
+    const head=el("div","grp-head");
+    head.appendChild(el("span","grp-name",g.name));
+    head.appendChild(el("span","grp-meta",`${g.members.length} 台`));
+    if(g.note) head.appendChild(el("span","chip",g.note));
+    head.appendChild(el("span","spacer"));
+    const bEdit=el("button","btn","編輯"); bEdit.title="改名稱與成員"; bEdit.onclick=()=>editGroup(g);
+    const bFly=el("button","btn","派任務");
+    bFly.title="到即時頁的任務控制指派這一隊（隊形與高度分層在那裡決定）";
+    const bDel=el("button","btn danger","刪除"); bDel.onclick=()=>delGroup(g);
+    head.appendChild(bEdit); head.appendChild(bFly); head.appendChild(bDel);
+    w.appendChild(head);
+
+    const ms=el("div","grp-members");
+    for(const id of g.members){
+      const d=P.drones.find(x=>x.id===id);
+      if(!d){ // **成員被刪掉了要說**，不是靜靜少一台
+        const m=el("span","member"); m.appendChild(el("span","dot off"));
+        m.appendChild(el("span",null,"（這台機的記錄已被刪除）")); ms.appendChild(m); continue; }
+      const st=statusOf(d);
+      const m=el("span","member");
+      const dot=el("span","dot"+(st.online?"":" off"));
+      if(st.online) dot.style.background="var(--ok)";
+      m.appendChild(dot);
+      m.appendChild(el("span",null,d.name));
+      m.appendChild(el("span","grp-meta",st.text));
+      ms.appendChild(m);
+    }
+    w.appendChild(ms);
+    if(g.last){
+      w.appendChild(el("div","grp-meta",
+        `上次群飛 ${when(g.last)}　共 ${g.flights ?? 0} 趟`));
+    } else {
+      w.appendChild(el("div","grp-meta","還沒有一起飛過"));
+    }
+    card.appendChild(w); box.appendChild(card);
+  }
+}
+
+/** 新增／編輯小隊：**勾機、取名**，其餘（隊形、高度分層、航線）留給派任務。 */
+function editGroup(g){
+  const isNew = !g;
+  const cur = new Set(g? g.members : []);
+  let name = g? g.name : "";
+  const body=el("div");
+  const f=el("label","field");
+  f.appendChild(el("span",null,"小隊名稱"));
+  const inp=el("input"); inp.value=name; inp.placeholder="例如：低速測線隊";
+  inp.oninput=()=>{name=inp.value;};
+  f.appendChild(inp); body.appendChild(f);
+  const list=el("div"); list.style.display="flex"; list.style.flexDirection="column"; list.style.gap="6px";
+  for(const d of P.drones){
+    const st=statusOf(d);
+    const b=el("button","pickrow");
+    const draw=()=>{
+      b.setAttribute("aria-pressed", cur.has(d.id)?"true":"false");
+      b.textContent="";
+      const box=el("span","pickbox", cur.has(d.id)?"✓":"");
+      b.appendChild(box);
+      const dot=el("span","dot"+(st.online?"":" off"));
+      if(st.online) dot.style.background="var(--ok)";
+      b.appendChild(dot);
+      b.appendChild(el("span",null,d.name));
+      b.appendChild(el("span","spacer"));
+      b.appendChild(el("span","grp-meta", st.text));
+    };
+    b.onclick=()=>{ cur.has(d.id)?cur.delete(d.id):cur.add(d.id); draw(); };
+    draw(); list.appendChild(b);
+  }
+  body.appendChild(list);
+  body.appendChild(el("div","hint","一台機可以同時屬於多個小隊。小隊只是名單——隊形、高度分層與航線在派任務時才決定。"));
+  const cancel=el("button","btn","取消"); cancel.onclick=closeModal;
+  const save=el("button","btn", isNew? "建立":"儲存");
+  save.onclick=()=>{
+    if(!name.trim() || !cur.size) return;   // 沒名字或沒成員就不是一隊
+    if(isNew) P.groups.push({id:"g"+Date.now(), name:name.trim(),
+      members:[...cur], note:null, last:null, flights:0});
+    else { g.name=name.trim(); g.members=[...cur]; }
+    closeModal(); renderGroups(); render();
+  };
+  openModal({title:isNew?"新增小隊":`編輯「${g.name}」`, meta:"", body, foot:[cancel,save],
+    tipText:"名稱可以隨時改，改名不影響已經飛過的紀錄（那些留的是當時的隊名快照）。勾選要編在一起的機；一台機可以同時屬於多個小隊。"});
+}
+
+function delGroup(g){
+  const body=el("div");
+  body.innerHTML=`<div style="font-size:12.5px;color:var(--ink-2);line-height:1.75">
+    只會刪掉這個編組，<b>不會動到任何一台機與它們的紀錄</b>。</div>`;
+  const cancel=el("button","btn","取消"); cancel.onclick=closeModal;
+  const ok=el("button","btn danger","刪除小隊");
+  ok.onclick=()=>{ P.groups=P.groups.filter(x=>x!==g); closeModal(); renderGroups(); render(); };
+  openModal({title:`刪除小隊「${g.name}」？`, meta:"", body, foot:[cancel,ok], tipText:null});
+}
+$("#gAdd").onclick=()=>editGroup(null);
 
 /* ── 機列 ─────────────────────────────────────────── */
 const open = new Set([P.drones.find(d=>d.sysid===1)?.id]);   // 開頁即示範展開態
@@ -246,6 +388,7 @@ function render(){
     row.appendChild(dot);
     row.appendChild(el("span","nm",d.name));
     row.appendChild(el("span","state "+st.tone, st.text));
+    if(st.mode) row.appendChild(el("span","mode", st.mode));
     if(d.demo){
       row.appendChild(bars(P.demo.sinr));
       row.appendChild(el("span","sig-n", `${P.demo.sinr.toFixed(1)} dB`));
@@ -253,6 +396,9 @@ function render(){
       i.style.width=P.demo.batt+"%"; i.style.background=P.demo.batt<=20?"var(--serious)":"var(--ink-2)";
       b.appendChild(i); row.appendChild(b);
       row.appendChild(el("span","sig-n", Math.round(P.demo.batt)+"%"));
+    }
+    for(const g of P.groups.filter(x=>x.members.includes(d.id))){
+      row.appendChild(el("span","chip grp", g.name));
     }
     if(d.pending>0){
       const c=el("span","chip warn", `⚠ ${d.pending} 待回傳`);
@@ -282,34 +428,22 @@ function render(){
 function work(d, st){
   const w=el("div","work");
 
-  // ① 身分：**兩層可信度分開**（機器覆核 vs 人填）
+  // ① 身分：**一張表**（使用者定案 2026-09-08）。人維護只留「名稱」——
+  // 機架序號與型號實際上一台都沒填過，留著只是多兩列空欄位
   const s1=el("div","sect");
   const h1=el("h3",null,"身分");
-  h1.appendChild(tip("上排是機器每次連線都會覆核的事實（板子 UID 是飛控板的身分，換機架時它會跟著板子走）；下排是人打的字，代理問不到。兩者可信度不同，所以分開放。留空就是「未填」，不預設值。"));
+  h1.appendChild(tip("除了名稱以外都是機器每次連線覆核的事實：板子 UID 是飛控板的身分（換機架時它跟著板子走）、韌體與自駕儀來自 MAVLink 心跳、代理版本來自意圖通道。名稱是人取的，改名不影響已經記下的架次。"));
   s1.appendChild(h1);
-  const g=el("div","grid2");
-
-  const mach=el("div","box");
-  mach.appendChild(el("div","cap","機器覆核"));
+  const box1=el("div","box");
   const kv1=el("div","kv");
+  kvRow(kv1,"名稱", d.name, null, ()=>edit(d,"名稱","name",d.name,"畫面上到處都用這個名字。改名不影響已經記下的架次。"));
   kvRow(kv1,"sysid", d.sysid!=null?String(d.sysid):null, "尚未收到心跳");
   kvRow(kv1,"板子 UID", d.board? d.board.slice(-12):null, "無板子 UID（身分較弱）");
   kvRow(kv1,"韌體", d.fw, "尚未回報");
   kvRow(kv1,"自駕儀", d.autopilot, "未見 MAVLink 心跳");
   kvRow(kv1,"機上代理", d.agent_version, "無機上代理");
-  mach.appendChild(kv1);
-  g.appendChild(mach);
-
-  const human=el("div","box");
-  human.appendChild(el("div","cap","人維護"));
-  const kv2=el("div","kv");
-  kvRow(kv2,"名稱", d.name, null, ()=>edit(d,"名稱","name",d.name,"畫面上到處都用這個名字。改名不影響已經記下的架次。"));
-  kvRow(kv2,"機架序號", d.serial, "未填", ()=>edit(d,"機架序號","serial",d.serial,"機身上的序號，用來對應實體機架。**板子換機時要更新**——板子帶著記錄走，只有人知道它現在裝在哪台機上。"));
-  kvRow(kv2,"型號", d.model, "未填", ()=>edit(d,"型號","model",d.model,"機架型號，如 X500 V2、S500。代理讀得到的是飛控機型（四旋翼／固定翼），不是這個。"));
-  kvRow(kv2,"影像位址", d.video, "未設定", ()=>edit(d,"影像位址","video",d.video,"地圖點機體時開的串流。瀏覽器不支援 RTSP：機上跑 MediaMTX 轉 WHEP，填 http://<機IP>:8889/<路徑>/whep；MJPEG／MP4 亦可。"));
-  human.appendChild(kv2);
-  g.appendChild(human);
-  s1.appendChild(g);
+  box1.appendChild(kv1);
+  s1.appendChild(box1);
   w.appendChild(s1);
 
   // ② 機上錄製與回傳
@@ -320,7 +454,10 @@ function work(d, st){
   const rec=el("div","box");
   const line=el("div","kv");
   kvRow(line,"已回傳", d.onboard_files? `${d.onboard_files} 份`:null, "還沒有回傳過");
-  kvRow(line,"待回傳", d.pending? `${d.pending} 份`:null, d.agent_version?"沒有東西要傳":"沒有代理就沒有機上錄製");
+  // **「沒有東西要傳」與「不知道」不同形**：代理沒在推狀態時，機上還有幾份
+  // 等著回傳我們根本看不到——說成 0 是替代理宣告它沒說過的事
+  kvRow(line,"待回傳", d.agent_version && d.pending ? `${d.pending} 份` : null,
+    d.agent_version ? "沒有東西要傳" : "不知道（現在沒有代理在推狀態）");
   rec.appendChild(line);
   const acts=el("div","actions");
   const b1=el("button","btn","看最近一份紀錄");
@@ -345,6 +482,11 @@ function work(d, st){
   const h4=el("h3",null,"這台機");
   s4.appendChild(h4);
   const a=el("div","actions");
+  const vb=el("button","btn", d.video? "影像位址 ✓":"影像位址");
+  vb.title="地圖點機體時開的串流位址";
+  vb.onclick=()=>edit(d,"影像位址","video",d.video,
+    "地圖點機體時開的串流。瀏覽器不支援 RTSP：機上跑 MediaMTX 轉 WHEP，填 http://<機IP>:8889/<路徑>/whep；MJPEG／MP4 亦可。留空＝清除。");
+  a.appendChild(vb);
   if(!d.primary){
     const b=el("button","btn","設為主機");
     b.title="MAVLink 收到的遙測記在這台名下（飛行中無法切換）";
@@ -457,6 +599,7 @@ function confirmDelete(d){
   openModal({title:`刪除「${d.name}」？`, meta:"", tipText:null, body, foot:[cancel,ok]});
 }
 
+renderGroups();
 render();
 })();
 </script>
