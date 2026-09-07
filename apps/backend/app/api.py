@@ -1197,6 +1197,63 @@ async def patch_session(session_id: str, body: SessionPatch):
     return {"id": row["id"], "note": row["note"]}
 
 
+@router.get("/sessions/{session_id}/telemetry-quality")
+async def session_telemetry_quality(session_id: str):
+    """這一趟的遙測是誰寫進來的，兩個來源有沒有互相矛盾。
+
+    **背景（2026-09-07，d6dea0b）**：補傳的去重原本比對 `round(t, 2)`，而即時
+    那條路的時間戳是「收到封包的時刻」（逐筆漂移的百分秒）、補傳那條是機上
+    1Hz 取樣的刻度（整齊的 `.51`）——兩邊永遠不會落在同一個百分秒，所以
+    **每一筆補傳都被當成新資料插進去**。實測後果：飛機正在 3 m 空中的那 20 秒
+    裡，被插進「LOITER、高度 −0.5 m、機在地上」的樣本，與正確的即時列一比一
+    交錯。去重已改成時間窗（即時優先），但**修法不會回頭改已經寫進去的列**。
+
+    所以這支端點用**現行那把尺**去量歷史：一筆補傳樣本，若 0.6 秒內有即時
+    樣本，它今天就不會被插進來——那就是「本來不該在這裡」的列。
+
+    回的是數字不是判決：**多少筆、位置差多遠、模式說的是不是同一件事**。
+    畫面據此決定要不要提醒判讀的人，而不是由這裡替他決定。
+    """
+    row = await db.pool.fetchrow(
+        """
+        WITH bf AS (SELECT time, lat, lon, alt_rel, flight_mode FROM telemetry
+                     WHERE session_id = $1 AND backfilled),
+             lv AS (SELECT time, lat, lon, alt_rel, flight_mode FROM telemetry
+                     WHERE session_id = $1 AND NOT backfilled),
+             pair AS (
+               SELECT b.flight_mode AS bf_mode, l.flight_mode AS lv_mode,
+                      b.alt_rel AS bf_alt, l.alt_rel AS lv_alt,
+                      CASE WHEN b.lat IS NULL OR l.lat IS NULL THEN NULL
+                           ELSE 111320 * sqrt((l.lat - b.lat) ^ 2
+                                + ((l.lon - b.lon) * cos(radians(l.lat))) ^ 2)
+                      END AS gap_m
+                 FROM bf b
+                 JOIN LATERAL (
+                   SELECT lat, lon, alt_rel, flight_mode FROM lv
+                    WHERE lv.time BETWEEN b.time - interval '0.6 s'
+                                      AND b.time + interval '0.6 s'
+                    ORDER BY abs(extract(epoch FROM lv.time - b.time)) LIMIT 1
+                 ) l ON true)
+        SELECT (SELECT count(*) FROM lv) AS live,
+               (SELECT count(*) FROM bf) AS backfilled,
+               (SELECT count(*) FROM pair) AS conflicts,
+               (SELECT max(gap_m) FROM pair) AS max_gap_m,
+               (SELECT count(*) FROM pair
+                 WHERE bf_mode IS DISTINCT FROM lv_mode) AS mode_mismatch
+        """, session_id)
+    d = dict(row) if row else {}
+    return {
+        "live": d.get("live", 0),
+        "backfilled": d.get("backfilled", 0),
+        # **落在即時資料已覆蓋的秒數上**＝現行規則不會再插入的那些列
+        "conflicts": d.get("conflicts", 0),
+        "max_gap_m": (round(float(d["max_gap_m"]), 1)
+                      if d.get("max_gap_m") is not None else None),
+        "mode_mismatch": d.get("mode_mismatch", 0),
+        "rule": "0.6 秒內已有即時樣本則不補（d6dea0b 起）",
+    }
+
+
 @router.get("/sessions/{session_id}/track")
 async def session_track(session_id: str):
     """回放用：一條航線的軌跡 + 鏈路時序 + 關聯任務（供疊預計路徑）。"""

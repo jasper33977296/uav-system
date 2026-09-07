@@ -28,7 +28,9 @@ import InfoTip from "@/components/InfoTip";
 import { emph } from "@/lib/emph";
 import { evText } from "@/lib/evtext";
 import { errText, getJson } from "@/lib/fetchJson";
+import { asGroups, EvDensity, foldEvents, foldTitle } from "@/lib/foldEvents";
 import { eventDetail, parseJsonb } from "@/lib/jsonb";
+import { normSev } from "@/lib/severity";
 import { API } from "@/lib/signal";
 
 /** 指令代號 → 畫面上的說法。**照枚舉列，不猜字串**（同 CommandPanel 的
@@ -195,6 +197,7 @@ function FlightDetail({ s, onReplay }: { s: SessionRow; onReplay: () => void }) 
                 : s.video_mode ?? "—"} />
         </div>
         {s.note && <div className="hint-line">備註：{s.note}</div>}
+        <TelemetryQuality sessionId={s.id} />
         <div className="cmd-row info-actions">
           <button className="btn-plain btn-sm" onClick={onReplay}>▶ 開回放</button>
           <a className="btn-plain btn-sm"
@@ -209,6 +212,52 @@ function FlightDetail({ s, onReplay }: { s: SessionRow; onReplay: () => void }) 
       <SessionEventsCard sessionId={s.id} droneName={s.drone_name} />
       <CoverageBlock sessionId={s.id} />
     </>
+  );
+}
+
+/** 這一趟的遙測是誰寫進來的，兩份說法有沒有打架。
+ *
+ * **為什麼要在架次頁講**：`telemetry` 有兩個來源——即時串流（直接來自飛控的
+ * 封包）與機上補傳（代理在斷線期間緩衝、恢復後補送）。2026-09-07 之前補傳的
+ * 去重從來沒生效過（比對百分秒，而兩條路的百分秒天生不同，見 d6dea0b），
+ * 於是**飛機正在空中的那些秒，被插進「機在地上 LOITER」的樣本**，兩種互相
+ * 矛盾的資料在匯出檔裡長得一樣可信。
+ *
+ * 修法只擋住未來，**已經寫進去的列還在**。所以判讀或匯出這一趟之前，這裡要
+ * 說得出：有沒有、幾筆、差多遠。**不自動修正、也不隱藏**——那是資料，不是
+ * 顯示問題；要刪要留是人的決定（`scripts/clean-backfill-conflicts.py`）。
+ *
+ * 沒有補傳列時整段不畫：**大多數架次沒有這回事，不必每一趟都掛一句話**。 */
+function TelemetryQuality({ sessionId }: { sessionId: string }) {
+  const [q, setQ] = useState<{
+    live: number; backfilled: number; conflicts: number;
+    max_gap_m: number | null; mode_mismatch: number; rule: string } | null>(null);
+  const [err, setErr] = useState<string | null>(null);
+  useEffect(() => {
+    let stop = false;
+    setQ(null); setErr(null);
+    getJson<NonNullable<typeof q>>(`${API}/api/sessions/${sessionId}/telemetry-quality`)
+      .then((r) => { if (!stop) setQ(r); })
+      // **取不到不得靜默**：靜默＝這一趟看起來沒有補傳問題（§0.2e）
+      .catch((e) => { if (!stop) setErr(errText((e as Error).message, "無法取得遙測來源統計")); });
+    return () => { stop = true; };
+  }, [sessionId]);
+
+  if (err) return <div className="form-err">{err}</div>;
+  if (!q || q.backfilled === 0) return null;
+  const gap = q.max_gap_m != null ? `，位置最遠差 ${q.max_gap_m} m` : "";
+  return (
+    <div className={q.conflicts > 0 ? "tq-row tq-bad" : "tq-row"}>
+      <span className="tq-main">
+        遙測 {q.live} 筆即時 · {q.backfilled} 筆機上補傳
+        {q.conflicts > 0 && (
+          <b>　{q.conflicts} 筆補傳落在即時資料已覆蓋的秒數上{gap}</b>
+        )}
+      </span>
+      <InfoTip tip={q.conflicts > 0
+        ? `這些列是 2026-09-07 修好的去重漏洞留下的（${q.rule}）：同一批時間戳上有兩份互相矛盾的資料，其中 ${q.mode_mismatch} 筆連飛行模式都不一樣。即時那份直接來自飛控，補傳那份是代理的 1Hz 快照——判讀與匯出這一趟時，補傳那份要排除。已經寫進去的列不會自動刪，那是資料不是顯示問題。`
+        : `這一趟有 ${q.backfilled} 筆是機上補傳（斷線期間代理緩衝、恢復後補送），沒有任何一筆與即時資料撞在同一秒。補傳列在匯出檔裡帶 backfilled=true。`} />
+    </div>
   );
 }
 
@@ -278,7 +327,8 @@ function SessionEventsCard({ sessionId, droneName }: {
   const [rows, setRows] = useState<EventRow[] | null>(null);
   const [err, setErr] = useState<string | null>(null);
   const [src, setSrc] = useState<"all" | "vehicle" | "system">("all");
-  const [open, setOpen] = useState<EventRow | null>(null);
+  const [open, setOpen] = useState<(EventRow & { timeFirst?: string }) | null>(null);
+  const [foldOn, setFoldOn] = useState(true);
   useEffect(() => {
     let stop = false;
     setRows(null); setErr(null);
@@ -288,8 +338,16 @@ function SessionEventsCard({ sessionId, droneName }: {
     return () => { stop = true; };
   }, [sessionId]);
 
-  const shown = (rows ?? []).filter((e) =>
-    src === "all" || (src === "vehicle" ? e.source === "vehicle" : e.source !== "vehicle"));
+  const shown = (rows ?? [])
+    .filter((e) => src === "all"
+      || (src === "vehicle" ? e.source === "vehicle" : e.source !== "vehicle"))
+    // 逐列解析 detail：一列壞掉不得吃掉整批（lib/jsonb.ts）
+    .map((e) => ({ ...e, detail: eventDetail(e.detail) }));
+  // 一趟之內同一句話重複（任務進度、ACK）照樣佔滿版面——同 lib/foldEvents.tsx。
+  // **這裡的時間正序是刻意的**（讀一趟飛行從頭讀到尾），折疊後改以最近一次
+  // 排序會把順序倒過來，所以折完再依首次時間正排
+  const groups = (foldOn ? foldEvents(shown) : asGroups(shown))
+    .sort((a, b) => new Date(a.first).getTime() - new Date(b.first).getTime());
 
   return (
     <div className="card">
@@ -301,6 +359,12 @@ function SessionEventsCard({ sessionId, droneName }: {
               <button key={k} className={src === k ? "on" : ""}
                 onClick={() => setSrc(k)}>{label}</button>
             ))}
+        </span>
+        <span className="ev-filter">
+          <button className={foldOn ? "on" : ""}
+            title={foldOn ? "同一句話折成一列（點擊看未折疊的原樣）"
+              : "一則一列（點擊折疊重複）"}
+            onClick={() => setFoldOn(!foldOn)}>折疊</button>
         </span>
       </h3>
       {err && <div className="form-err">{err}</div>}
@@ -314,20 +378,28 @@ function SessionEventsCard({ sessionId, droneName }: {
           <div className="hint-line">解鎖之前發生的事不掛在架次上——去「事件」分頁看。</div>
         </div>
       )}
-      {!!shown.length && (
+      {!!groups.length && (
         <div className="events info-sevents">
-          {shown.map((e) => {
-            const d = eventDetail(e.detail);
+          {groups.map((g) => {
+            const e = g.latest, d = e.detail;
+            const sv = normSev(e.severity);
             return (
-              <div className="event ev-tap" key={e.id} title="點擊看詳情"
-                onClick={() => setOpen({ ...e, detail: d })}>
-                <span className="dot" style={{
-                  background: SEV_COLOR[e.severity] ?? SEV_COLOR.info }} />
-                <time>{hms(e.time)}</time>
+              <div className="event ev-tap" key={g.key}
+                title={g.count > 1 ? foldTitle(g) : "點擊看詳情"}
+                onClick={() => setOpen({
+                  ...e,
+                  detail: g.count > 1 ? { ...d, count: g.count } : d,
+                  ...(g.count > 1 ? { timeFirst: g.first } : {}),
+                })}>
+                <span className="dot" style={{ background: SEV_COLOR[sv] }} />
+                {/* 折疊列顯示**首次**時間：讀一趟飛行是照發生順序讀的 */}
+                <time>{hms(g.first)}</time>
                 <span className="detail">
                   {emph(evText({ type: e.type, detail: d,
                     severity: e.severity as "info" | "warning" | "critical" }))}
                 </span>
+                {g.count > 1 && <span className="ev-count">×{g.count}</span>}
+                {g.count > 1 && <EvDensity times={g.times} color={SEV_COLOR[sv]} />}
               </div>
             );
           })}
@@ -336,7 +408,8 @@ function SessionEventsCard({ sessionId, droneName }: {
       {open && (
         <EventModal onClose={() => setOpen(null)}
           ev={{ id: open.id, time: open.time, type: open.type, severity: open.severity,
-            detail: open.detail, source: open.source, drone: droneName }} />
+            detail: open.detail, source: open.source, timeFirst: open.timeFirst,
+            drone: droneName }} />
       )}
     </div>
   );
