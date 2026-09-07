@@ -195,6 +195,18 @@ mission_groups ─< group_assignments                (CASCADE)
 | 狀態 | `flight_mode` text、`armed` bool |
 | 原始 | `raw` jsonb（不常用訊息，需求變更不必一直 migrate） |
 
+**電池三欄的分工**：`battery_voltage` 是量出來的，`battery_pct` 與
+`battery_consumed_mah` 都是飛控**算**的——`pct = (BATT_CAPACITY − consumed)
+/ BATT_CAPACITY`，而 consumed 是用 `BATT_AMP_PERVLT` 對電流積分得來。
+2026-09-07 補上 `battery_current` 與 `battery_consumed_mah`：原本只存結論
+（pct）不存推導過程，於是「那個百分比可不可信」在資料庫裡答不出來。
+**`consumed_mah` 是從上電起算的累加器**，斷電歸零，只在同一段供電裡有意義。
+
+> **⚠ 這張表只在 armed 且有架次時才寫**（`main.py` 的記錄迴圈）。
+> 停在地面待機時**一筆都不會寫**——那段時間唯一完整的紀錄是 014 的原始層
+> tlog（逐框架落盤，含 `BATTERY_STATUS`）。做地面耗電測試要看 tlog：
+> `mavlogdump.py --types BATTERY_STATUS /data/mavcap/<日期>.tlog`
+
 ### 3.6 `link_metrics` — 5G 鏈路品質（hypertable，取樣率見下）**研究核心**
 
 | 欄位群 | 欄位 | 說明 |
