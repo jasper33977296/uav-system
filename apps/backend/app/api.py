@@ -3,6 +3,7 @@ import asyncio
 
 import asyncpg
 import json
+import os
 import time
 from datetime import datetime, timedelta, timezone
 from uuid import UUID
@@ -2276,6 +2277,48 @@ async def make_terrain_frame(plan_id: str, name: str | None = None):
                 settings.geofence_margin, fence=fence,
                 autopilot=row["firmware_type"], home=home and [home["lat"], home["lon"]],
                 dem=terrain.shared())}
+
+
+#: 產好的地形圖磚放這裡。**圖磚是純函數的產物**（同一塊 DEM ＋ 同一組 z/x/y
+#: 永遠是同一張），所以快取只是省 CPU，不需要失效策略——換 DEM 的時候
+#: 把這個目錄砍掉就好。
+TILE_CACHE = os.environ.get("TERRAIN_TILE_CACHE", "/data/terrain-tiles")
+
+
+@router.get("/terrain-rgb/{z}/{x}/{y}.png")
+async def terrain_rgb(z: int, x: int, y: int):
+    """給 maplibre 的地形圖磚（`raster-dem`，`encoding: "terrarium"`）。
+
+    **就地從 `.hgt` 換算，不引進影像函式庫**——後端是會飛飛機的服務，
+    為了畫圖多裝一個相依不划算，而 PNG 的最小可用編碼只有二十幾行
+    （`libs/terrain._png`）。
+
+    **這一區沒有 DEM 就回 404**，不回一張全 0 的圖磚：後者在畫面上是一片
+    海平面高度的假平地，而那比沒有地形更糟——**它看起來像個答案**。
+    """
+    if not (0 <= z <= 20 and 0 <= x < 2 ** z and 0 <= y < 2 ** z):
+        raise HTTPException(400, "z/x/y 超出範圍")
+    path = os.path.join(TILE_CACHE, str(z), str(x), f"{y}.png")
+    if os.path.exists(path):
+        with open(path, "rb") as f:
+            png = f.read()
+    else:
+        # 一張約 0.14 秒，走執行緒池才不會擋住事件迴圈——遙測與 WebSocket
+        # 都在同一條上，而地圖一次會要十幾張
+        png = await asyncio.get_running_loop().run_in_executor(
+            None, terrain.terrarium_tile, terrain.shared(), z, x, y)
+        if png is None:
+            raise HTTPException(404, "這一區沒有地形資料")
+        try:
+            os.makedirs(os.path.dirname(path), exist_ok=True)
+            tmp = f"{path}.tmp"
+            with open(tmp, "wb") as f:
+                f.write(png)
+            os.replace(tmp, path)      # 換名是原子的：不會讀到寫一半的圖磚
+        except OSError as e:
+            log.warning("地形圖磚寫不進快取（%s）——照常回應，只是下次還要再算", e)
+    return Response(content=png, media_type="image/png",
+                    headers={"Cache-Control": "public, max-age=86400"})
 
 
 @router.get("/plans/{plan_id}/profile")

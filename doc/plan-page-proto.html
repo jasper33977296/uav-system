@@ -389,16 +389,19 @@ function showTip(h,mx,my){
   tip.style.left = Math.min(mx*sc+14, r.width-190)+"px";
   tip.style.top  = Math.max(mx? my*sc-10:0, 4)+"px";
 }
-let drag=null;
+/* **放點與旋轉共用左鍵**，靠位移門檻分辨：拖過 5px 就是轉視角，
+   沒拖過就是放一個點。`MissionThumb3D` 早就是這樣做的，沿用同一套
+   ——不然「放點模式下不能轉視角」，而放點的時候正是最想轉的時候。 */
+let drag=null, moved=false;
 cv.onpointerdown = e => {
-  if(placing) return;
-  drag={x:e.clientX,y:e.clientY,b:bearing,p:pitch};
+  drag={x:e.clientX,y:e.clientY,b:bearing,p:pitch}; moved=false;
   cv.setPointerCapture(e.pointerId); cv.classList.add("drag");
 };
 cv.onpointermove = e => {
   const r=cv.getBoundingClientRect();
   const mx=(e.clientX-r.left)/r.width*cv.width, my=(e.clientY-r.top)/r.height*cv.height;
   if(drag){
+    if(Math.hypot(e.clientX-drag.x, e.clientY-drag.y) > 5) moved=true;
     bearing = drag.b + (e.clientX-drag.x)*0.6;
     /* 俯角夾在 12–86°：壓到 0 會變成側視，整個地形塌成一條線 */
     pitch = Math.max(12, Math.min(86, drag.p + (e.clientY-drag.y)*0.35));
@@ -417,7 +420,7 @@ cv.onwheel = e => {
 };
 /* 從零產生：點地面就加一個航點 */
 cv.onclick = e => {
-  if(!placing) return;
+  if(!placing || moved) return;      /* 拖過就是在轉視角，不是要放點 */
   const r=cv.getBoundingClientRect();
   const q=unproj((e.clientX-r.left)/r.width*cv.width,(e.clientY-r.top)/r.height*cv.height);
   const prev=WP[WP.length-1];
@@ -559,7 +562,7 @@ document.getElementById("startNew").onclick = () => {
     spd:2.0, src:"機上 WP_SPD"});
   sel=0; placing=true; cv.classList.add("place");
   document.getElementById("hintbar").textContent =
-    "點地形＝放下一個航點 ・ 拖曳仍可旋轉（放點模式下請用滾輪縮放）";
+    "點地形＝放下一個航點 ・ 拖曳＝轉視角 ・ 滾輪＝縮放";
   sync();
 };
 document.querySelectorAll(".seg button").forEach(b => b.onclick = () => {

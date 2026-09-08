@@ -41,6 +41,7 @@ SRTM `.hgt`：大端 int16、由北向南逐列、每列由西向東，
 import math
 import os
 import struct
+import zlib
 
 VOID = -32768
 
@@ -138,3 +139,81 @@ def shared() -> Dem:
     if _shared is None:
         _shared = Dem()
     return _shared
+
+
+# ── 給 maplibre 吃的地形圖磚（issues/048 F1 的 3D 落地）──────────
+#
+# maplibre 的 `raster-dem` 只吃 XYZ 的 PNG 圖磚，而我們手上是 `.hgt`。
+# 這裡就地換算，**不引進任何相依**：後端是會飛飛機的服務，為了畫圖多裝一個
+# 影像函式庫不划算，而 PNG 的最小可用編碼只有二十幾行。
+
+#: 高程編碼。`terrarium`：`h = R*256 + G + B/256 - 32768`。
+#: 我們的 DEM 是整數公尺，所以 B 恆為 0——**那不是精度損失**，
+#: 是來源本來就只有公尺。
+TILE_PX = 256
+
+
+def _png(width: int, height: int, rgb: bytes) -> bytes:
+    """最小可用的 PNG（8-bit RGB、濾波器 0）。
+
+    **只做我們需要的那一種**：不做調色盤、不做交錯、不做其他濾波器。
+    多做的每一種都是一段沒有人會執行到、但會壞的程式。
+    """
+    raw = bytearray()
+    for y in range(height):
+        raw.append(0)                       # 每列的濾波器型別：None
+        raw += rgb[y * width * 3:(y + 1) * width * 3]
+
+    def chunk(tag: bytes, data: bytes) -> bytes:
+        return (struct.pack(">I", len(data)) + tag + data
+                + struct.pack(">I", zlib.crc32(tag + data) & 0xFFFFFFFF))
+
+    return (b"\x89PNG\r\n\x1a\n"
+            + chunk(b"IHDR", struct.pack(">IIBBBBB", width, height, 8, 2, 0, 0, 0))
+            + chunk(b"IDAT", zlib.compress(bytes(raw), 6))
+            + chunk(b"IEND", b""))
+
+
+def _tile_bounds(z: int, x: int, y: int):
+    """XYZ 圖磚 → 經緯度範圍（Web Mercator）。"""
+    n = 2 ** z
+    lon0 = x / n * 360.0 - 180.0
+    lon1 = (x + 1) / n * 360.0 - 180.0
+    lat0 = math.degrees(math.atan(math.sinh(math.pi * (1 - 2 * y / n))))
+    lat1 = math.degrees(math.atan(math.sinh(math.pi * (1 - 2 * (y + 1) / n))))
+    return lon0, lat0, lon1, lat1      # 上緣 lat0 > 下緣 lat1
+
+
+def terrarium_tile(dem: "Dem", z: int, x: int, y: int,
+                   size: int = TILE_PX) -> bytes | None:
+    """一張 `terrarium` 編碼的地形圖磚。整張都沒有資料時回 `None`。
+
+    **沒有資料的像素填 0 m，而整張沒有資料就不給圖磚**——兩者要分開：
+    前者是一張圖裡的破洞（邊界上一定會有），後者是「這一區我們沒有 DEM」，
+    而讓 maplibre 拿到一張全 0 的圖磚，畫面上會是一片**海平面高度的假平地**。
+    """
+    lon0, lat0, lon1, lat1 = _tile_bounds(z, x, y)
+    buf = bytearray(size * size * 3)
+    any_data = False
+    for py in range(size):
+        lat = lat0 + (lat1 - lat0) * (py + 0.5) / size
+        for px in range(size):
+            lon = lon0 + (lon1 - lon0) * (px + 0.5) / size
+            h = dem.elevation(lat, lon)
+            if h is None:
+                continue                    # 留 0（＝ -32768 m）？不：見下
+            any_data = True
+            v = int(round(h)) + 32768
+            i = (py * size + px) * 3
+            buf[i] = (v >> 8) & 0xFF
+            buf[i + 1] = v & 0xFF
+    if not any_data:
+        return None
+    # 破洞補成 0 m 而不是 -32768 m：前者是海平面，後者會在畫面上變成一個
+    # 三萬公尺深的坑，把整張地形的縮放拉爛
+    zero = 32768
+    for i in range(0, len(buf), 3):
+        if buf[i] == 0 and buf[i + 1] == 0:
+            buf[i] = (zero >> 8) & 0xFF
+            buf[i + 1] = zero & 0xFF
+    return _png(size, size, bytes(buf))

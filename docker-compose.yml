@@ -64,6 +64,8 @@ services:
               "--host", "0.0.0.0", "--port", "${BACKEND_PORT:-38000}"]
     volumes:
       - ./reference/px4-events:/srv/reference/px4-events:ro   # PX4 事件字典（014）
+      # 產好的地形圖磚。**圖磚是純函數的產物**，砍掉只會再算一次
+      - ./data/terrain-tiles:/data/terrain-tiles
       # 地形圖磚（issues/047 §1-B）。**唯讀、而且不進映像**：一塊 1 弧秒
       # SRTM 是 25 MB，塞進映像會讓每次建置都拖著它跑，而它一年也不會變。
       # 目錄不存在或空的 → 預檢會說「離地高度沒有檢查」，不會假裝通過
@@ -81,6 +83,7 @@ services:
       DATABASE_URL: postgresql://uav:uav@localhost:${DB_PORT:-35432}/uav
       PYTHONPATH: /srv/libs        # 共用驅動層（libs/autopilot）
       DEM_DIR: ${DEM_DIR:-/srv/dem}   # 地形圖磚目錄（libs/terrain）
+      TERRAIN_TILE_CACHE: /data/terrain-tiles
       MAVLINK_URL: ${MAVLINK_URL:-udpin://0.0.0.0:14540}
       LINK_SOURCE: ${LINK_SOURCE:-simulated}
       AUTOREGISTER_SIMULATED: ${AUTOREGISTER_SIMULATED:-false}   # SITL/dev true：自動註冊標假機
