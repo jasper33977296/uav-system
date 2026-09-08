@@ -333,10 +333,16 @@ interface StageData { wps: StageWp[]; sel: number; hover: StageHit | null; dirty
 
 /** 用**畫圖用的那個矩陣**把 (lon, lat, 海拔) 投影回螢幕像素。
  *
- * **不能用 `map.project`**：它回的是那個經緯度在**海平面**的位置，而航線畫在
- * 一百多公尺高——實測差了 160 px，等於「要指的地方」跟「眼睛看到的地方」
- * 對不上。用同一個矩陣算，才保證命中測試與畫面是同一件事。
+ * `map.project` 只吃經緯度、拿不到高度，所以命中測試一定要走這裡——
+ * 用同一個矩陣算，才保證「要指的地方」跟「眼睛看到的地方」是同一件事。
  */
+/** 畫面中心的地面高度：地形開著的時候，相機矩陣的原點就在這個高度上。 */
+function camElevM(map: maplibregl.Map): number {
+  const e = (map as unknown as { transform?: { elevation?: number } })
+    .transform?.elevation;
+  return typeof e === "number" ? e : 0;
+}
+
 type Projector = (lon: number, lat: number, amsl: number) =>
   { x: number; y: number } | null;
 
@@ -409,12 +415,17 @@ function makeRouteLayer(map: maplibregl.Map, dataRef: { current: StageData },
       const mat = (args as { defaultProjectionData?: { mainMatrix: number[] } })
         ?.defaultProjectionData?.mainMatrix ?? (args as number[]);
       const full = new THREE.Matrix4().fromArray(mat as number[]);
+      // **開了地形之後，矩陣裡的 z=0 是「畫面中心的地面高度」，不是海平面。**
+      // 直接餵海拔會讓整條航線浮在地圖上方 `transform.elevation` 公尺
+      // ——本場域 123 m，在 z17 就是一百六十個像素，整條線看起來像飄的。
+      // 中心高度會隨著平移改變，所以每一幀扣，不是建幾何時扣
+      const dz = camElevM(map) * ref.meterInMercatorCoordinateUnits();
       camera.projectionMatrix = full.clone()
-        .multiply(new THREE.Matrix4().makeTranslation(ref.x, ref.y, ref.z));
+        .multiply(new THREE.Matrix4().makeTranslation(ref.x, ref.y, ref.z - dz));
       // 命中測試要用同一個矩陣（見 `Projector` 的說明）
       setProjector((lon, lat, amsl) => {
         const m = maplibregl.MercatorCoordinate.fromLngLat([lon, lat], amsl);
-        const v = new THREE.Vector4(m.x, m.y, m.z, 1).applyMatrix4(full);
+        const v = new THREE.Vector4(m.x, m.y, m.z - dz, 1).applyMatrix4(full);
         if (v.w <= 0) return null;                    // 在鏡頭後面
         const cvs = map.getCanvas();
         const w = cvs.clientWidth, h = cvs.clientHeight;
