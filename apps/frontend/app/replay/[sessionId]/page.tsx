@@ -630,7 +630,7 @@ export default function Replay() {
               setDrawerOpen(o);
               localStorage.setItem("replay-drawer-open", o ? "1" : "0");
             }}>
-            <summary>SINR 與 RTT（與時間軸共用 X 軸）</summary>
+            <summary>SINR 與 RTT</summary>
             <Chart rows={rows} field="sinr" height={110} yLabel="SINR (dB)"
                    thresholds={[5, -2]} events={events} t0={t0} t1={t1} idx={idx}
                    onSeek={(i) => { setIdx(i); setPlaying(false); }}
@@ -770,7 +770,7 @@ function ReplayPanel({ sess, quality, rows, events, cmds, idx, evFilter,
   return (
     <>
       <div className="card">
-        <h3>這一趟
+        <h3>任務資訊
           <span className="spacer" />
           <InfoTip tip="樣本數＝這趟收到幾筆 5G 量測；SINR 與 RTT 是那些樣本的統計。「結束方式」分得出「上鎖」與「遙測中斷」——後者不代表飛行結束，只代表資料在那裡斷了。" />
         </h3>
