@@ -791,6 +791,9 @@ def route_profile(wps: list[dict], home: dict | None = None, dem=None,
                         a if fr_k in _AMSL_FRAMES else None)
                 out["points"].append({
                     "d": round(d0 + leg * f, 1),
+                    # **座標要跟著出來**：3D 那一層要把這些點放回地圖上，
+                    # 而讓它自己再去查一次航點，兩邊就會有兩份可能不同步的資料
+                    "lat": round(la, 7), "lon": round(lo, 7),
                     "ground": None if gz is None else round(gz, 1),
                     "plan": None if plan is None else round(plan, 1),
                     "agl": (None if gz is None or plan is None
@@ -803,7 +806,8 @@ def route_profile(wps: list[dict], home: dict | None = None, dem=None,
             plan = (ha + alt if fr in _REL_FRAMES else
                     alt if fr in _AMSL_FRAMES else None)
             out["points"].append({
-                "d": 0.0, "ground": None if gz is None else round(gz, 1),
+                "d": 0.0, "lat": round(lat, 7), "lon": round(lon, 7),
+                "ground": None if gz is None else round(gz, 1),
                 "plan": None if plan is None else round(plan, 1),
                 "agl": (None if gz is None or plan is None
                         else round(plan - gz, 1)),

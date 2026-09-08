@@ -12,11 +12,13 @@ import Link from "next/link";
 import { useParams } from "next/navigation";
 import { useEffect, useState } from "react";
 
+import TerrainStage, { type StageWp } from "@/components/TerrainStage";
 import { emph } from "@/lib/emph";
 import { errText, getJson } from "@/lib/fetchJson";
 import { API, COMMAND_API } from "@/lib/signal";
 
-interface Pt { d: number; ground: number | null; plan: number | null; agl: number | null; seq: number | null }
+interface Pt { d: number; lat?: number; lon?: number; ground: number | null;
+  plan: number | null; agl: number | null; seq: number | null }
 interface Profile { points: Pt[]; home_amsl_m: number | null; frames: number[] }
 interface Leg {
   from: number; to: number; length_m: number; agl_m: number | null;
@@ -137,6 +139,7 @@ export default function PlanPage() {
   const [spd, setSpd] = useState<{ wp: number | null; rad: number | null; src: string }>(
     { wp: null, rad: null, src: "還沒讀過這台機" });
   const [err, setErr] = useState<string | null>(null);
+  const [selWp, setSelWp] = useState(0);
 
   useEffect(() => {
     let stop = false;
@@ -179,6 +182,16 @@ export default function PlanPage() {
   }, [id]);
 
   const legs = chk?.legs ?? [];
+  // 3D 要的是「航點」，而剖面回的是沿線取樣——帶 seq 的那幾筆就是航點。
+  // **高度換算在這裡做一次**（profile 的 `plan` 已經是 AMSL），
+  // 3D 元件不猜高度基準
+  const badSeq = new Set(legs.filter((l) => l.agl_m != null && l.agl_m < 3)
+    .map((l) => l.to));
+  const stageWps: StageWp[] = (prof?.points ?? [])
+    .filter((p) => p.seq != null && p.plan != null)
+    .map((p) => ({ seq: p.seq as number, lat: p.lat ?? 0, lon: p.lon ?? 0,
+      amsl: p.plan as number, ground: p.ground,
+      bad: badSeq.has(p.seq as number) }));
   const worst = legs.reduce<number | null>(
     (m, l) => (l.agl_m == null ? m : m == null || l.agl_m < m ? l.agl_m : m), null);
 
@@ -205,6 +218,12 @@ export default function PlanPage() {
         </span>
       </div>
 
+      {/* 3D 地形（issues/048 F1）。**地形是真的**：maplibre 吃我們自己從
+          `.hgt` 產的圖磚。原型那張手繪線框到此為止 */}
+      {stageWps.length > 1 && (
+        <TerrainStage wps={stageWps} sel={selWp}
+          onSelect={setSelWp} />
+      )}
       {prof && <Profile p={prof} />}
       <div className="hint-line">
         {emph("地面線來自 SRTM（水平約 30 m），**只有地形，不含樹木、電線、建物**。")}
