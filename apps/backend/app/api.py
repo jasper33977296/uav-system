@@ -835,6 +835,59 @@ async def telemetry_backfill(body: BackfillIn):
         "ORDER BY started_at DESC LIMIT 1", drone_id, hi, lo)
     session_id = sess["id"] if sess else None
 
+    # ── 補傳要跟即時走同一道閘門（2026-09-08）────────────────────
+    #
+    # 即時路徑**只在 `armed and session_id` 時才寫 telemetry**（`main.py`）。
+    # 補傳原本無條件寫，於是同一個「飛機停在地上什麼都沒發生」的狀態，
+    # 走即時路是不記錄、走補傳路變成記錄——**差別只在於當時鏈路有沒有斷**。
+    # 實測一次 72 秒的中斷補進 59 筆停機坪資料，而且後端回報「跳過 0 筆重複」
+    # （地面上根本沒有即時列可比），2026-09-07 做的時間窗去重完全用不上。
+    #
+    # **但不能整套照抄。** 那道門有兩半，性質不同：
+    #
+    # * `armed`——樣本自己就帶著，照抄。
+    # * `session_id`——**不能照抄**。補傳存在的理由正是「飛機解鎖飛了，
+    #   而地面站在斷線中沒看到解鎖、所以沒建架次」。照抄會把最該補的那批
+    #   資料整個丟掉。那種情況要**把架次補建出來**（見下）。
+    #
+    # `armed is None`（不知道）：只有在**地面站自己已經知道那時有一趟**
+    # （時間對得上某個架次）才收。不知道又沒有旁證時不寫——那是在憑空
+    # 製造一筆飛行紀錄。
+    flight = [x for x in good
+              if x.armed is True or (x.armed is None and session_id)]
+    on_ground = len(good) - len(flight)
+    if not flight:
+        log.info("補傳全部落在地面（%d 筆，%s）——即時路徑在這種狀態下本來就"
+                 "不寫，補傳沒有理由比它更積極", on_ground, body.board_uid)
+        return {"ok": True, "inserted": 0, "skipped_duplicate": 0,
+                "skipped_on_ground": on_ground, "rejected_implausible": bad,
+                "session_id": None, "blackouts_recovered": [],
+                "stayed_armed": body.stayed_armed}
+    # **範圍要用真正會寫進去的那批算**：拿被丟掉的地面樣本去撐大範圍，
+    # 下面的 blackouts UPDATE 就會把不相干的失明記錄標成「已補回」
+    lo = min(x.t for x in flight)
+    hi = max(x.t for x in flight)
+
+    # **架次補建**：這批樣本說機體是 armed，而地面站沒有對得上的架次
+    # ——那就是「解鎖本身發生在斷線期間」。**不寫孤兒、也不丟掉**，
+    # 把那一趟補出來，並用 `origin` 說清楚它是怎麼來的：這條紀錄地面站
+    # 從頭到尾沒有即時看過，判讀時要知道。
+    if session_id is None and any(x.armed for x in flight):
+        row = await db.pool.fetchrow(
+            """INSERT INTO flight_sessions
+                 (drone_id, started_at, ended_at, origin, end_reason,
+                  mission_id, mission_name)
+               SELECT $1::uuid, to_timestamp($2), to_timestamp($3),
+                      'backfilled', 'reconstructed_from_backfill',
+                      d.current_mission_id,
+                      (SELECT name FROM missions m WHERE m.id = d.current_mission_id)
+                 FROM drones d WHERE d.id = $1::uuid
+               RETURNING id::text AS id""", drone_id, lo, hi)
+        session_id = row["id"] if row else None
+        log.warning("補傳補建了一個架次（%s，%.0f–%.0f）：這台機在斷線期間"
+                    "解鎖飛過，而地面站從頭到尾沒有即時看到——"
+                    "紀錄的 origin 標成 backfilled", session_id, lo, hi)
+
     # **去重靠先查再濾，不靠 ON CONFLICT**：telemetry 是 hypertable，
     # (drone_id, time) 上沒有唯一索引，`ON CONFLICT DO NOTHING` 因此什麼也不做
     # ——重連後代理重送一段，資料就會變成兩份（2026-08-26 測出來的）。
@@ -864,23 +917,38 @@ async def telemetry_backfill(body: BackfillIn):
         i = bisect.bisect_left(have, t - DEDUP_WINDOW_S)
         return i < len(have) and have[i] <= t + DEDUP_WINDOW_S
 
-    fresh = [s for s in good if not covered(s.t)]
+    fresh = [s for s in flight if not covered(s.t)]
     rows = [(s.t, drone_id, session_id, s.lat, s.lon, s.alt_msl, s.alt_rel,
              s.heading, s.ground_speed, s.battery_pct, s.battery_voltage,
-             s.gps_fix, s.satellites, s.flight_mode) for s in fresh]
+             s.gps_fix, s.satellites, s.flight_mode, s.armed) for s in fresh]
     await db.pool.executemany(
+        # **`armed` 要寫進去。** 代理一直有送，而這句 INSERT 沒列這個欄位
+        # ——於是每一筆補傳的 armed 都是 NULL，任何想照它判斷的地方都判不了
+        # （2026-09-08：連「刪掉地面上那批」都得改寫條件才刪得到）
         """INSERT INTO telemetry (time, drone_id, session_id, lat, lon,
              alt_msl, alt_rel, heading, ground_speed, battery_pct,
-             battery_voltage, gps_fix, satellites, flight_mode, backfilled)
+             battery_voltage, gps_fix, satellites, flight_mode, armed,
+             backfilled)
            VALUES (to_timestamp($1), $2::uuid, $3::uuid, $4, $5, $6, $7, $8,
-                   $9, $10, $11, $12, $13, $14, true)""", rows)
+                   $9, $10, $11, $12, $13, $14, $15, true)""", rows)
 
-    # 把這段時間的失明記錄標成「已補回」
+    # 把這段時間的失明記錄標成「已補回」。
+    #
+    # **只標「已經結束、而且整段都被這批資料涵蓋」的失明**（2026-09-08 修）。
+    # 原本的條件是 `coalesce(ended_at, now()) >= lo`，意思是**還沒結束的失明
+    # 一律視為延伸到現在**——於是任何一次補傳都會與它重疊，把它標成已補回。
+    # 實測：10 筆、跨度 10 秒的樣本，一次標掉 8 段從幾天前開始、從來沒結束
+    # 的失明記錄。「我們從沒看到它回來」與「那段資料補回來了」是互相矛盾的
+    # 兩句話，而系統同時說了。
+    #
+    # 寧可少標也不要多標：少標只是報告保守，多標是**歷史說謊**，
+    # 而且沒有任何線索指出它在說謊。
     closed = await db.pool.fetch(
         "UPDATE blackouts SET recovered_by = 'backfilled' "
-        "WHERE drone_id = $1::uuid AND started_at <= to_timestamp($2) "
-        "AND coalesce(ended_at, now()) >= to_timestamp($3) "
-        "RETURNING id::text AS id", drone_id, hi, lo)
+        "WHERE drone_id = $1::uuid AND ended_at IS NOT NULL "
+        "AND started_at >= to_timestamp($2) AND ended_at <= to_timestamp($3) "
+        "RETURNING id::text AS id", drone_id, lo - DEDUP_WINDOW_S,
+        hi + DEDUP_WINDOW_S)
     # ── D 層：回來之後，那還算不算同一趟 ────────────────────────
     # 代理看得到整段（它就在機上），所以它說得出「這段期間機體有沒有一直
     # armed」。地面站看不到，只能問它。
@@ -898,12 +966,13 @@ async def telemetry_backfill(body: BackfillIn):
             session_id, hi)
     # **重複與時間戳不合理要分開報**：兩者都是「沒寫進去」，但一個是正常的
     # 重送、一個是機上時鐘壞了，混成一個數字等於把後者藏起來
-    log.info("補傳 %d 筆、跳過 %d 筆重複、丟棄 %d 筆時間戳不合理"
+    log.info("補傳 %d 筆、跳過 %d 筆重複、%d 筆在地面、丟棄 %d 筆時間戳不合理"
              "（%s，架次 %s，補回 %d 段失明）",
-             len(rows), len(good) - len(rows), bad, body.board_uid,
-             session_id, len(closed))
+             len(rows), len(flight) - len(rows), on_ground, bad,
+             body.board_uid, session_id, len(closed))
     return {"ok": True, "inserted": len(rows),
-            "skipped_duplicate": len(good) - len(rows),
+            "skipped_duplicate": len(flight) - len(rows),
+            "skipped_on_ground": on_ground,
             "rejected_implausible": bad,
             "session_id": session_id,
             "blackouts_recovered": [r["id"] for r in closed],
