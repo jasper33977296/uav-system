@@ -15,7 +15,7 @@
 | 1 | `drones` | 一台無人機 | 機隊註冊（靜態） | 永久 |
 | 2 | `missions` | 一條路徑快照 | 匯入／生成的具體航線（**非任務庫**，見 §5.1） | 永久 |
 | 3 | `waypoints` | 一個航點 | 屬於某條路徑 | 隨 mission |
-| 4 | `flight_sessions` | 一次飛行（armed→disarmed） | 架次，所有時序資料的歸屬 | 永久 |
+| 4 | `flight_sessions` | 一次飛行（armed→disarmed；真正離地的區間另記 `airborne_from/to`） | 架次，所有時序資料的歸屬 | 永久 |
 | 5 | `telemetry` | 一筆遙測取樣 | 飛行狀態時序（**hypertable**，1Hz） | 30 天 |
 | 6 | `link_metrics` | 一筆鏈路量測 | **研究核心**：5G 品質時序（**hypertable**，1Hz） | 30 天 |
 | 7 | `events` | 一則事件 | 系統推導事件＋機上 log | 永久 |
@@ -182,6 +182,8 @@ mission_groups ─< group_assignments                (CASCADE)
 | `note` | text | 使用者自訂備註（標實驗條件，如「開干擾器那趟」） |
 | `origin` | text | `research`／`test`／`unknown`（NULL 視為 unknown）——見 §5.3 |
 | `video_mode` | text | `on`／`off`（本趟刻意不錄）／`no_source`（該機無影像來源）——見 §5.4 |
+| `airborne_from` / `airborne_to` | timestamptz | **這一趟真正離地的區間**（飛控的 `landed_state` 說的，不是高度門檻）。NULL＝沒有離地過，**或**我們沒收到過 `landed_state`——兩者靠下一欄分辨 |
+| `landed_state_seen` | bool NOT NULL DEFAULT false | 這一趟有沒有收到過任何 `landed_state`。**false＝不知道有沒有飛**，不是「沒飛」——影像的自動刪除只在 `true 且 airborne_from IS NULL` 時才成立（見 flight-video-design §8c） |
 
 ### 3.5 `telemetry` — 飛行遙測（hypertable，1Hz）
 
@@ -192,7 +194,7 @@ mission_groups ─< group_assignments                (CASCADE)
 | 運動 | `heading` `ground_speed` `vertical_speed` real |
 | 電量 | `battery_pct` `battery_voltage` real |
 | GPS | `gps_fix` `satellites` smallint |
-| 狀態 | `flight_mode` text、`armed` bool |
+| 狀態 | `flight_mode` text、`armed` bool、`landed_state` text（`on_ground`／`takeoff`／`in_air`／`landing`，飛控自己算的；NULL＝那一秒沒收到） |
 | 原始 | `raw` jsonb（不常用訊息，需求變更不必一直 migrate） |
 
 **電池三欄的分工**：`battery_voltage` 是量出來的，`battery_pct` 與
