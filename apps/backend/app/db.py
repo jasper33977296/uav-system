@@ -883,7 +883,7 @@ async def mark_landed_seen(session_id: str) -> None:
 async def airborne_of_session(session_id: str) -> dict | None:
     """這一趟飛過沒有。回傳 None＝查不到那一趟。"""
     row = await pool.fetchrow(
-        "SELECT airborne_from, airborne_to, landed_state_seen, video_mode "
+        "SELECT airborne_from, airborne_to, landed_state_seen, video_mode, end_reason "
         "FROM flight_sessions WHERE id = $1", session_id)
     return dict(row) if row else None
 

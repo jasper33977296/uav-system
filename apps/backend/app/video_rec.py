@@ -217,6 +217,13 @@ async def discard_if_never_airborne(session_id: str, sysid: int | None, st=None)
             log.info("影像：架次 %s 沒收到過 landed_state——不知道有沒有飛，"
                      "影像照留", session_id[:8])
             return
+        # **失聯收尾的那一趟一律留。** 我們是在「看不到它」的情況下收的架次，
+        # 而 armed 之後、失聯之前它可能還沒起飛——`airborne_from` 是 NULL 只
+        # 代表**我們沒看到起飛**，不代表沒起飛。§0.2e：不知道 ≠ 沒有
+        if row.get("end_reason") in ("telemetry_lost", "telemetry_lost_backfilled"):
+            log.info("影像：架次 %s 是失聯收尾的——沒看到起飛不等於沒起飛，影像照留",
+                     session_id[:8])
+            return
         if row.get("airborne_from") is not None:
             return                                   # 飛過了
         n = await _delete_segments(session_id, sysid)
@@ -349,6 +356,11 @@ async def reconcile() -> None:
     from .state import fleet
     for st in list(fleet.values()):
         if not (st.armed and st.sysid):
+            continue
+        # **落地已經停過的不要再打開。** 這裡的條件是「armed」，而落地停錄
+        # 之後架次還開著（飛機停在地上 armed 著）——不擋的話 30 秒後這一圈
+        # 就把剛停掉的錄影又打開，新的停止條件等於白做
+        if st.landed_stopped:
             continue
         await set_record(st.sysid, True)
         if st.video_mode != "on":
