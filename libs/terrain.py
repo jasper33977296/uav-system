@@ -48,6 +48,8 @@ import struct
 import zlib
 from dataclasses import dataclass
 
+import buildings
+
 VOID = -32768
 
 #: 圖磚放這裡。容器裡由 compose 掛進來；沒有這個目錄不是錯誤——
@@ -159,8 +161,9 @@ NO_DATA = Sample(None, None, "none", None, float("inf"))
 def surface(lat: float, lon: float, dem: "Dem | None" = None) -> Sample:
     """這一點的地面與上方最高點。由細往粗退，缺就說缺。
 
-    現在只有 SRTM 一層；建物與自測 DSM 進來時在這裡往前加，
-    **五個呼叫點不必改**（doc/field-3d-model-design.md §5）。
+    地面是 SRTM；上面若有建物，`top` 換成屋頂高。**高度未知的建物
+    `top` 是 None**——那是「有東西、不知道多高」，不是「什麼都沒有」，
+    呼叫端不可以把它當成沒有障礙（§9-A）。
     """
     d = dem if dem is not None else shared()
     if d is None or not d.available:
@@ -168,7 +171,14 @@ def surface(lat: float, lon: float, dem: "Dem | None" = None) -> Sample:
     g = d.elevation(lat, lon)
     if g is None:
         return NO_DATA
-    return Sample(g, g, "srtm", None, 30.0)
+    b = buildings.shared().at(lat, lon)
+    if b is None:
+        return Sample(g, g, "srtm", None, 30.0)
+    if b.height_m is None:
+        return Sample(g, None, b.height_source, "building",
+                      buildings.OSM_HORIZ_RES_M)
+    return Sample(g, g + b.height_m, b.height_source, "building",
+                  buildings.OSM_HORIZ_RES_M)
 
 
 #: 行程共用的一份（圖磚讀進來就留著；一塊 1 弧秒圖磚 25 MB，

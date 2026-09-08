@@ -15,6 +15,7 @@ from pydantic import BaseModel, Field, field_validator
 
 import logging
 
+import buildings
 import mission_time        # libs/ 的共用實作（PYTHONPATH=/srv/libs）
 import plan_check
 import terrain
@@ -2446,6 +2447,41 @@ async def ortho_tile(z: int, x: int, y: int):
             log.warning("正射影像寫不進快取（%s）", e)
     return Response(content=data, media_type="image/jpeg",
                     headers={"Cache-Control": "public, max-age=604800"})
+
+
+@router.get("/buildings")
+async def buildings_in_bbox(min_lat: float, min_lon: float,
+                            max_lat: float, max_lon: float):
+    """範圍內的建物輪廓（GeoJSON）。3D 舞台拿它畫 `fill-extrusion`。
+
+    **高度未知的樓照樣回**，`height_m` 是 null、`known` 是 false——
+    畫面要畫得出「有一棟樓、不知道多高」，而不是當它不存在（§9-A）。
+    前端不得自己存一份高度（§9-F）。
+    """
+    if max_lat <= min_lat or max_lon <= min_lon:
+        raise HTTPException(400, "bbox 顛倒了")
+    if (max_lat - min_lat) > 0.2 or (max_lon - min_lon) > 0.2:
+        raise HTTPException(400, "bbox 太大")
+    store = buildings.shared()
+    feats = []
+    for b in store.items:
+        if (b.bbox[2] < min_lat or b.bbox[0] > max_lat
+                or b.bbox[3] < min_lon or b.bbox[1] > max_lon):
+            continue
+        feats.append({
+            "type": "Feature",
+            "properties": {
+                "id": b.id, "name": b.name, "kind": b.kind,
+                "height_m": b.height_m, "height_source": b.height_source,
+                "known": b.known,
+            },
+            "geometry": {"type": "Polygon", "coordinates": [
+                [[lo, la] for la, lo in b.ring] + [[b.ring[0][1], b.ring[0][0]]]]},
+        })
+    return {"type": "FeatureCollection", "features": feats,
+            "meta": {"available": store.available, "files": store.files,
+                     "known": sum(1 for f in feats if f["properties"]["known"]),
+                     "unknown": sum(1 for f in feats if not f["properties"]["known"])}}
 
 
 @router.get("/plans/{plan_id}/profile")

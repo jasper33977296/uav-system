@@ -22,6 +22,7 @@ import json
 import math
 
 import autopilot as _autopilot
+import buildings
 import terrain
 
 
@@ -318,11 +319,18 @@ def check_terrain(nav: list[dict], home: dict, dem=None,
     below = []
     rise = 0.0
     checked = ground_n = 0
+    #: 航線經過、但高度不知道的建物。**不是「沒有障礙」**（§9-A）
+    blind: dict[str, str] = {}
 
     def look(lat, lon, amsl, where):
         nonlocal worst, rise, checked, ground_n
-        gz = terrain.surface(lat, lon, dem).top
+        s = terrain.surface(lat, lon, dem)
+        gz = s.top
         if gz is None:
+            if s.kind == "building" and amsl is not None:
+                b = buildings.shared().at(lat, lon)
+                if b is not None:
+                    blind.setdefault(b.id, b.name or b.kind)
             return
         ground_n += 1
         rise = max(rise, gz - ha)
@@ -366,6 +374,15 @@ def check_terrain(nav: list[dict], home: dict, dem=None,
         # 單獨列出來，畫面才挑得出「這次真正該看的是哪幾行」
         "notes": [],
     }
+    if blind:
+        names = "、".join(sorted(blind.values())[:4])
+        more = f" 等 {len(blind)} 棟" if len(blind) > 4 else ""
+        out["problems"].append(
+            f"航線經過 {names}{more}，**這些建物的高度沒有量過**——"
+            f"OSM 上既沒有 height 也沒有樓層數。系統不會替它猜一個數字放行"
+            f"（猜到的與量到的是兩件事），要飛就得先去量。")
+        out["terrain_blind"] = [{"id": k, "name": v} for k, v in sorted(blind.items())]
+
     if not checked:
         # **「都是地形跟隨」與「查不到地形資料」是兩件事**，說錯了會讓人
         # 以為自己剛做的改寫沒生效。分辨的依據是地面到底量到了沒
@@ -460,7 +477,9 @@ def to_terrain_frame(nav: list[dict], home: dict, dem=None,
             new.append(dict(w))
             out["kept"] += 1
             continue
-        gz = terrain.surface(lat, lon, dem).top
+        # **地面，不是屋頂。** frame 10 的基準是飛控自己那份地形庫，
+        # 那裡面沒有建物——照屋頂換算會讓飛機低飛一整棟樓
+        gz = terrain.surface(lat, lon, dem).ground
         if gz is None:
             out["problems"].append(
                 f"seq {w.get('seq')}（{lat:.5f}, {lon:.5f}）查不到地形高程"
@@ -673,7 +692,12 @@ def leg_profile(wps: list[dict], home: dict | None = None, dem=None,
                 f = k / n
                 la = a["lat"] + (b["lat"] - a["lat"]) * f
                 lo = a["lon"] + (b["lon"] - a["lon"]) * f
-                gz = terrain.surface(la, lo, dem).top
+                smp = terrain.surface(la, lo, dem)
+                gz = smp.top
+                if gz is None and smp.kind == "building":
+                    bd = buildings.shared().at(la, lo)
+                    if bd is not None:
+                        leg.setdefault("blind", []).append(bd.name or bd.id)
                 if gz is None or a["alt"] is None or b["alt"] is None:
                     continue
                 if a["frame"] in _REL_FRAMES and b["frame"] in _REL_FRAMES:
@@ -755,6 +779,29 @@ def leg_profile(wps: list[dict], home: dict | None = None, dem=None,
     return out
 
 
+def _profile_point(lat: float, lon: float, dem, plan: float | None) -> dict:
+    """剖面圖的一個取樣點：地面、屋頂、離地，三者出處分開。
+
+    `top` 是「這一點上方最高的東西」。建物高度未知時 `top` 是 None 而
+    `obst` 是 `"unknown"`——畫成開口向上的柱子，不是一條線（§9-A）。
+    """
+    s = terrain.surface(lat, lon, dem)
+    ref = s.top if s.top is not None else s.ground
+    pt = {
+        "lat": round(lat, 7), "lon": round(lon, 7),
+        "ground": None if s.ground is None else round(s.ground, 1),
+        "top": None if s.top is None else round(s.top, 1),
+        "plan": None if plan is None else round(plan, 1),
+        "agl": (None if ref is None or plan is None else round(plan - ref, 1)),
+        "src": s.source,
+    }
+    if s.kind == "building":
+        b = buildings.shared().at(lat, lon)
+        pt["obst"] = "unknown" if s.top is None else "building"
+        pt["obst_name"] = (b.name or b.kind) if b else None
+    return pt
+
+
 def route_profile(wps: list[dict], home: dict | None = None, dem=None,
                   home_amsl: float | None = None, step: float = DEM_STEP_M) -> dict:
     """剖面圖的資料：沿航線每 `step` 公尺，地面高程與規劃高度各一條。
@@ -807,34 +854,24 @@ def route_profile(wps: list[dict], home: dict | None = None, dem=None,
             for k in range(1, n + 1):
                 f = k / n
                 la, lo = pa[0] + (lat - pa[0]) * f, pa[1] + (lon - pa[1]) * f
-                gz = terrain.surface(la, lo, dem).top
                 a = palt + (alt - palt) * f
                 fr_k = fr if f > 0.5 else pfr
                 plan = (ha + a if fr_k in _REL_FRAMES else
                         a if fr_k in _AMSL_FRAMES else None)
-                out["points"].append({
-                    "d": round(d0 + leg * f, 1),
-                    # **座標要跟著出來**：3D 那一層要把這些點放回地圖上，
-                    # 而讓它自己再去查一次航點，兩邊就會有兩份可能不同步的資料
-                    "lat": round(la, 7), "lon": round(lo, 7),
-                    "ground": None if gz is None else round(gz, 1),
-                    "plan": None if plan is None else round(plan, 1),
-                    "agl": (None if gz is None or plan is None
-                            else round(plan - gz, 1)),
-                    "seq": seq if k == n else None,
-                })
+                # **座標要跟著出來**：3D 那一層要把這些點放回地圖上，
+                # 而讓它自己再去查一次航點，兩邊就會有兩份可能不同步的資料
+                pt = _profile_point(la, lo, dem, plan)
+                pt["d"] = round(d0 + leg * f, 1)
+                pt["seq"] = seq if k == n else None
+                out["points"].append(pt)
             d0 += leg
         else:
-            gz = terrain.surface(lat, lon, dem).top
             plan = (ha + alt if fr in _REL_FRAMES else
                     alt if fr in _AMSL_FRAMES else None)
-            out["points"].append({
-                "d": 0.0, "lat": round(lat, 7), "lon": round(lon, 7),
-                "ground": None if gz is None else round(gz, 1),
-                "plan": None if plan is None else round(plan, 1),
-                "agl": (None if gz is None or plan is None
-                        else round(plan - gz, 1)),
-                "seq": seq})
+            pt = _profile_point(lat, lon, dem, plan)
+            pt["d"] = 0.0
+            pt["seq"] = seq
+            out["points"].append(pt)
     return out
 
 

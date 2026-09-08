@@ -20,3 +20,6 @@ data/dem/*.hgt
 data/flight-logs/*.bin
 data/terrain-tiles/
 data/ortho/
+
+# 建物輪廓：跟 .hgt 同級的離線資產，佈署前用 scripts/fetch-buildings.py 抓
+data/buildings/*.geojson

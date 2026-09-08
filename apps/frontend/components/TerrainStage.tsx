@@ -123,6 +123,7 @@ export default function TerrainStage({ wps, sel, onSelect, tipFor, placing,
                  "hillshade-highlight-color": "#8a8474",
                  "hillshade-exaggeration": 0.35 },
       });
+      addBuildings(map, wps);
       map.addLayer(makeRouteLayer(map, dataRef, (p) => { projRef.current = p; }));
       fitRoute(map, dataRef.current.wps);
       // 先粗估一次鏡頭，再**量畫面上實際落在哪裡**去修（見 frameRoute）
@@ -336,6 +337,51 @@ interface StageData { wps: StageWp[]; sel: number; hover: StageHit | null; dirty
  * `map.project` 只吃經緯度、拿不到高度，所以命中測試一定要走這裡——
  * 用同一個矩陣算，才保證「要指的地方」跟「眼睛看到的地方」是同一件事。
  */
+/** 建物：有量過高度的拉成實體，**沒量過的是另一種東西**。
+ *
+ * 沒量過的不能畫成一個高度——那等於替它猜一個數字，而猜到的與量到的
+ * 是兩件事（doc/field-3d-model-design.md §9-A）。所以它畫成一根半透明、
+ * 只到 `BLIND_H` 的柱子，顏色與實體建物不同，滑鼠移上去說「高度未知」。
+ */
+const BLIND_H = 30;
+
+function addBuildings(map: maplibregl.Map, wps: StageWp[]) {
+  const pts = wps.filter((w) => w.lat && w.lon);
+  if (!pts.length) return;
+  const lats = pts.map((w) => w.lat), lons = pts.map((w) => w.lon);
+  const pad = 0.006;
+  const q = new URLSearchParams({
+    min_lat: String(Math.min(...lats) - pad), min_lon: String(Math.min(...lons) - pad),
+    max_lat: String(Math.max(...lats) + pad), max_lon: String(Math.max(...lons) + pad),
+  });
+  fetch(`${API}/api/buildings?${q}`).then((r) => r.ok ? r.json() : null).then((fc) => {
+    if (!fc || !fc.features?.length || !map.getStyle()) return;
+    // 航線是 three.js 自訂圖層，要畫在建物之上才看得出「穿過去」
+    const before = map.getLayer("route3d") ? "route3d" : undefined;
+    map.addSource("buildings", { type: "geojson", data: fc });
+    map.addLayer({
+      id: "buildings", type: "fill-extrusion", source: "buildings",
+      filter: ["==", ["get", "known"], true],
+      paint: {
+        "fill-extrusion-height": ["get", "height_m"],
+        "fill-extrusion-base": 0,
+        "fill-extrusion-color": "#8d8579",
+        "fill-extrusion-opacity": 0.85,
+      },
+    }, before);
+    map.addLayer({
+      id: "buildings-blind", type: "fill-extrusion", source: "buildings",
+      filter: ["==", ["get", "known"], false],
+      paint: {
+        "fill-extrusion-height": BLIND_H,
+        "fill-extrusion-base": 0,
+        "fill-extrusion-color": "#c98a2b",
+        "fill-extrusion-opacity": 0.35,
+      },
+    }, before);
+  }).catch(() => { /* 沒有建物資料就不畫——不是錯誤 */ });
+}
+
 /** 畫面中心的地面高度：地形開著的時候，相機矩陣的原點就在這個高度上。 */
 function camElevM(map: maplibregl.Map): number {
   const e = (map as unknown as { transform?: { elevation?: number } })

@@ -19,6 +19,12 @@ import { errText, getJson } from "@/lib/fetchJson";
 import { API, COMMAND_API } from "@/lib/signal";
 
 interface Pt { d: number; lat?: number; lon?: number; ground: number | null;
+  /** 這一點上方最高的東西（含建物）。**建物高度未知時是 null**——
+   *  那是「有東西、不知道多高」，不是「什麼都沒有」 */
+  top: number | null; obst?: "building" | "unknown"; obst_name?: string | null;
+  /** 這個高度的出處（`srtm`／`osm:height`／`osm:levels`／`unknown`）。
+   *  **樓層數推算的與量到的不是同一件事**，畫面要說得出來 */
+  src?: string;
   plan: number | null; agl: number | null; seq: number | null }
 interface Profile { points: Pt[]; home_amsl_m: number | null; frames: number[] }
 interface Leg {
@@ -46,7 +52,7 @@ function frameLabel(frames: number[]): string {
   return `高度＝${FRAME_TEXT[frames[0]] ?? `frame ${frames[0]}`}`;
 }
 
-/** 剖面圖：地面一條、規劃一條，中間就是離地空間。 */
+/** 剖面圖：地面一條、屋頂一條、規劃一條，中間就是離地空間。 */
 function Profile({ p }: { p: Profile }) {
   const pts = p.points.filter((x) => x.ground != null);
   if (pts.length < 2) {
@@ -55,7 +61,8 @@ function Profile({ p }: { p: Profile }) {
   }
   const W = 900, H = 260, PAD_L = 46, PAD_R = 12, PAD_T = 14, PAD_B = 26;
   const dMax = Math.max(...pts.map((x) => x.d), 1);
-  const vals = pts.flatMap((x) => [x.ground!, x.plan ?? x.ground!]);
+  const surf = (x: Pt) => x.top ?? x.ground!;
+  const vals = pts.flatMap((x) => [x.ground!, surf(x), x.plan ?? x.ground!]);
   let lo = Math.min(...vals), hi = Math.max(...vals);
   // **y 軸至少 6 公尺**：一條平坦航線若照資料自動縮放，2 m 的起伏會被拉滿
   // 整個圖高，看起來像懸崖——那是用版面製造出來的恐慌
@@ -71,10 +78,46 @@ function Profile({ p }: { p: Profile }) {
   const pLine = planPts.map((x, i) => `${i ? "L" : "M"}${X(x.d).toFixed(1)},${Y(x.plan!).toFixed(1)}`).join("");
   // **兩條線中間那一塊才是主角。** 只畫兩條線，看到的是「兩條線」；
   // 把中間填起來，看到的才是「離地空間」——那正是這一頁存在的理由。
+  // 離地帶量到的是**屋頂**，不是地面——飛過一棟樓的時候，兩者差一整棟樓
   const band = planPts.length
     ? pLine + planPts.slice().reverse().map(
-      (x) => `L${X(x.d).toFixed(1)},${Y(x.ground!).toFixed(1)}`).join("") + "Z"
+      (x) => `L${X(x.d).toFixed(1)},${Y(surf(x)).toFixed(1)}`).join("") + "Z"
     : "";
+  // 有量到高度的建物：地面到屋頂之間填實。**連續的才算一棟**，
+  // 中間斷掉就另起一段，否則兩棟樓之間的空地會被填成實心
+  // **牆是垂直的。** 每 30 m 才取樣一次，照取樣點連線會把一棟樓畫成
+  // 一根尖錐——那是取樣造成的形狀，不是那棟樓的形狀
+  const half = dMax / Math.max(1, pts.length - 1) / 2;
+  type Roof = { d0: number; d1: number; y: number; g: number;
+                name?: string | null; src?: string };
+  const roofs: Roof[] = [];
+  pts.forEach((x, i) => {
+    if (x.top == null || x.top <= x.ground! + 0.05) return;
+    const prev = pts[i - 1];
+    const cont = roofs.length && prev && prev.top != null
+      && prev.top > prev.ground! + 0.05 && prev.obst_name === x.obst_name;
+    if (cont) {
+      const c = roofs[roofs.length - 1];
+      c.d1 = x.d + half;
+      c.y = Math.min(c.y, Y(x.top));
+      c.g = Math.max(c.g, Y(x.ground!));
+    } else {
+      roofs.push({ d0: x.d - half, d1: x.d + half, y: Y(x.top), g: Y(x.ground!),
+                   name: x.obst_name, src: x.src });
+    }
+  });
+  // 高度未知的建物：**開口向上的柱子**，不是一條線——`assumed-default`
+  // 不得用來放行，畫面也不能把它畫成一個數字（§9-A）
+  const blind: { d0: number; d1: number; g: number; name?: string | null }[] = [];
+  pts.forEach((x) => {
+    if (x.obst !== "unknown") return;
+    const last = blind[blind.length - 1];
+    if (last && x.d - last.d1 < 2 * (dMax / Math.max(1, pts.length))) {
+      last.d1 = x.d; last.g = Math.max(last.g, Y(x.ground!));
+    } else {
+      blind.push({ d0: x.d, d1: x.d, g: Y(x.ground!), name: x.obst_name });
+    }
+  });
   const under = planPts.filter((x) => (x.agl ?? 1) < 0);
   // 最窄的地方直接標在圖上：使用者要的是「哪裡最危險」，不是自己去比對兩條線
   const tight = planPts.reduce<Pt | null>(
@@ -93,17 +136,51 @@ function Profile({ p }: { p: Profile }) {
       {/* 離地帶用**規劃線自己的顏色**（低透明度），不用 accent——
           `accent` 只准互動 chrome（ui-spec §4.6 的 design-tokens 鐵則），
           而這一塊是資料 */}
+      <defs>
+        <pattern id="blindhatch" width="6" height="6" patternUnits="userSpaceOnUse"
+          patternTransform="rotate(45)">
+          <line x1="0" y1="0" x2="0" y2="6" stroke="var(--status-warn)" strokeWidth="1.4" />
+        </pattern>
+      </defs>
       {band && <path d={band} fill="var(--series-1)" opacity="0.14" />}
       <path d={gFill} fill="var(--hairline)" />
+      {roofs.map((r, i) => (
+        <g key={`r${i}`}>
+          <rect x={X(r.d0)} y={r.y} width={Math.max(3, X(r.d1) - X(r.d0))}
+            height={Math.max(1, r.g - r.y)} fill="var(--ink-2)" opacity="0.55"
+            stroke="var(--ink-2)" strokeWidth="1.5" />
+          <text x={(X(r.d0) + X(r.d1)) / 2} y={r.y - 5} fill="var(--ink-2)"
+            fontSize="10" textAnchor="middle">
+            {r.name ?? "建物"}{r.src === "osm:levels" ? "・樓層數推算" : ""}
+          </text>
+        </g>
+      ))}
+      {/* 開口向上：只畫左右與底，**沒有頂**——頂在哪裡就是不知道 */}
+      {blind.map((b, i) => {
+        const x0 = X(b.d0) - 3, x1 = X(b.d1) + 3;
+        return (
+          <g key={`b${i}`}>
+            <rect x={x0} y={PAD_T} width={Math.max(4, x1 - x0)} height={b.g - PAD_T}
+              fill="url(#blindhatch)" opacity="0.35" />
+            <path d={`M${x0.toFixed(1)},${PAD_T}L${x0.toFixed(1)},${b.g.toFixed(1)}`
+              + `L${x1.toFixed(1)},${b.g.toFixed(1)}L${x1.toFixed(1)},${PAD_T}`}
+              fill="none" stroke="var(--status-warn)" strokeWidth="1.5" />
+            <text x={(x0 + x1) / 2} y={PAD_T + 12} fill="var(--status-warn)"
+              fontSize="10" textAnchor="middle">
+              {b.name ?? "建物"}・高度未知
+            </text>
+          </g>
+        );
+      })}
       <path d={gLine} stroke="var(--ink-2)" strokeWidth="1.5" fill="none" />
       <path d={pLine} stroke="var(--series-1)" strokeWidth="2" fill="none"
         strokeLinejoin="round" />
       {tight?.agl != null && (
         <g>
-          <line x1={X(tight.d)} x2={X(tight.d)} y1={Y(tight.plan!)} y2={Y(tight.ground!)}
+          <line x1={X(tight.d)} x2={X(tight.d)} y1={Y(tight.plan!)} y2={Y(surf(tight))}
             stroke={tight.agl < 0 ? "var(--status-danger)" : "var(--status-warn)"}
             strokeWidth="1.5" strokeDasharray="3 2" />
-          <text x={X(tight.d) + 5} y={(Y(tight.plan!) + Y(tight.ground!)) / 2 + 4}
+          <text x={X(tight.d) + 5} y={(Y(tight.plan!) + Y(surf(tight))) / 2 + 4}
             fill={tight.agl < 0 ? "var(--status-danger)" : "var(--status-warn)"} fontSize="12">
             最窄 {tight.agl} m
           </text>
@@ -525,7 +602,7 @@ export default function PlanPage() {
       )}
       {prof && <Profile p={prof} />}
       <div className="hint-line">
-        {emph("地面線來自 SRTM（水平約 30 m）——**被格子抹平的表面**：樹冠與屋頂混在裡面，但沒有一棟樓是它畫得出來的。既不能當乾淨的地面，也不能當障礙物圖。")}
+        {emph("地面線來自 SRTM（水平約 30 m）——**被格子抹平的表面**：樹冠與屋頂混在裡面，但沒有一棟樓是它畫得出來的。建物是另一份（OSM 輪廓）：灰塊標「樓層數推算」的是**樓層數 × 3.5 m 猜的**，不是量的；橘色斜線的柱子**沒有頂**，因為那棟樓的高度沒有人量過——系統不替它猜一個數字放行。輪廓只取外環，**中庭當成實心**（多禁不會少禁）。")}
       </div>
 
       {(chk?.problems?.length || chk?.warnings?.length) ? (

@@ -71,6 +71,8 @@ services:
       # SRTM 是 25 MB，塞進映像會讓每次建置都拖著它跑，而它一年也不會變。
       # 目錄不存在或空的 → 預檢會說「離地高度沒有檢查」，不會假裝通過
       - ./data/dem:/srv/dem:ro
+      # 建物輪廓（OSM）；唯讀。佈署前用 scripts/fetch-buildings.py 抓
+      - ./data/buildings:/srv/buildings:ro
       # 簽章金鑰（issues/040 A5-b）。**獨立 volume、不與位址表共用**：
       # 一個是設定、一個是秘密，混在一起的下場是備份與除錯時一起被帶走。
       # **不放映像**（映像會被推到 registry）、**不放資料庫**（DB 會被 dump）。
@@ -84,6 +86,7 @@ services:
       DATABASE_URL: postgresql://uav:uav@localhost:${DB_PORT:-35432}/uav
       PYTHONPATH: /srv/libs        # 共用驅動層（libs/autopilot）
       DEM_DIR: ${DEM_DIR:-/srv/dem}   # 地形圖磚目錄（libs/terrain）
+      BUILDINGS_DIR: ${BUILDINGS_DIR:-/srv/buildings}  # 建物輪廓（libs/buildings）
       TERRAIN_TILE_CACHE: /data/terrain-tiles
       ORTHO_CACHE: /data/ortho
       MAVLINK_URL: ${MAVLINK_URL:-udpin://0.0.0.0:14540}
@@ -141,6 +144,7 @@ services:
     volumes:
       - ./missions:/srv/missions:ro   # 航線檔（外部觸發 GET /api/plans、POST /api/start）；唯讀
       - ./data/dem:/srv/dem:ro        # 地形圖磚（issues/047 §1-B）；唯讀
+      - ./data/buildings:/srv/buildings:ro   # 建物輪廓（OSM）；唯讀
       # 從飛控撈回來的 dataflash 紀錄。**掛到 repo 外的 data/ 下**：
       # 一份 1.8 MB、事故調查用，不進 git（見 .gitignore）
       - ./data/flight-logs:/data/flight-logs
@@ -152,6 +156,7 @@ services:
       DATABASE_URL: postgresql://uav:uav@localhost:${DB_PORT:-35432}/uav
       PYTHONPATH: /srv/libs        # 共用驅動層（libs/autopilot）
       DEM_DIR: ${DEM_DIR:-/srv/dem}   # 地形圖磚目錄（libs/terrain）
+      BUILDINGS_DIR: ${BUILDINGS_DIR:-/srv/buildings}  # 建物輪廓（libs/buildings）
       FLIGHT_LOG_DIR: /data/flight-logs
       MISSIONS_DIR: ${MISSIONS_DIR:-/srv/missions}
       COMMAND_MAVLINK_URL: ${COMMAND_MAVLINK_URL:-udpin://0.0.0.0:14541}
