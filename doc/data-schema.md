@@ -175,7 +175,7 @@ mission_groups ─< group_assignments                (CASCADE)
 | `id` | uuid PK | |
 | `drone_id` | uuid NOT NULL → drones | |
 | `started_at` / `ended_at` | timestamptz | armed→disarmed；`ended_at` NULL＝進行中 |
-| `mission_id` | uuid → missions | 這趟飛的是哪條路徑（綁定序見 §5.2）；手飛為 NULL。路徑被刪＝SET NULL |
+| `mission_id` | uuid → missions | **解鎖那一刻**那台機要飛的路徑（綁定序見 §5.2）；手飛為 NULL。路徑被刪＝SET NULL。**飛行中換路徑不會更新這一欄**——見下方「一趟可以飛不只一份路徑」 |
 | `mission_name` | text | **路徑名稱快照（023）**：建立架次時複製當下的名字。路徑刪除後 `mission_id` 變 NULL，靠這欄仍能說「飛的是 X（路徑已刪除）」而非一片空白——對應「飛行紀錄要永遠存在」 |
 | `group_id` | uuid | 屬於哪次編隊（013）；單飛為 NULL |
 | `summary` | jsonb | 落地後計算：航程、最大高度、SINR 統計等 |
@@ -184,6 +184,44 @@ mission_groups ─< group_assignments                (CASCADE)
 | `video_mode` | text | `on`／`off`（本趟刻意不錄）／`no_source`（該機無影像來源）／`discarded`（從未離地，影像已自動刪除）——見 §5.4 與 flight-video-design §8c |
 | `airborne_from` / `airborne_to` | timestamptz | **這一趟真正離地的區間**（飛控的 `landed_state` 說的，不是高度門檻）。NULL＝沒有離地過，**或**我們沒收到過 `landed_state`——兩者靠下一欄分辨 |
 | `landed_state_seen` | bool NOT NULL DEFAULT false | 這一趟有沒有收到過任何 `landed_state`。**false＝不知道有沒有飛**，不是「沒飛」——影像的自動刪除只在 `true 且 airborne_from IS NULL` 時才成立（見 flight-video-design §8c） |
+
+#### 一趟可以飛不只一份路徑（使用者定案 2026-09-08）
+
+使用者原話：**「一個 mission 可以接受執行多個 plan 路徑規劃」**。
+所以飛行中換路徑**仍然是同一趟**——架次的定義是 arm→disarm，飛機沒落地，
+中間那個切點在物理上什麼都沒發生。
+
+但要說得出「換過」，因為畫面現在會說錯話：
+
+| | 說的是哪一份 |
+|---|---|
+| 機上實際飛的 | 換上去的那份 |
+| 即時頁疊圖 | 換上去的那份（`show_on_live`） |
+| **架次紀錄／資訊頁／回放頁疊的預計路徑** | **解鎖那一刻那份** |
+
+`create_session` 在 arm 的瞬間解析一次 `mission_id` 與 `mission_name` 快照，
+之後不再更新；飛行中上傳只改 `drones.current_mission_id`
+（`command/main.py`）。全 repo 沒有任何一行 `UPDATE flight_sessions SET mission_id`。
+
+**不加欄位。** 這件事**已經被記錄了**：`_audit` 解得出 `session_id`，所以
+飛行中的 `mission_upload` 會帶著架次寫進 `command_log`，`params.mission_id`
+就是換上去的那份，`time` 就是換的時間。再開一個欄位等於同一件事有兩個家，
+而它們遲早不一致。
+
+因此：
+
+* `/api/sessions` 與 `/api/sessions/{id}` 多回一個**衍生**欄位
+  `plan_changes`：這一趟之內 `action='mission_upload'` 且 `result='accepted'`
+  的筆數。0＝全程同一份。
+* `/api/sessions/{id}/commands` 的 `mission_upload` 列補上 `mission_name`
+  ——不然畫面只拿得到一個 uuid。
+* 畫面上：任務 chip 標「（飛行中換過 N 次）」，換了哪幾份、幾點換的住 ⓘ。
+  比較頁的「任務」維度要標出來——**那個維度假設一趟＝一條路徑**。
+
+> **到 2026-09-08 為止一次都還沒發生**（所有 `mission_upload` 的 `session_id`
+> 都是 NULL），所以還沒有人被它誤導過。這一版做的是「發生的時候說得出來」。
+> 真的開始這樣飛之後，再考慮 `session_missions`（一趟掛多份、按時間排），
+> 那時回放頁才能照時間切換疊圖。
 
 ### 3.5 `telemetry` — 飛行遙測（hypertable，1Hz）
 
