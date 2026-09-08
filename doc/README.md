@@ -28,6 +28,8 @@
 |---|---|
 | [gcs-replacement.md](gcs-replacement.md) | GCS 取代計畫：command 服務、兩層收集、群組任務、階段驗收表 |
 | [agent-mcp-goals.md](agent-mcp-goals.md) | 終局目標：系統作為 MCP 供 agent 使用——任務層工具/紀錄完備標準/分析 API（issue 019） |
+| [route-planning-first-principles.md](route-planning-first-principles.md) | 航線規劃第一原理：意圖→幾何→MAVLink→實飛的每一次翻譯，C1–C9 必要條件與 F1–F6 功能 |
+| [field-3d-model-design.md](field-3d-model-design.md) | **場域 3D 建模（DEM 深入調查）**：地形＋建物的資料源評比、`surface()` 抽象、六階段順序、外部專案做法評比（§9）|
 
 ## 現行設計規範（實作照這裡）
 
