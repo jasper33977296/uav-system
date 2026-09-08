@@ -15,7 +15,7 @@
  * 誠實規則照舊：載入中／取得失敗／真的沒有，三種話分開講；
  * 拿不到的段落**整段不畫並說明**，不畫一半。
  */
-import { useEffect, useState } from "react";
+import { Fragment, useEffect, useState } from "react";
 import { useRouter } from "next/navigation";
 
 import CoverageCard, { type Coverage } from "@/components/InfoCoverage";
@@ -58,6 +58,11 @@ const END_LABELS: Record<string, string> = {
   disarmed: "上鎖（正常結束）",
   telemetry_lost: "遙測中斷（不代表飛行結束）",
   telemetry_lost_backfilled: "遙測中斷，事後由機上補回",
+};
+
+/** 影像那一欄的說法。**認不得的原樣顯示代碼**，同 END_LABELS 的理由。 */
+const VIDEO_LABELS: Record<string, string> = {
+  on: "有錄影", off: "未錄影", no_source: "沒有影像源",
 };
 
 /** 指令的下場。**「被擋下」與「送出後失敗」不是同一件事**——前者是守門
@@ -138,14 +143,23 @@ export default function InfoFlights({ drones }: { drones: DroneRow[] }) {
             {drone ? "這台機還沒有飛行紀錄。" : "還沒有任何飛行紀錄——一次解鎖到上鎖＝一趟。"}
           </div>
         )}
+        {/* **日期做群組標頭**：逐列重複年月日的話，真正在變的（時間、時長、
+            出過什麼事）會被擠到右邊（ui-spec §6c.7） */}
         <div className="info-rows">
-          {(sessions ?? []).map((s) => (
-            <button key={s.id}
+          {(sessions ?? []).map((s, i, arr) => (
+            <Fragment key={s.id}>
+              {dayShort(s.started_at).slice(0, 5)
+                !== dayShort(arr[i - 1]?.started_at ?? "").slice(0, 5) && (
+                <div className="info-day">{dayShort(s.started_at).slice(0, 5)}</div>
+              )}
+            <button
               className={`info-srow${s.id === selId ? " on" : ""}`}
               onClick={() => setSelId(s.id)}>
-              <span className="info-sday">{dayShort(s.started_at)}</span>
-              <span className="info-sname">{s.drone_name}</span>
+              <span className="info-sday">{hms(s.started_at).slice(0, 5)}</span>
               <span className="info-sdur">{duration(s.started_at, s.ended_at)}</span>
+              {/* 機名只在「機：全部」時出現——已經篩成一台了還逐列重複是雜訊 */}
+              {!drone && <span className="info-sname">{s.drone_name}</span>}
+              <span className="spacer" />
               {/* 「這趟出過事嗎」要在清單上看得出來，不必逐趟點進去 */}
               {!!s.events_critical && (
                 <span className="info-badge bad" title="危急事件">{s.events_critical}</span>
@@ -154,6 +168,7 @@ export default function InfoFlights({ drones }: { drones: DroneRow[] }) {
                 <span className="info-badge warn" title="警告事件">{s.events_warning}</span>
               )}
             </button>
+            </Fragment>
           ))}
         </div>
       </div>
@@ -172,6 +187,8 @@ function FlightDetail({ s, onReplay }: { s: SessionRow; onReplay: () => void }) 
   return (
     <>
       <div className="card">
+        {/* **這趟是什麼**（chip）與**量到什麼**（KPI）分兩層：舊版八格平鋪，
+            「影像 沒有影像源」與「平均 SINR」一樣大（ui-spec §6c.7） */}
         <h3>
           {s.drone_name}
           <span className="h3-note">
@@ -179,8 +196,11 @@ function FlightDetail({ s, onReplay }: { s: SessionRow; onReplay: () => void }) 
             {s.ended_at ? "" : "（尚未結束）"}
           </span>
         </h3>
+        <div className="chips info-chips">
+          <span className="chip">{s.mission_name ?? "無任務"}</span>
+          <span className="chip">{VIDEO_LABELS[s.video_mode ?? ""] ?? s.video_mode ?? "影像未知"}</span>
+        </div>
         <div className="metrics info-metrics">
-          <M label="任務" value={s.mission_name ?? "無"} />
           <M label="鏈路樣本" value={s.summary?.samples_total != null
             ? String(s.summary.samples_total) : "—"} />
           <M label="平均 SINR" value={num(s.summary?.avg_sinr)} unit="dB" />
@@ -191,10 +211,6 @@ function FlightDetail({ s, onReplay }: { s: SessionRow; onReplay: () => void }) 
           <M label="結束方式" value={s.end_reason
             ? END_LABELS[s.end_reason] ?? s.end_reason
             : (s.ended_at ? "—" : "尚未結束")} />
-          <M label="影像" value={s.video_mode === "off" ? "未錄影"
-            : s.video_mode === "no_source" ? "沒有影像源"
-              : s.video_mode === "on" ? "有錄"
-                : s.video_mode ?? "—"} />
         </div>
         {s.note && <div className="hint-line">備註：{s.note}</div>}
         <TelemetryQuality sessionId={s.id} />
@@ -202,9 +218,9 @@ function FlightDetail({ s, onReplay }: { s: SessionRow; onReplay: () => void }) 
           <button className="btn-plain btn-sm" onClick={onReplay}>▶ 開回放</button>
           <a className="btn-plain btn-sm"
             href={`${API}/api/sessions/${s.id}/export`}>⤓ 匯出完整 JSON</a>
-          <span className="hint-line">
-            匯出檔含遙測、鏈路、事件與指令——<b>保留期到了 DB 會清掉，匯出的不會</b>
-          </span>
+          {/* 這句話讀第一次有用、讀第五十次只是把數字往下擠（ui-spec §6c.7） */}
+          <InfoTip tip={"匯出檔含這一趟的遙測、鏈路、事件與指令。"
+            + "資料庫的保留期到了會清掉，匯出的那一份不會——要留很久的就匯出。"} />
         </div>
       </div>
 
@@ -275,6 +291,8 @@ function M({ label, value, unit }: { label: string; value: string; unit?: string
 function CommandsCard({ sessionId }: { sessionId: string }) {
   const [rows, setRows] = useState<CommandRow[] | null>(null);
   const [err, setErr] = useState<string | null>(null);
+  const [raw, setRaw] = useState<
+    { title: string; meta: string; body: string } | null>(null);
   useEffect(() => {
     let stop = false;
     setRows(null); setErr(null);
@@ -286,7 +304,7 @@ function CommandsCard({ sessionId }: { sessionId: string }) {
 
   return (
     <div className="card">
-      <h3>指令<InfoTip tip="含被擋下來的。「守門擋下」是我方攔住了（飛機沒動），「機端拒絕」是指令出去了而飛控不接受，「逾時無回應」是送出去了不知道結果——三者的處置完全不同。" /></h3>
+      <h3>指令<InfoTip tip="含被擋下來的。點一列看飛控原樣回了什麼（ACK、嘗試次數、耗時）。「守門擋下」是我方攔住了（飛機沒動），「機端拒絕」是指令出去了而飛控不接受，「逾時無回應」是送出去了不知道結果——三者的處置完全不同。" /></h3>
       {err && <div className="form-err">{err}</div>}
       {!err && rows === null && <div className="empty">載入中…</div>}
       {!err && rows?.length === 0 && (
@@ -301,21 +319,76 @@ function CommandsCard({ sessionId }: { sessionId: string }) {
         <div className="info-cmds">
           {rows.map((c, i) => {
             const r = RESULT_TONE[c.result] ?? { tone: "warn", label: c.result };
+            // **飛控原樣回的那包不攤在畫面上**：一列塞不下就截斷，讀不完也
+            // 讀不懂，卻佔掉整個區塊。列上只留「花多久」，其餘進 modal
+            const d = parseJsonb(c.detail);
+            const obj = (d.ok && d.value && typeof d.value === "object")
+              ? d.value as Record<string, unknown> : null;
+            const acks = obj && typeof obj.steps === "object" && obj.steps
+              ? Object.values(obj.steps as Record<string, { ack_ms?: number }>)
+                .map((v) => v?.ack_ms).filter((v): v is number => v != null)
+              : [];
             return (
-              <div className="info-cmd" key={i}>
+              <button className="info-cmd info-cmd-tap" key={i}
+                title={c.detail ? "點擊看飛控原樣回了什麼" : undefined}
+                disabled={!c.detail}
+                onClick={() => c.detail && setRaw({
+                  title: actionLabel(c.action),
+                  meta: `${hms(c.time)}　${r.label}${c.client ? `　${c.client}` : ""}`,
+                  body: obj ? JSON.stringify(obj, null, 2) : c.detail,
+                })}>
                 <time>{hms(c.time)}</time>
                 <span className="info-cmdact">{actionLabel(c.action)}</span>
                 <span className={`chip cap-chip-${r.tone}`}>
                   <span className={`dot cap-dot-${r.tone}`} />{r.label}
                 </span>
-                {c.detail && (
-                  <span className="info-cmddetail" title={c.detail}>{c.detail}</span>
+                {!!acks.length && (
+                  <span className="hint-line">{Math.round(Math.max(...acks))} ms</span>
                 )}
-              </div>
+                <span className="spacer" />
+                {c.client && <span className="hint-line">{c.client}</span>}
+              </button>
             );
           })}
         </div>
       )}
+      {raw && <RawModal {...raw} onClose={() => setRaw(null)} />}
+    </div>
+  );
+}
+
+/** 會改變「飛機在做什麼」的事。**這不是過濾掉，是預設**——「全部」永遠按得到。 */
+const KEY_TYPES = new Set([
+  "mode_change", "mission_state", "failsafe", "rc_link", "blackout",
+  "link_state", "geofence", "precheck", "admission",
+]);
+function isKeyEvent(e: EventRow): boolean {
+  const sv = normSev(e.severity);
+  return sv === "critical" || sv === "warning" || KEY_TYPES.has(e.type);
+}
+
+/** 原始資料的家。**它該在一個「想看才會打開」的位置**——攤在列上時，
+ * 一列塞不下就截斷，那既不是可讀的資訊也不是可用的資料。 */
+function RawModal({ title, meta, body, onClose }: {
+  title: string; meta: string; body: string; onClose: () => void;
+}) {
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => e.key === "Escape" && onClose();
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [onClose]);
+  return (
+    <div className="modal-backdrop" onClick={onClose}>
+      <div className="modal" onClick={(e) => e.stopPropagation()}>
+        <div className="modal-head">
+          <span className="name">{title}</span>
+          <span className="meta">{meta}</span>
+          <span className="spacer" />
+          <button className="modal-close" aria-label="關閉（Esc）" title="關閉（Esc）"
+            onClick={onClose}>✕</button>
+        </div>
+        <div className="modal-text"><pre className="info-raw">{body}</pre></div>
+      </div>
     </div>
   );
 }
@@ -326,7 +399,11 @@ function SessionEventsCard({ sessionId, droneName }: {
 }) {
   const [rows, setRows] = useState<EventRow[] | null>(null);
   const [err, setErr] = useState<string | null>(null);
-  const [src, setSrc] = useState<"all" | "vehicle" | "system">("all");
+  // **預設只顯示會改變「飛機在做什麼」的那些**（ui-spec §6c.7）：一次起飛在
+  // 舊版是四列（收下了 NAV_TAKEOFF／模式換／Mission: 1 Takeoff／任務進度），
+  // 同一件事的第二、第三種說法把真正要看的擠掉。不是過濾掉——「全部」按得到。
+  // 來源（機上／系統）的篩選在「事件」分頁，這裡不重複一套軸
+  const [key, setKey] = useState<"key" | "all">("key");
   const [open, setOpen] =
     useState<(EventRow & { timeFirst?: string; times?: number[] }) | null>(null);
   const [foldOn, setFoldOn] = useState(true);
@@ -340,8 +417,7 @@ function SessionEventsCard({ sessionId, droneName }: {
   }, [sessionId]);
 
   const shown = (rows ?? [])
-    .filter((e) => src === "all"
-      || (src === "vehicle" ? e.source === "vehicle" : e.source !== "vehicle"))
+    .filter((e) => key === "all" || isKeyEvent(e))
     // 逐列解析 detail：一列壞掉不得吃掉整批（lib/jsonb.ts）
     .map((e) => ({ ...e, detail: eventDetail(e.detail) }));
   // 一趟之內同一句話重複（任務進度、ACK）照樣佔滿版面——同 lib/foldEvents.tsx。
@@ -353,14 +429,19 @@ function SessionEventsCard({ sessionId, droneName }: {
   return (
     <div className="card">
       <h3>事件
-        <span className="h3-note">{rows ? `${rows.length} 則` : ""}</span>
-        <span className="ev-filter">
-          {([["all", "全部"], ["vehicle", "機上訊息"], ["system", "系統"]] as const)
-            .map(([k, label]) => (
-              <button key={k} className={src === k ? "on" : ""}
-                onClick={() => setSrc(k)}>{label}</button>
-            ))}
+        <span className="h3-note">
+          {rows ? `${rows.length} 則・顯示 ${groups.length}` : ""}
         </span>
+        <span className="ev-filter">
+          {([["key", "重點"], ["all", "全部"]] as const).map(([k, label]) => (
+            <button key={k} className={key === k ? "on" : ""}
+              onClick={() => setKey(k)}>{label}</button>
+          ))}
+        </span>
+        <InfoTip tip={"「重點」＝危急、警告，加上模式切換、任務狀態、失效保護、"
+          + "遙控器鏈路這幾種會改變飛機在做什麼的事。其餘（飛控收到指令的 ACK、"
+          + "逐條機上訊息、任務進度）是同一件事的第二、第三種說法，"
+          + "按「全部」看得到，不預設佔版面。來源（機上／系統）的篩選在「事件」分頁。"} />
         <span className="ev-filter">
           <button className={foldOn ? "on" : ""}
             title={foldOn ? "同一句話折成一列（點擊看未折疊的原樣）"

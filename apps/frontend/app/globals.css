@@ -1477,8 +1477,13 @@ details.card summary { cursor: pointer; font-size: 14px; font-weight: 600; }
 
 /* 架次清單：一列一趟。**清單內部捲動**，右側詳情不跟著被推長 */
 .info-rows { display: flex; flex-direction: column; gap: 2px; max-height: 60vh; overflow-y: auto; }
+/* 日期做群組標頭（.info-day），列上只留時間・時長・徽章 */
+.info-day {
+  font-size: 11px; color: var(--muted); letter-spacing: 0.04em;
+  padding: 8px 8px 2px;
+}
 .info-srow {
-  display: grid; grid-template-columns: auto 1fr auto auto auto; gap: 8px;
+  display: flex; align-items: baseline; gap: 8px; white-space: nowrap;
   align-items: baseline; text-align: left; width: 100%;
   font: inherit; font-size: 12.5px; color: var(--ink-2);
   background: none; border: 0; border-radius: 6px; padding: 6px 8px; cursor: pointer;
@@ -1487,7 +1492,10 @@ details.card summary { cursor: pointer; font-size: 14px; font-weight: 600; }
 .info-srow.on { background: var(--accent-bg); color: var(--ink); }
 .info-sday { font-variant-numeric: tabular-nums; color: var(--muted); }
 .info-srow.on .info-sday { color: var(--ink-2); }
-.info-sname { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.info-sname { overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+  min-width: 0; flex: 1; font-size: 11px; color: var(--muted); }
+.info-srow .spacer { flex: 1; }
+.info-sdur, .info-badge { flex: none; }
 .info-sdur { font-size: 11px; color: var(--muted); font-variant-numeric: tabular-nums; }
 /* 「這趟出過事嗎」在清單上就看得出來——形狀先於顏色：有徽章＝有事 */
 .info-badge {
@@ -1503,10 +1511,40 @@ details.card summary { cursor: pointer; font-size: 14px; font-weight: 600; }
 .info-actions { margin-top: 10px; align-items: baseline; }
 
 /* 指令列：時間｜動作｜下場｜原文 */
+/* 指令列可點＝原始 ACK 進 modal（ui-spec §6c.7） */
+.info-cmd-tap {
+  background: none; border: none; cursor: pointer; text-align: left;
+  border-radius: 7px; padding: 3px 6px;
+}
+.info-cmd-tap:hover:not(:disabled) { background: var(--surface-2); }
+.info-cmd-tap:disabled { cursor: default; }
+.info-cmd .spacer { flex: 1; }
+.info-raw {
+  font-family: ui-monospace, "SF Mono", Menlo, Consolas, monospace;
+  font-size: 11px; color: var(--ink-2); white-space: pre-wrap; word-break: break-all;
+  background: var(--page); border: 1px solid var(--hairline); border-radius: 8px;
+  padding: 9px 11px; max-height: 46vh; overflow: auto; margin: 0;
+}
+.info-chips { margin: 2px 0 8px; }
+/* 回傳狀態：一台一列（ui-spec §6c.7） */
+.cap-fleet-rows { display: flex; flex-direction: column; gap: 2px; }
+.cap-arow {
+  display: flex; align-items: center; gap: 10px; flex-wrap: wrap;
+  padding: 6px 4px; font-size: 12.5px;
+  border-bottom: 1px solid var(--hairline);
+}
+.cap-arow:last-child { border-bottom: none; }
+.cap-arow .spacer { flex: 1; }
+.cap-arow .cap-dname { font-weight: 600; color: var(--ink); }
+.cap-arow .cap-dstate { color: var(--ink-2); }
+.cap-arow.cap-stale { opacity: 0.6; }
+.cap-arow .cap-prog { width: 90px; }
 .info-cmds { display: flex; flex-direction: column; gap: 4px; }
+/* 一列一道指令：欄數不固定（耗時、來源可有可無），用 flex 不用 grid——
+   grid 的固定欄在少一格時會把後面的擠到下一行 */
 .info-cmd {
-  display: grid; grid-template-columns: auto auto auto minmax(0, 1fr);
-  gap: 8px; align-items: baseline; font-size: 12px;
+  display: flex; flex-wrap: nowrap; gap: 8px; align-items: baseline;
+  font-size: 12px; width: 100%; min-width: 0;
 }
 .info-cmd time { color: var(--muted); font-variant-numeric: tabular-nums; }
 .info-cmdact { font-weight: 600; color: var(--ink); }

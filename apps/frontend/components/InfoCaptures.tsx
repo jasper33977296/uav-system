@@ -169,9 +169,10 @@ export default function InfoCaptures() {
     })();
   }, []);
 
-  const rows = (drones ?? []).map((d) => ({
-    d, v: verdict(agents[d.id] ?? d.agent),
-  })).sort((a, b) => a.v.rank - b.v.rank || a.d.name.localeCompare(b.d.name));
+  const rows = (drones ?? []).map((d) => {
+    const ag = agents[d.id] ?? d.agent;
+    return { d, ag, v: verdict(ag) };
+  }).sort((a, b) => a.v.rank - b.v.rank || a.d.name.localeCompare(b.d.name));
 
   const totalPending = rows.reduce(
     (n, r) => n + ((agents[r.d.id] ?? r.d.agent)?.record_upload?.pending ?? 0), 0);
@@ -202,24 +203,32 @@ export default function InfoCaptures() {
 
       {/* ② 每台機的回傳狀態 */}
       <div className="card">
-        <h3>回傳狀態<InfoTip tip="需要注意的排前面，不照機隊順序。「沒有東西要傳」與「傳不動」都是沒在傳，但一個是完成、一個是故障——所以每張卡都說得出為什麼。代理失聯時整張卡降調、圓點空心：那是「不知道」，不是「沒有」。" /></h3>
+        {/* **一台一列**（ui-spec §6c.7）：三張卡各抄一遍「沒有代理就沒有機上
+            錄製…」——那句話對每一台沒有代理的機都一樣，它住 ⓘ。
+            有代理的機才有各自的原因，那些照樣寫在列上。 */}
+        <h3>回傳狀態<InfoTip tip={"需要注意的排前面，不照機隊順序。"
+          + "「不知道」＝這台機沒有代理，我方無從得知它有沒有在機上錄——"
+          + "不是「沒有錄」。沒有機上錄製的機只有地面站那一份，"
+          + "斷線的那幾段沒有備份。"
+          + "「沒有東西要傳」與「傳不動」都是沒在傳，但一個是完成、一個是故障。"} /></h3>
         {drones === null && !err && <div className="empty">載入中…</div>}
         {drones?.length === 0 && <div className="empty">還沒有註冊過任何無人機。</div>}
-        <div className="cap-fleet">
-          {rows.map(({ d, v }) => (
-            <article key={d.id} className={`card cap-drone${v.stale ? " cap-stale" : ""}`}>
-              <div className="cap-drow">
-                <span className={`dot cap-dot-${v.tone}`} />
-                <span className="cap-dname">{d.name}</span>
-              </div>
-              <div className="cap-dstate">{v.state}</div>
+        <div className="cap-fleet-rows">
+          {rows.map(({ d, ag, v }) => (
+            <div key={d.id} className={`cap-arow${v.stale ? " cap-stale" : ""}`}>
+              <span className={`dot cap-dot-${v.tone}`} />
+              <span className="cap-dname">{d.name}</span>
               {v.progress != null && (
-                <div className="cap-prog"><i style={{ width: `${Math.round(v.progress * 100)}%` }} /></div>
+                <span className="cap-prog"><i
+                  style={{ width: `${Math.round(v.progress * 100)}%` }} /></span>
               )}
-              {v.why && <div className="cap-dwhy">{v.why}</div>}
-              {v.meta && <div className="cap-dmeta">{v.meta}</div>}
+              <span className="spacer" />
+              {/* 沒有代理時的那句話是共通的（住 ⓘ）；有代理才有各自的原因 */}
+              {v.why && ag && <span className="hint-line">{v.why}</span>}
+              <span className="cap-dstate">{v.state}</span>
+              {v.meta && <span className="hint-line">{v.meta}</span>}
               <LostBanner droneId={d.id} files={onboard?.files} />
-            </article>
+            </div>
           ))}
         </div>
       </div>

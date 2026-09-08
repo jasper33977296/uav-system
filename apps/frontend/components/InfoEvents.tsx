@@ -13,11 +13,11 @@
  *     把同一則推到下一頁（或整則跳過）。
  *  3. **取得失敗不得長得像「沒有事件」**（lib/fetchJson.ts）。
  */
-import { useCallback, useEffect, useState } from "react";
+import { Fragment, useCallback, useEffect, useState } from "react";
 
 import EventModal from "@/components/EventModal";
 import {
-  type DroneRow, type EventRow, dateTime, SEV_COLOR,
+  type DroneRow, type EventRow, dayShort, hms, SEV_COLOR,
 } from "@/components/InfoShared";
 import InfoTip from "@/components/InfoTip";
 import { emph } from "@/lib/emph";
@@ -117,28 +117,29 @@ export default function InfoEvents({ drones }: { drones: DroneRow[] }) {
 
   return (
     <>
+      {/* 篩選是一列控制，不是一張需要標題的卡（ui-spec §6c.7） */}
       <div className="card">
-        <h3>篩選</h3>
         <div className="info-filters">
+          <span className="hint-line">嚴重度</span>
+          <div className="sess-pills">
+            {([["", "全部"], ["critical", "危急"], ["warning", "警告"],
+               ["info", "資訊"]] as const).map(([v, l]) => (
+              <button key={v} className={`pill${sev === v ? " on" : ""}`}
+                onClick={() => setSev(v)}>{l}</button>
+            ))}
+          </div>
+          <span className="hint-line">來源</span>
+          <div className="sess-pills">
+            {([["", "全部"], ["vehicle", "機上"], ["system", "系統"]] as const)
+              .map(([v, l]) => (
+              <button key={v} className={`pill${src === v ? " on" : ""}`}
+                onClick={() => setSrc(v)}>{l}</button>
+            ))}
+          </div>
           <label>無人機
             <select value={drone} onChange={(e) => setDrone(e.target.value)}>
               <option value="">全部</option>
               {drones.map((d) => <option key={d.id} value={d.id}>{d.name}</option>)}
-            </select>
-          </label>
-          <label>嚴重度
-            <select value={sev} onChange={(e) => setSev(e.target.value)}>
-              <option value="">全部</option>
-              <option value="critical">危急</option>
-              <option value="warning">警告</option>
-              <option value="info">資訊</option>
-            </select>
-          </label>
-          <label>來源
-            <select value={src} onChange={(e) => setSrc(e.target.value)}>
-              <option value="">全部</option>
-              <option value="vehicle">機上訊息</option>
-              <option value="system">系統</option>
             </select>
           </label>
           <label>型別
@@ -186,14 +187,21 @@ export default function InfoEvents({ drones }: { drones: DroneRow[] }) {
         )}
         {!!rows?.length && (
           <div className="info-evlist">
-            {groups.map((g) => {
+            {groups.map((g, gi) => {
               const e = g.latest;
+              // **日期做群組標頭**：逐列重複「2026/9/8」的話，真正的內容
+              // 會被擠到右邊（ui-spec §6c.7）
+              const dayKey = dayShort(e.time).slice(0, 5);
+              const newDay = gi === 0
+                || dayShort(groups[gi - 1].latest.time).slice(0, 5) !== dayKey;
               const d = e.detail;
               const dn = droneName(e.drone_id);
               // **`warn` 也是警告**（lib/severity.ts）：舊資料裡有 292 則
               const sv = normSev(e.severity);
               return (
-                <button key={g.key} className="info-evrow"
+                <Fragment key={g.key}>
+                {newDay && <div className="info-day">{dayKey}</div>}
+                <button className="info-evrow"
                   title={g.count > 1 ? foldTitle(g) : "點擊看完整內容"}
                   onClick={() => setOpenEv({
                     ...e,
@@ -202,13 +210,15 @@ export default function InfoEvents({ drones }: { drones: DroneRow[] }) {
                     ...(g.count > 1 ? { timeFirst: g.first, times: g.times } : {}),
                   })}>
                   <span className="dot" style={{ background: SEV_COLOR[sv] }} />
-                  <time>{dateTime(e.time)}</time>
+                  <time>{hms(e.time)}</time>
+                  {/* 已經篩成一種來源／一台機時，那一格就不再逐列重複
+                      （空的 auto 欄會自己收掉，不影響其餘欄的對齊） */}
                   <span className="info-evsrc">
-                    {e.source === "vehicle" ? "機上" : "系統"}
+                    {src ? "" : (e.source === "vehicle" ? "機上" : "系統")}
                   </span>
                   {/* 機名沒有就留白——**不要寫「未知機」**：多數系統事件本來
                       就不屬於任何一台機，替它掛一個「未知」是無中生有 */}
-                  <span className="info-evdrone">{dn ?? ""}</span>
+                  <span className="info-evdrone">{drone ? "" : (dn ?? "")}</span>
                   <span className="info-evtext">
                     {emph(evText({ type: e.type, detail: d,
                       severity: e.severity as "info" | "warning" | "critical" }))}
@@ -220,6 +230,7 @@ export default function InfoEvents({ drones }: { drones: DroneRow[] }) {
                   </span>
                   {e.session_id && <span className="info-evflag" title="這則事件屬於某一趟飛行">飛行中</span>}
                 </button>
+                </Fragment>
               );
             })}
           </div>
