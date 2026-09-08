@@ -34,10 +34,15 @@ export interface StageHit { kind: "wp" | "leg"; i: number }
  *  規劃頁上，讓這個元件再查一次就會有兩份可能不同步的資料。 */
 export interface StageTip { title: string; rows: [string, string][]; bad?: boolean }
 
-export default function TerrainStage({ wps, sel, onSelect, tipFor,
-                                      exaggeration = 1 }: {
+export default function TerrainStage({ wps, sel, onSelect, tipFor, placing,
+                                      onPlace, center, exaggeration = 1 }: {
   wps: StageWp[]; sel: number; onSelect: (i: number) => void;
   tipFor?: (h: StageHit) => StageTip | null;
+  /** 放點模式：點地形＝加一個航點（maplibre 自己有 3px 的 clickTolerance，
+   *  所以拖曳轉視角不會誤放） */
+  placing?: boolean;
+  onPlace?: (lngLat: { lng: number; lat: number }) => void;
+  center?: [number, number];
   exaggeration?: number;
 }) {
   const box = useRef<HTMLDivElement>(null);
@@ -52,13 +57,18 @@ export default function TerrainStage({ wps, sel, onSelect, tipFor,
   const tipRef = useRef(tipFor);
   tipRef.current = tipFor;
   const projRef = useRef<Projector | null>(null);
+  const placeRefBox = useRef<{ current: {
+    placing?: boolean; onPlace?: (l: { lng: number; lat: number }) => void } } | null>(null);
+  if (placeRefBox.current) placeRefBox.current.current = { placing, onPlace };
 
   useEffect(() => {
     if (!box.current || mapRef.current) return;
     const first = wps.find((w) => w.lat && w.lon);
+    const placeRef = { current: { placing, onPlace } };
+    placeRefBox.current = placeRef;
     const map = new maplibregl.Map({
       container: box.current,
-      center: first ? [first.lon, first.lat] : [121.0459, 24.7734],
+      center: center ?? (first ? [first.lon, first.lat] : [121.0459, 24.7734]),
       zoom: 17, pitch: FIT_PITCH, maxPitch: 78, bearing: -28,
       // 滾輪縮放要按住 Ctrl：這一頁下面還有剖面與表格，捲頁比縮放常用
       cooperativeGestures: true,
@@ -96,6 +106,8 @@ export default function TerrainStage({ wps, sel, onSelect, tipFor,
       map.addLayer(makeRouteLayer(map, dataRef, (p) => { projRef.current = p; }));
       fitRoute(map, dataRef.current.wps);
       // 先粗估一次鏡頭，再**量畫面上實際落在哪裡**去修（見 frameRoute）
+      // **只在開頁時取景一次**：放點模式下每加一個點就重新取景，
+      // 畫面會在使用者手底下跳
       map.once("render", () => frameRoute(map, dataRef, projRef));
     });
 
@@ -124,8 +136,10 @@ export default function TerrainStage({ wps, sel, onSelect, tipFor,
       return null;
     };
     map.on("click", (e) => {
+      const pl = placeRefBox.current?.current;
+      if (pl?.placing && pl.onPlace) { pl.onPlace(e.lngLat); return; }
       const h = hitTest(e.point);
-      if (h) onSelect(h.kind === "wp" ? h.i : h.i);
+      if (h) onSelect(h.i);
     });
     map.on("mousemove", (e) => {
       const h = hitTest(e.point);
@@ -150,7 +164,7 @@ export default function TerrainStage({ wps, sel, onSelect, tipFor,
     [wps, sel]);
 
   return (
-    <div className="stage3d-wrap">
+    <div className={`stage3d-wrap${placing ? " placing" : ""}`}>
       <div ref={box} className="stage3d" />
       {tip && (
         <div className="stage-tip"

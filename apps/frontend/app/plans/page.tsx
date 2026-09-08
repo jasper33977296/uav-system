@@ -318,6 +318,9 @@ export default function Plans() {
         <span className="name">路徑{plans.length ? `（${plans.length}）` : ""}</span>
         <button className="btn-plain btn-sm" disabled={busy}
           onClick={() => fileRef.current?.click()}>＋ 上傳 .plan</button>
+        {/* 從零產生（issues/048 F2，使用者 2026-09-08：兩個入口都要）*/}
+        <a className="btn-plain btn-sm" href="/plans/new/plan"
+          title="先給起飛點的經緯度，再在地形上一個一個點出航線">＋ 從零規劃</a>
         <span className="spacer" />
         <InfoTip tip={"這裡是存下來的 QGC 航線。一列一份：縮圖是它的立體形狀"
           + "（拖曳可以轉動視角、往下拖壓低視角看高低差），旁邊是航點數、"

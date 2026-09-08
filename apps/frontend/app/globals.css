@@ -1879,3 +1879,14 @@ details.card summary { cursor: pointer; font-size: 14px; font-weight: 600; }
 .verdict.bad { background: var(--status-danger-bg); color: var(--ink);
   border: 1px solid var(--status-danger-border); }
 @media (max-width: 900px) { .plan-work { grid-template-columns: 1fr; } }
+.stage3d-wrap.placing .maplibregl-canvas { cursor: crosshair; }
+/* 從零產生的表單 */
+.newform { display: flex; gap: 10px; align-items: flex-end; flex-wrap: wrap;
+  background: var(--surface); border: 1px solid var(--border); border-radius: 10px;
+  padding: 10px 12px; }
+.newform .f { display: flex; flex-direction: column; gap: 3px; }
+.newform .f span { font-size: 11px; color: var(--muted); letter-spacing: .04em; }
+.newform input { background: var(--surface-2); border: 1px solid var(--border);
+  border-radius: 6px; padding: 5px 8px; font-variant-numeric: tabular-nums; width: 124px; }
+.newform input:disabled { opacity: .6; }
+.chip.bad { color: var(--status-danger); border-color: var(--status-danger); }

@@ -2575,6 +2575,55 @@ async def preview_plan(plan_id: str, body: PreviewIn):
     return out
 
 
+class DraftPoint(BaseModel):
+    lat: float
+    lon: float
+    alt: float | None = None
+
+
+class DraftIn(BaseModel):
+    """從零產生：一串點 ＋ 一個高度 ＋ 一個速度。"""
+    home: list[float] = Field(min_length=2, max_length=3)
+    points: list[DraftPoint] = Field(default_factory=list, max_length=500)
+    takeoff_alt: float = 1.5
+    speed: float = 1.0
+    wp_spd: float | None = None
+    wp_radius: float | None = None
+    save_as: str | None = None
+
+
+@router.post("/plans/draft")
+async def draft_plan(body: DraftIn):
+    """**從零產生**：把點組成航線、跑同一套檢查、預設不存。
+
+    使用者 2026-09-08：「先輸入經緯度，然後讓使用者用點位的方式規劃路線」。
+    起飛項、`frame`、改速度項、降落項由系統補（見 `plan_check.build_plan`）
+    ——那些正是 QGC／Mission Planner 要求使用者自己先知道的東西。
+
+    `save_as` 給了才寫進任務庫。**沒給就只算不存**，與改既有航線那條路
+    同一個規矩。
+    """
+    h = {"lat": body.home[0], "lon": body.home[1]}
+    wps = plan_check.build_plan(
+        [p.model_dump() for p in body.points], body.takeoff_alt, body.speed, h)
+    if len(body.points) < 1:
+        # **一個點都沒有時不要假裝算得出什麼**：回一份空的，讓畫面說
+        # 「還沒放點」，而不是回一份「通過」的報告
+        return {"check": None, "profile": None, "saved_id": None,
+                "waypoints": wps}
+    check = plan_check.check_waypoints(
+        wps, settings.geofence_radius_m, settings.geofence_alt_m,
+        settings.geofence_margin, dem=terrain.shared(),
+        home=body.home, wp_spd=body.wp_spd, wp_radius=body.wp_radius)
+    profile = plan_check.route_profile(wps, h, dem=terrain.shared())
+    saved = None
+    if body.save_as:
+        saved = await _store_mission(body.save_as.strip() or "新航線", "drawn",
+                                     wps, home=body.home)
+    return {"check": check, "profile": profile, "saved_id": saved,
+            "waypoints": wps}
+
+
 @router.post("/plans/{plan_id}/activate")
 async def activate_mission(plan_id: str, active: bool = True):
     async with db.pool.acquire() as con:

@@ -826,6 +826,48 @@ def route_profile(wps: list[dict], home: dict | None = None, dem=None,
     return out
 
 
+def build_plan(points: list[dict], takeoff_alt: float, speed: float,
+               home: dict | None = None) -> list[dict]:
+    """把「一串點 ＋ 一個高度 ＋ 一個速度」組成一份飛得起來的航線。
+
+    **這個函式存在的理由是「不需要先備知識就能規劃出可飛的路線」**
+    （使用者 2026-09-08，見 doc/route-planning-first-principles.md）。
+    操作員給的是意圖；起飛項、`frame`、改速度項、降落項這些**飛控要求的
+    結構**由系統補——那些正是 QGC／Mission Planner 要求使用者自己知道的東西。
+
+    組出來的形狀，每一項都說得出為什麼：
+
+    * **起飛項的座標是 0,0**：`NAV_TAKEOFF` 只說「爬到多高」，位置就是
+      解鎖的地方。這是 ArduPilot 的慣例，也是既有航線的樣子。
+    * **`DO_CHANGE_SPEED` 擺在第一個航點之前**：它只從被執行到的那一項
+      之後才生效，擺在後面的話**起飛到第一個航點那一段會用機上的
+      `WP_SPD`** ——2026-09-07 摔機那一趟就是這樣（使用者以為 0.3，實際 8）。
+    * **降落在起飛點**，不是最後一個航點：那是操作員站的地方。
+      要落在別處是另一個決定，讓他自己改。
+    * 全部 `frame 3`（離起飛點）。要跟地形就用「改成地形跟隨」轉一次
+      ——那條路已經有了，而且會另存一份。
+    """
+    out: list[dict] = []
+
+    def add(**kw):
+        kw["seq"] = len(out)
+        out.append(kw)
+
+    add(lat=0.0, lon=0.0, alt=float(takeoff_alt), action="takeoff",
+        command=_TAKEOFF, frame=3)
+    # **速度先設好再飛第一段**（見 docstring）
+    add(lat=0.0, lon=0.0, alt=0.0, action="do", command=_DO_CHANGE_SPEED,
+        frame=2, p1=1.0, p2=float(speed), p3=-1.0, p4=0.0)
+    for p in points:
+        add(lat=float(p["lat"]), lon=float(p["lon"]),
+            alt=float(p.get("alt", takeoff_alt)), action="waypoint",
+            command=16, frame=3)
+    if home and home.get("lat") and home.get("lon"):
+        add(lat=float(home["lat"]), lon=float(home["lon"]), alt=0.0,
+            action="land", command=_LAND, frame=3)
+    return out
+
+
 def check_group(paths: list[dict], vsep_m: float, lsep_m: float) -> dict:
     """群組跨路徑互檢（issue 013-A）：N 條同時飛的路徑要分離足夠。
     paths：[{label, waypoints:[{lat,lon,alt}]}]。兩條路徑若在某處**橫向 < lsep

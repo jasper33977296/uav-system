@@ -138,6 +138,13 @@ function Profile({ p }: { p: Profile }) {
 export default function PlanPage() {
   // Next 15 的 page props `params` 是 Promise；client component 用 useParams 取
   const id = String(useParams()?.id ?? "");
+  /** **從零產生**（使用者 2026-09-08：兩個入口都要）。`/plans/new/plan`。 */
+  const isNew = id === "new";
+  const [home, setHome] = useState({ lat: "24.773449", lon: "121.045864" });
+  const [tkAlt, setTkAlt] = useState(1.5);
+  const [drawSpd, setDrawSpd] = useState(1.0);
+  const [pts, setPts] = useState<{ lat: number; lon: number; alt: number }[]>([]);
+  const [started, setStarted] = useState(false);
   const [name, setName] = useState("");
   const [prof, setProf] = useState<Profile | null>(null);
   const [chk, setChk] = useState<Check | null>(null);
@@ -153,6 +160,27 @@ export default function PlanPage() {
   const spdRef = useRef<{ wp: number | null; rad: number | null }>({ wp: null, rad: null });
 
   useEffect(() => {
+    if (isNew) {
+      setName("新航線");
+      // 從零模式一樣要讀機上的 WP_SPD／WP_RADIUS_M——不然速度相關的判定
+      // 一律是「沒有檢查」，而那不等於沒問題
+      (async () => {
+        try {
+          const h = await getJson<{ drones: Record<string, unknown> }>(
+            `${COMMAND_API}/healthz`);
+          const sid = Object.keys(h.drones ?? {})[0];
+          if (!sid) return;
+          const p = await getJson<{ values: Record<string, number> }>(
+            `${COMMAND_API}/api/command/${sid}/params?names=WP_SPD,WP_RADIUS_M`);
+          spdRef.current = { wp: p.values.WP_SPD ?? null,
+                             rad: p.values.WP_RADIUS_M ?? null };
+          if (p.values.WP_SPD != null)
+            setSpd({ wp: p.values.WP_SPD, rad: p.values.WP_RADIUS_M ?? null,
+                     src: "取自機上（現在讀的）" });
+        } catch { /* 讀不到就維持「沒有檢查」 */ }
+      })();
+      return;
+    }
     let stop = false;
     (async () => {
       try {
@@ -191,13 +219,33 @@ export default function PlanPage() {
       }
     })();
     return () => { stop = true; };
-  }, [id]);
+  }, [id, isNew]);
+
+  // 從零模式：點一變就重算（同樣去抖、同樣不寫資料庫）
+  useEffect(() => {
+    if (!isNew || !started) return;
+    const t = setTimeout(async () => {
+      setBusy(true);
+      try {
+        const r = await fetch(`${API}/api/plans/draft`, {
+          method: "POST", headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            home: [Number(home.lat), Number(home.lon)], points: pts,
+            takeoff_alt: tkAlt, speed: drawSpd,
+            wp_spd: spdRef.current.wp, wp_radius: spdRef.current.rad }),
+        });
+        const d = await r.json();
+        if (r.ok) { setChk(d.check); setProf(d.profile); }
+      } finally { setBusy(false); }
+    }, 220);
+    return () => clearTimeout(t);
+  }, [isNew, started, pts, tkAlt, drawSpd, home.lat, home.lon]);
 
   // 改動 → 試算。**去抖**：拖滑桿一秒會產生幾十次變動，而每一次都要
   // 沿線取樣 DEM——沒有去抖等於用滑桿打後端
   useEffect(() => {
     const list = Object.entries(ov).map(([seq, v]) => ({ seq: Number(seq), ...v }));
-    if (!list.length) return;
+    if (!list.length || isNew) return;
     const t = setTimeout(async () => {
       setBusy(true);
       try {
@@ -211,7 +259,7 @@ export default function PlanPage() {
       } finally { setBusy(false); }
     }, 260);
     return () => clearTimeout(t);
-  }, [ov, id]);
+  }, [ov, id, isNew]);
 
   const legs = chk?.legs ?? [];
   // 3D 要的是「航點」，而剖面回的是沿線取樣——帶 seq 的那幾筆就是航點。
@@ -278,7 +326,9 @@ export default function PlanPage() {
         {prof?.home_amsl_m != null && (
           <span className="chip">起飛點 {prof.home_amsl_m} m（海拔）</span>
         )}
-        {worst != null && <span className="chip">最低離地 {worst} m</span>}
+        {worst != null && (
+          <span className={`chip${worst < 0 ? " bad" : ""}`}>最低離地 {worst} m</span>
+        )}
         <span className="chip" style={spd.wp == null ? { opacity: 0.6 } : undefined}
           title={spd.wp == null
             ? "航線裡的 DO_CHANGE_SPEED 只從它被執行到的那一項之後才生效；在那之前用的是機上的 WP_SPD。讀不到它，速度相關的判定就不做——讀不到不等於沒問題"
@@ -289,10 +339,38 @@ export default function PlanPage() {
 
       {/* 3D 地形（issues/048 F1）。**地形是真的**：maplibre 吃我們自己從
           `.hgt` 產的圖磚。原型那張手繪線框到此為止 */}
-      {stageWps.length > 1 && (
+      {isNew && (
+        <div className="newform">
+          <label className="f"><span>起飛點緯度</span>
+            <input value={home.lat} disabled={started}
+              onChange={(e) => setHome((h) => ({ ...h, lat: e.target.value }))} /></label>
+          <label className="f"><span>起飛點經度</span>
+            <input value={home.lon} disabled={started}
+              onChange={(e) => setHome((h) => ({ ...h, lon: e.target.value }))} /></label>
+          <label className="f"><span>起飛高度</span>
+            <input type="number" step="0.5" value={tkAlt} disabled={started}
+              onChange={(e) => setTkAlt(Number(e.target.value))} /></label>
+          <label className="f"><span>速度 m/s</span>
+            <input type="number" step="0.1" value={drawSpd} disabled={started}
+              onChange={(e) => setDrawSpd(Number(e.target.value))} /></label>
+          {!started
+            ? <button className="btn-accent btn-sm" onClick={() => setStarted(true)}>
+                從這裡開始放點</button>
+            : <span className="hint-line">
+                點地形放下一個航點（{pts.length} 個）・拖曳轉視角
+                {pts.length > 0 && <>　<button className="btn-plain btn-sm"
+                  onClick={() => setPts((p) => p.slice(0, -1))}>移除上一個</button></>}
+              </span>}
+        </div>
+      )}
+      {(stageWps.length > 1 || (isNew && started)) && (
         <div className="plan-work">
           <TerrainStage wps={stageWps} sel={selWp} onSelect={setSelWp}
-            tipFor={tipFor} />
+            tipFor={tipFor}
+            placing={isNew && started}
+            center={isNew ? [Number(home.lon), Number(home.lat)] : undefined}
+            onPlace={(l) => setPts((p) =>
+              [...p, { lat: l.lat, lon: l.lng, alt: tkAlt }])} />
           <aside className="plan-rail">
             <h2>選取的航點</h2>
             {(() => {
@@ -324,23 +402,54 @@ export default function PlanPage() {
                         onChange={(e) => set("speed", Number(e.target.value))} />
                     </label>
                   )}
-                  {out && (
-                    <div className={`verdict ${out.low_fast ? "bad" : "ok"}`}>
-                      {out.low_fast
-                        ? `離地 ${out.agl_m} m 卻要飛 ${out.speed_ms} m/s——低於 ${lowAlt} m 時地面會擾動這架飛機`
-                        : `離地 ${out.agl_m ?? "—"} m ・ ${out.speed_ms ?? "—"} m/s，這一段通過`}
-                    </div>
-                  )}
+                  {out && (() => {
+                    // **穿地與低空帶速是兩條不同的規則。** 只看 `low_fast`
+                    // 會在離地是負的時候寫「這一段通過」——綠色、而且是錯的
+                    // （2026-09-08 從零產生時當場撞到：離地 −1.4 m 配 1 m/s，
+                    // 速度沒超標所以 low_fast 是 false）
+                    const under = out.agl_m != null && out.agl_m < 0;
+                    const bad = under || out.low_fast;
+                    return (
+                      <div className={`verdict ${bad ? "bad" : "ok"}`}>
+                        {under
+                          ? `離地 ${out.agl_m} m——這一段在地面以下，飛不了`
+                          : out.low_fast
+                            ? `離地 ${out.agl_m} m 卻要飛 ${out.speed_ms} m/s——低於 ${lowAlt} m 時地面會擾動這架飛機`
+                            : `離地 ${out.agl_m ?? "—"} m ・ ${out.speed_ms ?? "—"} m/s，這一段通過`}
+                      </div>
+                    );
+                  })()}
                 </>
               );
             })()}
             {/* **改動不會動到原本那份**（使用者裁定）：按了才另存 */}
             <div className="rail-save">
               <div className="hint-line">
-                {Object.keys(ov).length
-                  ? `已改 ${Object.keys(ov).length} 個航點——${busy ? "試算中…" : "只在畫面上，還沒存"}`
-                  : "拖滑桿試算；原本這份不會被動到"}
+                {isNew
+                  ? `已放 ${pts.length} 個點——${busy ? "試算中…" : "還沒存"}`
+                  : Object.keys(ov).length
+                    ? `已改 ${Object.keys(ov).length} 個航點——${busy ? "試算中…" : "只在畫面上，還沒存"}`
+                    : "拖滑桿試算；原本這份不會被動到"}
               </div>
+              {isNew ? (
+                <button className="btn-accent btn-sm" disabled={pts.length < 1 || busy}
+                  onClick={async () => {
+                    setBusy(true);
+                    try {
+                      const r = await fetch(`${API}/api/plans/draft`, {
+                        method: "POST", headers: { "Content-Type": "application/json" },
+                        body: JSON.stringify({
+                          home: [Number(home.lat), Number(home.lon)], points: pts,
+                          takeoff_alt: tkAlt, speed: drawSpd,
+                          wp_spd: spdRef.current.wp, wp_radius: spdRef.current.rad,
+                          save_as: `新航線 ${new Date().toISOString().slice(5, 16)
+                            .replace("T", " ")}` }),
+                      });
+                      const d = await r.json();
+                      if (r.ok && d.saved_id) setSaved(d.saved_id);
+                    } finally { setBusy(false); }
+                  }}>存成新航線</button>
+              ) : (
               <button className="btn-accent btn-sm" disabled={!Object.keys(ov).length || busy}
                 onClick={async () => {
                   setBusy(true);
@@ -358,6 +467,7 @@ export default function PlanPage() {
                     if (r.ok && d.saved_id) { setSaved(d.saved_id); setOv({}); }
                   } finally { setBusy(false); }
                 }}>另存一份</button>
+              )}
               {saved && (
                 <div className="hint-line">
                   已另存 · <a href={`/plans/${saved}/plan`}>打開新的那一份</a>
