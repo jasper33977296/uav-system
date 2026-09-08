@@ -22,12 +22,24 @@ import json
 import math
 
 import autopilot as _autopilot
+import terrain
 
 
-def _dist_m(lat1: float, lon1: float, lat2: float, lon2: float) -> float:
-    dy = (lat2 - lat1) * 111320.0
-    dx = (lon2 - lon1) * 111320.0 * math.cos(math.radians(lat1))
+#: 一度緯度／赤道上一度經度的公尺數。**兩個不一樣**——111320 是後者，
+#: 拿它乘緯度會高估 0.67%（400 m 上約 2.7 m）。前端的 `lib/geo.ts` 用的是
+#: 同一組值（field-3d-model-design §9-G）。
+M_PER_DEG_LAT = 110574.0
+M_PER_DEG_LON_EQ = 111320.0
+
+
+def dist_m(lat1: float, lon1: float, lat2: float, lon2: float) -> float:
+    """兩點的水平距離（公尺）。**Python 這一側唯一的換算處。**"""
+    dy = (lat2 - lat1) * M_PER_DEG_LAT
+    dx = (lon2 - lon1) * M_PER_DEG_LON_EQ * math.cos(math.radians(lat1))
     return math.hypot(dx, dy)
+
+
+_dist_m = dist_m
 
 
 # 導航類指令（有實際飛行位置）；DO_*（如 178 改速度）是設定類，
@@ -263,8 +275,8 @@ def check_terrain(nav: list[dict], home: dict, dem=None,
             "「離起飛點」，地面沿路往上抬多少就吃掉多少離地空間")
         return out
 
-    ha = home_amsl if home_amsl is not None else dem.elevation(
-        home["lat"], home["lon"])
+    ha = home_amsl if home_amsl is not None else terrain.surface(
+        home["lat"], home["lon"], dem).ground
     if ha is None:
         out["warnings"].append(
             f"**離地高度沒有檢查**：起飛點（{home['lat']:.5f}, "
@@ -309,7 +321,7 @@ def check_terrain(nav: list[dict], home: dict, dem=None,
 
     def look(lat, lon, amsl, where):
         nonlocal worst, rise, checked, ground_n
-        gz = dem.elevation(lat, lon)
+        gz = terrain.surface(lat, lon, dem).top
         if gz is None:
             return
         ground_n += 1
@@ -431,8 +443,8 @@ def to_terrain_frame(nav: list[dict], home: dict, dem=None,
         out["problems"].append(
             "地面站沒有地形資料，算不出每個航點該離地多少——無法改寫成地形跟隨")
         return out
-    ha = home_amsl if home_amsl is not None else dem.elevation(
-        home["lat"], home["lon"])
+    ha = home_amsl if home_amsl is not None else terrain.surface(
+        home["lat"], home["lon"], dem).ground
     if ha is None:
         out["problems"].append("起飛點沒有地形資料，算不出基準高度")
         return out
@@ -448,7 +460,7 @@ def to_terrain_frame(nav: list[dict], home: dict, dem=None,
             new.append(dict(w))
             out["kept"] += 1
             continue
-        gz = dem.elevation(lat, lon)
+        gz = terrain.surface(lat, lon, dem).top
         if gz is None:
             out["problems"].append(
                 f"seq {w.get('seq')}（{lat:.5f}, {lon:.5f}）查不到地形高程"
@@ -591,7 +603,7 @@ def leg_profile(wps: list[dict], home: dict | None = None, dem=None,
     out: dict = {"legs": [], "problems": [], "warnings": []}
     ha = home_amsl
     if ha is None and dem is not None and getattr(dem, "available", False) and home:
-        ha = dem.elevation(home["lat"], home["lon"])
+        ha = terrain.surface(home["lat"], home["lon"], dem).ground
 
     # ── 走一遍，同時解出「每個導航項生效時的速度」────────────────
     speed, src = wp_spd, ("機上 WP_SPD" if wp_spd is not None else "unknown")
@@ -661,7 +673,7 @@ def leg_profile(wps: list[dict], home: dict | None = None, dem=None,
                 f = k / n
                 la = a["lat"] + (b["lat"] - a["lat"]) * f
                 lo = a["lon"] + (b["lon"] - a["lon"]) * f
-                gz = dem.elevation(la, lo)
+                gz = terrain.surface(la, lo, dem).top
                 if gz is None or a["alt"] is None or b["alt"] is None:
                     continue
                 if a["frame"] in _REL_FRAMES and b["frame"] in _REL_FRAMES:
@@ -761,7 +773,7 @@ def route_profile(wps: list[dict], home: dict | None = None, dem=None,
         return out
     ha = home_amsl
     if ha is None and home:
-        ha = dem.elevation(home["lat"], home["lon"])
+        ha = terrain.surface(home["lat"], home["lon"], dem).ground
     if ha is None:
         return out
     out["home_amsl_m"] = round(ha, 1)
@@ -795,7 +807,7 @@ def route_profile(wps: list[dict], home: dict | None = None, dem=None,
             for k in range(1, n + 1):
                 f = k / n
                 la, lo = pa[0] + (lat - pa[0]) * f, pa[1] + (lon - pa[1]) * f
-                gz = dem.elevation(la, lo)
+                gz = terrain.surface(la, lo, dem).top
                 a = palt + (alt - palt) * f
                 fr_k = fr if f > 0.5 else pfr
                 plan = (ha + a if fr_k in _REL_FRAMES else
@@ -813,7 +825,7 @@ def route_profile(wps: list[dict], home: dict | None = None, dem=None,
                 })
             d0 += leg
         else:
-            gz = dem.elevation(lat, lon)
+            gz = terrain.surface(lat, lon, dem).top
             plan = (ha + alt if fr in _REL_FRAMES else
                     alt if fr in _AMSL_FRAMES else None)
             out["points"].append({

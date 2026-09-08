@@ -569,10 +569,8 @@ TERRAIN_MATCH_M = 200.0
 TERRAIN_DRAIN_S = 0.4
 
 
-def _ll_dist_m(lat1, lon1, lat2, lon2) -> float:
-    dy = (lat2 - lat1) * 111320.0
-    dx = (lon2 - lon1) * 111320.0 * math.cos(math.radians(lat1))
-    return math.hypot(dx, dy)
+#: 換算住 `libs/plan_check`（Python 這一側唯一一處，field-3d-model-design §9-G）
+from plan_check import dist_m as _ll_dist_m  # noqa: E402
 
 
 def job_log_list(r: MavRouter, sysid: int, timeout: float = 12.0) -> dict:

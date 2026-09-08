@@ -46,6 +46,7 @@ import math
 import os
 import struct
 import zlib
+from dataclasses import dataclass
 
 VOID = -32768
 
@@ -131,6 +132,43 @@ class Dem:
             return None
         return ((z00 * (1 - fx) + z01 * fx) * (1 - fy)
                 + (z10 * (1 - fx) + z11 * fx) * fy)
+
+
+@dataclass(frozen=True)
+class Sample:
+    """某一點正上方有什麼——**帶著出處的一份答案，不是一個純量**。
+
+    `ground` 與 `top` 分開，是因為之後會有建物：那時 `top` 才是「飛機下方
+    最高的東西」，而 `ground` 仍然是地面。今天只有 SRTM，兩者相同。
+
+    `horiz_res_m` 不是裝飾：SRTM 的答案與航測 DSM 的答案在型別上一樣、
+    在意義上差三個數量級，畫面要說得出這一段的判定來自多粗的格子
+    （doc/field-3d-model-design.md §5）。
+    """
+    ground: float | None
+    top: float | None
+    source: str                  # srtm／nlsc20／lod1／survey／none
+    kind: str | None = None      # building／tree／unknown
+    horiz_res_m: float = 30.0
+
+
+#: 查不到的那一份。**不是 0，也不是「通過」。**
+NO_DATA = Sample(None, None, "none", None, float("inf"))
+
+
+def surface(lat: float, lon: float, dem: "Dem | None" = None) -> Sample:
+    """這一點的地面與上方最高點。由細往粗退，缺就說缺。
+
+    現在只有 SRTM 一層；建物與自測 DSM 進來時在這裡往前加，
+    **五個呼叫點不必改**（doc/field-3d-model-design.md §5）。
+    """
+    d = dem if dem is not None else shared()
+    if d is None or not d.available:
+        return NO_DATA
+    g = d.elevation(lat, lon)
+    if g is None:
+        return NO_DATA
+    return Sample(g, g, "srtm", None, 30.0)
 
 
 #: 行程共用的一份（圖磚讀進來就留著；一塊 1 弧秒圖磚 25 MB，
