@@ -575,6 +575,111 @@ def _ll_dist_m(lat1, lon1, lat2, lon2) -> float:
     return math.hypot(dx, dy)
 
 
+def job_log_list(r: MavRouter, sysid: int, timeout: float = 12.0) -> dict:
+    """問飛控 SD 卡上有哪些 dataflash 紀錄（`LOG_REQUEST_LIST` → `LOG_ENTRY`）。
+
+    **只問清單，不下載。** 清單是決定「值不值得走 MAVLink 這條線」的依據：
+    這條 FC↔Pi 的序列埠是 57600，扣掉遙測之後留給檔案傳輸的頻寬很窄，
+    幾 MB 的紀錄用聊天的速度傳會是幾十分鐘起跳。先看大小再決定要不要傳，
+    比傳到一半才發現不划算好。
+    """
+    r._sendto(sysid, lambda m: m.log_request_list_encode(sysid, 1, 0, 0xFFFF))
+    entries: dict[int, dict] = {}
+    total = None
+    deadline = time.monotonic() + timeout
+    other = 0
+    while time.monotonic() < deadline:
+        msg = r._recv(0.3)
+        if msg is None:
+            continue
+        other += 1
+        if msg.get_type() != "LOG_ENTRY" or msg.get_srcSystem() != sysid:
+            continue
+        total = int(msg.num_logs)
+        if total == 0:
+            break
+        entries[int(msg.id)] = {
+            "id": int(msg.id), "size": int(msg.size),
+            # `time_utc` 是 0 的話代表**飛控當時不知道時間**（沒有 GPS 定位），
+            # 不是 1970 年的紀錄。照實回 None，不要換算出一個假日期
+            "time_utc": int(msg.time_utc) or None,
+        }
+        if len(entries) >= total:
+            break
+    if total is None:
+        raise CommandError(
+            f"飛控沒有回應紀錄清單（期間收到 {other} 則其他訊息）。"
+            "可能是 LOG_BITMASK 關著、SD 卡沒插，或回應被塞滿的序列埠丟掉了")
+    return {"num_logs": total, "listed": len(entries),
+            "logs": sorted(entries.values(), key=lambda x: -x["id"])}
+
+
+#: 一次抓多少位元組。**不是越大越好**：這條 57600 的序列埠上，一塊 64 KB
+#: 已經要十幾秒，而工作跑在 router 的單一執行緒上——塊太大就等於在那段時間
+#: **整台機指揮不動**。分塊讓其他指令插得進來，代價只是多幾次來回。
+LOG_CHUNK_B = 65536
+LOG_PKT_B = 90                    # ArduPilot 的 LOG_DATA 一則固定 90 bytes
+
+
+def job_log_fetch(r: MavRouter, sysid: int, log_id: int, ofs: int,
+                  want: int = LOG_CHUNK_B, path: str = "",
+                  timeout: float = 20.0) -> dict:
+    """抓一塊 dataflash（`LOG_REQUEST_DATA` → `LOG_DATA`）。
+
+    **只抓一塊就回。** 一份 1.8 MB 的紀錄在這條線上要六分鐘，而工作是跑在
+    router 那條唯一的執行緒上的——整段抓完等於那六分鐘裡解鎖、切模式、
+    緊急降落全部排在後面。分塊之後其他指令插得進來。
+
+    **缺塊要說出來，不要靜靜地補零。** UDP 會掉，掉的那 90 bytes 如果用 0
+    填起來，`.bin` 解析出來會是一筆看起來很正常的假資料。這裡回報實際收到的
+    範圍，補洞交給呼叫端再要一次。
+
+    **位元組由這裡直接落盤，不經回傳值。** `_run` 會把工作的結果整份
+    `json.dumps` 進 `command_log`——幾十 KB 的二進位走那條路會塞爆留痕，
+    而留痕的用途是「誰在什麼時候下了什麼指令」，不是存檔案。
+    """
+    got: dict[int, bytes] = {}
+    end = ofs + want
+    for attempt in range(3):
+        missing = [o for o in range(ofs, end, LOG_PKT_B) if o not in got]
+        if not missing:
+            break
+        # 一次要一段連續的；ArduPilot 收到 LOG_REQUEST_DATA 會自己連續送
+        lo = missing[0]
+        r._sendto(sysid, lambda m, a=lo: m.log_request_data_encode(
+            sysid, 1, log_id, a, end - a))
+        deadline = time.monotonic() + timeout / 3
+        while time.monotonic() < deadline:
+            msg = r._recv(0.3)
+            if msg is None:
+                continue
+            if msg.get_type() != "LOG_DATA" or msg.get_srcSystem() != sysid:
+                continue
+            if int(msg.id) != log_id:
+                continue
+            o, n = int(msg.ofs), int(msg.count)
+            if n:
+                got[o] = bytes(bytearray(msg.data)[:n])
+            if o + n >= end or n < LOG_PKT_B:
+                break                     # 到尾了（最後一塊會短）
+    if not got:
+        raise CommandError(
+            f"飛控沒有回應紀錄 {log_id} 的資料（位移 {ofs}）。"
+            "紀錄編號對不對？SD 卡還在嗎？")
+    # 從 ofs 開始能連得起來多少，就回多少——**中間有洞就停在洞前面**，
+    # 呼叫端從回報的 next 繼續要，不會把洞跳過去
+    out = bytearray()
+    o = ofs
+    while o in got:
+        out += got[o]
+        o += len(got[o])
+    if path:
+        with open(path, "ab") as f:
+            f.write(bytes(out))
+    return {"ofs": ofs, "bytes": len(out), "next": o,
+            "holes": len(got) - (len(out) + LOG_PKT_B - 1) // LOG_PKT_B}
+
+
 def job_terrain_check(r: MavRouter, sysid: int, points: list) -> dict:
     """問飛控「你認為這幾個點的地面多高」（issues/047 §2 的核對那一半）。
 

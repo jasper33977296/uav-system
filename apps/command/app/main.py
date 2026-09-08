@@ -17,6 +17,7 @@ import concurrent.futures
 import json
 import logging
 import math
+import os
 import time
 import urllib.parse
 import urllib.request
@@ -1070,6 +1071,57 @@ def _terrain_probe_points(wps: list[dict], home) -> list:
 #: SRTM 的絕對誤差 LE90 約 16 m，而飛控那份多半也源自 SRTM——兩份同源時
 #: 差距應該很小；**差超過 5 m 就代表它們不同源，或有一邊沒有那塊資料**。
 TERRAIN_AGREE_M = 5.0
+
+
+@app.get("/api/command/{sysid}/logs", tags=["任務"],
+         summary="飛控 SD 卡上的 dataflash 紀錄清單")
+async def flight_logs(sysid: int):
+    """**只列清單，不下載。** 下載走 MAVLink 要與遙測搶同一條 57600 的序列埠
+    ——先看得到大小，才決定要不要走這條線（幾 MB 就是幾十分鐘起跳），
+    還是直接把 SD 卡拔下來讀。
+    """
+    _require_enabled()
+    await _require_capability(sysid, "param_get")
+    res = await _run(sysid, "log_list", mav.job_log_list, params={})
+    # 傳輸時間的估計要跟著清單走，不然「2.7 MB」對操作員沒有意義。
+    # 90 bytes/則 ＋ MAVLink 表頭，57600 8N1 → 每秒約 56 則、5 KB/s，
+    # 而那是**遙測完全讓路**時的上限
+    for lg in res["logs"]:
+        lg["mav_minutes"] = round(lg["size"] / 5000.0 / 60.0, 1)
+    return res
+
+
+LOG_DIR = os.environ.get("FLIGHT_LOG_DIR", "/data/flight-logs")
+
+
+@app.post("/api/command/{sysid}/logs/{log_id}/fetch", tags=["任務"],
+          summary="抓一塊 dataflash 紀錄（分塊，可重複呼叫直到完成）")
+async def fetch_log_chunk(sysid: int, log_id: int, ofs: int = 0,
+                          nbytes: int = mav.LOG_CHUNK_B):
+    """把一塊寫進 `FLIGHT_LOG_DIR/<sysid>-<log_id>.bin`，回報寫到哪裡。
+
+    **分塊是刻意的**：整段抓完要好幾分鐘，而工作跑在與所有指令共用的那條
+    執行緒上——那幾分鐘裡解鎖、切模式、緊急降落全部會排在後面。
+    呼叫端拿 `next` 再要下一塊（`scripts/fetch-flight-log.py` 就是那個迴圈）。
+
+    **只在 `ofs` 等於目前檔案大小時才接受**：亂序寫入會產生一個看起來
+    完整、其實錯位的 `.bin`，而那種檔案解析得出來、內容是錯的。
+    """
+    _require_enabled()
+    await _require_capability(sysid, "param_get")
+    os.makedirs(LOG_DIR, exist_ok=True)
+    path = os.path.join(LOG_DIR, f"{sysid}-{log_id}.bin")
+    have = os.path.getsize(path) if os.path.exists(path) else 0
+    if ofs != have:
+        raise HTTPException(409, {
+            "msg": f"位移對不上：檔案目前 {have} bytes，而你要從 {ofs} 開始寫",
+            "have": have,
+            "how_to": [f"從 ofs={have} 繼續", "或先刪掉那個檔案重抓"]})
+    res = await _run(sysid, "log_fetch", mav.job_log_fetch, log_id, ofs,
+                     nbytes, path, params={"log_id": log_id, "ofs": ofs})
+    return {"path": path, "ofs": ofs, "wrote": res["bytes"],
+            "next": res["next"], "holes": res["holes"],
+            "total_have": have + res["bytes"]}
 
 
 @app.get("/api/command/{sysid}/terrain", tags=["任務"],

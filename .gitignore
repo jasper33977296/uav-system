@@ -15,3 +15,6 @@ data/conformance/
 
 # 地形圖磚：一塊 25 MB、一年不變，不進版控（見 data/dem/README.md）
 data/dem/*.hgt
+
+# 飛控撈回來的 dataflash：事故調查用，不進 git
+data/flight-logs/*.bin
