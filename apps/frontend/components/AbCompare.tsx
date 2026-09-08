@@ -3,55 +3,80 @@ import { PolygonLayer } from "@deck.gl/layers";
 import { MapboxOverlay } from "@deck.gl/mapbox";
 import maplibregl from "maplibre-gl";
 import "maplibre-gl/dist/maplibre-gl.css";
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 
-import { compareAlongPath, deltaCells, type ChainPoint, type DeltaCell, type Sample }
-  from "@/lib/chainage";
 import CompareTabs from "@/components/CompareTabs";
-import { CANVAS, groundGrid } from "@/lib/geo";
+import InfoTip from "@/components/InfoTip";
+import { compareAlongPath, deltaCells, type AbResult, type ChainPoint,
+  type DeltaCell, type Pt, type Sample } from "@/lib/chainage";
 import { getJson } from "@/lib/fetchJson";
+import { CANVAS, groundGrid } from "@/lib/geo";
 import { API, CLIENT_HEADERS } from "@/lib/signal";
 import { firstFleetPos } from "@/lib/store";
 
-/** 前後比較頁（ui-spec §6b，023——使用者核准 2026-08-12）。
+/** 比較頁（ui-spec §6b；2026-09-08 使用者核准的改版）。
  *
- * 回答的問題與場域頁（§6 v4）不同：v4＝「這場域哪裡弱」（多趟累積無基準）；
- * 本頁＝「這條路徑，改善措施前後差多少」（兩趟對照、有前後之分）。
+ * 從「前後兩趟」擴成「**基準 ＋ 對照 N 趟**」，並加上**比較單位**：
  *
- * 三塊：①沿路徑訊號主圖（X＝弧長里程非時間——兩趟速度不同，時間對齊會
- * 錯位）②摘要表（CDF 經使用者二次否決，分佈資訊改以數字承接、p5 為重點）
- * ③差值熱區（發散色盤＋灰中點；兩趟都有樣本才上色）。
- * RSRP 不做雙軸：主圖下 24px 迷你帶＋卡頭自動判讀句，句尾必附依據數值。
+ *   time     以時間          同一台機不同時間的架次
+ *   mission  同一台機・同一任務  同一條航線飛過多趟——**唯一路徑一致的模式**
+ *   cross    跨機・跨任務      不同機、不同任務
+ *
+ * 三種共用同一套對齊（沿基準軌跡的弧長里程，lib/chainage），差別在候選怎麼
+ * 圈、標籤帶什麼，以及差異可以怎麼解讀。**基準是一趟，不是「前」**——兩趟時
+ * 可以叫前後，三趟以上就不能。
+ *
+ * 標籤跟著模式換：只有時間時「08/13 16:37」就夠；跨機時不帶機名根本分不出
+ * 誰是誰。差值熱區本質是兩兩比對，所以留一排 pill 選「現在看哪一趟對基準」。
+ *
+ * 解釋一律住 ⓘ（使用者要求 2026-09-08：畫面上不要太多解釋的文字）——
+ * 版面上只留事實與數字。
  */
 
-const A_COLOR = "#3987e5";   // 前（識別色第 1 槽，CVD 實測通過）
-const B_COLOR = "#d95926";   // 後（第 2 槽）
-const SMOOTH_WIN = 5;        // 平滑窗＝5 格 × 10m ＝ 50m（卡頭標示）
+const IDC = ["#3987e5", "#d95926", "#199e70"];   // 識別色 1藍 2橘 3綠
+const OVER = "#8f8b80";                          // 第 4 趟起：顏色不再承載識別
+const tripColor = (i: number) => (i < IDC.length ? IDC[i] : OVER);
+const BASE_INK = "#c9c5bb";                      // 基準線（虛線、中性色）
+
+type Mode = "time" | "mission" | "cross";
+const MODE_LABEL: Record<Mode, string> = {
+  time: "以時間", mission: "同一台機・同一任務", cross: "跨機・跨任務",
+};
 
 interface SessRow {
   id: string; drone_name: string; started_at: string;
   mission_id: string | null; mission_name: string | null;
   note: string | null;
   origin?: string | null;      // 'test'＝rig/驗收觸發的架次
-  summary: { samples_total?: number } | string | null;
 }
 
 const fmtT = (t: string) =>
   new Date(t).toLocaleString("zh-TW", { month: "numeric", day: "numeric",
     hour: "2-digit", minute: "2-digit", hour12: false });
 const f1 = (v: number | null | undefined) => (v == null ? "—" : v.toFixed(1));
+const dd = (b: number | null, a: number | null) =>
+  b == null || a == null ? "—" : `${b - a >= 0 ? "+" : ""}${(b - a).toFixed(1)}`;
 
-/** 發散色盤（dataviz 硬規則：兩極＋灰中點，中點絕不用第三個色相）。
- * 兩極沿用同一對識別色，避免全站色語言分裂。 */
+const median = (v: number[]): number | null => {
+  if (!v.length) return null;
+  const s = [...v].sort((x, y) => x - y);
+  return s.length % 2 ? s[(s.length - 1) / 2]
+    : (s[s.length / 2 - 1] + s[s.length / 2]) / 2;
+};
+
+/** 發散色盤（dataviz 硬規則：兩極＋灰中點，中點絕不用第三個色相）。 */
 function divergeRGB(d: number, max = 8): [number, number, number] {
   const t = Math.max(-1, Math.min(1, d / max));
   const grey: [number, number, number] = [143, 139, 128];
-  const pos: [number, number, number] = [57, 135, 229];    // 改善→藍
-  const neg: [number, number, number] = [217, 89, 38];     // 惡化→橘
-  const end = t >= 0 ? pos : neg;
+  const end: [number, number, number] = t >= 0 ? [57, 135, 229] : [217, 89, 38];
   const k = Math.abs(t);
   return [0, 1, 2].map((i) => Math.round(grey[i] + (end[i] - grey[i]) * k)) as
     [number, number, number];
+}
+
+interface TripRow {
+  id: string; sess: SessRow; label: string; color: string;
+  res: AbResult; paired: number; dS: number | null;
 }
 
 export default function AbCompare() {
@@ -59,43 +84,120 @@ export default function AbCompare() {
   // 「還在載入」與「取不到」必須分開說：兩者都是畫面空白，但前者會好、
   // 後者不會，而且後者若沿用載入中的字樣就是永遠的謊（§0.2e）
   const [loadErr, setLoadErr] = useState<string | null>(null);
-  const [aId, setAId] = useState<string | null>(null);
-  const [bId, setBId] = useState<string | null>(null);
+  const [mode, setMode] = useState<Mode>("time");
+  const [drone, setDrone] = useState<string | null>(null);
+  const [missionId, setMissionId] = useState<string | null>(null);
+  const [baseId, setBaseId] = useState<string | null>(null);
+  const [sel, setSel] = useState<string[]>([]);
+  const [heatId, setHeatId] = useState<string | null>(null);
   const [tracks, setTracks] = useState<Record<string, Sample[]>>({});
-  const [plan, setPlan] = useState<{ lat: number; lon: number }[] | null>(null);
+  const [plan, setPlan] = useState<Pt[] | null>(null);
   const [hover, setHover] = useState<DeltaCell | null>(null);
   const [noteEdit, setNoteEdit] = useState<string | null>(null);
-  const [showTest, setShowTest] = useState(false);   // 測試架次是否列入選單
+  const [showTest, setShowTest] = useState(false);   // 測試架次是否列入
 
-  // 架次清單（有樣本的才可比較——門檻與場域頁一致）。
-  // 測試架次（origin='test'）後端預設不回：比較頁本來就該以真飛行為主，
-  // 但驗收/實驗用的測試飛行也需要看得到——一律抓回、以開關切換並如實
-  // 顯示隱藏了幾筆（不能讓使用者以為架次憑空消失）
+  // 架次清單（有樣本的才可比較——門檻與場域頁一致）。測試架次
+  // （origin='test'）一律抓回、以開關切換並如實顯示隱藏了幾筆：
+  // 不能讓使用者以為架次憑空消失
   useEffect(() => {
     // 取得失敗不得變成「沒有可比較的架次」（見 lib/fetchJson.ts）
     getJson<SessRow[]>(`${API}/api/sessions?limit=500&min_samples=10&include_test=true`)
-      .then((rows: SessRow[]) => {
+      .then((rows) => {
         setSessions(rows);
         const q = new URLSearchParams(window.location.search);
-        const qa = q.get("a"), qb = q.get("b");
         if (q.get("test") === "1") setShowTest(true);
-        // 預設：**同一條航線**飛過 ≥2 趟者取最近兩趟（前＝較早、後＝較晚）。
-        // 不同航線的兩趟沒有共同里程軸，預設選到它們等於一開頁就是錯的比較
-        const byMission = new Map<string, SessRow[]>();
-        for (const r of rows) {
-          if (!r.mission_id) continue;
-          byMission.set(r.mission_id, [...(byMission.get(r.mission_id) ?? []), r]);
-        }
-        const pair = [...byMission.values()].find((g) => g.length >= 2);
-        setAId(qa ?? pair?.[1]?.id ?? null);   // 清單為時間新→舊，[1] 是較早的＝前
-        setBId(qb ?? pair?.[0]?.id ?? null);
+        const qa = q.get("a"), qb = q.get("b");
+        if (qa) setBaseId(qa);
+        if (qb) setSel([qb]);
       })
       .catch(() => setLoadErr("無法取得架次清單"));
   }, []);
 
-  // 兩趟軌跡（各抓一次即快取）
+  // 選單內容：預設只列真飛行；已選中的架次即使是測試也保留，
+  // 否則切換開關時選擇會憑空消失
+  const chosen = useMemo(() => new Set([baseId, ...sel]), [baseId, sel]);
+  const listed = useMemo(() => sessions.filter(
+    (r) => showTest || r.origin !== "test" || chosen.has(r.id)),
+    [sessions, showTest, chosen]);
+  const hiddenTest = sessions.filter((r) => r.origin === "test").length;
+
+  /** 這個模式下可以拿來比的架次（時間新→舊，清單本來就是這個序）。 */
+  const cand = useMemo(() => {
+    if (mode === "cross") return listed;
+    const d = listed.filter((r) => r.drone_name === drone);
+    return mode === "time" ? d : d.filter((r) => r.mission_id === missionId);
+  }, [listed, mode, drone, missionId]);
+
+  /** 標籤：帶到剛好能分辨為止，不多帶。 */
+  const tripLabel = useCallback((s: SessRow | null | undefined): string => {
+    if (!s) return "—";
+    if (mode === "cross") return `${s.drone_name} · ${fmtT(s.started_at)}`;
+    if (mode === "mission") {
+      const seq = [...cand].reverse();   // 舊→新才數得出「第幾趟」
+      const i = seq.findIndex((x) => x.id === s.id);
+      return i >= 0 ? `第 ${i + 1} 趟 · ${fmtT(s.started_at)}` : fmtT(s.started_at);
+    }
+    return fmtT(s.started_at);
+  }, [mode, cand]);
+
+  // 預設落在**架次最多**的那台機：挑最新的那台可能只有一趟，一進來就是空畫面
   useEffect(() => {
-    for (const id of [aId, bId]) {
+    if (drone || !sessions.length) return;
+    const cnt: Record<string, number> = {};
+    for (const r of sessions) cnt[r.drone_name] = (cnt[r.drone_name] ?? 0) + 1;
+    setDrone(Object.entries(cnt).sort((a, b) => b[1] - a[1])[0][0]);
+  }, [sessions, drone]);
+
+  // 換模式／換範圍之後把選擇重新落在合法的架次上。**不保留上一個模式的
+  // 選擇**——那會讓畫面上出現這個範圍裡根本沒有的趟次
+  useEffect(() => {
+    if (!cand.length) { setBaseId(null); setSel([]); return; }
+    const base = cand.some((s) => s.id === baseId) ? baseId! : cand[0].id;
+    if (base !== baseId) setBaseId(base);
+    const rest = cand.filter((s) => s.id !== base).map((s) => s.id);
+    const keep = sel.filter((id) => rest.includes(id));
+    const next = keep.length ? keep : rest.slice(0, 3);
+    if (next.join() !== sel.join()) setSel(next);
+  }, [cand, baseId, sel]);
+
+  useEffect(() => {
+    if (!sel.includes(heatId ?? "")) setHeatId(sel[0] ?? null);
+  }, [sel, heatId]);
+
+  // 切到「同機同任務」時，把機與任務換到**真的有任務紀錄**的那一組：
+  // 停在一台沒有任務的機上，畫面會是空的，那不是這個模式的樣子
+  const seatMission = () => {
+    const has = sessions.filter((s) => s.mission_id);
+    if (!has.length) return;
+    const mine = has.filter((s) => s.drone_name === drone);
+    if (mine.length) {
+      if (!mine.some((s) => s.mission_id === missionId))
+        setMissionId(mine[0].mission_id);
+      return;
+    }
+    const cnt: Record<string, number> = {};
+    for (const r of has) cnt[r.drone_name] = (cnt[r.drone_name] ?? 0) + 1;
+    const d = Object.entries(cnt).sort((a, b) => b[1] - a[1])[0][0];
+    setDrone(d);
+    setMissionId(has.find((s) => s.drone_name === d)!.mission_id);
+  };
+
+  // 切到「跨機・跨任務」時預設就挑到**別台機**去：沿用上一個模式的選擇會讓
+  // 這個模式一進來全是同一台機的架次，那正是它要對照的反面
+  const seatCross = () => {
+    const base = listed.find((s) => s.id === baseId) ?? listed[0];
+    if (!base) return;
+    setBaseId(base.id);
+    const others = listed.filter((s) => s.id !== base.id
+      && s.drone_name !== base.drone_name).slice(0, 2);
+    const same = listed.filter((s) => s.id !== base.id
+      && s.drone_name === base.drone_name).slice(0, 1);
+    setSel([...others, ...same].map((s) => s.id));
+  };
+
+  // 軌跡（各抓一次即快取）
+  useEffect(() => {
+    for (const id of [baseId, ...sel]) {
       if (!id || tracks[id]) continue;
       getJson<{ link?: Sample[] }>(`${API}/api/sessions/${id}/track`)
         .then((d) => setTracks((t) => ({ ...t, [id]: (d.link ?? []) as Sample[] })))
@@ -103,96 +205,50 @@ export default function AbCompare() {
         // 那是把我方的取得失敗說成對方沒資料（§0.2e）
         .catch(() => setLoadErr("無法取得軌跡"));
     }
-  }, [aId, bId, tracks]);
+  }, [baseId, sel, tracks]);
 
-  const aSess = sessions.find((s) => s.id === aId) ?? null;
-  const bSess = sessions.find((s) => s.id === bId) ?? null;
-  // 選單內容：預設只列真飛行；已選中的架次即使是測試也保留在選項裡，
-  // 否則切換開關時選擇會憑空消失
-  const listed = sessions.filter((r) => showTest || r.origin !== "test"
-    || r.id === aId || r.id === bId);
-  const hiddenTest = sessions.filter((r) => r.origin === "test").length;
+  const baseSess = sessions.find((s) => s.id === baseId) ?? null;
 
-  // 參考路徑：兩趟共用同一計畫航線時以它為基準（共同 X 軸的最佳來源）
+  // 參考路徑：同任務模式下每一趟共用同一條計畫航線（共同 X 軸的最佳來源）；
+  // 其他模式沒有共同航線，基準就是基準那一趟的軌跡
   useEffect(() => {
-    const mid = aSess?.mission_id && aSess.mission_id === bSess?.mission_id
-      ? aSess.mission_id : null;
+    const mid = mode === "mission" ? missionId : null;
     if (!mid) { setPlan(null); return; }
     fetch(`${API}/api/missions/${mid}/waypoints`)
       .then((r) => (r.ok ? r.json() : null))
       .then((d) => setPlan((d?.waypoints ?? [])
-        .filter((w: { lat: number; lon: number }) => w.lat && w.lon)))
+        .filter((w: Pt) => w.lat && w.lon)))
       .catch(() => setPlan(null));
-  }, [aSess?.mission_id, bSess?.mission_id]);
+  }, [mode, missionId]);
 
-  const aRows = (aId && tracks[aId]) || [];
-  const bRows = (bId && tracks[bId]) || [];
-  const ready = aRows.length > 0 && bRows.length > 0;
+  const baseRows = (baseId && tracks[baseId]) || [];
 
-  const res = useMemo(() =>
-    (ready ? compareAlongPath(aRows, bRows, plan) : null),
-    [ready, aRows, bRows, plan]);
+  const rows: TripRow[] = useMemo(() => {
+    if (!baseRows.length) return [];
+    const out: TripRow[] = [];
+    for (const id of sel) {
+      const sess = sessions.find((s) => s.id === id);
+      const rs = tracks[id];
+      if (!sess || !rs?.length) continue;
+      const res = compareAlongPath(baseRows, rs, plan);
+      const both = res.chainage.filter((c) => c.a_sinr != null && c.b_sinr != null);
+      out.push({
+        id, sess, label: tripLabel(sess), color: tripColor(out.length), res,
+        paired: both.length,
+        dS: median(both.map((c) => c.b_sinr! - c.a_sinr!)),
+      });
+    }
+    return out;
+  }, [baseRows, sel, sessions, tracks, plan, tripLabel]);
 
+  const heat = rows.find((r) => r.id === heatId) ?? rows[0] ?? null;
   const cells = useMemo(() => {
-    if (!ready) return [];
-    const o = aRows.find((r) => r.lat != null && r.lon != null);
-    return o ? deltaCells(aRows, bRows, o) : [];
-  }, [ready, aRows, bRows]);
+    if (!heat || !baseRows.length) return [];
+    const o = baseRows.find((r) => r.lat != null && r.lon != null);
+    return o ? deltaCells(baseRows, tracks[heat.id] ?? [], o) : [];
+  }, [heat, baseRows, tracks]);
 
-  // 兩趟皆有樣本的里程區間數——0＝無從比較（見下方誠實空態）
-  const bothBins = useMemo(() => (res?.chainage ?? [])
-    .filter((c) => c.a_sinr != null && c.b_sinr != null).length, [res]);
-
-  // 自動判讀（§6b.3）：依整段中位數；句尾必附依據，使用者可自行反駁
-  const verdict = useMemo(() => {
-    if (!res) return null;
-    const pts = res.chainage.filter((c) => c.a_sinr != null && c.b_sinr != null);
-    if (!pts.length) return null;
-    const median = (v: number[]) => {
-      const s = [...v].sort((x, y) => x - y);
-      return s.length ? s[Math.floor(s.length / 2)] : 0;
-    };
-    const dS = median(pts.map((c) => c.b_sinr! - c.a_sinr!));
-    const rp = res.chainage.filter((c) => c.a_rsrp != null && c.b_rsrp != null);
-    const dR = rp.length ? median(rp.map((c) => c.b_rsrp! - c.a_rsrp!)) : null;
-    const FLAT_R = 2, SIG_S = 1.5, TAIL = 3;   // 判定門檻（dB）：持平／顯著／尾部
-    // 語意中性（使用者定案 2026-08-13）：句子只描述**現象**（RSRP 與 SINR
-    // 的相對走勢），不宣告成因。機只知道訊號變差、不知道為什麼——
-    // 「是不是干擾」是研究者依現場條件判斷的事，系統把推測寫成事實就是
-    // 在替使用者下結論。
-    // 局部變化分支（§6b 設計師裁定）：整段中位數持平但尾部顯著時，若只說
-    // 「無顯著變化」會與同頁摘要表的 Δp5 互相打臉——判讀句的責任不是說出
-    // 一個對的結論，是說出一個不與同頁其他證據衝突的結論
-    const dP5 = res.summary.b.p5 != null && res.summary.a.p5 != null
-      ? res.summary.b.p5 - res.summary.a.p5 : null;
-    // **摘要表的 Δ 與判讀句的中位數是不同的統計量**：表上是「各自中位數
-    // 之差」median(後)−median(前)，句子裡是「逐段差值的中位數」
-    // median(後ᵢ−前ᵢ)。前趟在 700m 驟降、後趟在 1000m 才降時，逐段差值
-    // 中位數是 0 而整體中位數差 15.8——兩個數字都對卻互相打臉。
-    // 守門條件因此要涵蓋**摘要表任一欄的顯著差異**，不能只看尾部
-    const dP50 = res.summary.b.p50 != null && res.summary.a.p50 != null
-      ? res.summary.b.p50 - res.summary.a.p50 : null;
-    let txt: string;
-    if (dR == null) txt = "無 RSRP 對照資料，無法判定變因";
-    else if (Math.abs(dR) < FLAT_R && dS < -SIG_S) txt = "RSRP 大致持平而 SINR 下降 → 符合外部雜訊升高的特徵";
-    else if (Math.abs(dR) < FLAT_R && dS > SIG_S) txt = "RSRP 大致持平而 SINR 上升 → 符合外部雜訊下降的特徵";
-    else if (dR < -FLAT_R && dS < -SIG_S) txt = "RSRP 同步下降 → 變因在訊號強度側（距離、遮蔽或發射端）";
-    else if (dR > FLAT_R && dS > SIG_S) txt = "RSRP 同步上升 → 變因在訊號強度側（距離、遮蔽或發射端）";
-    else if ((dP5 != null && Math.abs(dP5) >= TAIL)
-             || (dP50 != null && Math.abs(dP50) >= TAIL)) {
-      // 只要摘要表任一欄顯示顯著差異，判讀句就不得說「無顯著變化」
-      const bits: string[] = [];
-      if (dP50 != null && Math.abs(dP50) >= TAIL) {
-        bits.push(`整體中位數${dP50 > 0 ? "改善" : "惡化"} ${Math.abs(dP50).toFixed(1)} dB`);
-      }
-      if (dP5 != null && Math.abs(dP5) >= TAIL) {
-        bits.push(`最差 5% ${dP5 > 0 ? "改善" : "惡化"} ${Math.abs(dP5).toFixed(1)} dB`);
-      }
-      txt = `逐段差值中位數持平，但${bits.join("、")}`
-        + " → 變化集中在局部區段（見主圖差值帶）";
-    } else txt = "無顯著變化";
-    return { txt, dS, dR, dP5, dP50 };
-  }, [res]);
+  const ready = rows.length > 0;
 
   // 差值熱區地圖（沿用場域頁的暖畫布底＋地面網格）
   const mapRef = useRef<maplibregl.Map | null>(null);
@@ -205,7 +261,6 @@ export default function AbCompare() {
     if (!boxRef.current || mapRef.current) return;
     const map = new maplibregl.Map({
       container: boxRef.current, zoom: firstFleetPos() ? 16 : 1.5,
-      // 初始中心取機隊；沒有遙測就世界視野——熱區資料到位後 fitBounds
       center: firstFleetPos() ?? [0, 20],
       attributionControl: false, cooperativeGestures: true,
       style: { version: 8, sources: {}, layers: [
@@ -213,8 +268,7 @@ export default function AbCompare() {
     });
     mapRef.current = map;
     map.on("load", () => {
-      // 網格錨在資料原點：先建空 source，cells 算出後再填（原本錨死在
-      // SITL 舊出生點，機隊搬家後參考線會在別的洲）
+      // 網格錨在資料原點：先建空 source，cells 算出後再填
       map.addSource("grid", { type: "geojson",
         data: { type: "FeatureCollection", features: [] } as GeoJSON.FeatureCollection });
       map.addLayer({ id: "grid", type: "line", source: "grid",
@@ -225,12 +279,9 @@ export default function AbCompare() {
       setMapReady(true);
     });
     // cleanup 必須把**與這張地圖同生命週期的東西全部歸零**，不只 mapRef：
-    //   - `ovRef` 還指著已銷毀的 overlay，推層會推進不存在的東西
-    //   - `mapReady` 留在 true 時，新地圖 load 後的 setMapReady(true) 是
-    //     no-op（React 不重渲染）→ 推層 effect 再也沒有觸發條件 →
-    //     **新 overlay 永遠停在 layers: []，熱區一片空白**
-    // 本頁是唯一 deps 非 [] 的地圖（[ready]：容器只在有資料時渲染），
-    // 所以只有這裡會重建、也只有這裡會踩到
+    // ovRef 還指著已銷毀的 overlay；mapReady 留在 true 時，新地圖 load 後的
+    // setMapReady(true) 是 no-op → 推層 effect 再也沒有觸發條件 →
+    // **新 overlay 永遠停在 layers: []，熱區一片空白**
     return () => {
       map.remove();
       mapRef.current = null;
@@ -259,10 +310,9 @@ export default function AbCompare() {
         getLineWidth: 0.6,
         stroked: true, filled: true, pickable: true,
         onHover: (info) => setHover((info.object as DeltaCell) ?? null),
-        updateTriggers: { getFillColor: cells.length, getPolygon: cells.length },
+        updateTriggers: { getFillColor: cells, getPolygon: cells },
       }),
     ] });
-    // 首次有格時把視野與網格帶到資料範圍
     if (cells.length && mapRef.current) {
       (mapRef.current.getSource("grid") as maplibregl.GeoJSONSource | undefined)
         ?.setData(groundGrid(cells[0].lat, cells[0].lon));
@@ -278,55 +328,43 @@ export default function AbCompare() {
       headers: { "Content-Type": "application/json", ...CLIENT_HEADERS },
       body: JSON.stringify({ note }),
     }).catch(() => {});
-    setSessions((rows) => rows.map((r) => (r.id === id ? { ...r, note } : r)));
+    setSessions((rs) => rs.map((r) => (r.id === id ? { ...r, note } : r)));
   }
 
-  const capsule = (s: SessRow | null, label: string, color: string,
-    onPick: (id: string) => void) => (
-    <div className="ab-cap">
-      <span className="meta">{label}</span>
-      <span className="dot" style={{ background: color }} />
-      <select value={s?.id ?? ""} onChange={(e) => onPick(e.target.value)}>
-        {listed.map((r) => (
-          <option key={r.id} value={r.id}>
-            {fmtT(r.started_at)}　{r.drone_name}{r.note ? `　${r.note}` : ""}
-            {r.origin === "test" ? "　［測試］" : ""}
-          </option>
-        ))}
-      </select>
-      {/* 備註即實驗標籤（沿用 v4：膠囊上直接可編） */}
-      {s && (noteEdit === s.id ? (
-        <input autoFocus defaultValue={s.note ?? ""} placeholder="實驗標籤"
+  /** 備註即實驗標籤（沿用 v4：直接可編）。 */
+  const noteCell = (s: SessRow | null) => {
+    if (!s) return null;
+    if (noteEdit === s.id) {
+      return (
+        <input className="cmp-noteedit" autoFocus defaultValue={s.note ?? ""}
+          placeholder="實驗標籤"
           onBlur={(e) => { saveNote(s.id, e.target.value); setNoteEdit(null); }}
-          onKeyDown={(e) => { if (e.key === "Enter") (e.target as HTMLInputElement).blur(); }} />
-      ) : (
-        <button className="btn-plain btn-sm" title="編輯備註（實驗標籤）"
-          onClick={() => setNoteEdit(s.id)}>✎</button>
-      ))}
-    </div>
-  );
+          onKeyDown={(e) => {
+            if (e.key === "Enter") (e.target as HTMLInputElement).blur();
+          }} />
+      );
+    }
+    return (
+      <button className="cmp-note" title="編輯備註（實驗標籤）"
+        onClick={() => setNoteEdit(s.id)}>{s.note || "✎"}</button>
+    );
+  };
+
+  const missionsOf = (d: string | null) => {
+    const seen = new Map<string, string>();
+    for (const r of sessions) {
+      if (r.drone_name === d && r.mission_id)
+        seen.set(r.mission_id, r.mission_name ?? "（未命名航線）");
+    }
+    return [...seen.entries()];
+  };
+  const noMission = mode === "mission" && missionsOf(drone).length === 0;
 
   return (
     <div className="ab-page">
       <div className="ab-head">
         <CompareTabs active="ab" />
-        <span className="name">
-          路徑：{aSess?.mission_id && aSess.mission_id === bSess?.mission_id
-            ? aSess.mission_name ?? "（未命名航線）"
-            : "兩趟航線不同"}
-        </span>
-        {/* 不同航線＝沒有共同里程軸，投影會把不相干的位置壓到同一 X。
-            不阻止（研究者可能就是要看），但明說（誠實原則，同樣本數差異） */}
-        {aSess && bSess && aSess.mission_id !== bSess.mission_id && (
-          <span className="hint-line">
-            兩趟不是同一條航線（{aSess.mission_name ?? "無航線"} vs {bSess.mission_name ?? "無航線"}）
-            ——里程軸以「前」的軌跡為基準，比較僅供參考
-          </span>
-        )}
-        <span className="spacer" />
-        {capsule(aSess, "前", A_COLOR, setAId)}
-        {capsule(bSess, "後", B_COLOR, setBId)}
-        {/* 隱藏的測試架次如實揭露＋可切換（不能讓使用者以為架次消失了） */}
+        <span className="spacer" style={{ flex: 1 }} />
         {hiddenTest > 0 && (
           <label className="ab-testtoggle" title="測試/驗收觸發的架次（origin=test）">
             <input type="checkbox" checked={showTest}
@@ -336,180 +374,366 @@ export default function AbCompare() {
         )}
       </div>
 
-      {!ready && (
-        <div className="card">
-          <div className="empty">{loadErr ?? "載入兩趟軌跡中…"}</div>
+      {loadErr && <div className="card"><div className="form-err">{loadErr}</div></div>}
+
+      {/* ① 比較單位：先講清楚在比什麼，再選誰跟誰 */}
+      <div className="card">
+        <h3>比較什麼<span className="h3-note">
+          <InfoTip tip={"三種單位用同一套對齊：沿基準軌跡的弧長里程，不是時間"
+            + "（兩趟速度不同，時間對齊會錯位）；偏離基準路徑逾 60 m 的樣本不納入。"
+            + "　以時間＝同一台機不同時間，路徑不保證一樣。"
+            + "　同一台機・同一任務＝唯一路徑一致的模式，共同區間會接近全滿。"
+            + "　跨機・跨任務＝差異可能來自機或模組本身，不只是位置。"} />
+        </span></h3>
+        <div className="sess-pills">
+          {(Object.keys(MODE_LABEL) as Mode[]).map((k) => (
+            <button key={k} className={`pill${mode === k ? " on" : ""}`}
+              onClick={() => {
+                setMode(k);
+                if (k === "mission") seatMission();
+                if (k === "cross") seatCross();
+              }}>{MODE_LABEL[k]}</button>
+          ))}
         </div>
+        {mode !== "cross" && (
+          <div className="cmp-scope">
+            <span className="hint-line">機</span>
+            <select value={drone ?? ""} onChange={(e) => {
+              setDrone(e.target.value);
+              const ms = missionsOf(e.target.value);
+              if (mode === "mission") setMissionId(ms[0]?.[0] ?? null);
+            }}>
+              {[...new Set(sessions.map((s) => s.drone_name))].map((d) => (
+                <option key={d} value={d}>{d}</option>
+              ))}
+            </select>
+            {mode === "mission" && (<>
+              <span className="hint-line">任務</span>
+              <select value={missionId ?? ""} disabled={noMission}
+                onChange={(e) => setMissionId(e.target.value)}>
+                {noMission
+                  ? <option value="">（沒有任務紀錄）</option>
+                  : missionsOf(drone).map(([id, nm]) => (
+                    <option key={id} value={id}>{nm}</option>))}
+              </select>
+            </>)}
+          </div>
+        )}
+      </div>
+
+      {/* **不足以比較時直說是哪一種不足**：沒有候選、只有一趟，是兩件不同的事 */}
+      {!loadErr && sessions.length > 0 && cand.length < 2 && (
+        <div className="card"><div className="empty">
+          {noMission
+            ? `${drone} 沒有任何一趟掛著任務——這個單位要先有任務紀錄。`
+            : cand.length === 0 ? "這個範圍裡沒有任何架次。"
+            : mode === "mission"
+              ? `${drone} 在這條任務上只有 1 趟——一趟不能比。`
+              : "這個範圍裡只有 1 趟——一趟不能比。"}
+        </div></div>
       )}
 
-      {/* 兩趟沒有共同里程區間＝沿路徑比較無從談起（實測會發生：一趟飛完
-          走廊、另一趟只在起飛點做指令驗收）。不畫空圖假裝有比較，明說 */}
-      {res && bothBins === 0 && (
+      {cand.length >= 2 && (
         <div className="card">
-          <div className="empty">
-            這兩趟沒有共同的里程區間——可能其中一趟未沿此路徑飛行。
-            <div className="hint-line" style={{ marginTop: 6 }}>
-              前：{res.summary.a.n} 筆樣本、後：{res.summary.b.n} 筆；分箱 {res.binM} m，兩趟皆有樣本的區間 0 個。
-            </div>
+          <h3>比較對象<span className="h3-note">
+            <InfoTip tip={"所有對照都對同一個基準算，所以摘要表的 Δ 之間可以互相比。"
+              + "第 4 趟起顏色一律灰（顏色到此不再承載識別），改看線末的標籤。"} />
+          </span></h3>
+          <div className="cmp-scope">
+            <span className="hint-line">基準</span>
+            <select value={baseId ?? ""} onChange={(e) => setBaseId(e.target.value)}>
+              {cand.map((s) => (
+                <option key={s.id} value={s.id}>{tripLabel(s)}</option>
+              ))}
+            </select>
+            {baseSess?.mission_name && (
+              <span className="chip">{baseSess.mission_name}</span>
+            )}
+          </div>
+          <div className="sess-pills cmp-tripsel">
+            {cand.filter((s) => s.id !== baseId).map((s) => {
+              const on = sel.includes(s.id);
+              const r = rows.find((x) => x.id === s.id);
+              return (
+                <button key={s.id} className={`pill${on ? " on" : ""}`}
+                  title={s.note ?? undefined}
+                  onClick={() => setSel((cur) => cur.includes(s.id)
+                    ? cur.filter((x) => x !== s.id) : [...cur, s.id])}>
+                  <span className="dot" style={{
+                    background: on && r ? r.color : "var(--hairline)" }} />
+                  {tripLabel(s)}
+                </button>
+              );
+            })}
           </div>
         </div>
       )}
 
-      {res && bothBins > 0 && (<>
+      {cand.length >= 2 && !ready && (
+        <div className="card"><div className="empty">
+          {sel.length ? "載入軌跡中…" : "沒有選任何對照——上面挑一趟以上。"}
+        </div></div>
+      )}
+
+      {ready && (<>
         <div className="card">
-          <h3>沿路徑訊號
-            <span className="h3-note">
-              {res.binM}m 分箱 · 平滑 {SMOOTH_WIN * res.binM}m 窗（原始淡線並存）
-              · 里程 0–{Math.round(res.totalM)}m
-              {plan ? "（基準＝計畫航線）" : "（基準＝前一趟軌跡）"}
-            </span>
-          </h3>
-          <ChainChart pts={res.chainage} />
-          {verdict && (
-            <div className="ab-verdict">
-              ⓘ {verdict.txt}
-              {/* 判讀必須可反駁：句尾附依據，使用者能自行檢查系統的結論 */}
-              <span className="meta">
-                {/* 標明統計量：判讀句用「逐段差值」、摘要表用「各自中位數
-                    之差」——同名不同義會讓兩個都對的數字看起來互相矛盾 */}
-                （依據：SINR 逐段差值中位數 {f1(verdict.dS)} dB
-                {verdict.dR != null && `、RSRP 逐段差值中位數 ${f1(verdict.dR)} dB`}
-                {verdict.dP50 != null && `、整體 P50 差 ${f1(verdict.dP50)} dB`}
-                {verdict.dP5 != null && `、Δp5 ${f1(verdict.dP5)} dB`}
-                {"；持平門檻 ±2 dB、表列顯著門檻 ±3 dB）"}
-              </span>
-            </div>
-          )}
-          <RsrpBand pts={res.chainage} />
+          <h3>沿里程訊號<span className="h3-note">
+            <InfoTip tip={"每格取該里程區間內樣本的平均；虛線是 5／13 dB 門檻"
+              + "（與 backend 事件門檻同一出處）。「逐段」只比對兩趟都飛過的區間、"
+              + "逐段取差再取中位數；摘要表的 Δ 是各自整體統計之差，含各自獨飛的"
+              + "部分——兩個都對，差很多代表兩趟走過的範圍差很多。持平門檻 ±2 dB。"
+              + (plan ? "　基準路徑＝這條任務的計畫航線。" : "　基準路徑＝基準那一趟的軌跡。")} />
+          </span></h3>
+          <MultiChart rows={rows} />
+          <div className="cmp-verdicts">
+            {rows.map((r) => (
+              <div className="cmp-vrow" key={r.id}>
+                <span className="dot" style={{ background: r.color }} />
+                <span>{r.label}</span>
+                <span className="hint-line">{
+                  r.dS == null ? "沒有共同區間"
+                    : Math.abs(r.dS) < 2 ? "大致持平"
+                    : r.dS > 0 ? "較基準好" : "較基準差"
+                }</span>
+                <span className="spacer" style={{ flex: 1 }} />
+                <span className="cmp-vnum">
+                  {r.dS == null ? "—"
+                    : `逐段 ${r.dS > 0 ? "+" : ""}${f1(r.dS)} dB`}
+                </span>
+                <span className="cmp-vn2">共同區間 {r.paired}</span>
+                {rows.length === 1 && <RsrpTip res={r.res} dS={r.dS} />}
+              </div>
+            ))}
+          </div>
+          {/* ΔRSRP 只在單趟對照時畫得出意思——多趟疊在同一條 24px 帶上分不出誰是誰 */}
+          {rows.length === 1 && <RsrpBand pts={rows[0].res.chainage} />}
         </div>
 
         <div className="card">
-          <h3>摘要<span className="h3-note">p5＝最差 5%（尾部才是斷鏈的來源）</span></h3>
+          <h3>摘要<span className="h3-note">
+            <InfoTip tip={"p5＝最差 5%——尾部才是斷鏈的來源，所以它比均值重要。"
+              + "Δ 是對基準的差（正＝比基準好）。共同區間＝這一趟與基準都有樣本的"
+              + `里程格數，太少（<3）時趨勢不足採信。分箱 ${rows[0].res.binM} m。`} />
+          </span></h3>
           <table className="table ab-sum">
-            <thead><tr><th></th><th className="num">均值</th><th className="num">p50</th>
-              <th className="num">p5</th><th className="num">樣本數</th></tr></thead>
+            <thead><tr>
+              <th>趟次</th>
+              {mode === "cross" && <th>任務</th>}
+              <th className="num">均值</th><th className="num">p50</th>
+              <th className="num">p5</th><th className="num">樣本數</th>
+              <th className="num">Δp50</th><th className="num">共同區間</th>
+            </tr></thead>
             <tbody>
-              {([["前", res.summary.a, A_COLOR], ["後", res.summary.b, B_COLOR]] as const)
-                .map(([lab, s, c]) => (
-                <tr key={lab}>
-                  <td><span className="dot" style={{ background: c }} />{lab}</td>
-                  <td className="num">{f1(s.mean)}</td>
-                  <td className="num">{f1(s.p50)}</td>
-                  <td className="num"><b>{f1(s.p5)}</b></td>
-                  <td className="num">{s.n.toLocaleString()}</td>
+              <tr>
+                <td>
+                  <span className="chip">基準 {tripLabel(baseSess)}</span>
+                  {noteCell(baseSess)}
+                </td>
+                {mode === "cross" && (
+                  <td className="cmp-mis">{baseSess?.mission_name ?? "—"}</td>)}
+                <td className="num">{f1(rows[0].res.summary.a.mean)}</td>
+                <td className="num">{f1(rows[0].res.summary.a.p50)}</td>
+                <td className="num"><b>{f1(rows[0].res.summary.a.p5)}</b></td>
+                <td className="num">{rows[0].res.summary.a.n.toLocaleString()}</td>
+                <td className="num">—</td><td className="num">—</td>
+              </tr>
+              {rows.map((r) => (
+                <tr key={r.id}>
+                  <td>
+                    <span className="chip">
+                      <span className="dot" style={{ background: r.color }} />
+                      {r.label}
+                    </span>
+                    {noteCell(r.sess)}
+                  </td>
+                  {mode === "cross" && (
+                    <td className="cmp-mis">{r.sess.mission_name ?? "—"}</td>)}
+                  <td className="num">{f1(r.res.summary.b.mean)}</td>
+                  <td className="num">{f1(r.res.summary.b.p50)}</td>
+                  <td className="num"><b>{f1(r.res.summary.b.p5)}</b></td>
+                  <td className="num">{r.res.summary.b.n.toLocaleString()}</td>
+                  <td className="num">
+                    {dd(r.res.summary.b.p50, r.res.summary.a.p50)}
+                  </td>
+                  <td className="num"
+                    title={r.paired < 3 ? "共同區間太少，趨勢不足採信" : undefined}>
+                    {r.paired}{r.paired < 3 ? " ⚠" : ""}
+                  </td>
                 </tr>
               ))}
-              <tr>
-                <td>Δ</td>
-                <td className="num">{delta(res.summary.b.mean, res.summary.a.mean)}</td>
-                <td className="num">{delta(res.summary.b.p50, res.summary.a.p50)}</td>
-                <td className="num"><b>{delta(res.summary.b.p5, res.summary.a.p5)}</b></td>
-                <td className="num">—</td>
-              </tr>
             </tbody>
           </table>
           {/* 誠實：不阻止比較，但不假裝對等 */}
-          {res.summary.a.n > 0 && res.summary.b.n > 0
-            && Math.max(res.summary.a.n, res.summary.b.n)
-               / Math.min(res.summary.a.n, res.summary.b.n) > 3 && (
-            <div className="hint-line">樣本數差異大（{res.summary.a.n} vs {res.summary.b.n}），比較僅供參考</div>
-          )}
-          {bothBins > 0 && bothBins < 3 && (
+          {(() => {
+            const a = rows[0].res.summary.a.n;
+            const big = rows.filter((r) => {
+              const b = r.res.summary.b.n;
+              return a > 0 && b > 0 && Math.max(a, b) / Math.min(a, b) > 3;
+            });
+            return big.length ? (
+              <div className="hint-line">
+                {big.map((r) => r.label).join("、")}：樣本數與基準差 3 倍以上
+              </div>
+            ) : null;
+          })()}
+          {(rows[0].res.dropped.a > 0 || rows.some((r) => r.res.dropped.b > 0)) && (
             <div className="hint-line">
-              兩趟僅 {bothBins} 個里程區間有共同樣本——重疊太少，趨勢不足採信
-            </div>
-          )}
-          {(res.dropped.a > 0 || res.dropped.b > 0) && (
-            <div className="hint-line">
-              偏離基準路徑逾 60 m 而未納入：前 {res.dropped.a}、後 {res.dropped.b} 筆
+              偏離基準路徑逾 60 m 而未納入：基準 {rows[0].res.dropped.a} 筆
+              {rows.filter((r) => r.res.dropped.b > 0)
+                .map((r) => `，${r.label} ${r.res.dropped.b} 筆`).join("")}
             </div>
           )}
         </div>
 
         <div className="card">
-          <h3>差值熱區
-            <span className="h3-note">後−前（藍＝改善／灰＝無變化／橘＝惡化）· 10m 格</span>
-          </h3>
-          <div className="ab-map" ref={boxRef} />
-          <div className="ab-legend">
-            <span className="sw" style={{ background: `rgb(${divergeRGB(-8).join(",")})` }} />惡化
-            <span className="sw" style={{ background: "rgb(143,139,128)" }} />無變化
-            <span className="sw" style={{ background: `rgb(${divergeRGB(8).join(",")})` }} />改善
-            <span className="sw sw-none" />無對照（僅一趟有樣本）
-            {hover && (
-              <span className="meta">
-                　前 {f1(hover.a_sinr)}（{hover.a_n}）· 後 {f1(hover.b_sinr)}（{hover.b_n}）
-                {hover.delta != null ? `· Δ ${f1(hover.delta)} dB` : "· 無對照"}
-              </span>
-            )}
+          <h3>差值熱區<span className="h3-note">
+            <InfoTip tip={"這一趟減基準，10 m 格。發散色盤：兩極用識別色、中點是灰"
+              + "——中點絕不用第三個色相，否則「沒變化」會看起來像另一種變化。"
+              + "虛框＝只有其中一趟有樣本，那不是「沒變化」。"} />
+          </span></h3>
+          {/* 熱區本質是兩兩比對，所以要選一趟 */}
+          <div className="sess-pills">
+            {rows.map((r) => (
+              <button key={r.id} className={`pill${heat?.id === r.id ? " on" : ""}`}
+                onClick={() => setHeatId(r.id)}>{r.label}</button>
+            ))}
           </div>
+          {cells.length === 0 ? (
+            <div className="empty" style={{ marginTop: 8 }}>
+              這一趟與基準沒有共同的里程區間——不畫空圖假裝有比較。
+            </div>
+          ) : (<>
+            <div className="ab-map" ref={boxRef} />
+            <div className="ab-legend">
+              <span className="sw" style={{
+                background: `rgb(${divergeRGB(-8).join(",")})` }} />比基準差
+              <span className="sw" style={{ background: "rgb(143,139,128)" }} />無變化
+              <span className="sw" style={{
+                background: `rgb(${divergeRGB(8).join(",")})` }} />比基準好
+              <span className="sw sw-none" />無對照
+              {hover && (
+                <span className="meta">
+                　基準 {f1(hover.a_sinr)}（{hover.a_n}）· 這趟 {f1(hover.b_sinr)}（{hover.b_n}）
+                  {hover.delta != null ? `· Δ ${f1(hover.delta)} dB` : "· 無對照"}
+                </span>
+              )}
+            </div>
+          </>)}
         </div>
       </>)}
     </div>
   );
 }
 
-const delta = (b: number | null, a: number | null) =>
-  b == null || a == null ? "—" : `${b - a >= 0 ? "+" : ""}${(b - a).toFixed(1)}`;
+/** RSRP 對照的判讀住 ⓘ（單趟對照才成立）。**只描述現象，不宣告成因**——
+ * 機只知道訊號變差、不知道為什麼；把推測寫成事實就是替使用者下結論。 */
+function RsrpTip({ res, dS }: { res: AbResult; dS: number | null }) {
+  const rp = res.chainage.filter((c) => c.a_rsrp != null && c.b_rsrp != null);
+  const dR = median(rp.map((c) => c.b_rsrp! - c.a_rsrp!));
+  if (dR == null || dS == null) return null;
+  const FLAT_R = 2, SIG_S = 1.5;
+  const say = Math.abs(dR) < FLAT_R && dS < -SIG_S
+      ? "RSRP 大致持平而 SINR 下降 → 符合外部雜訊升高的特徵"
+    : Math.abs(dR) < FLAT_R && dS > SIG_S
+      ? "RSRP 大致持平而 SINR 上升 → 符合外部雜訊下降的特徵"
+    : dR < -FLAT_R && dS < -SIG_S
+      ? "RSRP 同步下降 → 變因在訊號強度側（距離、遮蔽或發射端）"
+    : dR > FLAT_R && dS > SIG_S
+      ? "RSRP 同步上升 → 變因在訊號強度側（距離、遮蔽或發射端）"
+    : "RSRP 與 SINR 沒有一致的走勢，無從指出變因";
+  return <InfoTip tip={`${say}（RSRP 逐段差值中位數 ${f1(dR)} dB）`} />;
+}
 
-/** 主圖：X＝里程、單一 y 軸（絕不雙軸）；原始淡線＋平滑線；差值帶同兩色 */
-function ChainChart({ pts }: { pts: ChainPoint[] }) {
-  const W = 1000, H = 220, PAD = 26;
+/** 沿里程主圖：基準一條虛線＋每趟一條，線末標籤排在右側留白。 */
+function MultiChart({ rows }: { rows: TripRow[] }) {
+  const H = 190, W = 1000, L = 44, T = 12, Bm = 22;
+  // 右側留白照**最長的標籤**算：跨機模式的標籤帶機名，固定寬度會把字切掉，
+  // 而切掉的正是用來分辨誰是誰的那一段
+  const tw = (t: string) => [...t]
+    .reduce((a, ch) => a + (ch.charCodeAt(0) > 255 ? 10 : 5.4), 0);
+  const R = Math.min(320, 26 + Math.max(...rows.map((r) => tw(r.label)), tw("基準")));
+
+  const pts = rows.flatMap((r) => r.res.chainage);
   const xs = pts.map((p) => p.m);
-  const x0 = Math.min(...xs), x1 = Math.max(...xs);
   const vals = pts.flatMap((p) => [p.a_sinr, p.b_sinr])
     .filter((v): v is number => v != null);
-  if (!vals.length) return null;
-  const lo = Math.min(...vals) - 2, hi = Math.max(...vals) + 2;
-  const X = (m: number) => ((m - x0) / (x1 - x0 || 1)) * (W - PAD) + PAD;
-  const Y = (v: number) => H - 18 - ((v - lo) / (hi - lo || 1)) * (H - 40);
-  const smooth = (key: "a_sinr" | "b_sinr") => pts.map((_, i) => {
-    const w = pts.slice(Math.max(0, i - SMOOTH_WIN + 1), i + 1)
-      .map((p) => p[key]).filter((v): v is number => v != null);
-    return w.length ? w.reduce((a, b) => a + b, 0) / w.length : null;
-  });
-  const line = (v: (number | null)[]) => pts.map((p, i) =>
-    (v[i] == null ? null : `${X(p.m)},${Y(v[i]!)}`))
-    .filter(Boolean).join(" ");
-  const sa = smooth("a_sinr"), sb = smooth("b_sinr");
+  if (!xs.length || !vals.length) return null;
+  const x0 = Math.min(...xs), x1 = Math.max(...xs);
+  let y0 = Math.min(...vals, -2), y1 = Math.max(...vals, 13);
+  const pad = (y1 - y0) * 0.12 || 1; y0 -= pad; y1 += pad;
+  const X = (v: number) => L + ((v - x0) / (x1 - x0 || 1)) * (W - L - R);
+  const Y = (v: number) => T + (1 - (v - y0) / (y1 - y0)) * (H - T - Bm);
+
+  const grid: string[] = [];
+  for (const v of [5, 13]) {
+    if (v < y0 || v > y1) continue;
+    grid.push(`<line x1="${L}" x2="${W - R}" y1="${Y(v).toFixed(1)}" `
+      + `y2="${Y(v).toFixed(1)}" stroke="var(--status-warn)" stroke-width="1" `
+      + `stroke-dasharray="4 4" stroke-opacity=".45"/>`);
+  }
+  const ticks = [y0 + (y1 - y0) * 0.15, (y0 + y1) / 2, y1 - (y1 - y0) * 0.15];
+
+  interface Lab { ex: number; ey: number; y: number; color: string; text: string }
+  const labels: Lab[] = [];
+  const line = (cs: ChainPoint[], key: "a_sinr" | "b_sinr",
+    color: string, text: string, dash: boolean) => {
+    const q = cs.filter((p) => p[key] != null);
+    if (q.length < 2) return "";
+    const d = q.map((p, i) => `${i ? "L" : "M"}${X(p.m).toFixed(1)} `
+      + `${Y(p[key]!).toFixed(1)}`).join(" ");
+    const last = q[q.length - 1];
+    labels.push({ ex: X(last.m), ey: Y(last[key]!),
+      y: Y(last[key]!) + 3.5, color, text });
+    return `<path d="${d}" fill="none" stroke="${color}" stroke-width="2"`
+      + `${dash ? ' stroke-dasharray="5 4"' : ""} vector-effect="non-scaling-stroke"/>`
+      + q.map((p) => `<circle cx="${X(p.m).toFixed(1)}" `
+        + `cy="${Y(p[key]!).toFixed(1)}" r="2.2" fill="${color}"/>`).join("");
+  };
+  let body = line(rows[0].res.chainage, "a_sinr", BASE_INK, "基準", true);
+  for (const r of rows) body += line(r.res.chainage, "b_sinr", r.color, r.label, false);
+
+  // 標籤全部靠右側留白排，彼此至少差 12px；引線接回各自線末的真實位置
+  const lx = W - R + 10;
+  labels.sort((a, b) => a.y - b.y);
+  for (let i = 1; i < labels.length; i++) {
+    if (labels[i].y - labels[i - 1].y < 12) labels[i].y = labels[i - 1].y + 12;
+  }
+  const over = labels.length ? labels[labels.length - 1].y - (H - Bm) : 0;
+  if (over > 0) for (const l of labels) l.y -= over;
+  for (const l of labels) {
+    body += `<path d="M${l.ex.toFixed(1)} ${l.ey.toFixed(1)} `
+      + `L${(lx - 4).toFixed(1)} ${(l.y - 3.5).toFixed(1)}" fill="none" `
+      + `stroke="${l.color}" stroke-width="1" stroke-opacity=".45"/>`
+      + `<text x="${lx}" y="${l.y.toFixed(1)}" fill="${l.color}" `
+      + `font-size="10">${esc(l.text)}</text>`;
+  }
+
+  const axis = ticks.map((v) =>
+    `<line x1="${L}" x2="${W - R}" y1="${Y(v).toFixed(1)}" y2="${Y(v).toFixed(1)}" `
+    + `stroke="var(--hairline)"/><text x="${L - 6}" y="${(Y(v) + 3.5).toFixed(1)}" `
+    + `fill="var(--muted)" font-size="9" text-anchor="end">${v.toFixed(0)}</text>`)
+    .join("");
 
   return (
-    <div className="ab-chart">
+    <div className="ab-chart cmp-chart">
       <svg viewBox={`0 0 ${W} ${H}`} preserveAspectRatio="none" role="img"
-        aria-label="沿路徑訊號（前後對照）">
-        {/* 差值帶：逐段四邊形，依該段 後−前 的正負取色（不引第三色） */}
-        {pts.slice(0, -1).map((p, i) => {
-          const q = pts[i + 1];
-          if (p.a_sinr == null || p.b_sinr == null
-            || q.a_sinr == null || q.b_sinr == null) return null;
-          const up = (p.b_sinr - p.a_sinr + q.b_sinr - q.a_sinr) / 2 >= 0;
-          return (
-            <polygon key={i} opacity={0.18} fill={up ? A_COLOR : B_COLOR}
-              points={`${X(p.m)},${Y(p.a_sinr)} ${X(q.m)},${Y(q.a_sinr)} `
-                + `${X(q.m)},${Y(q.b_sinr)} ${X(p.m)},${Y(p.b_sinr)}`} />
-          );
-        })}
-        {/* 原始（淡）＋平滑（實）並存——誠實規則禁止只畫平滑線 */}
-        <polyline points={line(pts.map((p) => p.a_sinr))} fill="none"
-          stroke={A_COLOR} strokeWidth="1" strokeOpacity="0.35"
-          vectorEffect="non-scaling-stroke" />
-        <polyline points={line(pts.map((p) => p.b_sinr))} fill="none"
-          stroke={B_COLOR} strokeWidth="1" strokeOpacity="0.35"
-          vectorEffect="non-scaling-stroke" />
-        <polyline points={line(sa)} fill="none" stroke={A_COLOR} strokeWidth="2"
-          vectorEffect="non-scaling-stroke" />
-        <polyline points={line(sb)} fill="none" stroke={B_COLOR} strokeWidth="2"
-          vectorEffect="non-scaling-stroke" />
-        <text x={4} y={Y(hi - 2) + 4} className="ax">{(hi - 2).toFixed(0)}</text>
-        <text x={4} y={Y(lo + 2) + 4} className="ax">{(lo + 2).toFixed(0)}</text>
-        <text x={W - 4} y={H - 4} className="ax" textAnchor="end">{Math.round(x1)}m</text>
-        <text x={PAD} y={H - 4} className="ax">0m</text>
-      </svg>
+        aria-label="沿里程訊號（基準與對照趟）"
+        dangerouslySetInnerHTML={{ __html: grid.join("") + axis + body
+          + `<text x="${L}" y="${H - 5}" fill="var(--muted)" font-size="9">0 m</text>`
+          + `<text x="${W - R}" y="${H - 5}" fill="var(--muted)" font-size="9" `
+          + `text-anchor="end">${Math.round(x1)} m</text>`
+          + `<text x="${L}" y="${T - 2}" fill="var(--muted)" font-size="9">SINR dB</text>` }} />
     </div>
   );
 }
 
-/** RSRP 迷你帶（§6b.3）：24px、同 X 軸、只畫 後−前 的差值走勢——不做雙軸 */
+/** 架次備註是使用者輸入，進 SVG 前要跳脫——否則一個 `<` 就能毀掉整張圖。 */
+function esc(s: string): string {
+  return s.replace(/[&<>]/g, (c) =>
+    ({ "&": "&amp;", "<": "&lt;", ">": "&gt;" })[c]!);
+}
+
+/** RSRP 迷你帶：24px、同 X 軸、只畫 這趟−基準 的差值走勢——不做雙軸 */
 function RsrpBand({ pts }: { pts: ChainPoint[] }) {
   const W = 1000, H = 24;
   const d = pts.map((p) => (p.a_rsrp != null && p.b_rsrp != null
@@ -524,8 +748,8 @@ function RsrpBand({ pts }: { pts: ChainPoint[] }) {
     <div className="ab-rsrp">
       <span className="meta">ΔRSRP</span>
       <svg viewBox={`0 0 ${W} ${H}`} preserveAspectRatio="none">
-        <line x1={0} x2={W} y1={H / 2} y2={H / 2} stroke="var(--hairline)" strokeWidth="1"
-          vectorEffect="non-scaling-stroke" />
+        <line x1={0} x2={W} y1={H / 2} y2={H / 2} stroke="var(--hairline)"
+          strokeWidth="1" vectorEffect="non-scaling-stroke" />
         <polyline fill="none" stroke="var(--ink-2)" strokeWidth="1.5"
           vectorEffect="non-scaling-stroke"
           points={pts.map((p, i) => (d[i] == null ? null : `${X(p.m)},${Y(d[i]!)}`))
