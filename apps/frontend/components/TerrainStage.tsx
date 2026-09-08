@@ -95,6 +95,8 @@ export default function TerrainStage({ wps, sel, onSelect, tipFor,
       });
       map.addLayer(makeRouteLayer(map, dataRef, (p) => { projRef.current = p; }));
       fitRoute(map, dataRef.current.wps);
+      // 先粗估一次鏡頭，再**量畫面上實際落在哪裡**去修（見 frameRoute）
+      map.once("render", () => frameRoute(map, dataRef, projRef));
     });
 
     /* three.js 的自訂圖層沒有 maplibre 的 `queryRenderedFeatures`，
@@ -192,6 +194,84 @@ function fitRoute(map: maplibregl.Map, wps: StageWp[]) {
   // （第一版就是這樣：地形滿版、航線完全不見）。退一格再壓低俯角。
   if (cam) map.jumpTo({ center: cam.center, zoom: (cam.zoom ?? 17) - 1.1,
                         pitch: FIT_PITCH, bearing });
+}
+
+/** 取景的第二步：**量出航線在畫面上實際落在哪裡**，修一次，沒變好就退回去。
+ *
+ * 為什麼需要第二步：帶地形又帶俯角時，maplibre 的「中心」是地面上的一個點，
+ * 而航線畫在一百多公尺高——`cameraForBounds` 算出來的鏡頭會把航線推到畫面
+ * 上方。與其推導那個偏差，不如量它。
+ *
+ * **為什麼不迭代**：第一版寫成「追著誤差修到收斂」，結果整個畫面飛掉。
+ * 原因是帶俯角時「平移 N 像素」與「畫面上移動 N 像素」**不是線性關係**，
+ * 追著跑會過衝、然後發散。改成：量一次、帶阻尼修一次、再量一次，
+ * **沒有變好就把鏡頭還原**。修不好的時候讓使用者自己拖，比把畫面弄丟好。
+ */
+function frameRoute(map: maplibregl.Map, dataRef: { current: StageData },
+                    projRef: { current: Projector | null }) {
+  const measure = () => {
+    const proj = projRef.current;
+    if (!proj) return null;
+    const pts = dataRef.current.wps
+      .filter((w) => w.lat && w.lon)
+      .map((w) => proj(w.lon, w.lat, w.amsl))
+      .filter((p): p is { x: number; y: number } => !!p);
+    if (pts.length < 2) return null;
+    const cvs = map.getCanvas(), W = cvs.clientWidth, H = cvs.clientHeight;
+    const xs = pts.map((p) => p.x), ys = pts.map((p) => p.y);
+    const x0 = Math.min(...xs), x1 = Math.max(...xs);
+    const y0 = Math.min(...ys), y1 = Math.max(...ys);
+    return {
+      dx: (x0 + x1) / 2 - W / 2, dy: (y0 + y1) / 2 - H / 2,
+      err: Math.hypot((x0 + x1) / 2 - W / 2, (y0 + y1) / 2 - H / 2),
+      // 航線佔畫面六成：留白是給地形看的——這一頁的重點之一就是
+      // 「航線周圍的地長什麼樣」，塞滿反而看不出它在什麼地形裡
+      want: Math.min(W * 0.6 / Math.max(1, x1 - x0),
+                     H * 0.6 / Math.max(1, y1 - y0)),
+    };
+  };
+  /** 一個分數同時管「置中」與「大小」——只看其中一個會出現
+   *  「置中了但塞爆畫面」這種結果。 */
+  const score = (m: NonNullable<ReturnType<typeof measure>>) =>
+    m.err / 200 + Math.abs(Math.log2(m.want));
+
+  const m0 = measure();
+  if (!m0) return;
+  let best = { center: map.getCenter(), zoom: map.getZoom(), s: score(m0) };
+  let step = 0.9;
+
+  /** **有護欄的搜尋**：每一步只有分數變好才留下，否則退回上一個最好的
+   *  並把步長減半。
+   *
+   *  為什麼不用開環修正（前兩版都試過，都歪）：帶俯角時「平移 N 像素」
+   *  與「畫面上移動 N 像素」不是線性關係，**縮放也不是**——把東西移到
+   *  畫面中央本身就會讓它看起來變大（離鏡頭變近）。追著誤差一次算完，
+   *  第一版直接把畫面飛掉，第二版置中了卻塞爆。
+   *
+   *  這裡最壞情況是「沒改善、退回原狀」，而那正是可接受的下限：
+   *  修不好就讓使用者自己拖。 */
+  const tryStep = (iter: number) => {
+    if (iter > 6 || step < 0.12 || best.s < 0.12) return;
+    const m = measure();
+    if (!m) return;
+    map.panBy([m.dx * step, m.dy * step], { duration: 0 });
+    const dz = Math.max(-1.5, Math.min(1.5, Math.log2(m.want))) * step;
+    if (Math.abs(dz) >= 0.02)
+      map.setZoom(Math.max(13, Math.min(19, map.getZoom() + dz)));
+    map.once("render", () => {
+      const m2 = measure();
+      const s2 = m2 ? score(m2) : Infinity;
+      if (s2 < best.s) {
+        best = { center: map.getCenter(), zoom: map.getZoom(), s: s2 };
+      } else {
+        map.jumpTo({ center: best.center, zoom: best.zoom,
+                     pitch: map.getPitch(), bearing: map.getBearing() });
+        step *= 0.5;
+      }
+      map.once("render", () => tryStep(iter + 1));
+    });
+  };
+  tryStep(0);
 }
 
 /** three.js 自訂圖層：航線畫在真高度上，每個航點往地面垂一根線。 */
