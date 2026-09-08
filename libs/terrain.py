@@ -158,12 +158,17 @@ class Sample:
 NO_DATA = Sample(None, None, "none", None, float("inf"))
 
 
-def surface(lat: float, lon: float, dem: "Dem | None" = None) -> Sample:
+def surface(lat: float, lon: float, dem: "Dem | None" = None,
+            assume_m: float | None = None) -> Sample:
     """這一點的地面與上方最高點。由細往粗退，缺就說缺。
 
     地面是 SRTM；上面若有建物，`top` 換成屋頂高。**高度未知的建物
-    `top` 是 None**——那是「有東西、不知道多高」，不是「什麼都沒有」，
+    預設 `top` 是 None**——那是「有東西、不知道多高」，不是「什麼都沒有」，
     呼叫端不可以把它當成沒有障礙（§9-A）。
+
+    `assume_m` 給了就替那些樓假設一個高度，`source` 變成 `"assumed"`。
+    **那個字串是整條路上唯一分得出「估的」與「量的」的東西**——判定的
+    措辭與畫面都要照它走，不能只看到一個數字就當成量到的。
     """
     d = dem if dem is not None else shared()
     if d is None or not d.available:
@@ -175,7 +180,10 @@ def surface(lat: float, lon: float, dem: "Dem | None" = None) -> Sample:
     if b is None:
         return Sample(g, g, "srtm", None, 30.0)
     if b.height_m is None:
-        return Sample(g, None, b.height_source, "building",
+        if assume_m is None:
+            return Sample(g, None, b.height_source, "building",
+                          buildings.OSM_HORIZ_RES_M)
+        return Sample(g, g + float(assume_m), "assumed", "building",
                       buildings.OSM_HORIZ_RES_M)
     return Sample(g, g + b.height_m, b.height_source, "building",
                   buildings.OSM_HORIZ_RES_M)

@@ -2481,11 +2481,13 @@ async def buildings_in_bbox(min_lat: float, min_lon: float,
     return {"type": "FeatureCollection", "features": feats,
             "meta": {"available": store.available, "files": store.files,
                      "known": sum(1 for f in feats if f["properties"]["known"]),
-                     "unknown": sum(1 for f in feats if not f["properties"]["known"])}}
+                     "unknown": sum(1 for f in feats if not f["properties"]["known"]),
+                     # 畫面那個旋鈕的預設值。**是預設值不是量測值**
+                     "assumed_default_m": buildings.ASSUMED_DEFAULT_M}}
 
 
 @router.get("/plans/{plan_id}/profile")
-async def mission_profile(plan_id: str):
+async def mission_profile(plan_id: str, assume_m: float | None = None):
     """剖面圖的資料（issues/048 F1）：沿航線的地面高程與規劃高度。
 
     **這是那條綠線該有的樣子。** 使用者的原始問題不是沒有警告，是
@@ -2514,12 +2516,14 @@ async def mission_profile(plan_id: str):
          if home and len(home) >= 2 and (home[0] or home[1]) else
          next(({"lat": w["lat"], "lon": w["lon"]} for w in wps
                if w.get("lat") and w.get("lon")), None))
-    return plan_check.route_profile(wps, h, dem=terrain.shared())
+    return plan_check.route_profile(wps, h, dem=terrain.shared(),
+                                    assume_m=assume_m)
 
 
 @router.get("/plans/{plan_id}/check")
 async def check_mission(plan_id: str, wp_spd: float | None = None,
-                        wp_radius: float | None = None):
+                        wp_radius: float | None = None,
+                        assume_m: float | None = None):
     """任務庫裡某一份的幾何預檢。**檢查不該只在匯入的那一刻做一次。**
 
     匯入時看到的報告會隨畫面關掉就消失，而使用者是在**要飛之前**才需要它；
@@ -2554,7 +2558,10 @@ async def check_mission(plan_id: str, wp_spd: float | None = None,
         dem=terrain.shared(),
         # **速度只有飛機說得準**：規劃頁連得到機時把讀到的值帶進來，
         # 沒帶就是「沒有檢查」（`leg_profile` 會說出來），不是「通過」
-        wp_spd=wp_spd, wp_radius=wp_radius)
+        wp_spd=wp_spd, wp_radius=wp_radius,
+        # 未量測建物的假設高度。**不給就不假設**——那時未知的樓是擋下，
+        # 不是通過（`libs/buildings.py` 的 ASSUMED_DEFAULT_M 只是畫面的預設值）
+        assume_m=assume_m)
 
 
 class PlanOverride(BaseModel):
@@ -2571,6 +2578,8 @@ class PreviewIn(BaseModel):
     overrides: list[PlanOverride] = Field(default_factory=list, max_length=500)
     wp_spd: float | None = None
     wp_radius: float | None = None
+    #: 未量測建物的假設高度（公尺）。**不給就不假設**
+    assume_m: float | None = None
     #: 給了就**存成新的一份**；不給就只算不存
     save_as: str | None = None
 
@@ -2653,8 +2662,9 @@ async def preview_plan(plan_id: str, body: PreviewIn):
         wps, settings.geofence_radius_m, settings.geofence_alt_m,
         settings.geofence_margin, fence=fence, autopilot=row["firmware_type"],
         home=home, dem=terrain.shared(),
-        wp_spd=body.wp_spd, wp_radius=body.wp_radius)
-    profile = plan_check.route_profile(wps, h, dem=terrain.shared())
+        wp_spd=body.wp_spd, wp_radius=body.wp_radius, assume_m=body.assume_m)
+    profile = plan_check.route_profile(wps, h, dem=terrain.shared(),
+                                       assume_m=body.assume_m)
     out: dict = {"check": check, "profile": profile, "saved_id": None}
     if body.save_as:
         stored = [{"seq": i, "lat": w.get("lat"), "lon": w.get("lon"),
@@ -2689,6 +2699,8 @@ class DraftIn(BaseModel):
     land_mode: str = "vert"   # vert（飛到定點再垂直降落）／glide（逐漸降落）
     wp_spd: float | None = None
     wp_radius: float | None = None
+    #: 未量測建物的假設高度（公尺）。**不給就不假設**
+    assume_m: float | None = None
     save_as: str | None = None
 
 
@@ -2715,8 +2727,10 @@ async def draft_plan(body: DraftIn):
     check = plan_check.check_waypoints(
         wps, settings.geofence_radius_m, settings.geofence_alt_m,
         settings.geofence_margin, dem=terrain.shared(),
-        home=body.home, wp_spd=body.wp_spd, wp_radius=body.wp_radius)
-    profile = plan_check.route_profile(wps, h, dem=terrain.shared())
+        home=body.home, wp_spd=body.wp_spd, wp_radius=body.wp_radius,
+        assume_m=body.assume_m)
+    profile = plan_check.route_profile(wps, h, dem=terrain.shared(),
+                                       assume_m=body.assume_m)
     saved = None
     if body.save_as:
         saved = await _store_mission(body.save_as.strip() or "新航線", "drawn",

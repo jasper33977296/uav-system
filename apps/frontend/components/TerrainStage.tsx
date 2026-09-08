@@ -37,7 +37,7 @@ export interface StageHit { kind: "wp" | "leg"; i: number }
 export interface StageTip { title: string; rows: [string, string][]; bad?: boolean }
 
 export default function TerrainStage({ wps, sel, onSelect, tipFor, placing,
-                                      onPlace, onMove, center,
+                                      onPlace, onMove, center, assumeM = null,
                                       exaggeration = 1 }: {
   wps: StageWp[]; sel: number; onSelect: (i: number) => void;
   tipFor?: (h: StageHit) => StageTip | null;
@@ -48,6 +48,9 @@ export default function TerrainStage({ wps, sel, onSelect, tipFor, placing,
   /** 拖曳航點：**只移動位置**，高度由右欄的滑桿或數字決定 */
   onMove?: (i: number, lngLat: { lng: number; lat: number }) => void;
   center?: [number, number];
+  /** 未量測建物的假設高度。null ＝不假設，那時柱子畫成「一定包住航線」
+   *  的高度——讀出來是「這裡有東西」，不是某個公尺數 */
+  assumeM?: number | null;
   exaggeration?: number;
 }) {
   const box = useRef<HTMLDivElement>(null);
@@ -62,12 +65,21 @@ export default function TerrainStage({ wps, sel, onSelect, tipFor, placing,
   const tipRef = useRef(tipFor);
   tipRef.current = tipFor;
   const projRef = useRef<Projector | null>(null);
+  const assumeRef = useRef<number | null>(assumeM);
+  assumeRef.current = assumeM;
   const moveRef = useRef(onMove);
   moveRef.current = onMove;
   const dragRef = useRef<number | null>(null);
   const placeRefBox = useRef<{ current: {
     placing?: boolean; onPlace?: (l: { lng: number; lat: number }) => void } } | null>(null);
   if (placeRefBox.current) placeRefBox.current.current = { placing, onPlace };
+
+  useEffect(() => {
+    const m = mapRef.current;
+    if (!m || !m.getLayer("buildings-blind")) return;
+    m.setPaintProperty("buildings-blind", "fill-extrusion-height",
+                       blindHeight(wps, assumeM));
+  }, [assumeM, wps]);
 
   useEffect(() => {
     if (!box.current || mapRef.current) return;
@@ -123,7 +135,7 @@ export default function TerrainStage({ wps, sel, onSelect, tipFor, placing,
                  "hillshade-highlight-color": "#8a8474",
                  "hillshade-exaggeration": 0.35 },
       });
-      addBuildings(map, wps);
+      addBuildings(map, wps, assumeRef.current);
       map.addLayer(makeRouteLayer(map, dataRef, (p) => { projRef.current = p; }));
       fitRoute(map, dataRef.current.wps);
       // 先粗估一次鏡頭，再**量畫面上實際落在哪裡**去修（見 frameRoute）
@@ -346,12 +358,20 @@ interface StageData { wps: StageWp[]; sel: number; hover: StageHit | null; dirty
  */
 const BLIND_OVER_M = 25;
 
-function addBuildings(map: maplibregl.Map, wps: StageWp[]) {
+/** 不假設的時候柱子要多高：**包住這條航線再加一截**。 */
+function blindHeight(wps: StageWp[], assume: number | null): number {
+  if (assume != null) return assume;
+  const pts = wps.filter((w) => w.lat && w.lon);
+  return Math.max(...pts.map(
+    (w) => (w.ground == null ? 0 : w.amsl - w.ground)), 0) + BLIND_OVER_M;
+}
+
+function addBuildings(map: maplibregl.Map, wps: StageWp[],
+                      assume: number | null) {
   const pts = wps.filter((w) => w.lat && w.lon);
   if (!pts.length) return;
   const lats = pts.map((w) => w.lat), lons = pts.map((w) => w.lon);
-  const blindH = Math.max(...pts.map(
-    (w) => (w.ground == null ? 0 : w.amsl - w.ground)), 0) + BLIND_OVER_M;
+  const blindH = blindHeight(wps, assume);
   const pad = 0.006;
   const q = new URLSearchParams({
     min_lat: String(Math.min(...lats) - pad), min_lon: String(Math.min(...lons) - pad),

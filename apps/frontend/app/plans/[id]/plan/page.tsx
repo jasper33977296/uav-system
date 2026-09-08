@@ -21,7 +21,8 @@ import { API, COMMAND_API } from "@/lib/signal";
 interface Pt { d: number; lat?: number; lon?: number; ground: number | null;
   /** 這一點上方最高的東西（含建物）。**建物高度未知時是 null**——
    *  那是「有東西、不知道多高」，不是「什麼都沒有」 */
-  top: number | null; obst?: "building" | "unknown"; obst_name?: string | null;
+  top: number | null; obst?: "building" | "assumed" | "unknown";
+  obst_name?: string | null;
   /** 這個高度的出處（`srtm`／`osm:height`／`osm:levels`／`unknown`）。
    *  **樓層數推算的與量到的不是同一件事**，畫面要說得出來 */
   src?: string;
@@ -34,10 +35,15 @@ interface Leg {
    *  一次——改了後端的常數，畫面不會跟著變，而且看起來完全正常 */
   low_fast?: boolean;
 }
-interface Limits { low_alt_m: number; low_speed_ms: number; min_takeoff_alt_m: number }
+interface Limits { low_alt_m: number; low_speed_ms: number; min_takeoff_alt_m: number;
+  /** 未量測建物假設高度的**預設值**（後端給，前端不要自己抄一份） */
+  assumed_default_m?: number }
 interface Check {
   ok: boolean; problems: string[]; warnings: string[]; legs?: Leg[];
   limits?: Limits; terrain?: { home_amsl_m?: number };
+  /** 這份判定是用哪個假設高度算的；null ＝沒有假設，未量測的樓直接擋下 */
+  assumed_m?: number | null;
+  terrain_blind?: { id: string; name: string }[];
 }
 
 /** 高度基準是這一頁最該講清楚的一件事——同一個「4.6 m」在兩種 frame 下
@@ -89,7 +95,7 @@ function Profile({ p }: { p: Profile }) {
   // 一根尖錐——那是取樣造成的形狀，不是那棟樓的形狀
   const half = dMax / Math.max(1, pts.length - 1) / 2;
   type Roof = { d0: number; d1: number; y: number; g: number;
-                name?: string | null; src?: string };
+                name?: string | null; src?: string; est?: boolean; h: number };
   const roofs: Roof[] = [];
   pts.forEach((x, i) => {
     if (x.top == null || x.top <= x.ground! + 0.05) return;
@@ -101,9 +107,11 @@ function Profile({ p }: { p: Profile }) {
       c.d1 = x.d + half;
       c.y = Math.min(c.y, Y(x.top));
       c.g = Math.max(c.g, Y(x.ground!));
+      c.h = Math.max(c.h, x.top - x.ground!);
     } else {
       roofs.push({ d0: x.d - half, d1: x.d + half, y: Y(x.top), g: Y(x.ground!),
-                   name: x.obst_name, src: x.src });
+                   name: x.obst_name, src: x.src, est: x.obst === "assumed",
+                   h: x.top - x.ground! });
     }
   });
   // 高度未知的建物：**開口向上的柱子**，不是一條線——`assumed-default`
@@ -144,14 +152,22 @@ function Profile({ p }: { p: Profile }) {
       </defs>
       {band && <path d={band} fill="var(--series-1)" opacity="0.14" />}
       <path d={gFill} fill="var(--hairline)" />
+      {/* 量到的是實心；**假設的是虛線外框**——同一個形狀但一眼分得出來，
+          因為改一下旋鈕它就會變高變矮，而實心的那些不會 */}
       {roofs.map((r, i) => (
         <g key={`r${i}`}>
           <rect x={X(r.d0)} y={r.y} width={Math.max(3, X(r.d1) - X(r.d0))}
-            height={Math.max(1, r.g - r.y)} fill="var(--ink-2)" opacity="0.55"
-            stroke="var(--ink-2)" strokeWidth="1.5" />
-          <text x={(X(r.d0) + X(r.d1)) / 2} y={r.y - 5} fill="var(--ink-2)"
+            height={Math.max(1, r.g - r.y)}
+            fill={r.est ? "url(#blindhatch)" : "var(--ink-2)"}
+            opacity={r.est ? 0.3 : 0.55}
+            stroke={r.est ? "var(--status-warn)" : "var(--ink-2)"} strokeWidth="1.5"
+            strokeDasharray={r.est ? "4 3" : undefined} />
+          <text x={(X(r.d0) + X(r.d1)) / 2} y={r.y - 5}
+            fill={r.est ? "var(--status-warn)" : "var(--ink-2)"}
             fontSize="10" textAnchor="middle">
-            {r.name ?? "建物"}{r.src === "osm:levels" ? "・樓層數推算" : ""}
+            {r.name ?? "建物"}
+            {r.est ? `・假設 ${Math.round(r.h)} m`
+              : r.src === "osm:levels" ? "・樓層數推算" : ""}
           </text>
         </g>
       ))}
@@ -229,6 +245,12 @@ export default function PlanPage() {
   const [naming, setNaming] = useState<string | null>(null);
   const [name, setName] = useState("");
   const [prof, setProf] = useState<Profile | null>(null);
+  // 未量測建物的假設高度。**它是規劃時的旋鈕，不是那些樓的高度**——
+  // 真正的答案要等光達實測，所以每一份用到它的判定都帶著出處出去。
+  // null ＝不假設：那時未量測的樓是擋下，不是通過
+  const [assume, setAssume] = useState<number | null>(null);
+  const assumeRef = useRef<number | null>(null);
+  assumeRef.current = assume;
   const [chk, setChk] = useState<Check | null>(null);
   const [spd, setSpd] = useState<{ wp: number | null; rad: number | null; src: string }>(
     { wp: null, rad: null, src: "還沒讀過這台機" });
@@ -288,6 +310,8 @@ export default function PlanPage() {
           } catch { /* 讀不到就維持 null，下面會顯示「沒有檢查」 */ }
         }
         const q = wp != null ? `?wp_spd=${wp}${rad != null ? `&wp_radius=${rad}` : ""}` : "";
+        // 開頁時**先不假設**：第一眼看到的是「這幾棟沒量過」，
+        // 而不是一份用假設值算出來的「通過」
         const [ms, pr, ck] = await Promise.all([
           getJson<{ name: string }[]>(`${API}/api/plans`),
           getJson<Profile>(`${API}/api/plans/${id}/profile`),
@@ -316,14 +340,51 @@ export default function PlanPage() {
             home: [Number(home.lat), Number(home.lon)], points: pts,
             takeoff_alt: tkAlt, speed: drawSpd, land_at_home: landHome,
             land_mode: landMode,
-            wp_spd: spdRef.current.wp, wp_radius: spdRef.current.rad }),
+            wp_spd: spdRef.current.wp, wp_radius: spdRef.current.rad,
+            assume_m: assumeRef.current }),
         });
         const d = await r.json();
         if (r.ok) { setChk(d.check); setProf(d.profile); }
       } finally { setBusy(false); }
     }, 220);
     return () => clearTimeout(t);
-  }, [isNew, started, pts, tkAlt, drawSpd, home.lat, home.lon, landHome, landMode]);
+  }, [isNew, started, pts, tkAlt, drawSpd, home.lat, home.lon, landHome, landMode,
+      assume]);
+
+  /** 改假設高度 → 重算。**既有航線也要能改**，不然這個旋鈕只有從零模式
+   *  用得到，而使用者最常做的事是拿既有航線來看。 */
+  const firstAssume = useRef(true);
+  useEffect(() => {
+    if (isNew) return;
+    if (firstAssume.current) { firstAssume.current = false; return; }
+    const t = setTimeout(async () => {
+      setBusy(true);
+      try {
+        const list = Object.entries(ov).map(([seq, v]) => ({ seq: Number(seq), ...v }));
+        const a = assume == null ? "" : `&assume_m=${assume}`;
+        const sp = spdRef.current.wp;
+        const q = `?wp_spd=${sp ?? ""}${spdRef.current.rad != null
+          ? `&wp_radius=${spdRef.current.rad}` : ""}${a}`;
+        if (list.length) {
+          const r = await fetch(`${API}/api/plans/${id}/preview`, {
+            method: "POST", headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ overrides: list, wp_spd: sp,
+                                   wp_radius: spdRef.current.rad, assume_m: assume }),
+          });
+          const d = await r.json();
+          if (r.ok) { setChk(d.check); setProf(d.profile); }
+        } else {
+          const [pr, ck] = await Promise.all([
+            getJson<Profile>(`${API}/api/plans/${id}/profile${
+              assume == null ? "" : `?assume_m=${assume}`}`),
+            getJson<Check>(`${API}/api/plans/${id}/check${q}`),
+          ]);
+          setProf(pr); setChk(ck);
+        }
+      } catch { /* 讀不到就維持上一份，畫面不要空掉 */ } finally { setBusy(false); }
+    }, 260);
+    return () => clearTimeout(t);
+  }, [assume, id, isNew, ov]);
 
   // 改動 → 試算。**去抖**：拖滑桿一秒會產生幾十次變動，而每一次都要
   // 沿線取樣 DEM——沒有去抖等於用滑桿打後端
@@ -336,7 +397,8 @@ export default function PlanPage() {
         const r = await fetch(`${API}/api/plans/${id}/preview`, {
           method: "POST", headers: { "Content-Type": "application/json" },
           body: JSON.stringify({ overrides: list, wp_spd: spdRef.current.wp,
-                                 wp_radius: spdRef.current.rad }),
+                                 wp_radius: spdRef.current.rad,
+                                 assume_m: assumeRef.current }),
         });
         const d = await r.json();
         if (r.ok) { setChk(d.check); setProf(d.profile); }
@@ -345,6 +407,7 @@ export default function PlanPage() {
     return () => clearTimeout(t);
   }, [ov, id, isNew]);
 
+  const defAssume = chk?.limits?.assumed_default_m ?? 9;
   const legs = chk?.legs ?? [];
   // 3D 要的是「航點」，而剖面回的是沿線取樣——帶 seq 的那幾筆就是航點。
   // **高度換算在這裡做一次**（profile 的 `plan` 已經是 AMSL），
@@ -478,6 +541,7 @@ export default function PlanPage() {
       {(stageWps.length > 1 || (isNew && started)) && (
         <div className="plan-work">
           <TerrainStage wps={stageWps} sel={selWp} onSelect={setSelWp}
+            assumeM={assume}
             tipFor={tipFor}
             placing={isNew && started}
             center={isNew ? [Number(home.lon), Number(home.lat)] : undefined}
@@ -577,6 +641,41 @@ export default function PlanPage() {
                 </>
               );
             })()}
+            {/* 未量測建物的假設高度。**它不是那些樓的高度**——放在這裡是
+                因為它會改變判定結果，而使用者要看得到自己按了什麼 */}
+            {(chk?.terrain_blind?.length ?? 0) > 0 && (
+              <div className="rail-field">
+                <div className="rail-row">
+                  <span>未量測建物假設高度</span>
+                  {assume == null ? (
+                    <button className="btn-sm"
+                      onClick={() => setAssume(defAssume)}>套用 {defAssume} m</button>
+                  ) : (
+                    <input className="numin" type="number" step={1} min={0} max={80}
+                      value={assume}
+                      onChange={(e) => setAssume(Number(e.target.value))} />
+                  )}
+                </div>
+                {assume != null && (
+                  <>
+                    <input type="range" min={0} max={80} step={1} value={assume}
+                      onChange={(e) => setAssume(Number(e.target.value))} />
+                    <div className="hint-line">
+                      {emph(`${chk!.terrain_blind!.length} 棟沒量過，都當成 ${assume} m 算——**這是規劃時的旋鈕，不是它們的高度**，實測要等光達`)}
+                    </div>
+                    <button className="btn-sm" onClick={() => setAssume(null)}>
+                      改回不假設（擋下）
+                    </button>
+                  </>
+                )}
+                {assume == null && (
+                  <div className="hint-line">
+                    {emph(`${chk!.terrain_blind!.length} 棟沒量過——**現在是擋下**，不是通過`)}
+                  </div>
+                )}
+              </div>
+            )}
+
             {/* **改動不會動到原本那份**（使用者裁定）：按了才另存 */}
             <div className="rail-save">
               <div className="hint-line">
@@ -602,7 +701,7 @@ export default function PlanPage() {
       )}
       {prof && <Profile p={prof} />}
       <div className="hint-line">
-        {emph("地面線來自 SRTM（水平約 30 m）——**被格子抹平的表面**：樹冠與屋頂混在裡面，但沒有一棟樓是它畫得出來的。建物是另一份（OSM 輪廓）：灰塊標「樓層數推算」的是**樓層數 × 3.5 m 猜的**，不是量的；橘色斜線的柱子**沒有頂**，因為那棟樓的高度沒有人量過——系統不替它猜一個數字放行。輪廓只取外環，**中庭當成實心**（多禁不會少禁）。")}
+        {emph("地面線來自 SRTM（水平約 30 m）——**被格子抹平的表面**：樹冠與屋頂混在裡面，但沒有一棟樓是它畫得出來的。建物是另一份（OSM 輪廓），三種畫法對應三種出處：實心灰塊標「樓層數推算」是**樓層數 × 3.5 m 猜的**，不是量的；虛線橘塊標「假設 N m」用的是右欄那個旋鈕，**改它判定就會變**；沒有頂的橘色柱子代表現在不假設，那棟樓的高度沒有人量過。三種都不是實測——**實測要等光達**。輪廓只取外環，**中庭當成實心**（多禁不會少禁）。")}
       </div>
 
       {(chk?.problems?.length || chk?.warnings?.length) ? (

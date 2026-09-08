@@ -143,6 +143,46 @@ roof = [p for p in pr1["points"] if p.get("obst") == "building"]
 ck("經過有高度的樓：top 高過 ground",
    bool(roof) and all(p["top"] > p["ground"] for p in roof), len(roof))
 
+print("\n── 假設高度（使用者可調的旋鈕）──")
+ck("不給 assume_m 時 top 仍然是 None",
+   terrain.surface(ul, uo, dem).top is None)
+s9 = terrain.surface(ul, uo, dem, assume_m=9)
+ck("給了就有 top", s9.top is not None and abs(s9.top - (s9.ground + 9)) < 0.01, f"{s9}")
+ck("出處變成 assumed（分得出估的與量的）", s9.source == "assumed", s9.source)
+ck("改數字 top 跟著變",
+   abs(terrain.surface(ul, uo, dem, assume_m=20).top - (s9.top + 11)) < 0.01)
+ck("有量過的樓不受旋鈕影響",
+   terrain.surface(*centre(known[0]), dem, assume_m=99).source == known[0].height_source)
+
+r3 = plan_check.check_terrain(wps2, home=home2, dem=dem, assume_m=9)
+ck("有假設值時不再是 problem",
+   not any("沒有量過" in p for p in r3["problems"]),
+   json.dumps(r3["problems"], ensure_ascii=False)[:160])
+ck("但一定有一句 warning 說是用假設值算的",
+   any("假設高度 9 m" in w for w in r3["warnings"]),
+   json.dumps(r3["warnings"], ensure_ascii=False)[:160])
+ck("報告帶著 assumed_m 出去", r3.get("assumed_m") == 9, r3.get("assumed_m"))
+
+# 高得一定會撞：撞的那句要說「照假設高度算」，而不是「這一段會撞地」
+r4 = plan_check.check_terrain(wps2, home=home2, dem=dem, assume_m=60)
+ck("估出來的撞是 warning 不是 problem",
+   any("照假設高度算" in w for w in r4["warnings"]) and not r4["problems"],
+   json.dumps(r4["problems"] + r4["warnings"], ensure_ascii=False)[:200])
+
+pr9 = plan_check.route_profile(wps2, home=home2, dem=dem, assume_m=9)
+asum = [x for x in pr9["points"] if x.get("obst") == "assumed"]
+ck("剖面把假設的標成 assumed（畫面要畫成虛線，不是實心）", bool(asum), len(asum))
+ck("假設的點 top 有數字", all(x["top"] is not None for x in asum))
+
+lp = plan_check.check_waypoints(
+    wps2, 1000, 120, home=[home2["lat"], home2["lon"]], dem=dem, assume_m=9)
+ck("check_waypoints 也把 assumed_m 與名單帶出來",
+   lp.get("assumed_m") == 9 and bool(lp.get("terrain_blind")),
+   f"{lp.get('assumed_m')} {lp.get('terrain_blind')}")
+ck("limits 帶著旋鈕的預設值（前端不抄第二份）",
+   lp["limits"].get("assumed_default_m") == buildings.ASSUMED_DEFAULT_M,
+   lp["limits"].get("assumed_default_m"))
+
 print()
 if fails:
     print(f"✗ {len(fails)} 項沒過：" + "、".join(fails))

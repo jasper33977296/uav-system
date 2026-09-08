@@ -19,6 +19,11 @@ LEVEL_M = 3.5
 #: OSM 輪廓的水平解析度：畫的是牆的位置，不是量出來的，公尺級。
 OSM_HORIZ_RES_M = 3.0
 
+#: 高度未知時的**假設高度**預設值（§9-A 第三層的 fallback）。
+#: 這是規劃時的一個旋鈕，不是這些樓的高度——真正的答案要等光達實測。
+#: 呼叫端不給 `assume_m` 就代表「不假設」，那時未知的樓仍然是 top=None。
+ASSUMED_DEFAULT_M = 9.0
+
 DATA_DIR = os.environ.get(
     "BUILDINGS_DIR",
     os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))),

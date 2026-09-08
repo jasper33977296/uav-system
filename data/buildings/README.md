@@ -20,6 +20,11 @@
   `unknown` 不是「沒有障礙」。`libs/terrain.surface()` 對它回
   `top=None`、`kind="building"`，剖面圖畫成**開口向上的柱子**，
   `check_terrain` 直接擋下並說出是哪一棟。
+
+  規劃頁上有一個**假設高度**的旋鈕（`assume_m`，預設 9 m）：按了才假設，
+  按了之後 `source` 是 `"assumed"`、畫面畫成虛線、判定的措辭改成
+  「照假設高度算」。**那是規劃時的旋鈕，不是那些樓的高度**——
+  實測要用光達（doc/field-3d-model-design.md §8.2.1）。
   這是 `data/dem/README.md` 那條紀律的延伸：原本是「查不到與 0 m 是兩件事」，
   現在多一條——**猜到的與量到的是兩件事，只有後者可以放行**。
 

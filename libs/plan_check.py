@@ -122,7 +122,8 @@ def check_waypoints(wps: list[dict], fence_r: float, fence_alt: float,
                     home: list[float] | None = None,
                     dem=None, min_clear: float = MIN_CLEARANCE_M,
                     wp_spd: float | None = None,
-                    wp_radius: float | None = None) -> dict:
+                    wp_radius: float | None = None,
+                    assume_m: float | None = None) -> dict:
     """wps：本系統 waypoints 模型 [{seq, lat, lon, alt, action, command?}]。
     DO_* 設定類不計距離；回傳 {ok, problems, warnings, max_dist_m, ...}。
 
@@ -223,7 +224,8 @@ def check_waypoints(wps: list[dict], fence_r: float, fence_alt: float,
     # 地形預檢（issues/047 §1-B）。擺在最後：它需要上面解出來的起飛點，
     # 而且它的發現要跟圍欄/機種的發現混在同一組 problems/warnings 裡
     # ——前端已經會顯示那兩組，多開一個顯示點就多一個沒人接的欄位（issues/037）
-    terr = check_terrain(nav, home, dem=dem, min_clear=min_clear)
+    terr = check_terrain(nav, home, dem=dem, min_clear=min_clear,
+                         assume_m=assume_m)
     problems += terr["problems"]
     warnings += terr["warnings"]
 
@@ -231,19 +233,26 @@ def check_waypoints(wps: list[dict], fence_r: float, fence_alt: float,
     # 「會不會低於地面」，而 2026-09-07 那一趟離地 1.5 m 是正的、會被放行
     # ——「在地面上方」不等於「飛得安全」。
     prof = leg_profile(wps, home, dem=dem, home_amsl=None,
-                       wp_spd=wp_spd, wp_radius=wp_radius)
+                       wp_spd=wp_spd, wp_radius=wp_radius, assume_m=assume_m)
     problems += prof["problems"]
     warnings += prof["warnings"]
 
     return {"ok": not problems, "problems": problems, "warnings": warnings,
             "max_dist_m": round(max_d, 1), "max_alt_m": round(max_alt, 1),
             "terrain": terr["terrain"],
+            # **假設高度是判定的一部分**，所以要跟著報告出來——畫面上
+            # 那句「通過」旁邊必須看得到它是用哪個假設算的
+            "assumed_m": assume_m,
+            "terrain_blind": terr.get("terrain_blind") or [],
             # 逐段的事實：剖面圖、逐段表、自動修正共用的輸入
             "legs": prof["legs"],
             # **門檻要跟著出來**：畫面要在剖面圖上畫那條線，而它不該自己
             # 寫死一個數字（見 `leg_profile` 裡 `low_fast` 的說明）
             "limits": {"low_alt_m": LOW_ALT_M, "low_speed_ms": LOW_SPEED_MS,
-                       "min_takeoff_alt_m": MIN_TAKEOFF_ALT_M},
+                       "min_takeoff_alt_m": MIN_TAKEOFF_ALT_M,
+                       # 畫面那個旋鈕的預設值。**跟著報告走**，前端不要自己
+                       # 抄一份——抄了就會有兩個 9，改一個不會動另一個
+                       "assumed_default_m": buildings.ASSUMED_DEFAULT_M},
             # **量測用的是哪一份圍欄，要跟著報告走**：同一句「超出圍欄」在
             # 兩種來源下的處置完全不同
             "fence_source": fence_src}
@@ -252,7 +261,8 @@ def check_waypoints(wps: list[dict], fence_r: float, fence_alt: float,
 
 def check_terrain(nav: list[dict], home: dict, dem=None,
                   min_clear: float = MIN_CLEARANCE_M,
-                  home_amsl: float | None = None) -> dict:
+                  home_amsl: float | None = None,
+                  assume_m: float | None = None) -> dict:
     """地形預檢（issues/047 §1-B）：沿著整條航線算 `預期離地`，不足的指名報出來。
 
         預期離地 = (起飛點 AMSL + 相對高度) − DEM 高程(該點)
@@ -324,20 +334,21 @@ def check_terrain(nav: list[dict], home: dict, dem=None,
 
     def look(lat, lon, amsl, where):
         nonlocal worst, rise, checked, ground_n
-        s = terrain.surface(lat, lon, dem)
+        s = terrain.surface(lat, lon, dem, assume_m=assume_m)
         gz = s.top
+        if s.kind == "building" and s.source in ("unknown", "assumed"):
+            b = buildings.shared().at(lat, lon)
+            if b is not None:
+                blind.setdefault(b.id, b.name or b.kind)
         if gz is None:
-            if s.kind == "building" and amsl is not None:
-                b = buildings.shared().at(lat, lon)
-                if b is not None:
-                    blind.setdefault(b.id, b.name or b.kind)
             return
         ground_n += 1
         rise = max(rise, gz - ha)
         if amsl is None:          # 只量地面，不判離地
             return
         checked += 1
-        rec = (amsl - gz, where, gz)
+        # 第四個欄位是「這個高度是估的嗎」——**判定的措辭跟著它走**
+        rec = (amsl - gz, where, gz, s.source == "assumed")
         if worst is None or rec[0] < worst[0]:
             worst = rec
         if rec[0] < min_clear:
@@ -377,11 +388,21 @@ def check_terrain(nav: list[dict], home: dict, dem=None,
     if blind:
         names = "、".join(sorted(blind.values())[:4])
         more = f" 等 {len(blind)} 棟" if len(blind) > 4 else ""
-        out["problems"].append(
-            f"航線經過 {names}{more}，**這些建物的高度沒有量過**——"
-            f"OSM 上既沒有 height 也沒有樓層數。系統不會替它猜一個數字放行"
-            f"（猜到的與量到的是兩件事），要飛就得先去量。")
+        if assume_m is None:
+            out["problems"].append(
+                f"航線經過 {names}{more}，**這些建物的高度沒有量過**——"
+                f"OSM 上既沒有 height 也沒有樓層數。系統不會替它猜一個數字放行"
+                f"（猜到的與量到的是兩件事），要飛就得先去量。")
+        else:
+            # **假設值不是量測值。** 給了旋鈕就照它算，但每一次判定都要
+            # 帶著這句話出去——不然畫面上的「通過」會被讀成「量過了」
+            out["warnings"].append(
+                f"航線經過 {names}{more}，**這些建物的高度沒有量過**，"
+                f"以下的離地是用**假設高度 {assume_m:g} m** 算的。"
+                f"改這個數字會改變判定結果——它是規劃時的旋鈕，"
+                f"不是那些樓的高度，實測要等光達。")
         out["terrain_blind"] = [{"id": k, "name": v} for k, v in sorted(blind.items())]
+        out["assumed_m"] = assume_m
 
     if not checked:
         # **「都是地形跟隨」與「查不到地形資料」是兩件事**，說錯了會讓人
@@ -395,12 +416,20 @@ def check_terrain(nav: list[dict], home: dict, dem=None,
         return out
     if below:
         notes = out["terrain"]["notes"]
-        c, where, gz = min(below)
+        c, where, gz, est = min(below)
         d = gz - ha
         more = f"，另有 {len(below) - 1} 處同樣不足" if len(below) > 1 else ""
         rel = (f"地面比起飛點高 {d:.1f} m" if d >= 0.05 else
                f"地面比起飛點低 {-d:.1f} m" if d <= -0.05 else "地面與起飛點齊平")
-        if c < 0:
+        # **估出來的撞不是量出來的撞。** 兩者都要報，但措辭不能一樣：
+        # 一個是「這條線會撞」，另一個是「照你假設的高度會撞」——
+        # 後者改一下旋鈕就消失，把它寫成前者會讓人不再相信前者
+        if c < 0 and est:
+            out["warnings"].append(
+                f"{where}：**照假設高度算，預期離地 {c:.1f} m——會撞到那棟樓**"
+                f"{more}。那個高度是假設的，不是量到的")
+            notes.append(out["warnings"][-1])
+        elif c < 0:
             out["problems"].append(
                 f"{where}：{rel}，**預期離地 {c:.1f} m——這一段會撞地**{more}")
             notes.append(out["problems"][-1])
@@ -600,7 +629,8 @@ def leg_profile(wps: list[dict], home: dict | None = None, dem=None,
                 home_amsl: float | None = None, wp_spd: float | None = None,
                 wp_radius: float | None = None,
                 low_alt: float = LOW_ALT_M,
-                low_speed: float = LOW_SPEED_MS) -> dict:
+                low_speed: float = LOW_SPEED_MS,
+                assume_m: float | None = None) -> dict:
     """把一份航線攤成**逐段的事實**：離地、有效速度與它的來源、長度、轉角。
 
     這是剖面圖、逐段表、自動修正、擋門**四個功能共同的輸入**，所以它只算
@@ -692,9 +722,9 @@ def leg_profile(wps: list[dict], home: dict | None = None, dem=None,
                 f = k / n
                 la = a["lat"] + (b["lat"] - a["lat"]) * f
                 lo = a["lon"] + (b["lon"] - a["lon"]) * f
-                smp = terrain.surface(la, lo, dem)
+                smp = terrain.surface(la, lo, dem, assume_m=assume_m)
                 gz = smp.top
-                if gz is None and smp.kind == "building":
+                if smp.kind == "building" and smp.source in ("unknown", "assumed"):
                     bd = buildings.shared().at(la, lo)
                     if bd is not None:
                         leg.setdefault("blind", []).append(bd.name or bd.id)
@@ -779,13 +809,14 @@ def leg_profile(wps: list[dict], home: dict | None = None, dem=None,
     return out
 
 
-def _profile_point(lat: float, lon: float, dem, plan: float | None) -> dict:
+def _profile_point(lat: float, lon: float, dem, plan: float | None,
+                   assume_m: float | None = None) -> dict:
     """剖面圖的一個取樣點：地面、屋頂、離地，三者出處分開。
 
     `top` 是「這一點上方最高的東西」。建物高度未知時 `top` 是 None 而
     `obst` 是 `"unknown"`——畫成開口向上的柱子，不是一條線（§9-A）。
     """
-    s = terrain.surface(lat, lon, dem)
+    s = terrain.surface(lat, lon, dem, assume_m=assume_m)
     ref = s.top if s.top is not None else s.ground
     pt = {
         "lat": round(lat, 7), "lon": round(lon, 7),
@@ -797,13 +828,15 @@ def _profile_point(lat: float, lon: float, dem, plan: float | None) -> dict:
     }
     if s.kind == "building":
         b = buildings.shared().at(lat, lon)
-        pt["obst"] = "unknown" if s.top is None else "building"
+        pt["obst"] = ("unknown" if s.top is None else
+                      "assumed" if s.source == "assumed" else "building")
         pt["obst_name"] = (b.name or b.kind) if b else None
     return pt
 
 
 def route_profile(wps: list[dict], home: dict | None = None, dem=None,
-                  home_amsl: float | None = None, step: float = DEM_STEP_M) -> dict:
+                  home_amsl: float | None = None, step: float = DEM_STEP_M,
+                  assume_m: float | None = None) -> dict:
     """剖面圖的資料：沿航線每 `step` 公尺，地面高程與規劃高度各一條。
 
     **這是那條綠線該有的樣子**（doc/route-planning-first-principles.md F1）。
@@ -860,7 +893,7 @@ def route_profile(wps: list[dict], home: dict | None = None, dem=None,
                         a if fr_k in _AMSL_FRAMES else None)
                 # **座標要跟著出來**：3D 那一層要把這些點放回地圖上，
                 # 而讓它自己再去查一次航點，兩邊就會有兩份可能不同步的資料
-                pt = _profile_point(la, lo, dem, plan)
+                pt = _profile_point(la, lo, dem, plan, assume_m)
                 pt["d"] = round(d0 + leg * f, 1)
                 pt["seq"] = seq if k == n else None
                 out["points"].append(pt)
@@ -868,7 +901,7 @@ def route_profile(wps: list[dict], home: dict | None = None, dem=None,
         else:
             plan = (ha + alt if fr in _REL_FRAMES else
                     alt if fr in _AMSL_FRAMES else None)
-            pt = _profile_point(lat, lon, dem, plan)
+            pt = _profile_point(lat, lon, dem, plan, assume_m)
             pt["d"] = 0.0
             pt["seq"] = seq
             out["points"].append(pt)
