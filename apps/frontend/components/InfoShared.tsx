@@ -23,6 +23,12 @@ export interface SessionRow {
   //: 飛行中換過幾次路徑（後端衍生，讀 command_log）。**0＝全程同一份**；
   //: >0 時 `plan_name` 說的只是**解鎖那一刻**那份（doc/data-schema §3.4）
   plan_changes?: number;
+  //: 這一趟屬於哪個「任務」（階段 2；doc/mission-vs-plan-design.md）。
+  //: **任務 ≠ 路徑**：路徑是一份 .plan，任務是要達成的那件事，可以跨多趟、
+  //: 多份路徑、多台機。`mission_name` 是指派當下的名稱快照——任務刪掉之後
+  //: 歷史仍說得出當時屬於哪個任務
+  mission_id?: string | null;
+  mission_name?: string | null;
   summary: {
     avg_sinr?: number | null; min_sinr?: number | null; avg_rtt_ms?: number | null;
     max_alt_rel?: number | null; samples_total?: number | null;

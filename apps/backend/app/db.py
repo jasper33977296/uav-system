@@ -96,6 +96,37 @@ async def migrate() -> None:
     # 038：飛控板的唯一 ID（AUTOPILOT_VERSION.uid2）。**目前唯一機器可驗證的
     # 身分**——sysid 只是機上可改的參數。NULL＝還沒問到（不是「沒有」）
     await pool.execute("ALTER TABLE drones ADD COLUMN IF NOT EXISTS board_uid TEXT")
+    # ── 階段 2：任務（doc/mission-vs-plan-design.md §4）──────────────
+    # **`missions` 現在是「要達成的那件事」**，不是路徑（路徑在 `plans`）。
+    # 一個任務可以有 N 個架次、N 份路徑、N 台機——三個 N 都不設限，
+    # 限制哪一個都會在某次實驗被打破。所以關聯放在 `flight_sessions` 那一側
+    # （多對一），不需要中介表。
+    await pool.execute("""
+        CREATE TABLE IF NOT EXISTS missions (
+          id         UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+          name       TEXT NOT NULL,
+          note       TEXT,
+          created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+          ended_at   TIMESTAMPTZ
+        )""")
+    # 名稱唯一：任務是拿來喊的（「那個低速測線的實驗」）。兩個同名任務畫面上
+    # 分得出（有 id），**人喊出來分不出**——與 squads 同一條理由
+    await pool.execute("CREATE UNIQUE INDEX IF NOT EXISTS idx_missions_name "
+                       "ON missions (lower(name))")
+    await pool.execute(
+        "ALTER TABLE flight_sessions ADD COLUMN IF NOT EXISTS mission_id UUID")
+    # 名稱快照，與 plan_name 同一條理由：任務被刪掉之後，歷史仍要說得出
+    # 當時屬於哪個任務
+    await pool.execute(
+        "ALTER TABLE flight_sessions ADD COLUMN IF NOT EXISTS mission_name TEXT")
+    # 刪任務不刪歷史（SET NULL）。ADD CONSTRAINT 沒有 IF NOT EXISTS，
+    # 而 migrate() 每次啟動都跑——照既有慣例用 duplicate_object 包起來
+    await pool.execute("""
+        DO $$ BEGIN
+          ALTER TABLE flight_sessions ADD CONSTRAINT flight_sessions_mission_id_fkey
+            FOREIGN KEY (mission_id) REFERENCES missions(id) ON DELETE SET NULL;
+        EXCEPTION WHEN duplicate_object THEN NULL; END $$""")
+
     # 錄製起訖條件（flight-video-design §8c，使用者定案 2026-09-08）。
     # `landed_state` 是飛控自己算的「我在地上還是空中」——**它原本只活在
     # 記憶體裡**，於是事後查不出「這一趟到底離地了沒」。

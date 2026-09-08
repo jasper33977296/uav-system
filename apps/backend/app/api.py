@@ -1483,18 +1483,48 @@ async def get_session(session_id: str):
 
 class SessionPatch(BaseModel):
     note: str | None = None            # 自訂備註（實驗條件標註）；空字串/None＝清除
+    #: 這一趟屬於哪個任務（階段 2）。**空字串＝取消指派**，None＝這次不改
+    #: ——兩者不同：前者是一個決定，後者是「這個欄位沒有出現在請求裡」
+    mission_id: str | None = None
 
 
 @router.patch("/sessions/{session_id}")
 async def patch_session(session_id: str, body: SessionPatch):
-    """更新架次自訂備註（使用者標實驗條件，如「開干擾器那趟」）。"""
-    note = (body.note or "").strip() or None
+    """更新架次的備註，以及**這一趟屬於哪個任務**。
+
+    指派是人做的，系統不猜（doc/mission-vs-plan-design.md §4.1②）：
+    時間相近、路徑相同都不足以證明是同一件事，而**猜錯的歸類比沒有歸類
+    更難發現**。
+
+    `mission_id` 傳空字串＝取消指派。指派的同時把**當下的任務名寫成快照**
+    ——任務被刪掉之後，歷史仍要說得出當時屬於哪個任務。
+    """
+    sets, args = [], []
+
+    def arg(v):
+        args.append(v)
+        return f"${len(args) + 1}"
+
+    if body.note is not None:
+        sets.append(f"note = {arg((body.note or '').strip() or None)}")
+    if body.mission_id is not None:
+        mid = (body.mission_id or "").strip() or None
+        if mid is None:
+            sets.append("mission_id = NULL, mission_name = NULL")
+        else:
+            name = await db.pool.fetchval("SELECT name FROM missions WHERE id = $1", mid)
+            if name is None:
+                raise HTTPException(404, "無此任務")
+            sets.append(f"mission_id = {arg(mid)}, mission_name = {arg(name)}")
+    if not sets:
+        raise HTTPException(422, "沒有要改的欄位")
     row = await db.pool.fetchrow(
-        "UPDATE flight_sessions SET note = $2 WHERE id = $1 RETURNING id::text, note",
-        session_id, note)
+        f"UPDATE flight_sessions SET {', '.join(sets)} WHERE id = $1 "
+        "RETURNING id::text, note, mission_id::text, mission_name",
+        session_id, *args)
     if row is None:
         raise HTTPException(404, "無此架次")
-    return {"id": row["id"], "note": row["note"]}
+    return dict(row)
 
 
 @router.get("/sessions/{session_id}/telemetry-quality")
@@ -1918,6 +1948,101 @@ async def _store_mission(name: str, source: str, wps: list[dict],
                               if w.get(k) is not None}) if w.get("command") is not None else None)
                  for w in wps])
     return str(row["id"])
+
+
+# ── 任務（doc/mission-vs-plan-design.md §4）──────────────────────────────
+# **任務 ≠ 路徑。** 路徑是一份 `.plan`（`/api/plans`），任務是「要達成的那件
+# 事」——可以跨多份路徑、多個架次、多台機。這一組端點是 2026-09-08 階段 2
+# 新增的；在那之前 `/api/missions` 指的是路徑（已於階段 1 改名並移除轉址）。
+class MissionIn(BaseModel):
+    name: str
+    note: str | None = None
+
+
+class MissionPatch(BaseModel):
+    name: str | None = None
+    note: str | None = None
+    #: 顯式收尾。**只給畫面分「進行中／已結束」，不影響任何判定**——
+    #: 不做狀態機（squads 的同一條：任務不該長成第二套規劃）
+    ended: bool | None = None
+
+
+@router.get("/missions")
+async def list_missions():
+    """全部任務，附**衍生**的統計：幾趟、幾台機、幾份路徑、最近一趟。
+
+    **統計不存欄位**：它們都是 `flight_sessions` 上一個 group by 就有的東西，
+    存下來就要維護一致性，而那是第二個家。
+    """
+    rows = await db.pool.fetch("""
+        SELECT m.*,
+               (SELECT count(*) FROM flight_sessions s WHERE s.mission_id = m.id)
+                 AS sessions,
+               (SELECT count(DISTINCT s.drone_id) FROM flight_sessions s
+                 WHERE s.mission_id = m.id) AS drones,
+               (SELECT count(DISTINCT s.plan_id) FROM flight_sessions s
+                 WHERE s.mission_id = m.id AND s.plan_id IS NOT NULL) AS plans,
+               (SELECT max(s.started_at) FROM flight_sessions s
+                 WHERE s.mission_id = m.id) AS last_flight
+          FROM missions m ORDER BY m.created_at DESC""")
+    return [dict(r) for r in rows]
+
+
+@router.post("/missions", status_code=201)
+async def create_mission(body: MissionIn):
+    name = (body.name or "").strip()
+    if not name:
+        raise HTTPException(422, "任務要有名字")
+    try:
+        row = await db.pool.fetchrow(
+            "INSERT INTO missions (name, note) VALUES ($1, $2) RETURNING id::text",
+            name, (body.note or "").strip() or None)
+    except asyncpg.UniqueViolationError:
+        # **說得出撞到哪一個**：只講「名稱重複」的話，人得自己去清單裡找
+        raise HTTPException(409, f"已經有一個任務叫「{name}」")
+    return {"id": row["id"], "name": name}
+
+
+@router.patch("/missions/{mission_id}")
+async def patch_mission(mission_id: str, body: MissionPatch):
+    """改名／改備註／收尾。**改名不影響歷史**——架次上留的是當時的快照。"""
+    sets, args = [], []
+
+    def arg(v):
+        args.append(v)
+        return f"${len(args) + 1}"
+
+    if body.name is not None:
+        name = body.name.strip()
+        if not name:
+            raise HTTPException(422, "任務要有名字")
+        sets.append(f"name = {arg(name)}")
+    if body.note is not None:
+        sets.append(f"note = {arg(body.note.strip() or None)}")
+    if body.ended is not None:
+        sets.append(f"ended_at = {'now()' if body.ended else 'NULL'}")
+    if not sets:
+        raise HTTPException(422, "沒有要改的欄位")
+    try:
+        row = await db.pool.fetchrow(
+            f"UPDATE missions SET {', '.join(sets)} WHERE id = $1 RETURNING id::text",
+            mission_id, *args)
+    except asyncpg.UniqueViolationError:
+        raise HTTPException(409, f"已經有一個任務叫「{body.name}」")
+    if row is None:
+        raise HTTPException(404, "無此任務")
+    return {"id": row["id"]}
+
+
+@router.delete("/missions/{mission_id}")
+async def delete_mission(mission_id: str):
+    """刪任務**不刪任何一趟飛行**。架次的 `mission_id` 變 NULL，
+    但 `mission_name` 快照留著——歷史仍說得出當時屬於哪個任務。"""
+    row = await db.pool.fetchrow(
+        "DELETE FROM missions WHERE id = $1 RETURNING id::text", mission_id)
+    if row is None:
+        raise HTTPException(404, "無此任務")
+    return {"deleted": row["id"]}
 
 
 @router.get("/plans")

@@ -199,6 +199,7 @@ function FlightDetail({ s, onReplay }: { s: SessionRow; onReplay: () => void }) 
             {s.ended_at ? "" : "（尚未結束）"}
           </span>
         </h3>
+        <MissionPicker s={s} />
         <div className="chips info-chips">
           {/* **飛行中換過路徑要說出來**（doc/data-schema §3.4）：`plan_name`
               是解鎖那一刻那份，機上後來飛的可能是別份——不標的話這個 chip
@@ -388,6 +389,87 @@ const KEY_TYPES = new Set([
 function isKeyEvent(e: EventRow): boolean {
   const sv = normSev(e.severity);
   return sv === "critical" || sv === "warning" || KEY_TYPES.has(e.type);
+}
+
+/** 這一趟屬於哪個「任務」（doc/mission-vs-plan-design.md §4）。
+ *
+ * **任務 ≠ 路徑**：路徑是一份 `.plan`（下面 chip 那個），任務是要達成的那件
+ * 事——可以跨多趟、多份路徑、多台機。
+ *
+ * **指派是人做的，系統不猜**（§4.1②）：時間相近、路徑相同都不足以證明是
+ * 同一件事，而猜錯的歸類比沒有歸類更難發現。所以這裡只有一個下拉，沒有
+ * 任何自動建議——**除了**新建時把備註當預設值，那是使用者自己寫的字。
+ */
+function MissionPicker({ s }: { s: SessionRow }) {
+  const [list, setList] = useState<{ id: string; name: string }[] | null>(null);
+  const [cur, setCur] = useState<{ id: string | null; name: string | null }>(
+    { id: s.mission_id ?? null, name: s.mission_name ?? null });
+  const [adding, setAdding] = useState(false);
+  const [name, setName] = useState("");
+  const [err, setErr] = useState<string | null>(null);
+  useEffect(() => {
+    setCur({ id: s.mission_id ?? null, name: s.mission_name ?? null });
+  }, [s.id, s.mission_id, s.mission_name]);
+  const load = () => getJson<{ id: string; name: string }[]>(`${API}/api/missions`)
+    .then(setList).catch(() => setList([]));
+  useEffect(() => { load(); }, []);
+
+  const assign = async (mid: string) => {
+    setErr(null);
+    const r = await fetch(`${API}/api/sessions/${s.id}`, {
+      method: "PATCH", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ mission_id: mid }),
+    });
+    const b = await r.json().catch(() => null);
+    if (!r.ok) { setErr(errText(b?.detail, "指派失敗")); return; }
+    setCur({ id: b.mission_id, name: b.mission_name });
+  };
+  const create = async () => {
+    setErr(null);
+    const r = await fetch(`${API}/api/missions`, {
+      method: "POST", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ name: name.trim() }),
+    });
+    const b = await r.json().catch(() => null);
+    // 撞名（409）後端給得出人話（說得出撞到哪一個），原文顯示
+    if (!r.ok) { setErr(errText(b?.detail, "建立失敗")); return; }
+    setAdding(false); setName("");
+    await load();
+    await assign(b.id);
+  };
+
+  return (
+    <div className="cmp-scope info-mission">
+      <span className="hint-line">任務</span>
+      {adding ? (<>
+        <input className="msearch" autoFocus value={name} placeholder="例如：低速測線實驗"
+          onChange={(e) => setName(e.target.value)}
+          onKeyDown={(e) => { if (e.key === "Enter" && name.trim()) create(); }} />
+        <button className="btn-plain btn-sm" disabled={!name.trim()}
+          onClick={create}>建立並指派</button>
+        <button className="btn-plain btn-sm" onClick={() => setAdding(false)}>取消</button>
+      </>) : (<>
+        <select value={cur.id ?? ""} onChange={(e) => assign(e.target.value)}>
+          <option value="">未指派</option>
+          {(list ?? []).map((m) => (
+            <option key={m.id} value={m.id}>{m.name}</option>
+          ))}
+        </select>
+        <button className="btn-plain btn-sm"
+          onClick={() => { setAdding(true); setName(s.note ?? ""); }}>＋ 新任務</button>
+        {/* **任務被刪掉之後快照還在**：這時下拉是「未指派」，但歷史說得出
+            當時屬於哪個任務——兩件事都要看得到 */}
+        {!cur.id && cur.name && (
+          <span className="hint-line">（原屬「{cur.name}」，該任務已刪除）</span>
+        )}
+        <InfoTip tip={"任務＝要達成的那件事，可以跨多趟飛行、多份路徑、多台機；"
+          + "路徑是一份 .plan（下面那個 chip）。指派是人做的，系統不猜——"
+          + "時間相近、路徑相同都不足以證明是同一件事。"
+          + "刪掉任務不會刪任何一趟飛行，架次上留的是指派當下的名稱快照。"} />
+      </>)}
+      {err && <span className="form-err">{err}</span>}
+    </div>
+  );
 }
 
 /** 原始資料的家。**它該在一個「想看才會打開」的位置**——攤在列上時，

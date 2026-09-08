@@ -42,11 +42,13 @@ const VGRID = 10, VZ = 5;   // 體素 10×10×5 m
 // **倍率一律寫在畫面上**（ⓘ）——偷偷放大的高度就是一張假的圖
 const VEX = 2;
 
-type Mode = "time" | "mission" | "cross";
+type Mode = "time" | "plan" | "mission" | "cross";
 const MODE_LABEL: Record<Mode, string> = {
-  // 三個維度是同一個層級的名詞：時間／任務／機隊。**不用「跨機・跨任務」
-  // 這種把兩件事並排的說法**——它讀起來像在描述操作，不像在指一個維度
-  time: "時間", mission: "任務", cross: "機隊",
+  // 四個維度是同一個層級的名詞。**「任務」原本指的是路徑**（那張表就叫
+  // missions），2026-09-08 正名之後分成兩個維度：
+  //   路徑＝同一份 .plan 飛過多趟（**唯一路徑一致的維度**）
+  //   任務＝同一件事的多趟，可以跨路徑、跨機（doc/mission-vs-plan-design.md）
+  time: "時間", plan: "路徑", mission: "任務", cross: "機隊",
 };
 
 interface SessRow {
@@ -54,9 +56,12 @@ interface SessRow {
   plan_id: string | null; plan_name: string | null;
   note: string | null;
   origin?: string | null;      // 'test'＝rig/驗收觸發的架次
-  //: 飛行中換過幾次路徑（doc/data-schema §3.4）。**「任務」維度整個假設
-  //: 一趟＝一條路徑**，換過的那幾趟必須標出來，否則這個維度在說謊
+  //: 飛行中換過幾次路徑（doc/data-schema §3.4）。**「路徑」維度整個假設
+  //: 一趟＝一份 .plan**，換過的那幾趟必須標出來，否則這個維度在說謊
   plan_changes?: number;
+  //: 這一趟屬於哪個任務（階段 2）。任務維度按這個圈候選
+  mission_id?: string | null;
+  mission_name?: string | null;
 }
 
 const fmtT = (t: string) =>
@@ -100,7 +105,10 @@ export default function AbCompare() {
   const [loadErr, setLoadErr] = useState<string | null>(null);
   const [mode, setMode] = useState<Mode>("time");
   const [drone, setDrone] = useState<string | null>(null);
-  const [planId, setMissionId] = useState<string | null>(null);
+  const [planId, setPlanId] = useState<string | null>(null);      // 路徑維度
+  //: 任務維度（階段 2）。**任務不限機、不限路徑**——那正是它與路徑維度的差別
+  const [taskId, setTaskId] = useState<string | null>(null);
+  const [tasks, setTasks] = useState<{ id: string; name: string }[]>([]);
   const [baseId, setBaseId] = useState<string | null>(null);
   const [sel, setSel] = useState<string[]>([]);
   const [heatId, setHeatId] = useState<string | null>(null);
@@ -126,6 +134,10 @@ export default function AbCompare() {
         if (qb) setSel([qb]);
       })
       .catch(() => setLoadErr("無法取得架次清單"));
+    // 任務清單（維度選單用）。**取不到就是空清單**，那與「沒有任務」在畫面上
+    // 一樣是「沒得選」——這裡不需要分，因為它不會被讀成一個宣告
+    getJson<{ id: string; name: string }[]>(`${API}/api/missions`)
+      .then(setTasks).catch(() => setTasks([]));
   }, []);
 
   // 選單內容：預設只列真飛行；已選中的架次即使是測試也保留，
@@ -139,15 +151,25 @@ export default function AbCompare() {
   /** 這個維度下可以拿來比的架次（時間新→舊，清單本來就是這個序）。 */
   const cand = useMemo(() => {
     if (mode === "cross") return listed;
+    // **任務維度不限機、不限路徑**——那正是它與「路徑」維度的差別。
+    // **還沒選任務時是空的，不是「全部未指派的架次」**：`mission_id === null`
+    // 會把每一趟沒指派的都比對成相等，畫面上就變成「全都在這個任務底下」
+    if (mode === "mission") {
+      return taskId ? listed.filter((r) => r.mission_id === taskId) : [];
+    }
     const d = listed.filter((r) => r.drone_name === drone);
     return mode === "time" ? d : d.filter((r) => r.plan_id === planId);
-  }, [listed, mode, drone, planId]);
+  }, [listed, mode, drone, planId, taskId]);
 
   /** 標籤：帶到剛好能分辨為止，不多帶。 */
   const tripLabel = useCallback((s: SessRow | null | undefined): string => {
     if (!s) return "—";
     if (mode === "cross") return `${s.drone_name} · ${fmtT(s.started_at)}`;
+    // 任務維度**跨機也跨路徑**，兩個都不帶就分不出誰是誰
     if (mode === "mission") {
+      return `${s.drone_name} · ${s.plan_name ?? "無路徑"} · ${fmtT(s.started_at)}`;
+    }
+    if (mode === "plan") {
       const seq = [...cand].reverse();   // 舊→新才數得出「第幾趟」
       const i = seq.findIndex((x) => x.id === s.id);
       // 飛行中換過路徑的那一趟，**這個維度的前提對它不成立**——標出來，
@@ -184,20 +206,20 @@ export default function AbCompare() {
 
   // 切到「任務」維度時，把機與任務換到**真的有任務紀錄**的那一組：
   // 停在一台沒有任務的機上，畫面會是空的，那不是這個維度的樣子
-  const seatMission = () => {
+  const seatPlan = () => {
     const has = sessions.filter((s) => s.plan_id);
     if (!has.length) return;
     const mine = has.filter((s) => s.drone_name === drone);
     if (mine.length) {
       if (!mine.some((s) => s.plan_id === planId))
-        setMissionId(mine[0].plan_id);
+        setPlanId(mine[0].plan_id);
       return;
     }
     const cnt: Record<string, number> = {};
     for (const r of has) cnt[r.drone_name] = (cnt[r.drone_name] ?? 0) + 1;
     const d = Object.entries(cnt).sort((a, b) => b[1] - a[1])[0][0];
     setDrone(d);
-    setMissionId(has.find((s) => s.drone_name === d)!.plan_id);
+    setPlanId(has.find((s) => s.drone_name === d)!.plan_id);
   };
 
   // 切到「機隊」維度時預設就挑到**別台機**去：沿用上一個維度的選擇會讓
@@ -230,7 +252,7 @@ export default function AbCompare() {
   // 參考路徑：任務維度下每一趟共用同一條計畫航線（共同 X 軸的最佳來源）；
   // 其他維度沒有共同航線，基準就是基準那一趟的軌跡
   useEffect(() => {
-    const mid = mode === "mission" ? planId : null;
+    const mid = mode === "plan" ? planId : null;
     if (!mid) { setPlan(null); return; }
     fetch(`${API}/api/plans/${mid}/waypoints`)
       .then((r) => (r.ok ? r.json() : null))
@@ -397,7 +419,7 @@ export default function AbCompare() {
     }
     return [...seen.entries()];
   };
-  const noMission = mode === "mission" && missionsOf(drone).length === 0;
+  const noMission = mode === "plan" && missionsOf(drone).length === 0;
 
   return (
     <div className="ab-page">
@@ -421,36 +443,53 @@ export default function AbCompare() {
           <InfoTip tip={"三個維度用同一套對齊：沿基準軌跡的弧長里程，不是時間"
             + "（兩趟速度不同，時間對齊會錯位）；偏離基準路徑逾 60 m 的樣本不納入。"
             + "　時間＝同一台機不同時間，路徑不保證一樣。"
-            + "　任務＝同一台機把同一條任務飛過多趟，唯一路徑一致的維度，共同區間會接近全滿"
-            + "（飛行中換過路徑的那一趟會標 ⚠：這個維度的前提對它不成立）。"
-            + "　機隊＝不同機、不同任務，差異可能來自機或模組本身，不只是位置。"} />
+            + "　路徑＝同一台機把同一份 .plan 飛過多趟，唯一路徑一致的維度，"
+            + "共同區間會接近全滿（飛行中換過路徑的那一趟會標 ⚠：前提對它不成立）。"
+            + "　任務＝同一件事的多趟，**可以跨路徑、跨機**——所以路徑不保證一樣，"
+            + "共同區間就是重疊多少。"
+            + "　機隊＝不同機、不同路徑，差異可能來自機或模組本身，不只是位置。"} />
         </span></h3>
         <div className="sess-pills">
           {(Object.keys(MODE_LABEL) as Mode[]).map((k) => (
             <button key={k} className={`pill${mode === k ? " on" : ""}`}
               onClick={() => {
                 setMode(k);
-                if (k === "mission") seatMission();
+                if (k === "plan") seatPlan();
                 if (k === "cross") seatCross();
               }}>{MODE_LABEL[k]}</button>
           ))}
         </div>
-        {mode !== "cross" && (
+        {/* 任務維度的範圍選擇：**只選任務，不選機也不選路徑**——它就是要
+            跨那兩件事的（doc/mission-vs-plan-design.md §4） */}
+        {mode === "mission" && (
+          <div className="cmp-scope">
+            <span className="hint-line">任務</span>
+            <select value={taskId ?? ""} disabled={!tasks.length}
+              onChange={(e) => setTaskId(e.target.value)}>
+              {tasks.length
+                ? [<option key="" value="">（選一個任務）</option>,
+                   ...tasks.map((t) => (
+                     <option key={t.id} value={t.id}>{t.name}</option>))]
+                : <option value="">（還沒有任何任務）</option>}
+            </select>
+          </div>
+        )}
+        {mode !== "cross" && mode !== "mission" && (
           <div className="cmp-scope">
             <span className="hint-line">機</span>
             <select value={drone ?? ""} onChange={(e) => {
               setDrone(e.target.value);
               const ms = missionsOf(e.target.value);
-              if (mode === "mission") setMissionId(ms[0]?.[0] ?? null);
+              if (mode === "plan") setPlanId(ms[0]?.[0] ?? null);
             }}>
               {[...new Set(sessions.map((s) => s.drone_name))].map((d) => (
                 <option key={d} value={d}>{d}</option>
               ))}
             </select>
-            {mode === "mission" && (<>
-              <span className="hint-line">任務</span>
+            {mode === "plan" && (<>
+              <span className="hint-line">路徑</span>
               <select value={planId ?? ""} disabled={noMission}
-                onChange={(e) => setMissionId(e.target.value)}>
+                onChange={(e) => setPlanId(e.target.value)}>
                 {noMission
                   ? <option value="">（沒有任務紀錄）</option>
                   : missionsOf(drone).map(([id, nm]) => (
@@ -465,11 +504,15 @@ export default function AbCompare() {
       {!loadErr && sessions.length > 0 && cand.length < 2 && (
         <div className="card"><div className="empty">
           {noMission
-            ? `${drone} 沒有任何一趟掛著任務——這個維度要先有任務紀錄。`
+            ? `${drone} 沒有任何一趟掛著路徑——這個維度要先有路徑紀錄。`
+            : mode === "mission" && !taskId
+              ? "上面選一個任務。"
+            : mode === "mission" && !tasks.length
+              ? "還沒有任何任務——在資訊頁的架次詳情裡建一個，把幾趟指過去。"
             : cand.length === 0 ? "這個範圍裡沒有任何架次。"
-            : mode === "mission"
-              ? `${drone} 在這條任務上只有 1 趟——一趟不能比。`
-              : "這個範圍裡只有 1 趟——一趟不能比。"}
+            : mode === "plan"
+              ? `${drone} 在這份路徑上只有 1 趟——一趟不能比。`
+              : "這個任務底下只有 1 趟——一趟不能比。"}
         </div></div>
       )}
 
@@ -558,7 +601,7 @@ export default function AbCompare() {
           <table className="table ab-sum">
             <thead><tr>
               <th>趟次</th>
-              {mode === "cross" && <th>任務</th>}
+              {mode === "cross" && <th>路徑</th>}
               <th className="num">均值</th><th className="num">p50</th>
               <th className="num">p5</th><th className="num">樣本數</th>
               <th className="num">Δp50</th><th className="num">共同區間</th>

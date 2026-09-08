@@ -130,7 +130,7 @@ mission_groups ─< group_assignments                (CASCADE)
 
 ---
 
-> **⚠ 2026-09-08 改名**：`missions` 這張表已改名 `plans`（它裝的是 `.plan`
+> **⚠ 2026-09-08 正名（兩階段）**：`missions` 這張表已改名 `plans`（它裝的是 `.plan`
 > 路徑快照，不是任務），`*_mission_id` → `*_plan_id`、`mission_name` →
 > `plan_name`。**「任務」這個名字保留給階段 2 的新實體**——見
 > [mission-vs-plan-design.md](mission-vs-plan-design.md)。
@@ -138,6 +138,11 @@ mission_groups ─< group_assignments                (CASCADE)
 > （那是歷史資料）、`mission_groups` 表名。
 > 約束名維持舊的（`RENAME` 不動約束名），例如
 > `drones_current_mission_id_fkey` 現在掛在 `current_plan_id` 上。
+>
+> **階段 2 已落地**：`missions` 這個名字現在屬於**任務**（要達成的那件事，
+> 可跨多趟、多份路徑、多台機），`flight_sessions.mission_id` ／
+> `mission_name` 指的是它。**同一個名字在 2026-09-08 之前是路徑、之後是任務**
+> ——查舊資料或舊 commit 時要注意。
 
 ## 3. 各表欄位
 
@@ -192,6 +197,8 @@ mission_groups ─< group_assignments                (CASCADE)
 | `origin` | text | `research`／`test`／`unknown`（NULL 視為 unknown）——見 §5.3 |
 | `video_mode` | text | `on`／`off`（本趟刻意不錄）／`no_source`（該機無影像來源）／`discarded`（從未離地，影像已自動刪除）——見 §5.4 與 flight-video-design §8c |
 | `airborne_from` / `airborne_to` | timestamptz | **這一趟真正離地的區間**（飛控的 `landed_state` 說的，不是高度門檻）。NULL＝沒有離地過，**或**我們沒收到過 `landed_state`——兩者靠下一欄分辨 |
+| `mission_id` | uuid → `missions` SET NULL | 這一趟屬於哪個**任務**（不是路徑，路徑是 `plan_id`）。**指派是人做的，系統不猜** |
+| `mission_name` | text | 任務名稱快照，與 `plan_name` 同一條理由：任務刪掉之後，歷史仍說得出當時屬於哪個任務 |
 | `landed_state_seen` | bool NOT NULL DEFAULT false | 這一趟有沒有收到過任何 `landed_state`。**false＝不知道有沒有飛**，不是「沒飛」——影像的自動刪除只在 `true 且 airborne_from IS NULL` 時才成立（見 flight-video-design §8c） |
 
 #### 一趟可以飛不只一份路徑（使用者定案 2026-09-08）
@@ -231,6 +238,25 @@ mission_groups ─< group_assignments                (CASCADE)
 > 都是 NULL），所以還沒有人被它誤導過。這一版做的是「發生的時候說得出來」。
 > 真的開始這樣飛之後，再考慮 `session_missions`（一趟掛多份、按時間排），
 > 那時回放頁才能照時間切換疊圖。
+
+### 3.4b `missions` — 任務（2026-09-08 新增）
+
+**要達成的那件事**，可以跨多趟飛行、多份路徑、多台機。與 `plans`（一份
+`.plan`）、`flight_sessions`（一次 arm→disarm）是三個不同的東西。
+
+| 欄位 | 型別 | 說明 |
+|---|---|---|
+| `id` | uuid PK | |
+| `name` | text NOT NULL，`UNIQUE(lower(name))` | 任務是拿來喊的。兩個同名任務畫面上分得出（有 id），**人喊出來分不出**——與 `squads` 同一條。撞名回 409，訊息說得出撞到哪一個 |
+| `note` | text | 選填，一句用途 |
+| `created_at` | timestamptz NOT NULL | |
+| `ended_at` | timestamptz | NULL＝進行中。**只給畫面分「進行中／已結束」，不影響任何判定**——不做狀態機，也不自動關（沒有任何規則說得出「這個任務結束了」） |
+
+關聯放在 `flight_sessions` 那一側（多對一），**不需要中介表**：
+一個任務 N 個架次、N 份路徑、N 台機，三個 N 都不設限。
+
+架次數／機數／路徑數／最近一趟都是 `flight_sessions` 上 group by 就有的東西，
+**衍生不落欄**——存下來就要維護一致性，而那是第二個家。
 
 ### 3.5 `telemetry` — 飛行遙測（hypertable，1Hz）
 
