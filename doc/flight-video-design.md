@@ -333,6 +333,116 @@ RECORDDELETEAFTER`，真正在刪檔的那個）與 backend（本欄）。UI 寫
   yuv420p/1280x720/15fps，與來源一致）。
 - **即時畫面**：地面站 WHEP `http://<GS>:8889/uav-<sysid>/whep`（與錄的是同一份流）。
 
+## 8c. 錄製的起訖條件（使用者定案 2026-09-08）
+
+### 現況與它的三個破口（實測）
+
+**今天的條件不是起飛／降落，是 `armed` / `disarmed`**（`mavlink_rx._armed_transition`）。
+量過之後，問題不在「開始得太早」：
+
+| | 架次秒 | 真正離地秒 |
+|---|---|---|
+| 09/07 16:28 | 89 | 78 |
+| 09/02 15:37 | 116 | 103 |
+| 08/11 16:31 | 197 | 173 |
+
+地面時間 10–25 秒，而**那 10–25 秒是解鎖、切模式、推油門——出事時最想看的
+一段**。所以起點維持 `armed`：早錄的成本是幾十秒，晚錄的成本是那幾十秒永遠沒有。
+
+真正的破口有三個：
+
+1. **arm 了但根本沒飛。** 最近 16 趟裡有 4 趟最高高度 <= 0.5 m，一樣建架次、一樣開錄。
+2. **`disarmed` 沒收到。** 08/13 那趟長 **31,101 秒（8.6 小時）**。兜底有
+   （`SESSION_LOST_S = 90` 秒沒遙測就收架次），**但它沒有關錄影**——
+   `_close_orphan_sessions` 只呼叫 `db.end_session`，而 `video_rec.reconcile()`
+   只負責「飛行中的機要在錄」，不負責關。這是 bug，不是取捨。
+3. **結束時間比實際資料還早。** 09/02 15:15 那趟架次 22 秒，掛在它底下的遙測有
+   **15 筆落在 `ended_at` 之後**，全是機上補傳的——我們記的「結束」是**地面站
+   看到的結束**，不是飛行的結束。
+
+### 判準：問飛控，不要拿高度猜
+
+`EXTENDED_SYS_STATE.landed_state`（`on_ground` / `takeoff` / `in_air` / `landing`）
+是**飛控自己算的**（ArduCopter 的 `land_complete`：推力、垂直速度、姿態、觸地
+一起看），不是一個高度門檻。
+
+`alt_rel` 在沒有 GPS 定位時會漂——本專案量過停在地面的機漂到 4.4 m
+（`CommandPanel.tsx`）。拿會漂的數字證明離地，門檻訂多低都證明不了，訂多高
+只是把漂移往上推。指令服務的起飛守門（`mav.airborne_of`）早就是「先看
+`landed_state`，拿不到才退回高度，而且要說得出自己退回了」。
+
+**這台機真的在送**（掃 53 份機上 tlog）：
+
+```
+on_ground 142,207   takeoff 104   in_air 945   landing 181
+```
+
+頻率與 ATTITUDE 同級（約 4 Hz）。完整循環看得到，例如 `20260902-074704.tlog`：
+`on_ground -> takeoff -> in_air -> landing`。
+
+### 狀態機
+
+```
+armed                                     -> 開始錄
+landed_state in {takeoff,in_air,landing}  -> 記住「這趟飛過了」，記 airborne_from
+飛過了 且 on_ground 持續 VIDEO_LANDED_STOP_S -> 停止錄，記 airborne_to
+disarmed                                  -> 停止錄（不論飛過沒有）
+失聯 SESSION_LOST_S（90 秒）               -> 停止錄（兜底，本次補上）
+landed_state 超過 LANDED_STALE_S（5 秒）沒更新 -> **不得當成「已降落」**，退回上面兩條兜底
+```
+
+兩個細節是資料逼出來的，不是想出來的：
+
+* **「曾飛過」不能只認 `in_air`。** `20260902-081800.tlog` 整份只有 `on_ground`
+  與 `takeoff`，沒有一則 `in_air`——短跳來不及進 `IN_AIR` 就落地了。
+  三個非 `on_ground` 的值都算。
+* **`on_ground` 一出現就停會殺掉起點。** arm 之後、起飛之前本來就是 `on_ground`，
+  所以條件必須有記憶（「曾飛過」）。
+
+`VIDEO_LANDED_STOP_S` 預設 **10 秒**：落地彈跳或重心轉移時飛控可能短暫跳回
+`in_air`，10 秒吃得掉；多錄 10 秒的成本遠低於少錄那 10 秒。
+
+**判準只有一份**：`video_rec.should_stop_for_landing(st, now)`，每秒的迴圈與
+離線測試（`scripts/test-record-window.py`）共用。
+
+**`reconcile()` 要略過已經因落地停錄的機。** 那一圈的條件是「armed」，而落地
+停錄之後架次還開著（飛機停在地上 armed 著）——不擋的話 30 秒後就把剛停掉的
+錄影又打開，整條停止條件等於白做。
+
+### 從未離地的架次：影像自動不留（使用者定案）
+
+**架次紀錄一律留著**——它真的發生過。刪的只有影像。
+
+判準必須分得出四件事，這是這一段最重要的規矩：
+
+| 情況 | 影像 |
+|---|---|
+| `landed_state_seen` 且 `airborne_from` 有值＝飛過 | 留 |
+| `landed_state_seen` 且 `airborne_from` NULL＝**確定沒飛過** | **自動刪** |
+| 沒收到過 `landed_state`＝**不知道有沒有飛** | 留 |
+| `end_reason` 是 `telemetry_lost`／`telemetry_lost_backfilled`＝**失聯收尾** | 留 |
+
+**「不知道」不得觸發刪除**（§0.2e 的同一條）。最後一列尤其要緊：失聯收尾時
+`airborne_from` 是 NULL 只代表**我方沒看到起飛**，不代表它沒起飛——那是這套
+自動刪除唯一會真的刪錯東西的路徑。
+
+**刪除走錄製器自己的 API**（`DELETE /v3/recordings/deletesegment`），不是
+backend 去動 `/rec`——那個目錄 backend 是唯讀掛載，而且「寫入是 uav-video
+的職責」（compose 檔的原話）。刪掉的要發事件、`video_mode` 記成 `discarded`，
+不能悄悄消失。
+
+### Schema（照慣例與 `migrate()` 同批更新 `doc/data-schema.md`）
+
+```sql
+ALTER TABLE telemetry        ADD COLUMN IF NOT EXISTS landed_state TEXT;
+ALTER TABLE flight_sessions  ADD COLUMN IF NOT EXISTS airborne_from TIMESTAMPTZ;
+ALTER TABLE flight_sessions  ADD COLUMN IF NOT EXISTS airborne_to   TIMESTAMPTZ;
+ALTER TABLE flight_sessions  ADD COLUMN IF NOT EXISTS landed_state_seen BOOLEAN NOT NULL DEFAULT false;
+```
+
+`landed_state` 落盤的理由與這個判斷無關也成立：**它原本只活在記憶體裡**
+（18,401 筆 telemetry，有值的 0 筆），所以事後根本查不出「這一趟到底離地了沒」。
+
 ## 9. 未定／風險
 
 - **fMP4 在目標瀏覽器的實播**：需前端實測（安全閥見 §2）。
