@@ -1846,3 +1846,16 @@ details.card summary { cursor: pointer; font-size: 14px; font-weight: 600; }
 /* 3D 地形舞台（issues/048 F1）*/
 .stage3d { height: 460px; border: 1px solid var(--border); border-radius: 10px;
   overflow: hidden; background: var(--page); }
+.stage3d-wrap { position: relative; }
+/* 滑鼠指到航點或航段時的細節。**跟著游標**，不固定在角落——固定的話
+   人要在圖與角落之間來回看，而這張圖的重點就是「指哪裡看哪裡」 */
+.stage-tip {
+  position: absolute; pointer-events: none; z-index: 5;
+  background: rgba(27, 26, 23, .96); border: 1px solid var(--border);
+  border-radius: 8px; padding: 8px 10px; font-size: 12px; line-height: 1.55;
+  white-space: nowrap; box-shadow: 0 6px 18px rgba(0, 0, 0, .45);
+  font-variant-numeric: tabular-nums;
+}
+.stage-tip b { color: var(--ink); }
+.stage-tip .k { color: var(--muted); margin-right: 6px; }
+.stage-tip .bad { color: var(--status-danger); }

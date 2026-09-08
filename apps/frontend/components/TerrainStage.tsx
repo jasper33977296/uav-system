@@ -12,7 +12,7 @@
  * 「有點歪」，而不是壞掉。
  */
 import maplibregl from "maplibre-gl";
-import { useEffect, useRef } from "react";
+import { useEffect, useRef, useState } from "react";
 import * as THREE from "three";
 
 import { API } from "@/lib/signal";
@@ -26,16 +26,32 @@ export interface StageWp {
   bad: boolean;
 }
 
-const BLUE = 0x3987e5, RED = 0xe05e5e, PICK = 0xd97757;
+const BLUE = 0x3987e5, RED = 0xe05e5e, PICK = 0xd97757, HOT = 0xf0eee6;
 
-export default function TerrainStage({ wps, sel, onSelect, exaggeration = 1 }: {
+/** 滑鼠指到的東西。`kind:"leg"` 的 `i` 是「第 i 段」＝ wps[i-1] → wps[i]。 */
+export interface StageHit { kind: "wp" | "leg"; i: number }
+/** 這一格要顯示什麼由**呼叫端**決定：航段的長度、速度、來源、判定都住在
+ *  規劃頁上，讓這個元件再查一次就會有兩份可能不同步的資料。 */
+export interface StageTip { title: string; rows: [string, string][]; bad?: boolean }
+
+export default function TerrainStage({ wps, sel, onSelect, tipFor,
+                                      exaggeration = 1 }: {
   wps: StageWp[]; sel: number; onSelect: (i: number) => void;
+  tipFor?: (h: StageHit) => StageTip | null;
   exaggeration?: number;
 }) {
   const box = useRef<HTMLDivElement>(null);
   const mapRef = useRef<maplibregl.Map | null>(null);
-  const dataRef = useRef({ wps, sel });
-  dataRef.current = { wps, sel };
+  const [tip, setTip] = useState<{ t: StageTip; x: number; y: number } | null>(null);
+  const dataRef = useRef({ wps, sel, hover: null as StageHit | null, dirty: true });
+  if (dataRef.current.wps !== wps || dataRef.current.sel !== sel) {
+    dataRef.current.dirty = true;
+  }
+  dataRef.current.wps = wps;
+  dataRef.current.sel = sel;
+  const tipRef = useRef(tipFor);
+  tipRef.current = tipFor;
+  const projRef = useRef<Projector | null>(null);
 
   useEffect(() => {
     if (!box.current || mapRef.current) return;
@@ -77,30 +93,75 @@ export default function TerrainStage({ wps, sel, onSelect, exaggeration = 1 }: {
                  "hillshade-highlight-color": "#8a8474",
                  "hillshade-exaggeration": 0.9 },
       });
-      map.addLayer(makeRouteLayer(map, dataRef));
+      map.addLayer(makeRouteLayer(map, dataRef, (p) => { projRef.current = p; }));
       fitRoute(map, dataRef.current.wps);
     });
 
-    // 點選最近的航點：three.js 的自訂圖層沒有 maplibre 的
-    // `queryRenderedFeatures`，所以自己把航點投影回螢幕來比距離
+    /* three.js 的自訂圖層沒有 maplibre 的 `queryRenderedFeatures`，
+       所以自己把航點與航段投影回螢幕來比距離。**航點優先於航段**：
+       兩者重疊時人要點的幾乎一定是航點。 */
+    const hitTest = (pt: { x: number; y: number }): StageHit | null => {
+      const ws = dataRef.current.wps;
+      const proj = projRef.current;
+      if (!proj) return null;
+      const at = (w: StageWp) => proj(w.lon, w.lat, w.amsl);
+      for (let i = 0; i < ws.length; i++) {
+        if (!ws[i].lat || !ws[i].lon) continue;
+        const p = at(ws[i]);
+        if (p && Math.hypot(p.x - pt.x, p.y - pt.y) < 14) return { kind: "wp", i };
+      }
+      for (let i = 1; i < ws.length; i++) {
+        const a = at(ws[i - 1]), b = at(ws[i]);
+        if (!a || !b) continue;
+        const dx = b.x - a.x, dy = b.y - a.y;
+        const t = Math.max(0, Math.min(1,
+          ((pt.x - a.x) * dx + (pt.y - a.y) * dy) / (dx * dx + dy * dy || 1)));
+        if (Math.hypot(pt.x - (a.x + dx * t), pt.y - (a.y + dy * t)) < 9)
+          return { kind: "leg", i };
+      }
+      return null;
+    };
     map.on("click", (e) => {
-      const { wps: ws } = dataRef.current;
-      let best = -1, bd = 26;
-      ws.forEach((w, i) => {
-        if (!w.lat || !w.lon) return;
-        const p = map.project([w.lon, w.lat]);
-        const d = Math.hypot(p.x - e.point.x, p.y - e.point.y);
-        if (d < bd) { bd = d; best = i; }
-      });
-      if (best >= 0) onSelect(best);
+      const h = hitTest(e.point);
+      if (h) onSelect(h.kind === "wp" ? h.i : h.i);
+    });
+    map.on("mousemove", (e) => {
+      const h = hitTest(e.point);
+      const prev = dataRef.current.hover;
+      if (JSON.stringify(h) !== JSON.stringify(prev)) {
+        dataRef.current.hover = h;
+        dataRef.current.dirty = true;          // 換顏色要重建一次
+        map.getCanvas().style.cursor = h ? "pointer" : "";
+      }
+      const t = h && tipRef.current ? tipRef.current(h) : null;
+      setTip(t ? { t, x: e.point.x, y: e.point.y } : null);
+    });
+    map.on("mouseout", () => {
+      dataRef.current.hover = null; dataRef.current.dirty = true;
+      map.getCanvas().style.cursor = ""; setTip(null);
     });
     return () => { map.remove(); mapRef.current = null; };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
-  useEffect(() => { mapRef.current?.triggerRepaint(); }, [wps, sel]);
+  useEffect(() => { dataRef.current.dirty = true; mapRef.current?.triggerRepaint(); },
+    [wps, sel]);
 
-  return <div ref={box} className="stage3d" />;
+  return (
+    <div className="stage3d-wrap">
+      <div ref={box} className="stage3d" />
+      {tip && (
+        <div className="stage-tip"
+          style={{ left: Math.min(tip.x + 14, 9999), top: Math.max(tip.y - 8, 4) }}>
+          <b>{tip.t.title}</b>
+          {tip.t.rows.map(([k, v]) => (
+            <div key={k}><span className="k">{k}</span>{v}</div>
+          ))}
+          {tip.t.bad && <div className="bad">低空帶速：擋上傳</div>}
+        </div>
+      )}
+    </div>
+  );
 }
 
 /** 把鏡頭對準整條航線。
@@ -134,8 +195,19 @@ function fitRoute(map: maplibregl.Map, wps: StageWp[]) {
 }
 
 /** three.js 自訂圖層：航線畫在真高度上，每個航點往地面垂一根線。 */
-function makeRouteLayer(map: maplibregl.Map,
-                        dataRef: { current: { wps: StageWp[]; sel: number } }):
+interface StageData { wps: StageWp[]; sel: number; hover: StageHit | null; dirty: boolean }
+
+/** 用**畫圖用的那個矩陣**把 (lon, lat, 海拔) 投影回螢幕像素。
+ *
+ * **不能用 `map.project`**：它回的是那個經緯度在**海平面**的位置，而航線畫在
+ * 一百多公尺高——實測差了 160 px，等於「要指的地方」跟「眼睛看到的地方」
+ * 對不上。用同一個矩陣算，才保證命中測試與畫面是同一件事。
+ */
+type Projector = (lon: number, lat: number, amsl: number) =>
+  { x: number; y: number } | null;
+
+function makeRouteLayer(map: maplibregl.Map, dataRef: { current: StageData },
+                        setProjector: (p: Projector) => void):
                         maplibregl.CustomLayerInterface {
   let renderer: THREE.WebGLRenderer;
   const camera = new THREE.Camera();
@@ -146,8 +218,12 @@ function makeRouteLayer(map: maplibregl.Map,
   scene.add(group);
 
   const rebuild = () => {
+    // **只在資料變動時重建。** 原本每一幀都重新配置 TubeGeometry——
+    // 一秒六十次的幾何配置，在這種只會偶爾改一個數字的畫面上毫無理由
+    if (!dataRef.current.dirty) return;
+    dataRef.current.dirty = false;
     group.clear();
-    const { wps, sel } = dataRef.current;
+    const { wps, sel, hover } = dataRef.current;
     const pts = wps.filter((w) => w.lat && w.lon);
     if (!pts.length) return;
     ref = maplibregl.MercatorCoordinate.fromLngLat([pts[0].lon, pts[0].lat], 0);
@@ -161,8 +237,9 @@ function makeRouteLayer(map: maplibregl.Map,
       const a = pts[i - 1], b = pts[i];
       const curve = new THREE.LineCurve3(v(a.lon, a.lat, a.amsl), v(b.lon, b.lat, b.amsl));
       const geo = new THREE.TubeGeometry(curve, 1, 0.9 * mScale, 6, false);
+      const hot = hover?.kind === "leg" && hover.i === i;
       group.add(new THREE.Mesh(geo, new THREE.MeshBasicMaterial({
-        color: b.bad ? RED : BLUE })));
+        color: hot ? HOT : b.bad ? RED : BLUE })));
     }
     // 垂線＝離地空間。**沒有地形資料就不畫**，畫一根到 0 m 的線是騙人
     pts.forEach((w, i) => {
@@ -172,9 +249,11 @@ function makeRouteLayer(map: maplibregl.Map,
         new THREE.TubeGeometry(curve, 1, 0.35 * mScale, 5, false),
         new THREE.MeshBasicMaterial({ color: w.bad ? RED : BLUE,
           transparent: true, opacity: 0.55 })));
+      const hot = hover?.kind === "wp" && hover.i === i;
       const s = new THREE.Mesh(
-        new THREE.SphereGeometry((i === dataRef.current.sel ? 1.7 : 1.1) * mScale, 12, 8),
-        new THREE.MeshBasicMaterial({ color: i === sel ? PICK : (w.bad ? RED : BLUE) }));
+        new THREE.SphereGeometry((i === sel || hot ? 1.7 : 1.1) * mScale, 12, 8),
+        new THREE.MeshBasicMaterial({
+          color: i === sel ? PICK : hot ? HOT : w.bad ? RED : BLUE }));
       s.position.copy(v(w.lon, w.lat, w.amsl));
       group.add(s);
     });
@@ -185,6 +264,7 @@ function makeRouteLayer(map: maplibregl.Map,
     onAdd(_m, gl) {
       renderer = new THREE.WebGLRenderer({ canvas: map.getCanvas(), context: gl });
       renderer.autoClear = false;
+      dataRef.current.dirty = true;
       rebuild();
     },
     render(_gl, args: unknown) {
@@ -194,8 +274,18 @@ function makeRouteLayer(map: maplibregl.Map,
       // 那類轉換寫錯時畫面只是「有點歪」，而不是壞掉，最難發現
       const mat = (args as { defaultProjectionData?: { mainMatrix: number[] } })
         ?.defaultProjectionData?.mainMatrix ?? (args as number[]);
-      camera.projectionMatrix = new THREE.Matrix4().fromArray(mat as number[])
+      const full = new THREE.Matrix4().fromArray(mat as number[]);
+      camera.projectionMatrix = full.clone()
         .multiply(new THREE.Matrix4().makeTranslation(ref.x, ref.y, ref.z));
+      // 命中測試要用同一個矩陣（見 `Projector` 的說明）
+      setProjector((lon, lat, amsl) => {
+        const m = maplibregl.MercatorCoordinate.fromLngLat([lon, lat], amsl);
+        const v = new THREE.Vector4(m.x, m.y, m.z, 1).applyMatrix4(full);
+        if (v.w <= 0) return null;                    // 在鏡頭後面
+        const cvs = map.getCanvas();
+        const w = cvs.clientWidth, h = cvs.clientHeight;
+        return { x: (v.x / v.w * 0.5 + 0.5) * w, y: (0.5 - v.y / v.w * 0.5) * h };
+      });
       renderer.resetState();
       renderer.render(scene, camera);
       map.triggerRepaint();

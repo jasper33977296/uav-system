@@ -12,7 +12,8 @@ import Link from "next/link";
 import { useParams } from "next/navigation";
 import { useEffect, useState } from "react";
 
-import TerrainStage, { type StageWp } from "@/components/TerrainStage";
+import TerrainStage, { type StageHit, type StageTip, type StageWp }
+  from "@/components/TerrainStage";
 import { emph } from "@/lib/emph";
 import { errText, getJson } from "@/lib/fetchJson";
 import { API, COMMAND_API } from "@/lib/signal";
@@ -187,6 +188,44 @@ export default function PlanPage() {
   // 3D 元件不猜高度基準
   const badSeq = new Set(legs.filter((l) => l.agl_m != null && l.agl_m < 3)
     .map((l) => l.to));
+  /** 滑鼠指到東西時要顯示什麼。**由這一頁決定**：航段的長度、速度、來源、
+   *  判定都住在這裡，讓 3D 那個元件自己再查一次就會有兩份可能不同步的資料。 */
+  const tipFor = (h: StageHit): StageTip | null => {
+    if (h.kind === "wp") {
+      const w = stageWps[h.i];
+      if (!w) return null;
+      const p = (prof?.points ?? []).find((x) => x.seq === w.seq);
+      return {
+        title: `seq ${w.seq}`,
+        rows: [
+          ["離地", p?.agl != null ? `${p.agl} m` : "沒有地形資料"],
+          ["規劃高度", `${w.amsl.toFixed(1)} m 海拔`],
+          ["地面", w.ground != null ? `${w.ground} m 海拔` : "—"],
+        ],
+      };
+    }
+    // 第 i 段＝ stageWps[i-1] → stageWps[i]；逐段表用 seq 對得起來
+    const a = stageWps[h.i - 1], b = stageWps[h.i];
+    if (!a || !b) return null;
+    const leg = legs.find((l) => l.from === a.seq && l.to === b.seq);
+    if (!leg) return null;
+    return {
+      title: `seq ${leg.from}→${leg.to}`,
+      rows: [
+        ["長度", `${leg.length_m} m`],
+        ["離地", leg.agl_m != null ? `${leg.agl_m} m` : "沒有地形資料"],
+        ["速度", leg.speed_ms != null ? `${leg.speed_ms} m/s` : "未讀到"],
+        // **「來源」是這個 tooltip 最重要的一行**：一眼看出這一段用的是
+        // 機上的 WP_SPD，還是航線裡寫的那個（2026-09-07 的誤會）
+        ["來源", leg.speed_src === "unknown" ? "未讀到（沒檢查）" : leg.speed_src],
+        ...(leg.turn_deg != null
+          ? ([["轉角", `${leg.turn_deg}°`]] as [string, string][]) : []),
+      ],
+      bad: leg.agl_m != null && leg.agl_m < 3
+        && leg.speed_ms != null && leg.speed_ms > 1,
+    };
+  };
+
   const stageWps: StageWp[] = (prof?.points ?? [])
     .filter((p) => p.seq != null && p.plan != null)
     .map((p) => ({ seq: p.seq as number, lat: p.lat ?? 0, lon: p.lon ?? 0,
@@ -221,8 +260,8 @@ export default function PlanPage() {
       {/* 3D 地形（issues/048 F1）。**地形是真的**：maplibre 吃我們自己從
           `.hgt` 產的圖磚。原型那張手繪線框到此為止 */}
       {stageWps.length > 1 && (
-        <TerrainStage wps={stageWps} sel={selWp}
-          onSelect={setSelWp} />
+        <TerrainStage wps={stageWps} sel={selWp} onSelect={setSelWp}
+          tipFor={tipFor} />
       )}
       {prof && <Profile p={prof} />}
       <div className="hint-line">
