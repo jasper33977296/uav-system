@@ -158,57 +158,16 @@ export function compareAlongPath(
   };
 }
 
-/** 差值熱區的格（§6b.2 ③）：兩趟都有樣本才有 delta；單趟＝無對照 */
-export interface DeltaCell {
-  lat: number; lon: number;
-  delta: number | null;      // null＝無對照（只有一趟有樣本）
-  a_sinr: number | null; b_sinr: number | null;
-  a_n: number; b_n: number;
-}
-
-/** 中位數（熱區用；比平均耐離群） */
+/** 中位數（體素聚合用；比平均耐離群） */
 const med = (v: number[]): number | null => {
   if (!v.length) return null;
   const s = [...v].sort((x, y) => x - y);
   return s[Math.floor(s.length / 2)];
 };
 
-export function deltaCells(
-  a: Sample[], b: Sample[], origin: Pt, grid = 10,
-): DeltaCell[] {
-  const k = mLon(origin.lat);
-  const bins = new Map<string, { a: number[]; b: number[] }>();
-  const put = (rows: Sample[], side: "a" | "b") => {
-    for (const r of rows) {
-      if (r.lat == null || r.lon == null || r.sinr == null) continue;
-      const x = (r.lon - origin.lon) * k, y = (r.lat - origin.lat) * M_LAT;
-      const key = `${Math.floor(x / grid)}|${Math.floor(y / grid)}`;
-      const slot = bins.get(key) ?? { a: [], b: [] };
-      slot[side].push(r.sinr);
-      bins.set(key, slot);
-    }
-  };
-  put(a, "a");
-  put(b, "b");
-  const out: DeltaCell[] = [];
-  for (const [key, s] of bins) {
-    const [ix, iy] = key.split("|").map(Number);
-    const x = (ix + 0.5) * grid, y = (iy + 0.5) * grid;
-    const av = med(s.a), bv = med(s.b);
-    out.push({
-      lat: origin.lat + y / M_LAT, lon: origin.lon + x / k,
-      // 兩趟都有樣本才給 delta；否則 null＝無對照（不用 0 冒充「沒變化」）
-      delta: av != null && bv != null ? bv - av : null,
-      a_sinr: av, b_sinr: bv, a_n: s.a.length, b_n: s.b.length,
-    });
-  }
-  return out;
-}
-
-
 /** 體素：**訊號分佈在空間裡，不是一個平面**（使用者要求 2026-09-08）。
  *
- * 同一個 10×10 m 的地面格，飛 3 m 與飛 25 m 量到的是兩件事——`deltaCells`
+ * 同一個 10×10 m 的地面格，飛 3 m 與飛 25 m 量到的是兩件事——壓成平面等於
  * 把它們平均掉，而那個平均值哪一個高度都不成立。這裡多切一軸：垂直
  * `vz` 公尺一層，`alt_rel`（相對起飛點）為準。
  *
