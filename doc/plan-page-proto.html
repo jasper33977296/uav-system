@@ -202,13 +202,15 @@ tbody tr:last-child td{border-bottom:none}
 
       <div class="verdict bad" id="verdict"></div>
 
-      <div class="field"><h2>自動修正這一段</h2>
+      <div class="field" style="border-top:1px solid var(--hairline);padding-top:10px">
+        <div class="note" id="saveNote"></div>
         <div class="fixes">
-          <button id="fixAlt">抬高度</button>
-          <button id="fixSpd">降速度</button>
+          <button id="saveAs" style="border-color:var(--accent);color:var(--accent);
+            background:var(--accent-bg)">另存一份</button>
         </div>
+        <div class="note"><b>拖滑桿只會試算，不會動到原本這份。</b>
+          按「另存一份」才寫進任務庫。</div>
       </div>
-      <div class="note">兩者都會<b>另存一份</b>，原本這份不動。</div>
     </aside>
   </div>
 
@@ -268,7 +270,7 @@ const groundAt = d => {
   }
   return GROUND[GROUND.length-1][1];
 };
-let sel = 0, view = "3d", mode = "agl";
+let sel = 0, view = "3d", mode = "agl", dirty = 0;
 
 const agl = w => HOME_AMSL + w.alt - groundAt(w.d);
 const legBad = i => i>0 && agl(WP[i]) < LOW_ALT && WP[i].spd > LOW_SPD;
@@ -518,22 +520,34 @@ function sync(){
   document.getElementById("spdVal").textContent = w.spd.toFixed(1)+" m/s";
   const A=agl(w), bad=legBad(sel);
   const v=document.getElementById("verdict");
-  v.className = "verdict "+(bad?"bad":"ok");
-  v.innerHTML = bad
+  // **穿地與低空帶速是兩條不同的規則**，兩條都要判。只看低空帶速的話，
+  // 離地 −1.4 m 配 1 m/s 會寫成「這一段通過」——綠色、而且是錯的
+  // （2026-09-08 落地時當場撞到）
+  const under = A < 0;
+  v.className = "verdict "+((under||bad)?"bad":"ok");
+  v.innerHTML = under
+    ? `離地 <b class="num">${A.toFixed(1)}</b> m——<b>這一段在地面以下，飛不了</b>。`
+    : bad
     ? `離地 <b class="num">${A.toFixed(1)}</b> m 卻要飛 <b class="num">${w.spd.toFixed(1)}</b> m/s。
        低於 <b>3 m</b> 時地面會擾動這架飛機——2026-09-07 就是在 1.5 m 加速通過 5 m/s 時失控的。`
     : `離地 <b class="num">${A.toFixed(1)}</b> m ・ <b class="num">${w.spd.toFixed(1)}</b> m/s，這一段通過。`;
+  const sn=document.getElementById("saveNote");
+  if(sn) sn.textContent = placing
+    ? `已放 ${WP.length-1} 個點——還沒存`
+    : (dirty ? `已改 ${dirty} 個航點——只在畫面上，還沒存` : "拖滑桿試算；原本這份不會被動到");
   const mins = WP.map((_,i)=>i?agl(WP[i]):agl(WP[0]));
   document.getElementById("chipMin").innerHTML =
     '最低離地 <span class="num">'+Math.min(...mins).toFixed(1)+'</span> m';
   document.getElementById("chipMin").className = "chip"+(Math.min(...mins)<LOW_ALT?" bad":"");
   drawScene(); drawProf(); drawLegs();
 }
-document.getElementById("alt").oninput = e => { WP[sel].alt = +e.target.value; sync(); };
-document.getElementById("spd").oninput = e => { WP[sel].spd = +e.target.value; sync(); };
-document.getElementById("fixAlt").onclick = () => {
-  WP[sel].alt = +(WP[sel].alt + (LOW_ALT - agl(WP[sel])) + 0.1).toFixed(1); sync(); };
-document.getElementById("fixSpd").onclick = () => { WP[sel].spd = LOW_SPD; sync(); };
+document.getElementById("alt").oninput = e => { WP[sel].alt = +e.target.value; dirty++; sync(); };
+document.getElementById("spd").oninput = e => { WP[sel].spd = +e.target.value; dirty++; sync(); };
+document.getElementById("saveAs").onclick = () => {
+  alert("落地時會 POST /api/plans/{id}/preview 並帶 save_as：\n"
+    + "**另存一份新的航線**，原本這份完全不動。\n"
+    + "（原型只是示意，沒有真的寫入。）");
+};
 document.querySelectorAll(".stagebar button").forEach(b => b.onclick = () => {
   view=b.dataset.view;
   document.querySelectorAll(".stagebar button").forEach(x=>
