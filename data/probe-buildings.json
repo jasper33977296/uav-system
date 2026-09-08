@@ -1,0 +1,152 @@
+{
+ "when": "2026-09-08T16:16:52Z",
+ "where": {
+  "lat": 24.773449,
+  "lon": 121.045864,
+  "radius_m": 600.0
+ },
+ "nlsc": {
+  "host": "3dmaps.nlsc.gov.tw",
+  "dns": "140.110.137.47",
+  "tcp443": "通",
+  "tcp80": "不通（TimeoutError）",
+  "tls": {
+   "驗證": "不過：unable to get local issuer certificate",
+   "葉憑證 CN": {}
+  },
+  "frontmap": {
+   "ok": true,
+   "status": 200,
+   "secs": 0.36,
+   "type": "text/html; charset=utf-8",
+   "bytes": 311655
+  },
+  "其他主機": {
+   "3dtiles.nlsc.gov.tw": {
+    "ok": false,
+    "status": 403,
+    "secs": 0.08
+   },
+   "i3s.nlsc.gov.tw": {
+    "ok": false,
+    "status": 403,
+    "secs": 0.08
+   },
+   "3dtest.nlsc.gov.tw": {
+    "ok": false,
+    "error": "URLError: <urlopen error [Errno 101] Network is unreachable>",
+    "secs": 12.01
+   },
+   "mapserver01.nlsc.gov.tw": {
+    "ok": true,
+    "status": 200,
+    "secs": 0.09,
+    "type": "text/html; charset=utf-8",
+    "bytes": 443
+   },
+   "wmts.nlsc.gov.tw": {
+    "ok": true,
+    "status": 200,
+    "secs": 0.08,
+    "type": "text/html;charset=UTF-8",
+    "bytes": 45
+   }
+  },
+  "目錄": {
+   "ok": true,
+   "status": 200,
+   "secs": 0.41,
+   "type": "text/plain; charset=utf-8",
+   "bytes": 718102,
+   "節點數": 1465
+  },
+  "LOD1 圖層數": 66,
+  "定位點在 60 km 內的 LOD1 圖層": [
+   {
+    "標題": "113_新竹縣",
+    "圖層名": "113_J",
+    "型別": 11,
+    "定位點距場域_km": 3.5
+   },
+   {
+    "標題": "113_桃園市",
+    "圖層名": "113_H",
+    "型別": 11,
+    "定位點距場域_km": 27.0
+   },
+   {
+    "標題": "113_苗栗縣",
+    "圖層名": "113_K",
+    "型別": 11,
+    "定位點距場域_km": 33.5
+   }
+  ],
+  "目錄內的開放格式端點": {
+   "數量": 498,
+   "主機": [
+    "3dgis.reac.taipei",
+    "3dpipe.tainan.gov.tw",
+    "3dtest.nlsc.gov.tw",
+    "pipegis3d.kcg.gov.tw",
+    "rim03.maintenance.ntpc.gov.tw",
+    "rmic.tycg.gov.tw",
+    "tcroad.taichung.gov.tw"
+   ],
+   "取樣": [
+    "https://3dgis.reac.taipei/get3dtiles/b3dm/564994/tileset.json",
+    "https://3dgis.reac.taipei/get3dtiles/b3dm/564995/tileset.json",
+    "https://3dgis.reac.taipei/get3dtiles/b3dm/564996/tileset.json"
+   ]
+  },
+  "開放端點抽驗": {
+   "https://3dgis.reac.taipei/get3dtiles/b3dm/564994/tileset.json": {
+    "ok": false,
+    "status": 403,
+    "secs": 0.96
+   },
+   "https://3dgis.reac.taipei/get3dtiles/b3dm/564995/tileset.json": {
+    "ok": false,
+    "status": 403,
+    "secs": 0.18
+   }
+  }
+ },
+ "overpass": {
+  "bbox": [
+   24.768023,
+   121.039888,
+   24.778875,
+   121.05184
+  ],
+  "query": "[out:json][timeout:60];(way[\"building\"](24.768023,121.039888,24.778875,121.05184);relation[\"building\"](24.768023,121.039888,24.778875,121.05184););out geom;",
+  "mirrors": {
+   "https://overpass-api.de/api/interpreter": {
+    "ok": true,
+    "status": 200,
+    "secs": 17.71,
+    "type": "application/json",
+    "bytes": 39662
+   }
+  },
+  "counts": {
+   "way": 53,
+   "relation": 1,
+   "total": 54,
+   "有 height": 0,
+   "有 building:levels": 10,
+   "兩者都沒有": 44
+  },
+  "kinds": {
+   "commercial": 7,
+   "yes": 40,
+   "public": 1,
+   "residential": 3,
+   "industrial": 1,
+   "dormitory": 1,
+   "apartments": 1
+  },
+  "輪廓點數不足": [
+   7100253
+  ]
+ }
+}
