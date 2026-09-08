@@ -21,7 +21,8 @@ import { basePreview, separatePreview, unifiedPreview, type Wp } from "@/lib/for
 import { CANVAS, groundGrid, planPath, ribbon, trailLineString } from "@/lib/geo";
 import { getJson } from "@/lib/fetchJson";
 import { API, LINK_CLASSES } from "@/lib/signal";
-import { firstFleetPos, useUavStore } from "@/lib/store";
+import { freshOnly, staleLevel } from "@/lib/staleness";
+import { firstFleetPos, useUavStore, type Telemetry } from "@/lib/store";
 
 
 // 刻意**不放底圖**：場域物件不存在於系統認知中，鏈路品質的空間分布由
@@ -29,6 +30,24 @@ import { firstFleetPos, useUavStore } from "@/lib/store";
 // 要加底圖時在 style.sources 加 raster source、layers 最前面插一層即可。
 
 interface DroneVideo { id: string; name: string; video_url: string | null }
+
+/** 機身標籤一則的資料與整塊高度（三行 × 13px × lineHeight 1.15，再留一點縫）。 */
+interface LabelDatum {
+  id: string; name: string; slot: number;
+  pos: [number, number, number];
+  color: [number, number, number, number];
+  alt: number | null; spd: number | null;   // 過舊時為 null → 畫成「—」
+}
+const LABEL_H = 48;
+
+/** 讀數的變動指紋——deck 的 updateTriggers 只吃純值，機數不變但高度在動時
+ *  也必須重算 getText。取到小數一位就好：再細只是每幀重建字串。 */
+function labelStamp(fleet: Record<string, Telemetry>): string {
+  return Object.entries(fleet)
+    .map(([id, t]) => `${id}:${t.alt_rel?.toFixed(1) ?? "-"}`
+      + `/${t.ground_speed?.toFixed(1) ?? "-"}/${staleLevel(t.telem_age_s)}`)
+    .join(",");
+}
 
 export default function MapView() {
   const containerRef = useRef<HTMLDivElement>(null);
@@ -588,6 +607,11 @@ export default function MapView() {
                 // 平視很遠」。垂直距離一律交給 getPixelOffset（螢幕像素）
                 pos: [t.lon!, t.lat!, t.alt_rel ?? 0] as [number, number, number],
                 color: rgba(colorFor(id)),
+                // 高度／速度跟著機體走（與回放頁同一份寫法）。**過舊就換
+                // 成「—」**（freshOnly，>10 秒）：一個高度數字不會因為變灰
+                // 就不再被讀成「它現在在那個高度」——要讓人讀不到那個數字
+                alt: freshOnly(t.alt_rel, t.telem_age_s),
+                spd: freshOnly(t.ground_speed, t.telem_age_s),
                 slot: list.slice(0, i).filter(([, o]) =>
                   Math.hypot((o.lat! - t.lat!) * 110574,
                     (o.lon! - t.lon!) * 111320 * Math.cos(t.lat! * Math.PI / 180))
@@ -596,9 +620,19 @@ export default function MapView() {
               }));
             })(),
             getPosition: (d: { pos: [number, number, number] }) => d.pos,
-            getText: (d: { name: string }) => d.name,
+            // 三行：機名／高度／速度（使用者要求 2026-09-08，與回放頁一致）。
+            // **用字不用符號**——deck 的 TextLayer 畫不出 ▲／→（回放頁實測）
+            getText: (d: LabelDatum) => [
+              d.name,
+              `高度 ${d.alt != null ? d.alt.toFixed(1) : "—"} m`,
+              `速度 ${d.spd != null ? d.spd.toFixed(1) : "—"} m/s`,
+            ].join("\n"),
             getColor: (d: { color: [number, number, number, number] }) => d.color,
             getSize: 13,
+            lineHeight: 1.15,
+            // CJK 不在 deck 的預設字元集裡：不開 auto 的話「高度／速度」
+            // 整段畫不出來，只剩數字（回放頁踩過）
+            characterSet: "auto" as const,
             getTextAnchor: "middle" as const,
             // 同位者上下交錯（偶數在上、奇數在下）：四機同位時原本最上面
             // 那個離機體 45px（使用者說「太遠」的真身），交錯後減半
@@ -615,7 +649,9 @@ export default function MapView() {
               const lod = lodFactor(zoomRef.current);
               const meshHalf = 34 * (0.35 + 0.65 * Math.cos(rad)) * lod;
               const rank = Math.floor(d.slot / 2);
-              const dist = Math.max(iconHalf, meshHalf) + 4 + rank * 12;
+              // 一則標籤現在是三行（13px × lineHeight 1.15），同位者要讓開
+              // 的距離跟著整塊高度走——沿用舊的 12px 會讓兩塊直接疊在一起
+              const dist = Math.max(iconHalf, meshHalf) + 4 + rank * LABEL_H;
               return [0, d.slot % 2 === 0 ? -dist : dist];
             },
             outlineWidth: 2.5,
@@ -624,7 +660,10 @@ export default function MapView() {
             // ⚠ getPixelOffset 依賴**俯角與縮放**（外部狀態），不列進
             // updateTriggers 的話 deck 會沿用第一次算出的值、改視角不重算
             updateTriggers: {
-              getPosition: fleetIds, getText: fleetIds,
+              getPosition: fleetIds,
+              // 讀數每筆遙測都在動——只掛 fleetIds 的話 deck 會沿用第一次
+              // 算出的字串，高度／速度就永遠停在剛連上的那一刻
+              getText: `${fleetIds}|${labelStamp(s.fleet)}`,
               getAlignmentBaseline: fleetIds,
               getPixelOffset: `${fleetIds}|${Math.round(pitchRef.current)}`
                 + `|${zoomRef.current.toFixed(1)}`,
