@@ -2121,8 +2121,42 @@ async def make_terrain_frame(mission_id: str, name: str | None = None):
                 dem=terrain.shared())}
 
 
+@router.get("/missions/{mission_id}/profile")
+async def mission_profile(mission_id: str):
+    """剖面圖的資料（issues/048 F1）：沿航線的地面高程與規劃高度。
+
+    **這是那條綠線該有的樣子。** 使用者的原始問題不是沒有警告，是
+    「QGC 有一條綠線而我不知道那是什麼」——圖不需要先備知識，
+    線穿到地下、或兩條線貼在一起，看一眼就知道。
+    """
+    row = await db.pool.fetchrow(
+        "SELECT home FROM missions WHERE id = $1", mission_id)
+    if row is None:
+        raise HTTPException(404, "無此路徑")
+    rows = await db.pool.fetch(
+        "SELECT seq, lat, lon, alt, action, params FROM waypoints "
+        "WHERE mission_id = $1 ORDER BY seq", mission_id)
+    wps = []
+    for r in rows:
+        w = dict(r)
+        pm = w.get("params")
+        pm = json.loads(pm) if isinstance(pm, str) else (pm or {})
+        w["params"] = pm
+        w.update({k: pm.get(k) for k in ("command", "frame", "p1", "p2")})
+        wps.append(w)
+    home = row["home"]
+    if isinstance(home, str):
+        home = json.loads(home)
+    h = ({"lat": home[0], "lon": home[1]}
+         if home and len(home) >= 2 and (home[0] or home[1]) else
+         next(({"lat": w["lat"], "lon": w["lon"]} for w in wps
+               if w.get("lat") and w.get("lon")), None))
+    return plan_check.route_profile(wps, h, dem=terrain.shared())
+
+
 @router.get("/missions/{mission_id}/check")
-async def check_mission(mission_id: str):
+async def check_mission(mission_id: str, wp_spd: float | None = None,
+                        wp_radius: float | None = None):
     """任務庫裡某一份的幾何預檢。**檢查不該只在匯入的那一刻做一次。**
 
     匯入時看到的報告會隨畫面關掉就消失，而使用者是在**要飛之前**才需要它；
@@ -2154,7 +2188,10 @@ async def check_mission(mission_id: str):
         # frame 規則是方言，要知道是給哪一家寫的才判得了（沒宣告時只警告）
         autopilot=row["firmware_type"],
         home=json.loads(row["home"]) if isinstance(row["home"], str) else row["home"],
-        dem=terrain.shared())
+        dem=terrain.shared(),
+        # **速度只有飛機說得準**：規劃頁連得到機時把讀到的值帶進來，
+        # 沒帶就是「沒有檢查」（`leg_profile` 會說出來），不是「通過」
+        wp_spd=wp_spd, wp_radius=wp_radius)
 
 
 @router.post("/missions/{mission_id}/activate")

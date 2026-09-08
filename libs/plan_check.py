@@ -58,10 +58,20 @@ def _cmd(w: dict) -> int | None:
             "waypoint": 16}.get(w.get("action") or "waypoint")
 
 
-#: 「離地了」的保底高度。**它不是一個飛行高度**——是航線沒說起飛高度時，
-#: 序列為了讓機離開地面（切 AUTO 的前提）而用的最小值。爬到任務高度是航線裡
-#: NAV_TAKEOFF 自己的事。單機（`mission_fly`）與群飛（`group_exec`）共用同一個值。
-FALLBACK_TAKEOFF_ALT = 1.0
+#: **最低起飛高度**（m，使用者裁定 2026-09-08）。兩個用途共用同一個數字：
+#:
+#: 1. 航線沒說起飛高度時的保底值（`mission_fly`／`group_exec` 為了讓機離開
+#:    地面、滿足切 AUTO 的前提而用）。
+#: 2. 規劃時的下限：航線寫得比它低就是一個發現。
+#:
+#: **一套系統不該有兩個不同的「最低起飛高度」**——分成兩個數字，遲早會出現
+#: 「規劃時說 1.5 是下限，實際飛的保底卻是 1.0」這種自己打自己的狀況。
+#:
+#: 與 `LOW_ALT_M`（3 m）是**不同的規則**，兩者並存是自洽的：起飛到 1.5 m
+#: 只是離地懸停，而 `LOW_ALT_M` 管的是「在那個高度**帶著速度移動**」。
+#: 所以 1.5 m 起飛合法，但從它出發的第一段必須慢，或者先爬升。
+FALLBACK_TAKEOFF_ALT = 1.5
+MIN_TAKEOFF_ALT_M = FALLBACK_TAKEOFF_ALT
 
 
 def takeoff_alt(wps: list[dict]) -> tuple[float | None, str]:
@@ -614,8 +624,15 @@ def leg_profile(wps: list[dict], home: dict | None = None, dem=None,
                 lat, lon = home["lat"], home["lon"]
             else:
                 continue
+        alt = w.get("alt")
+        # **降落／返航項的高度用前一點的**：飛機是平飛過去再下降，
+        # 照 0 算會讓最後一段的離地變成負的。`check_terrain` 與
+        # `route_profile` 都是這樣做的——**三個視圖對同一條航線不能給出
+        # 不同的離地**，那種不一致比單一個算錯更難查。
+        if c in (_LAND, _RTL) and pts:
+            alt, fr = pts[-1]["alt"], pts[-1]["frame"]
         pts.append({"seq": w.get("seq"), "lat": lat, "lon": lon,
-                    "alt": w.get("alt"), "frame": fr, "cmd": c,
+                    "alt": alt, "frame": fr, "cmd": c,
                     "speed": speed, "speed_src": src})
 
     # ── 逐段 ──────────────────────────────────────────────────
@@ -659,6 +676,13 @@ def leg_profile(wps: list[dict], home: dict | None = None, dem=None,
         out["legs"].append(leg)
 
     # ── 發現 ──────────────────────────────────────────────────
+    tk = next((p for p in pts if p["cmd"] == _TAKEOFF), None)
+    if tk is not None and tk["alt"] is not None \
+            and float(tk["alt"]) < MIN_TAKEOFF_ALT_M:
+        out["warnings"].append(
+            f"起飛高度 {float(tk['alt']):g} m 低於下限 {MIN_TAKEOFF_ALT_M:g} m"
+            "——**切 AUTO 之前要先確實離地**，太低的話落地偵測與地效都還在作用")
+
     v_unknown = any(l["speed_src"] == "unknown" for l in out["legs"])
     if v_unknown:
         out["warnings"].append(
@@ -705,6 +729,85 @@ def leg_profile(wps: list[dict], home: dict | None = None, dem=None,
                     "**單一次實測**（8 m/s 配 2 m 半徑過衝約 9 m，樣本數 1），"
                     "當成量級看，不要當成精確值")
                 break
+    return out
+
+
+def route_profile(wps: list[dict], home: dict | None = None, dem=None,
+                  home_amsl: float | None = None, step: float = DEM_STEP_M) -> dict:
+    """剖面圖的資料：沿航線每 `step` 公尺，地面高程與規劃高度各一條。
+
+    **這是那條綠線該有的樣子**（doc/route-planning-first-principles.md F1）。
+    使用者的原始問題不是沒有警告，是「QGC 有一條綠線而我不知道那是什麼」
+    ——門檻要求人先知道數字的意思，**圖不用**：線穿到地下、或兩條線貼在
+    一起，看一眼就知道。
+
+    回 `{points, home_amsl_m, frame, unit}`；`points` 的每一筆是
+    `{d, ground, plan, agl, seq}`（`d` 是沿線里程，公尺）。
+    `plan` 為 None ＝那一段的高度基準這裡判不了（`frame 10` 交給飛控）。
+    """
+    out = {"points": [], "home_amsl_m": None, "frames": []}
+    if dem is None or not getattr(dem, "available", False):
+        return out
+    ha = home_amsl
+    if ha is None and home:
+        ha = dem.elevation(home["lat"], home["lon"])
+    if ha is None:
+        return out
+    out["home_amsl_m"] = round(ha, 1)
+
+    pts = []
+    for w in wps:
+        c = _cmd(w)
+        if not _is_nav(w):
+            continue
+        lat, lon = w.get("lat"), w.get("lon")
+        if (not lat or not lon) and c == _TAKEOFF and home:
+            lat, lon = home.get("lat"), home.get("lon")
+        if not lat or not lon or w.get("alt") is None:
+            continue
+        fr = w.get("frame")
+        fr = 3 if fr is None else int(fr)
+        pts.append((lat, lon, float(w["alt"]), fr, w.get("seq"), c))
+    out["frames"] = sorted({p[3] for p in pts})
+
+    d0 = 0.0
+    for i, (lat, lon, alt, fr, seq, c) in enumerate(pts):
+        # 降落項的高度是 0，但飛機是**平飛過去再下降**——照 0 畫會讓剖面圖
+        # 在最後憑空多一條斜線下去，那不是它會飛的路徑（同 check_terrain）
+        if c in (_LAND, _RTL) and i:
+            alt, fr = pts[i - 1][2], pts[i - 1][3]
+        if i:
+            pa = pts[i - 1]
+            palt, pfr = (pa[2], pa[3])
+            leg = _dist_m(pa[0], pa[1], lat, lon)
+            n = max(1, int(leg // step))
+            for k in range(1, n + 1):
+                f = k / n
+                la, lo = pa[0] + (lat - pa[0]) * f, pa[1] + (lon - pa[1]) * f
+                gz = dem.elevation(la, lo)
+                a = palt + (alt - palt) * f
+                fr_k = fr if f > 0.5 else pfr
+                plan = (ha + a if fr_k in _REL_FRAMES else
+                        a if fr_k in _AMSL_FRAMES else None)
+                out["points"].append({
+                    "d": round(d0 + leg * f, 1),
+                    "ground": None if gz is None else round(gz, 1),
+                    "plan": None if plan is None else round(plan, 1),
+                    "agl": (None if gz is None or plan is None
+                            else round(plan - gz, 1)),
+                    "seq": seq if k == n else None,
+                })
+            d0 += leg
+        else:
+            gz = dem.elevation(lat, lon)
+            plan = (ha + alt if fr in _REL_FRAMES else
+                    alt if fr in _AMSL_FRAMES else None)
+            out["points"].append({
+                "d": 0.0, "ground": None if gz is None else round(gz, 1),
+                "plan": None if plan is None else round(plan, 1),
+                "agl": (None if gz is None or plan is None
+                        else round(plan - gz, 1)),
+                "seq": seq})
     return out
 
 

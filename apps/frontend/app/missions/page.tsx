@@ -437,6 +437,11 @@ export default function Missions() {
                   }}>
                   {m.is_active ? "從即時頁隱藏" : "顯示於即時頁"}
                 </button>
+                {/* 規劃子頁（issues/048）。**放在這一頁底下，不另開頂層頁**
+                    ——使用者 2026-09-08：「管理本身包含規劃」 */}
+                <a className="btn-plain btn-sm" href={`/missions/${m.id}/plan`}
+                  title="剖面圖（地面高程 vs 規劃高度）與逐段的離地／速度"
+                  onClick={() => setMenuId(null)}>離地與速度</a>
                 {/* 地形跟隨（issues/047 §1-A）：**存成新的一份**，不就地改寫。
                     改寫之後高度的意思從「離起飛點」變成「離地面」——那是另一
                     份航線，該讓人先看到縮圖再決定要不要飛 */}

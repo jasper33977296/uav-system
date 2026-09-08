@@ -1820,3 +1820,26 @@ details.card summary { cursor: pointer; font-size: 14px; font-weight: 600; }
 .rp-track .scrub-wrap { display: block; width: 100%; }
 .rp-rel { color: var(--muted); margin-left: 6px; }
 .timeline .spacer { flex: 1; }
+
+/* ── 規劃子頁（issues/048）──────────────────────────────────────
+   主角是剖面圖：地面一條、規劃一條，中間就是離地空間。**版面不搶戲**
+   ——這一頁 2026-09-07 才因為「一段沒有人會讀的文字」被清空過一次。 */
+.plan-head { display: flex; align-items: center; gap: 12px; margin-bottom: 12px; }
+.plan-facts { display: flex; flex-wrap: wrap; gap: 8px; margin-bottom: 10px; }
+.profile {
+  width: 100%; height: auto; background: var(--surface);
+  border: 1px solid var(--border); border-radius: 8px; display: block;
+}
+.plan-findings { display: flex; flex-direction: column; gap: 6px; margin: 12px 0; }
+.plan-legs { width: 100%; border-collapse: collapse; margin-top: 12px; font-size: 13px; }
+.plan-legs th {
+  text-align: left; color: var(--muted); font-weight: 500; padding: 6px 10px;
+  border-bottom: 1px solid var(--hairline); white-space: nowrap;
+}
+.plan-legs td {
+  padding: 6px 10px; border-bottom: 1px solid var(--hairline);
+  /* 數字要對得齊才比得出大小 */
+  font-variant-numeric: tabular-nums;
+}
+.plan-legs td.bad { color: var(--status-danger); }
+.plan-legs td.muted { color: var(--muted); }
