@@ -340,15 +340,18 @@ interface StageData { wps: StageWp[]; sel: number; hover: StageHit | null; dirty
 /** 建物：有量過高度的拉成實體，**沒量過的是另一種東西**。
  *
  * 沒量過的不能畫成一個高度——那等於替它猜一個數字，而猜到的與量到的
- * 是兩件事（doc/field-3d-model-design.md §9-A）。所以它畫成一根半透明、
- * 只到 `BLIND_H` 的柱子，顏色與實體建物不同，滑鼠移上去說「高度未知」。
+ * 是兩件事（doc/field-3d-model-design.md §9-A）。所以它是一根半透明的
+ * 橘色柱子，**高度取「這條航線最高點再加一截」**：它一定包住航線，
+ * 讀出來的是「這裡有東西、你飛不過去」，而不是某個公尺數。
  */
-const BLIND_H = 30;
+const BLIND_OVER_M = 25;
 
 function addBuildings(map: maplibregl.Map, wps: StageWp[]) {
   const pts = wps.filter((w) => w.lat && w.lon);
   if (!pts.length) return;
   const lats = pts.map((w) => w.lat), lons = pts.map((w) => w.lon);
+  const blindH = Math.max(...pts.map(
+    (w) => (w.ground == null ? 0 : w.amsl - w.ground)), 0) + BLIND_OVER_M;
   const pad = 0.006;
   const q = new URLSearchParams({
     min_lat: String(Math.min(...lats) - pad), min_lon: String(Math.min(...lons) - pad),
@@ -373,7 +376,7 @@ function addBuildings(map: maplibregl.Map, wps: StageWp[]) {
       id: "buildings-blind", type: "fill-extrusion", source: "buildings",
       filter: ["==", ["get", "known"], false],
       paint: {
-        "fill-extrusion-height": BLIND_H,
+        "fill-extrusion-height": blindH,
         "fill-extrusion-base": 0,
         "fill-extrusion-color": "#c98a2b",
         "fill-extrusion-opacity": 0.35,
