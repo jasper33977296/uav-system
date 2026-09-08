@@ -9,7 +9,7 @@
   POST /api/command/{sysid}/arm | /disarm
   POST /api/command/{sysid}/mode/{mission|hold|rtl|land}
   POST /api/command/{sysid}/mission/start
-  POST /api/command/{sysid}/mission/upload   body: {"mission_id": "..."}
+  POST /api/command/{sysid}/mission/upload   body: {"plan_id": "..."}
 """
 import asyncio
 import contextvars
@@ -295,7 +295,7 @@ async def lifespan(app):
     await pool.execute("ALTER TABLE command_log ADD COLUMN IF NOT EXISTS client TEXT")
     # 單埠多機的身分對應欄位（issues/011；backend migrate 也建，這裡防序）
     await pool.execute("ALTER TABLE drones ADD COLUMN IF NOT EXISTS mav_sysid INT")
-    await pool.execute("ALTER TABLE drones ADD COLUMN IF NOT EXISTS current_mission_id UUID")
+    await pool.execute("ALTER TABLE drones ADD COLUMN IF NOT EXISTS current_plan_id UUID")
     # 群組執行期即時態欄位（issue 013-B；backend migrate 也建，這裡防序）
     await pool.execute("ALTER TABLE group_assignments ADD COLUMN IF NOT EXISTS error JSONB")
     await pool.execute(
@@ -582,7 +582,7 @@ async def mission_start(sysid: int):
     res = await _run(sysid, "mission_start", mav.job_command, 300, [0.0])
     # 啟動的是**機上現有**的任務，所以要查這台機現在綁的是哪一份
     mid = await pool.fetchval(
-        "SELECT current_mission_id::text FROM drones WHERE mav_sysid = $1", sysid)
+        "SELECT current_plan_id::text FROM drones WHERE mav_sysid = $1", sysid)
     if mid:
         await guard_client.show_on_live(sysid, mid, "任務已啟動")
     return res
@@ -629,7 +629,7 @@ async def _do_takeoff(sysid: int, alt: float) -> dict:
 
 
 class UploadIn(BaseModel):
-    mission_id: str
+    plan_id: str
 
 
 @app.post("/api/command/{sysid}/takeoff", tags=["操作"])
@@ -641,7 +641,7 @@ async def takeoff(sysid: int, body: TakeoffIn):
 
 
 class FlyIn(BaseModel):
-    mission_id: str | None = None      # 給了就先上傳＋回讀比對；不給＝用機上現有任務
+    plan_id: str | None = None      # 給了就先上傳＋回讀比對；不給＝用機上現有任務
     #: 切 AUTO 前那一段 GUIDED 起飛的相對高度。**省略＝跟著任務自己的
     #: NAV_TAKEOFF 走**（見 `_mission_takeoff_alt`），不是一個固定值。
     takeoff_alt: float | None = None
@@ -666,7 +666,7 @@ def _with_command(row) -> dict:
     return w
 
 
-async def _mission_takeoff_alt(mission_id: str | None) -> tuple[float, str]:
+async def _mission_takeoff_alt(plan_id: str | None) -> tuple[float, str]:
     """任務自己的起飛高度 →（高度, 依據）。讀不到就回保底值，**並說出為什麼**。
 
     **切 AUTO 前那一段不該由一個固定常數決定。** 原本寫死 10 m：對一份
@@ -676,11 +676,11 @@ async def _mission_takeoff_alt(mission_id: str | None) -> tuple[float, str]:
 
     挑選規則在 `plan_check.takeoff_alt`——**群飛路徑用的是同一份**。
     """
-    if not mission_id:
+    if not plan_id:
         return plan_check.FALLBACK_TAKEOFF_ALT, "沒有任務可讀，用保底值"
     rows = await pool.fetch(
-        "SELECT alt, action, params FROM waypoints WHERE mission_id = $1 ORDER BY seq",
-        mission_id)
+        "SELECT alt, action, params FROM waypoints WHERE plan_id = $1 ORDER BY seq",
+        plan_id)
     alt, why = plan_check.takeoff_alt([_with_command(r) for r in rows])
     return (alt, why) if alt is not None else (plan_check.FALLBACK_TAKEOFF_ALT,
                                                f"{why}，用保底值")
@@ -710,13 +710,13 @@ async def mission_fly(sysid: int, body: FlyIn):
     _require_enabled(); await _require_capability(sysid, "mission_fly")
     await guard_client.ask_guard(sysid, "mission_fly")
     steps = {}
-    if body.mission_id:
-        steps["upload"] = await mission_upload(sysid, UploadIn(mission_id=body.mission_id))
+    if body.plan_id:
+        steps["upload"] = await mission_upload(sysid, UploadIn(plan_id=body.plan_id))
     # **這一段只是「離地」，高度跟著任務走。** mid 在這裡就解出來（原本是
-    # 序列跑完才解）——不給 mission_id 的呼叫用的是機上現有任務，那份任務的
+    # 序列跑完才解）——不給 plan_id 的呼叫用的是機上現有任務，那份任務的
     # 起飛高度同樣該由它自己決定
-    mid = body.mission_id or await pool.fetchval(
-        "SELECT current_mission_id::text FROM drones WHERE mav_sysid = $1", sysid)
+    mid = body.plan_id or await pool.fetchval(
+        "SELECT current_plan_id::text FROM drones WHERE mav_sysid = $1", sysid)
     if body.takeoff_alt is not None:
         alt_target, alt_src = float(body.takeoff_alt), "呼叫端指定"
     else:
@@ -870,14 +870,14 @@ async def mission_goto(sysid: int, body: GotoIn):
                       params={"index": body.index})
 
 
-async def _load_wps(mission_id: str) -> tuple[list[dict], str]:
+async def _load_wps(plan_id: str) -> tuple[list[dict], str]:
     rows = await pool.fetch(
         "SELECT seq, lat, lon, alt, action, params FROM waypoints "
-        "WHERE mission_id = $1 ORDER BY seq", mission_id)
+        "WHERE plan_id = $1 ORDER BY seq", plan_id)
     if not rows:
         raise HTTPException(404, "任務不存在或沒有航點")
-    name = await pool.fetchval("SELECT name FROM missions WHERE id = $1",
-                               mission_id) or mission_id
+    name = await pool.fetchval("SELECT name FROM plans WHERE id = $1",
+                               plan_id) or plan_id
     wps = []
     for r in rows:
         w = dict(r)
@@ -896,7 +896,7 @@ def _cur_of(sysid: int) -> dict:
 
 
 class ChangeRouteIn(BaseModel):
-    mission_id: str
+    plan_id: str
     hold_alt: float | None = None      # 不給＝暫停後維持當前高度
     # 執行時把**人看到的那份提案**送回來，用來比對這段時間機體有沒有飄掉
     # （協定 §5.1）。省略＝不做漂移檢查，只有非互動的呼叫端該這樣用
@@ -918,15 +918,15 @@ async def change_route_proposal(sysid: int, body: ChangeRouteIn):
     然後空中那次也照按（§6.3 明文禁止把它做成 upload 的預設行為）。
     """
     _require_enabled()
-    wps, name = await _load_wps(body.mission_id)
+    wps, name = await _load_wps(body.plan_id)
     # **先問機上**：提案的權威在代理（狀態機文件 §0.1）——它讀飛控是微秒級，
     # 而我們手上的位置經 5G 回來已經過期。10 m/s 巡航下一次鏈路抖動就是數十
     # 公尺誤差，而「離當前位置最近的航點」正是對位置最敏感的判斷
     res = await guard_client.ask_guard(sysid, "change_route", params={
         "wps": [{k: w[k] for k in ("seq", "lat", "lon", "alt", "action",
                                    "command") if k in w} for w in wps],
-        "hold_alt": body.hold_alt, "mission_name": name,
-        "mission_id": body.mission_id})
+        "hold_alt": body.hold_alt, "plan_name": name,
+        "plan_id": body.plan_id})
     p = (res.get("event") or {}).get("proposal") if res else None
     if p is None:
         # **只有機上算，沒有備援**（使用者裁定 2026-08-25）。地面站再寫一份
@@ -978,7 +978,7 @@ async def change_route_exec(sysid: int, body: ChangeRouteIn):
             "code": ev.get("event") or "refused",
             "proposal": ev.get("proposal")})
     fresh = ev.get("proposal")
-    wps, name = await _load_wps(body.mission_id)
+    wps, name = await _load_wps(body.plan_id)
     steps: dict = {}
 
     async def note(step, ok_, detail=""):
@@ -1010,7 +1010,7 @@ async def change_route_exec(sysid: int, body: ChangeRouteIn):
     # 1. 暫停 —— job_set_mode 內含讀回確認（mode_engaged），不是只看 ACK
     await step("hold", set_mode(sysid, "hold", skip_guard=True), "切 hold 懸停")
     # 2. 上傳 —— 機體已在 hold，守門會放行（只擋 mission 模式）
-    await step("upload", mission_upload(sysid, UploadIn(mission_id=body.mission_id)),
+    await step("upload", mission_upload(sysid, UploadIn(plan_id=body.plan_id)),
                "上傳新航線")
     # 3. 續飛 —— 先指定航點再切 mission。**順序不能反**：先切 mission 的話
     #    機體會用舊索引開始飛，而那個索引在新航線上毫無意義
@@ -1021,7 +1021,7 @@ async def change_route_exec(sysid: int, body: ChangeRouteIn):
 
     await _audit(sysid, "change_route", body.model_dump(), "ok",
                  f"續飛第 {fresh['resume_wp']['index']} 點")
-    await guard_client.show_on_live(sysid, body.mission_id,
+    await guard_client.show_on_live(sysid, body.plan_id,
                         f"改航線完成，從第 {fresh['resume_wp']['index']} 點續飛")
     return {"ok": True, "steps": steps, "proposal": fresh}
 
@@ -1126,13 +1126,13 @@ async def fetch_log_chunk(sysid: int, log_id: int, ofs: int = 0,
 
 @app.get("/api/command/{sysid}/terrain", tags=["任務"],
          summary="跟飛控核對地形資料（issues/047 §2）")
-async def terrain_crosscheck(sysid: int, mission_id: str | None = None):
+async def terrain_crosscheck(sysid: int, plan_id: str | None = None):
     """問飛控「你認為這幾個點的地面多高」，跟地面站的 SRTM 對照。
 
     **兩份不一致本身就是要報告的事實**，不是要挑一個當真相——飛機實際跟隨
     的是它自己那份。地面站這份只決定「我們在畫面上警告什麼」。
 
-    `mission_id` 給了就沿那條航線取樣（含起飛點）；不給就只問飛機現在的位置。
+    `plan_id` 給了就沿那條航線取樣（含起飛點）；不給就只問飛機現在的位置。
 
     三種要分開讀的結果：
 
@@ -1146,14 +1146,14 @@ async def terrain_crosscheck(sysid: int, mission_id: str | None = None):
     await _require_capability(sysid, "param_get")
     dem = terrain.shared()
     pts: list[tuple[float, float, str]] = []
-    if mission_id:
+    if plan_id:
         rows = await pool.fetch(
             "SELECT seq, lat, lon, alt, action, params FROM waypoints "
-            "WHERE mission_id = $1 ORDER BY seq", mission_id)
+            "WHERE plan_id = $1 ORDER BY seq", plan_id)
         if not rows:
             raise HTTPException(404, "任務不存在或沒有航點")
-        meta = await pool.fetchrow("SELECT home FROM missions WHERE id = $1",
-                                   mission_id)
+        meta = await pool.fetchrow("SELECT home FROM plans WHERE id = $1",
+                                   plan_id)
         home = meta["home"] if meta else None
         if isinstance(home, str):
             home = json.loads(home)
@@ -1162,12 +1162,12 @@ async def terrain_crosscheck(sysid: int, mission_id: str | None = None):
         d = (router.snapshot() if router else {}).get(str(sysid)) or {}
         if not (d.get("lat") and d.get("lon")):
             raise HTTPException(409, {
-                "msg": "沒給 mission_id，而且讀不到飛機現在的位置",
-                "how_to": ["帶上 mission_id 沿航線取樣"]})
+                "msg": "沒給 plan_id，而且讀不到飛機現在的位置",
+                "how_to": ["帶上 plan_id 沿航線取樣"]})
         pts.append((float(d["lat"]), float(d["lon"]), "現在位置"))
 
     res = await _run(sysid, "terrain_check", mav.job_terrain_check, pts,
-                     params={"mission_id": mission_id, "points": len(pts)})
+                     params={"plan_id": plan_id, "points": len(pts)})
 
     max_diff = 0.0
     pending_total = 0
@@ -1228,12 +1228,12 @@ async def mission_upload(sysid: int, body: UploadIn):
     _require_enabled(); await _require_capability(sysid, "mission_upload")
     rows = await pool.fetch(
         "SELECT seq, lat, lon, alt, action, params FROM waypoints "
-        "WHERE mission_id = $1 ORDER BY seq", body.mission_id)
+        "WHERE plan_id = $1 ORDER BY seq", body.plan_id)
     if not rows:
         raise HTTPException(404, "任務不存在或沒有航點")
     meta = await pool.fetchrow(
-        "SELECT firmware_type, vehicle_type, fence, home FROM missions WHERE id = $1",
-        body.mission_id)
+        "SELECT firmware_type, vehicle_type, fence, home FROM plans WHERE id = $1",
+        body.plan_id)
     wps = [_with_command(r) for r in rows]   # plan_check 用原始 command 判導航類
     # 幾何預檢：報告一律附在回應與留痕；GEOFENCE_ENFORCE=true 才擋
     # （預設不擋——2026-08-10 使用者決定；空中防線是 PX4 自己的 Geofence）
@@ -1282,7 +1282,7 @@ async def mission_upload(sysid: int, body: UploadIn):
     # 一份完美的航線在空中上傳一樣危險
     blocked = _inflight_upload_block(sysid)
     if blocked:
-        await _audit(sysid, "mission_upload", {"mission_id": body.mission_id},
+        await _audit(sysid, "mission_upload", {"plan_id": body.plan_id},
                      "rejected_inflight", blocked)
         log.warning("擋下空中上傳（sysid %d）：%s", sysid, blocked)
         raise HTTPException(409, {"msg": blocked, "code": "inflight_upload",
@@ -1295,7 +1295,7 @@ async def mission_upload(sysid: int, body: UploadIn):
     terr_bad = [p for p in (report.get("terrain") or {}).get("notes") or []
                 if p in report["problems"]]
     if terr_bad and settings.terrain_enforce:
-        await _audit(sysid, "mission_upload", {"mission_id": body.mission_id},
+        await _audit(sysid, "mission_upload", {"plan_id": body.plan_id},
                      "rejected_terrain", "；".join(terr_bad))
         raise HTTPException(409, {
             "msg": "航線會穿過地面，未上傳", **report,
@@ -1335,9 +1335,9 @@ async def mission_upload(sysid: int, body: UploadIn):
         # 「上傳前要跟無人機飛控要資料做檢查」）。只在地形跟隨的航線上做——
         # frame 3 的航線根本不看飛控的地形庫，為它多花 8 次問答不划算，
         # 而且那條序列埠的頻寬是實測過的稀缺資源。要對其他航線做的話，
-        # `GET /api/command/{sysid}/terrain?mission_id=…` 隨時可以單獨叫。
+        # `GET /api/command/{sysid}/terrain?plan_id=…` 隨時可以單獨叫。
         try:
-            tc = await terrain_crosscheck(sysid, body.mission_id)
+            tc = await terrain_crosscheck(sysid, body.plan_id)
         except HTTPException:
             raise
         except Exception as e:                                  # noqa: BLE001
@@ -1347,7 +1347,7 @@ async def mission_upload(sysid: int, body: UploadIn):
             report["warnings"] += tc["notes"]
             if tc["pending_total"]:
                 await _audit(sysid, "mission_upload",
-                             {"mission_id": body.mission_id},
+                             {"plan_id": body.plan_id},
                              "rejected_terrain_pending",
                              f"pending={tc['pending_total']}")
                 raise HTTPException(409, {
@@ -1361,7 +1361,7 @@ async def mission_upload(sysid: int, body: UploadIn):
                         "或把圖磚放進飛控 SD 卡的 Terrain 目錄",
                         "或改用原本那份非地形跟隨的航線"]})
         if ready["problems"]:
-            await _audit(sysid, "mission_upload", {"mission_id": body.mission_id},
+            await _audit(sysid, "mission_upload", {"plan_id": body.plan_id},
                          "rejected_terrain_ready", "；".join(ready["problems"]))
             raise HTTPException(409, {
                 "msg": "這台機的設定撐不住地形跟隨，未上傳",
@@ -1374,7 +1374,7 @@ async def mission_upload(sysid: int, body: UploadIn):
     # 而圍欄那個開關管的是完全不同的一件事（系統預設範圍對不對得上場地）。
     low = [p for p in report["problems"] if "地面會擾動這架飛機" in p]
     if low and settings.terrain_enforce:
-        await _audit(sysid, "mission_upload", {"mission_id": body.mission_id},
+        await _audit(sysid, "mission_upload", {"plan_id": body.plan_id},
                      "rejected_low_fast", "；".join(low))
         raise HTTPException(409, {
             "msg": "低空又要跑快，未上傳", "problems": low,
@@ -1383,21 +1383,21 @@ async def mission_upload(sysid: int, body: UploadIn):
                        "航線裡的 DO_CHANGE_SPEED 管不到它",
                        "確定這個組合安全就把 TERRAIN_ENFORCE 設成 false"]})
     if not report["ok"] and settings.geofence_enforce:
-        await _audit(sysid, "mission_upload", {"mission_id": body.mission_id},
+        await _audit(sysid, "mission_upload", {"plan_id": body.plan_id},
                      "rejected_precheck", "；".join(report["problems"]))
         raise HTTPException(409, {"msg": "任務未通過幾何預檢，未上傳", **report})
     if not report["ok"]:
         log.warning("預檢有問題但未啟用擋門，照常上傳：%s", "；".join(report["problems"]))
     res = await _run(sysid, "mission_upload", mav.job_upload_mission,
                      build_items(wps),
-                     params={"mission_id": body.mission_id, "items": len(wps)})
+                     params={"plan_id": body.plan_id, "items": len(wps)})
     # issue 020：記「這台機當前飛的任務」——backend create_session 據此綁架次。
     # sysid→drone 靠 drones.mav_sysid（backend 心跳時寫入）。
-    await pool.execute("UPDATE drones SET current_mission_id = $1 WHERE mav_sysid = $2",
-                       body.mission_id, sysid)
+    await pool.execute("UPDATE drones SET current_plan_id = $1 WHERE mav_sysid = $2",
+                       body.plan_id, sysid)
     # **上傳成功 → 即時畫面就該畫這一份**：從這一刻起機上的航線就是它，
     # 畫面上還畫別份（或什麼都不畫）就是與飛機的事實對不上
-    await guard_client.show_on_live(sysid, body.mission_id, "已上傳到機上")
+    await guard_client.show_on_live(sysid, body.plan_id, "已上傳到機上")
     return {**res, "check": report}
 
 
@@ -1470,17 +1470,17 @@ async def _resolve_mission(ref: str) -> dict:
     except ValueError:
         is_id = False
     if is_id:
-        row = await pool.fetchrow("SELECT id, name FROM missions WHERE id = $1", ref)
+        row = await pool.fetchrow("SELECT id, name FROM plans WHERE id = $1", ref)
         same = 1
     else:
         rows = await pool.fetch(
-            "SELECT id, name FROM missions WHERE name = $1 ORDER BY created_at DESC", ref)
+            "SELECT id, name FROM plans WHERE name = $1 ORDER BY created_at DESC", ref)
         row, same = (rows[0] if rows else None), len(rows)
     if row is None:
         raise HTTPException(404, f"任務庫找不到「{ref}」")
     wp_rows = await pool.fetch(
         "SELECT seq, lat, lon, alt, action, params FROM waypoints "
-        "WHERE mission_id = $1 ORDER BY seq", row["id"])
+        "WHERE plan_id = $1 ORDER BY seq", row["id"])
     if not wp_rows:
         raise HTTPException(404, f"任務「{row['name']}」沒有航點")
     return {"id": str(row["id"]), "name": row["name"], "same_name_count": same,
@@ -1526,25 +1526,25 @@ def _same_waypoints(old: list, wps: list[dict]) -> bool:
 
 async def _store_plan(name: str, wps: list[dict],
                       firmware_type=None, vehicle_type=None) -> str:
-    """.plan 航線入庫回 mission_id；內容相同就重用（外部反覆觸發不洗版任務庫）。"""
+    """.plan 航線入庫回 plan_id；內容相同就重用（外部反覆觸發不洗版任務庫）。"""
     rows = await pool.fetch(
-        "SELECT id FROM missions WHERE name = $1 AND created_by = 'plan-file' "
+        "SELECT id FROM plans WHERE name = $1 AND created_by = 'plan-file' "
         "ORDER BY created_at DESC LIMIT 10", name)
     for r in rows:
         old = await pool.fetch(
-            "SELECT lat, lon, alt, params FROM waypoints WHERE mission_id = $1 ORDER BY seq",
+            "SELECT lat, lon, alt, params FROM waypoints WHERE plan_id = $1 ORDER BY seq",
             r["id"])
         if _same_waypoints(old, wps):
             return str(r["id"])
     async with pool.acquire() as con:
         async with con.transaction():
             row = await con.fetchrow(
-                "INSERT INTO missions (name, created_by, kind, firmware_type, "
+                "INSERT INTO plans (name, created_by, kind, firmware_type, "
                 "vehicle_type) VALUES ($1, 'plan-file', 'imported', $2, $3) "
                 "RETURNING id",
                 name, firmware_type, vehicle_type)
             await con.executemany(
-                "INSERT INTO waypoints (mission_id, seq, lat, lon, alt, action, params) "
+                "INSERT INTO waypoints (plan_id, seq, lat, lon, alt, action, params) "
                 "VALUES ($1, $2, $3, $4, $5, $6, $7)",
                 [(row["id"], w["seq"], w["lat"], w["lon"], w.get("alt"),
                   w.get("action", "waypoint"),
@@ -1600,7 +1600,7 @@ async def ext_list_missions():
         SELECT m.id::text AS id, m.name, m.created_by AS source, m.created_at,
                m.is_active, count(w.seq) AS waypoint_count,
                count(*) FILTER (WHERE w.lat <> 0 OR w.lon <> 0) AS nav_count
-        FROM missions m LEFT JOIN waypoints w ON w.mission_id = m.id
+        FROM plans m LEFT JOIN waypoints w ON w.plan_id = m.id
         GROUP BY m.id ORDER BY m.created_at DESC""")
     return {"source": "db", "missions": [dict(r) for r in rows]}
 
@@ -1646,16 +1646,16 @@ async def start(body: StartIn):
     （上傳回讀→arm→起飛→到高度→AUTO.MISSION）。航線來源二選一：
       {"mission": "<id 或名稱>"}   任務庫（主要）
       {"plan": "xxx.plan"}         missions/ 目錄（會先入庫再飛）
-    失敗帶 mission/fly 的 step 與 PX4 原因。成功回 {source, mission_id, name, sysid, ok, steps}。"""
+    失敗帶 mission/fly 的 step 與 PX4 原因。成功回 {source, plan_id, name, sysid, ok, steps}。"""
     _require_enabled()
     if bool(body.mission) == bool(body.plan):
         raise HTTPException(422, "mission 與 plan 二選一（mission＝任務庫，plan＝.plan 檔）")
     if body.mission:
         m = await _resolve_mission(body.mission)
-        mission_id, name, src, skipped = m["id"], m["name"], "db", []
+        plan_id, name, src, skipped = m["id"], m["name"], "db", []
         if m["same_name_count"] > 1:
             log.warning("任務名稱「%s」有 %d 筆同名，取最新的 %s",
-                        name, m["same_name_count"], mission_id)
+                        name, m["same_name_count"], plan_id)
     else:
         try:
             path = plans.resolve(settings.missions_dir, body.plan)
@@ -1663,12 +1663,12 @@ async def start(body: StartIn):
         except plans.PlanError as e:
             await _audit(None, "start", {"plan": body.plan}, "failed", str(e))
             raise HTTPException(404, {"step": "plan", "msg": str(e)})
-        mission_id = await _store_plan(path.stem, parsed["waypoints"],
+        plan_id = await _store_plan(path.stem, parsed["waypoints"],
                                        parsed.get("firmware_type"),
                                        parsed.get("vehicle_type"))
         name, src, skipped = path.name, "file", parsed["skipped"]
     sysid = _resolve_sysid(body.sysid)
     # 委派現版正確流程（capability gate＋到高度 gating＋逐台 audit＋X-Client 都自動繼承）
-    result = await mission_fly(sysid, FlyIn(mission_id=mission_id, takeoff_alt=body.takeoff_alt))
-    return {"source": src, "mission_id": mission_id, "name": name, "sysid": sysid,
+    result = await mission_fly(sysid, FlyIn(plan_id=plan_id, takeoff_alt=body.takeoff_alt))
+    return {"source": src, "plan_id": plan_id, "name": name, "sysid": sysid,
             "skipped": skipped, **result}

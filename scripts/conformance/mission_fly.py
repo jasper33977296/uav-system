@@ -60,15 +60,15 @@ def check(autopilot: str) -> str:
     # 航點以機體當下位置為原點——不寫死座標，理由見 _harness.local_wps
     wps = local_wps(info, TAKEOFF_ALT)
     wps.append({"seq": len(wps), "lat": 0.0, "lon": 0.0, "alt": None, "action": "rtl"})
-    ok, m = post("/api/missions", {"name": f"conformance-fly-{autopilot}",
+    ok, m = post("/api/plans", {"name": f"conformance-fly-{autopilot}",
                                    "source": "plan-file", "waypoints": wps},
                  base=BACKEND)
     assert ok, f"建任務失敗：{m}"
-    mission_id = m["id"]
+    plan_id = m["id"]
 
     try:
         ok, r = post(f"/api/command/{sysid}/mission/fly",
-                     {"mission_id": mission_id, "takeoff_alt": TAKEOFF_ALT},
+                     {"plan_id": plan_id, "takeoff_alt": TAKEOFF_ALT},
                      timeout=180)
         assert_dialect(ok, r, "任務執行序列")
         steps = r.get("steps", {}) if isinstance(r, dict) else {}
@@ -95,7 +95,7 @@ def check(autopilot: str) -> str:
     finally:
         if not _recover(sysid):
             print(f"  ⚠ sysid {sysid} 未在時限內上鎖，請人工確認")
-        delete(f"/api/missions/{mission_id}", base=BACKEND)
+        delete(f"/api/plans/{plan_id}", base=BACKEND)
 
 
 if __name__ == "__main__":

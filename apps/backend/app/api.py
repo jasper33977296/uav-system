@@ -394,7 +394,7 @@ async def onboard_capture_index(drone_id: str, name: str, refresh: bool = False)
 
 
 @router.get("/compare/chainage")
-async def compare_chainage(a: str, b: str, mission_id: str | None = None,
+async def compare_chainage(a: str, b: str, plan_id: str | None = None,
                            grid_size: float | None = None,
                            max_offset_m: float = chainage.DEFAULT_MAX_OFFSET_M):
     """兩個架次沿路徑的訊號對照（issues/027）。
@@ -403,7 +403,7 @@ async def compare_chainage(a: str, b: str, mission_id: str | None = None,
     `compare_flights` 共用一份邏輯，不養兩份（issues/019）。
 
     * `a`／`b`：兩個 `flight_sessions.id`
-    * `mission_id`：**參考路徑用的計畫航點**。省略就退回用 A 那趟的軌跡，
+    * `plan_id`：**參考路徑用的計畫航點**。省略就退回用 A 那趟的軌跡，
       而回應的 `reference` 會說是 `trip_a`——**那讓 A 的偏航變成零誤差**，
       比較的意義因此打折，所以它必須看得見。
     * `grid_size`：省略＝依較稀那趟的樣本密度自適應（回應帶 `grid_size_used`）
@@ -421,10 +421,10 @@ async def compare_chainage(a: str, b: str, mission_id: str | None = None,
         return [dict(r) for r in rows]
 
     ref = None
-    if mission_id:
+    if plan_id:
         rows = await db.pool.fetch(
-            "SELECT lat, lon FROM waypoints WHERE mission_id = $1::uuid "
-            "AND (lat <> 0 OR lon <> 0) ORDER BY seq", mission_id)
+            "SELECT lat, lon FROM waypoints WHERE plan_id = $1::uuid "
+            "AND (lat <> 0 OR lon <> 0) ORDER BY seq", plan_id)
         ref = [dict(r) for r in rows]
     try:
         sa, sb = await samples(a), await samples(b)
@@ -876,11 +876,11 @@ async def telemetry_backfill(body: BackfillIn):
         row = await db.pool.fetchrow(
             """INSERT INTO flight_sessions
                  (drone_id, started_at, ended_at, origin, end_reason,
-                  mission_id, mission_name)
+                  plan_id, plan_name)
                SELECT $1::uuid, to_timestamp($2), to_timestamp($3),
                       'backfilled', 'reconstructed_from_backfill',
-                      d.current_mission_id,
-                      (SELECT name FROM missions m WHERE m.id = d.current_mission_id)
+                      d.current_plan_id,
+                      (SELECT name FROM plans m WHERE m.id = d.current_plan_id)
                  FROM drones d WHERE d.id = $1::uuid
                RETURNING id::text AS id""", drone_id, lo, hi)
         session_id = row["id"] if row else None
@@ -1064,7 +1064,7 @@ async def delete_drone(drone_id: str):
                 counts[table] = await con.fetchval(
                     f"SELECT count(*) FROM {table} WHERE drone_id = $1::uuid",
                     drone_id)
-            # 路徑不陪葬：missions 是「路徑快照」不綁機（issues/010、023）。
+            # 路徑不陪葬：plans 是「路徑快照」不綁機（issues/010、023）。
             #
             # **這一行現在會連帶清掉上面那六張表**（2026-09-02：全部掛上
             # `ON DELETE CASCADE`）。在那之前是一張張手動刪的，而**漏一張
@@ -1163,9 +1163,9 @@ def _require_uuid(v: str | None) -> str | None:
 class GroupDroneIn(BaseModel):
     drone_id: str
     layer_index: int | None = None
-    mission_id: str | None = None     # separate 模式各自任務
+    plan_id: str | None = None     # separate 模式各自任務
 
-    @field_validator("drone_id", "mission_id")
+    @field_validator("drone_id", "plan_id")
     @classmethod
     def _v_uuid(cls, v):
         return _require_uuid(v)
@@ -1174,14 +1174,14 @@ class GroupDroneIn(BaseModel):
 class GroupIn(BaseModel):
     name: str
     mode: str = "unified"             # unified / separate
-    base_mission_id: str | None = None
+    base_plan_id: str | None = None
     #: 直接給機（既有用法），或給 `squad_id` 讓後端展開成員（小隊）。
     #: **展開之後走的是同一條路**——預檢、衝突檢查、gate 全部不變
     drones: list[GroupDroneIn] = Field(default_factory=list, max_length=8)
     squad_id: str | None = None
     params: dict | None = None
 
-    @field_validator("base_mission_id")
+    @field_validator("base_plan_id")
     @classmethod
     def _v_uuid(cls, v):
         return _require_uuid(v)
@@ -1222,13 +1222,13 @@ async def create_group(g: GroupIn):
             name = f"{row['name']} · {stamp}"
     if not drones:
         raise HTTPException(422, "至少要指定一台機（或給 squad_id）")
-    if g.mode == "unified" and not g.base_mission_id:
-        raise HTTPException(422, "unified 模式需要 base_mission_id")
-    if g.mode == "separate" and any(d.mission_id is None for d in drones):
-        raise HTTPException(422, "separate 模式每台需要 mission_id")
+    if g.mode == "unified" and not g.base_plan_id:
+        raise HTTPException(422, "unified 模式需要 base_plan_id")
+    if g.mode == "separate" and any(d.plan_id is None for d in drones):
+        raise HTTPException(422, "separate 模式每台需要 plan_id")
     try:
         return await groups.create_group(
-            name, g.mode, g.base_mission_id,
+            name, g.mode, g.base_plan_id,
             [d.model_dump() for d in drones], g.params, squad_id=squad_id)
     except groups.GroupError as e:
         raise HTTPException(422, str(e))
@@ -1397,11 +1397,11 @@ async def delete_group(group_id: str):
 
 
 @router.get("/sessions")
-async def list_sessions(limit: int = 50, mission_id: str | None = None,
+async def list_sessions(limit: int = 50, plan_id: str | None = None,
                         since: str | None = None, min_samples: int | None = None,
                         include_test: bool = False, drone_id: str | None = None,
                         with_events: bool = False):
-    """架次清單。可選 mission_id（綁定任務）／since（ISO 時間窗）／min_samples／include_test。
+    """架次清單。可選 plan_id（綁定任務）／since（ISO 時間窗）／min_samples／include_test。
 
     `min_samples`：只回鏈路樣本數 ≥ 此值的架次（場域訊號頁用，避免空/測試殘留架次
     佔滿載入窗——空架次不是「飛行」，誠實原則）。用架次結束時算好的 summary.samples_total
@@ -1418,9 +1418,9 @@ async def list_sessions(limit: int = 50, mission_id: str | None = None,
     conds, args = [], []
     if not include_test:
         conds.append("COALESCE(s.origin, 'unknown') <> 'test'")
-    if mission_id:
-        args.append(mission_id)
-        conds.append(f"s.mission_id = ${len(args) + 1}")
+    if plan_id:
+        args.append(plan_id)
+        conds.append(f"s.plan_id = ${len(args) + 1}")
     if drone_id:
         args.append(drone_id)
         conds.append(f"s.drone_id = ${len(args) + 1}")
@@ -1446,10 +1446,10 @@ async def list_sessions(limit: int = 50, mission_id: str | None = None,
           (SELECT count(*) FROM events e WHERE e.session_id = s.id
              AND e.severity = 'critical') AS events_critical""" if with_events else ""
     q = f"""
-        SELECT s.*, d.name AS drone_name, m.name AS mission_name{plans}{ev}
+        SELECT s.*, d.name AS drone_name, m.name AS plan_name{plans}{ev}
         FROM flight_sessions s
         JOIN drones d ON d.id = s.drone_id
-        LEFT JOIN missions m ON m.id = s.mission_id
+        LEFT JOIN plans m ON m.id = s.plan_id
         {where}
         ORDER BY s.started_at DESC LIMIT $1
         """
@@ -1462,7 +1462,7 @@ async def get_session(session_id: str):
     """單一架次。清單抓得到就不必打這支；**深連結（重整、貼網址）需要它**
     ——那時候手上只有一個 id，而清單可能根本沒載到那一頁。"""
     row = await db.pool.fetchrow(
-        """SELECT s.*, d.name AS drone_name, m.name AS mission_name,
+        """SELECT s.*, d.name AS drone_name, m.name AS plan_name,
                   (SELECT count(*) FROM command_log c WHERE c.session_id = s.id
                      AND c.action = 'mission_upload' AND c.result = 'accepted')
                     AS plan_changes,
@@ -1474,7 +1474,7 @@ async def get_session(session_id: str):
                      AND e.severity = 'critical') AS events_critical
            FROM flight_sessions s
            JOIN drones d ON d.id = s.drone_id
-           LEFT JOIN missions m ON m.id = s.mission_id
+           LEFT JOIN plans m ON m.id = s.plan_id
            WHERE s.id = $1""", session_id)
     if row is None:
         raise HTTPException(404, "無此架次")
@@ -1558,8 +1558,8 @@ async def session_telemetry_quality(session_id: str):
 async def session_track(session_id: str):
     """回放用：一條航線的軌跡 + 鏈路時序 + 關聯任務（供疊預計路徑）。"""
     sess = await db.pool.fetchrow(
-        """SELECT s.id, s.mission_id, s.started_at, s.ended_at, m.name AS mission_name
-           FROM flight_sessions s LEFT JOIN missions m ON m.id = s.mission_id
+        """SELECT s.id, s.plan_id, s.started_at, s.ended_at, m.name AS plan_name
+           FROM flight_sessions s LEFT JOIN plans m ON m.id = s.plan_id
            WHERE s.id = $1""", session_id)
     telemetry = await db.pool.fetch(
         "SELECT * FROM telemetry WHERE session_id = $1 ORDER BY time", session_id)
@@ -1581,10 +1581,10 @@ async def export_session(session_id: str):
     配合 30 天 retention：要長期保留原始資料就先匯出；
     匯出後可呼叫 DELETE 移除 DB 內的資料（UI 的「匯出並移除」流程）。"""
     sess = await db.pool.fetchrow(
-        """SELECT s.*, d.name AS drone_name, m.name AS mission_name
+        """SELECT s.*, d.name AS drone_name, m.name AS plan_name
            FROM flight_sessions s
            JOIN drones d ON d.id = s.drone_id
-           LEFT JOIN missions m ON m.id = s.mission_id WHERE s.id = $1""", session_id)
+           LEFT JOIN plans m ON m.id = s.plan_id WHERE s.id = $1""", session_id)
     if sess is None:
         raise HTTPException(404, "無此航線")
     payload = {
@@ -1793,16 +1793,16 @@ async def session_commands(session_id: str):
 
     `/sessions/{id}/track` 也回這一段，但它同時拖著整條遙測——資訊頁只要
     指令那一列時，不該為此把幾萬筆 telemetry 拉過網路。"""
-    # `params.mission_id` 補上名字：畫面上只拿得到一個 uuid 的話，
+    # `params.plan_id` 補上名字：畫面上只拿得到一個 uuid 的話，
     # 「飛行中換成哪一份」就答不出來（doc/data-schema §3.4）。
     # **路徑被刪掉時 name 是 NULL**——那就顯示成「已刪除的路徑」，
     # 不是留白（留白會被讀成「沒有換」）
     rows = await db.pool.fetch(
         "SELECT c.time, c.action, c.result, c.detail, c.client, c.params, "
-        "       m.name AS mission_name "
+        "       m.name AS plan_name "
         "  FROM command_log c "
-        "  LEFT JOIN missions m "
-        "    ON m.id = NULLIF(c.params->>'mission_id', '')::uuid "
+        "  LEFT JOIN plans m "
+        "    ON m.id = NULLIF(c.params->>'plan_id', '')::uuid "
         " WHERE c.session_id = $1 ORDER BY c.time", session_id)
     return [dict(r) for r in rows]
 
@@ -1816,7 +1816,7 @@ _NAV_CMDS = {16, 21, 22}
 
 
 @router.get("/mission/current")
-async def current_mission():
+async def current_plan():
     if mavlink_rx.rx is None or not live.connected:
         raise HTTPException(503, "MAVLink 未連線")
     try:
@@ -1900,7 +1900,7 @@ async def _store_mission(name: str, source: str, wps: list[dict],
     async with db.pool.acquire() as con:
         async with con.transaction():
             row = await con.fetchrow(
-                "INSERT INTO missions (name, created_by, kind, firmware_type, "
+                "INSERT INTO plans (name, created_by, kind, firmware_type, "
                 "vehicle_type, fence, home, cruise_speed, hover_speed, rally) "
                 "VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10) RETURNING id",
                 name, source, "from-vehicle" if source == "vehicle" else "imported",
@@ -1909,7 +1909,7 @@ async def _store_mission(name: str, source: str, wps: list[dict],
                 jdumps(home) if home else None, cruise, hover,
                 jdumps(rally) if rally else None)
             await con.executemany(
-                """INSERT INTO waypoints (mission_id, seq, lat, lon, alt, action, params)
+                """INSERT INTO waypoints (plan_id, seq, lat, lon, alt, action, params)
                    VALUES ($1, $2, $3, $4, $5, $6, $7)""",
                 [(row["id"], w["seq"], w["lat"], w["lon"], w.get("alt"),
                   w.get("action", "waypoint"),
@@ -1920,7 +1920,7 @@ async def _store_mission(name: str, source: str, wps: list[dict],
     return str(row["id"])
 
 
-@router.get("/missions")
+@router.get("/plans")
 async def list_missions():
     # 排除群組任務地面生成的具體任務（created_by='group-gen'）——那是編隊每台的
     # materialized 任務、不是任務庫草稿，會污染一般任務清單 UI（issue 013-B 前端回報）。
@@ -1929,7 +1929,7 @@ async def list_missions():
                m.firmware_type, m.vehicle_type, m.home,
                m.cruise_speed, m.hover_speed,
                count(w.seq) AS waypoint_count
-        FROM missions m LEFT JOIN waypoints w ON w.mission_id = m.id
+        FROM plans m LEFT JOIN waypoints w ON w.plan_id = m.id
         WHERE m.kind IS DISTINCT FROM 'generated'
         GROUP BY m.id ORDER BY m.created_at DESC""")
     out = [dict(r) for r in rows]
@@ -1940,15 +1940,15 @@ async def list_missions():
     # 不給預設速度，因為使用者會拿這個數字去安排電池
     ids = [r["id"] for r in out]
     wrows = await db.pool.fetch(
-        "SELECT mission_id, seq, lat, lon, alt, action, params FROM waypoints "
-        "WHERE mission_id = ANY($1::uuid[]) ORDER BY mission_id, seq", ids)
+        "SELECT plan_id, seq, lat, lon, alt, action, params FROM waypoints "
+        "WHERE plan_id = ANY($1::uuid[]) ORDER BY plan_id, seq", ids)
     by_mission: dict = {}
     for r in wrows:
         w = dict(r)
         pm = w.get("params")
         pm = json.loads(pm) if isinstance(pm, str) else (pm or {})
         w.update({k: pm.get(k) for k in ("command", "frame", "p1", "p2")})
-        by_mission.setdefault(w["mission_id"], []).append(w)
+        by_mission.setdefault(w["plan_id"], []).append(w)
     for d in out:
         home = d.get("home")
         if isinstance(home, str):
@@ -1963,14 +1963,14 @@ async def list_missions():
     return out
 
 
-@router.get("/missions/active")
+@router.get("/plans/active")
 async def active_mission():
     row = await db.pool.fetchrow(
-        "SELECT id, name, home, fence, rally FROM missions WHERE is_active LIMIT 1")
+        "SELECT id, name, home, fence, rally FROM plans WHERE is_active LIMIT 1")
     if row is None:
         raise HTTPException(404, "沒有啟用中的路徑")
     wps = await db.pool.fetch(
-        "SELECT seq, lat, lon, alt, action FROM waypoints WHERE mission_id = $1 ORDER BY seq",
+        "SELECT seq, lat, lon, alt, action FROM waypoints WHERE plan_id = $1 ORDER BY seq",
         row["id"])
     home = row["home"]
     if isinstance(home, str):
@@ -1986,8 +1986,8 @@ async def active_mission():
             "waypoints": [dict(w) for w in wps]}
 
 
-@router.get("/missions/{mission_id}/waypoints")
-async def mission_waypoints(mission_id: str):
+@router.get("/plans/{plan_id}/waypoints")
+async def mission_waypoints(plan_id: str):
     # `frame` 一起回（MAV_FRAME，躺在 params 裡）：**高度的意思寫在它上面**
     # ——3＝離起飛點、10＝離地面（地形跟隨）。同一個「4.6 m」在兩者是不同的
     # 地方，而路徑管理頁要在列上說出這件事（ui-spec §4.6）。
@@ -1995,21 +1995,21 @@ async def mission_waypoints(mission_id: str):
         "SELECT seq, lat, lon, alt, action, "
         "       (params->>'frame')::int   AS frame, "
         "       (params->>'command')::int AS command "
-        "  FROM waypoints WHERE mission_id = $1 ORDER BY seq",
-        mission_id)
+        "  FROM waypoints WHERE plan_id = $1 ORDER BY seq",
+        plan_id)
     if not wps:
         raise HTTPException(404, "無此路徑或無航點")
     # **home 也要回**：起飛項與 RTL／LAND 在 .plan 裡可以沒有座標（意思是
     # 「從 home 起飛」「回 home」），少了它取用端畫不出起飛爬升段與返航段。
     # `/missions/active` 一直有回，回放頁走的是這條端點、於是同一份任務在
     # 即時頁與回放頁上是兩個形狀（2026-09-07）。
-    home = await db.pool.fetchval("SELECT home FROM missions WHERE id = $1", mission_id)
+    home = await db.pool.fetchval("SELECT home FROM plans WHERE id = $1", plan_id)
     if isinstance(home, str):
         home = json.loads(home)
     return {"waypoints": [dict(w) for w in wps], "home": home}
 
 
-@router.post("/missions")
+@router.post("/plans")
 async def save_mission(m: MissionIn):
     """存入任務庫並附上幾何預檢報告。**不因預檢失敗而拒存**——任務庫
     可放草稿；真正的擋門在 command 服務上傳到機那一步。"""
@@ -2023,10 +2023,10 @@ async def save_mission(m: MissionIn):
         autopilot=m.firmware_type, home=m.home, dem=terrain.shared())}
 
 
-@router.post("/missions/from-vehicle")
+@router.post("/plans/from-vehicle")
 async def import_mission_from_vehicle(name: str | None = None):
     """把機上目前的任務（QGC 上傳的）讀回並存進任務庫。唯讀 + 入庫。"""
-    data = await current_mission()
+    data = await current_plan()
     wps = data["waypoints"]
     if len(wps) < 2:
         raise HTTPException(404, "機上沒有可儲存的任務（航點少於 2）")
@@ -2046,8 +2046,8 @@ async def import_mission_from_vehicle(name: str | None = None):
                 settings.geofence_margin, dem=terrain.shared())}
 
 
-@router.post("/missions/{mission_id}/terrain-frame")
-async def make_terrain_frame(mission_id: str, name: str | None = None):
+@router.post("/plans/{plan_id}/terrain-frame")
+async def make_terrain_frame(plan_id: str, name: str | None = None):
     """把一份航線改寫成**地形跟隨**（`frame 10`）並**存成新的一份**
     （issues/047 §1-A）。
 
@@ -2063,12 +2063,12 @@ async def make_terrain_frame(mission_id: str, name: str | None = None):
     """
     row = await db.pool.fetchrow(
         "SELECT name, fence, home, firmware_type, vehicle_type, "
-        "cruise_speed, hover_speed, rally FROM missions WHERE id = $1", mission_id)
+        "cruise_speed, hover_speed, rally FROM plans WHERE id = $1", plan_id)
     if row is None:
         raise HTTPException(404, "無此路徑")
     rows = await db.pool.fetch(
         "SELECT seq, lat, lon, alt, action, params FROM waypoints "
-        "WHERE mission_id = $1 ORDER BY seq", mission_id)
+        "WHERE plan_id = $1 ORDER BY seq", plan_id)
     wps = []
     for r in rows:
         w = dict(r)
@@ -2109,7 +2109,7 @@ async def make_terrain_frame(mission_id: str, name: str | None = None):
         row["firmware_type"], row["vehicle_type"], fence,
         json.loads(row["home"]) if isinstance(row["home"], str) else row["home"],
         row["cruise_speed"], row["hover_speed"], rally)
-    return {"id": mid, "from": mission_id,
+    return {"id": mid, "from": plan_id,
             "converted": conv["converted"], "kept": conv["kept"],
             "warnings": conv["warnings"],
             # 新的那份再跑一次預檢：改寫之後 frame 10 的點不參加地形檢查
@@ -2121,8 +2121,8 @@ async def make_terrain_frame(mission_id: str, name: str | None = None):
                 dem=terrain.shared())}
 
 
-@router.get("/missions/{mission_id}/profile")
-async def mission_profile(mission_id: str):
+@router.get("/plans/{plan_id}/profile")
+async def mission_profile(plan_id: str):
     """剖面圖的資料（issues/048 F1）：沿航線的地面高程與規劃高度。
 
     **這是那條綠線該有的樣子。** 使用者的原始問題不是沒有警告，是
@@ -2130,12 +2130,12 @@ async def mission_profile(mission_id: str):
     線穿到地下、或兩條線貼在一起，看一眼就知道。
     """
     row = await db.pool.fetchrow(
-        "SELECT home FROM missions WHERE id = $1", mission_id)
+        "SELECT home FROM plans WHERE id = $1", plan_id)
     if row is None:
         raise HTTPException(404, "無此路徑")
     rows = await db.pool.fetch(
         "SELECT seq, lat, lon, alt, action, params FROM waypoints "
-        "WHERE mission_id = $1 ORDER BY seq", mission_id)
+        "WHERE plan_id = $1 ORDER BY seq", plan_id)
     wps = []
     for r in rows:
         w = dict(r)
@@ -2154,8 +2154,8 @@ async def mission_profile(mission_id: str):
     return plan_check.route_profile(wps, h, dem=terrain.shared())
 
 
-@router.get("/missions/{mission_id}/check")
-async def check_mission(mission_id: str, wp_spd: float | None = None,
+@router.get("/plans/{plan_id}/check")
+async def check_mission(plan_id: str, wp_spd: float | None = None,
                         wp_radius: float | None = None):
     """任務庫裡某一份的幾何預檢。**檢查不該只在匯入的那一刻做一次。**
 
@@ -2164,13 +2164,13 @@ async def check_mission(mission_id: str, wp_spd: float | None = None,
     每次點開一份航線就重算一次，成本是一次查表。
     """
     row = await db.pool.fetchrow(
-        "SELECT name, fence, home, firmware_type, vehicle_type FROM missions "
-        "WHERE id = $1", mission_id)
+        "SELECT name, fence, home, firmware_type, vehicle_type FROM plans "
+        "WHERE id = $1", plan_id)
     if row is None:
         raise HTTPException(404, "無此路徑")
     rows = await db.pool.fetch(
         "SELECT seq, lat, lon, alt, action, params FROM waypoints "
-        "WHERE mission_id = $1 ORDER BY seq", mission_id)
+        "WHERE plan_id = $1 ORDER BY seq", plan_id)
     wps = []
     for r in rows:
         w = dict(r)
@@ -2194,21 +2194,21 @@ async def check_mission(mission_id: str, wp_spd: float | None = None,
         wp_spd=wp_spd, wp_radius=wp_radius)
 
 
-@router.post("/missions/{mission_id}/activate")
-async def activate_mission(mission_id: str, active: bool = True):
+@router.post("/plans/{plan_id}/activate")
+async def activate_mission(plan_id: str, active: bool = True):
     async with db.pool.acquire() as con:
         async with con.transaction():
-            await con.execute("UPDATE missions SET is_active = false WHERE is_active")
+            await con.execute("UPDATE plans SET is_active = false WHERE is_active")
             if active:
                 r = await con.execute(
-                    "UPDATE missions SET is_active = true WHERE id = $1", mission_id)
+                    "UPDATE plans SET is_active = true WHERE id = $1", plan_id)
                 if r.split()[-1] == "0":
                     raise HTTPException(404, "無此路徑")
     return {"ok": True}
 
 
-@router.post("/missions/{mission_id}/show")
-async def show_mission(mission_id: str, why: str = "", sysid: int | None = None):
+@router.post("/plans/{plan_id}/show")
+async def show_mission(plan_id: str, why: str = "", sysid: int | None = None):
     """**這份航線就是機上現在的那份 → 畫到即時頁上，並留一筆事件。**
 
     與 `/activate` 的差別是**語意**，不是行為：`activate` 是人手動切換要看哪
@@ -2218,15 +2218,15 @@ async def show_mission(mission_id: str, why: str = "", sysid: int | None = None)
 
     由指令服務在上傳成功／改航線完成後呼叫。
     """
-    row = await db.pool.fetchrow("SELECT name FROM missions WHERE id = $1",
-                                 mission_id)
+    row = await db.pool.fetchrow("SELECT name FROM plans WHERE id = $1",
+                                 plan_id)
     if row is None:
         raise HTTPException(404, "無此路徑")
     async with db.pool.acquire() as con:
         async with con.transaction():
-            await con.execute("UPDATE missions SET is_active = false WHERE is_active")
-            await con.execute("UPDATE missions SET is_active = true WHERE id = $1",
-                              mission_id)
+            await con.execute("UPDATE plans SET is_active = false WHERE is_active")
+            await con.execute("UPDATE plans SET is_active = true WHERE id = $1",
+                              plan_id)
     drone_id = None
     if sysid is not None:
         r = await db.pool.fetchrow(
@@ -2235,7 +2235,7 @@ async def show_mission(mission_id: str, why: str = "", sysid: int | None = None)
     try:
         ev = await db.insert_event(
             drone_id, None, "info", "mission_shown",
-            {"mission_id": mission_id, "mission": row["name"], "why": why})
+            {"plan_id": plan_id, "mission": row["name"], "why": why})
         ev["drone"] = None
         await manager.broadcast({"type": "event", "event": ev})
     except Exception:
@@ -2243,9 +2243,9 @@ async def show_mission(mission_id: str, why: str = "", sysid: int | None = None)
     return {"ok": True, "mission": row["name"]}
 
 
-@router.delete("/missions/{mission_id}")
-async def delete_mission(mission_id: str):
-    r = await db.pool.execute("DELETE FROM missions WHERE id = $1", mission_id)
+@router.delete("/plans/{plan_id}")
+async def delete_mission(plan_id: str):
+    r = await db.pool.execute("DELETE FROM plans WHERE id = $1", plan_id)
     if r.split()[-1] == "0":
         raise HTTPException(404, "無此路徑")
     return {"ok": True}  # waypoints 由 FK CASCADE 一併刪除

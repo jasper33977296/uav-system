@@ -55,7 +55,7 @@ class GroupExecutor:
         if g is None:
             return None, None
         rows = await self.pool.fetch(
-            """SELECT ga.drone_id::text, ga.mission_id::text, ga.layer_index,
+            """SELECT ga.drone_id::text, ga.plan_id::text, ga.layer_index,
                       d.mav_sysid, d.name AS drone_name
                FROM group_assignments ga LEFT JOIN drones d ON d.id = ga.drone_id
                WHERE ga.group_id = $1 ORDER BY ga.layer_index""", gid)
@@ -127,10 +127,10 @@ class GroupExecutor:
                           json.dumps(res, default=str)[:400])
         return res
 
-    async def _items_for(self, mission_id: str):
+    async def _items_for(self, plan_id: str):
         rows = await self.pool.fetch(
             "SELECT seq, lat, lon, alt, action, params FROM waypoints "
-            "WHERE mission_id=$1 ORDER BY seq", mission_id)
+            "WHERE plan_id=$1 ORDER BY seq", plan_id)
         if not rows:
             raise mav.CommandError("材料化任務沒有航點")
         return self._build_items([dict(r) for r in rows])
@@ -157,8 +157,8 @@ class GroupExecutor:
         whys: list[str] = []
         for m in members:
             rows = await self.pool.fetch(
-                "SELECT alt, action, params FROM waypoints WHERE mission_id=$1 ORDER BY seq",
-                m["mission_id"])
+                "SELECT alt, action, params FROM waypoints WHERE plan_id=$1 ORDER BY seq",
+                m["plan_id"])
             alt, why = plan_check.takeoff_alt([self._with_command(r) for r in rows])
             if alt is None:
                 whys.append(why)
@@ -233,12 +233,12 @@ class GroupExecutor:
                     return
                 await self._set_phase(gid, m["drone_id"], "uploading")
                 try:
-                    items = await self._items_for(m["mission_id"])
+                    items = await self._items_for(m["plan_id"])
                     await self._submit_audited(m["mav_sysid"], "upload",
                                                mav.job_upload_mission, items)
                     await self.pool.execute(
-                        "UPDATE drones SET current_mission_id=$1 WHERE mav_sysid=$2",
-                        m["mission_id"], m["mav_sysid"])
+                        "UPDATE drones SET current_plan_id=$1 WHERE mav_sysid=$2",
+                        m["plan_id"], m["mav_sysid"])
                     await self._set_phase(gid, m["drone_id"], "uploaded")
                 except Exception as e:
                     await self._set_phase(gid, m["drone_id"], "upload_failed", self._err(e))

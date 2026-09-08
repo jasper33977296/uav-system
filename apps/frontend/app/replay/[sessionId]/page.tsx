@@ -47,7 +47,7 @@ interface CmdRow {
 /** 這一趟的摘要（`/api/sessions/{id}`）。**「上鎖」與「我們看不到它了」
  * 是兩件事**，所以 end_reason 要照枚舉講人話，認不得就顯示原代號。 */
 interface SessionMeta {
-  drone_name?: string | null; mission_name: string | null;
+  drone_name?: string | null; plan_name: string | null;
   started_at: string; ended_at: string | null; end_reason: string | null;
   summary: unknown;
 }
@@ -145,8 +145,8 @@ export default function Replay() {
   const { sessionId } = useParams<{ sessionId: string }>();
   const router = useRouter();
   const [rows, setRows] = useState<LinkRow[]>([]);
-  const [meta, setMeta] = useState<{ mission_id: string | null;
-    mission_name: string | null; drone_name?: string | null;
+  const [meta, setMeta] = useState<{ plan_id: string | null;
+    plan_name: string | null; drone_name?: string | null;
     drone_id?: string | null } | null>(null);
   const [video, setVideo] = useState<SessionVideo | null>(null);   // §5.4
   // 右側面板要的三份（都是既有端點，這次後端不用動）
@@ -191,8 +191,8 @@ export default function Replay() {
         setIdx(0);
         setMeta(d.session ?? null);
         // 航線關聯了任務 → 抓航點疊預計路徑（預計 vs 實際比對）
-        if (d.session?.mission_id)
-          fetch(`${API}/api/missions/${d.session.mission_id}/waypoints`)
+        if (d.session?.plan_id)
+          fetch(`${API}/api/plans/${d.session.plan_id}/waypoints`)
             .then((r) => (r.ok ? r.json() : null))
             // planPath 補起飛爬升段與返航降落段：起飛項的高度是「爬到哪」，
             // 照 lat/lon 過濾直接畫會讓預計路徑從空中出發、與即時頁不同形狀
@@ -530,7 +530,7 @@ export default function Replay() {
           {sess && `${hm(sess.started_at)}–${sess.ended_at ? hm(sess.ended_at) : "進行中"}`}
           {sess?.ended_at && ` · ${secs((new Date(sess.ended_at).getTime()
             - new Date(sess.started_at).getTime()) / 1000)}`}
-          {meta?.mission_name && ` · ${meta.mission_name}`}
+          {meta?.plan_name && ` · ${meta.plan_name}`}
           {/* opt-out 留痕（§5.4）：未錄影＝正常態，弱字不宣告 */}
           {video?.video_status === "off" && "　本趟未錄影"}
         </span>
@@ -836,7 +836,7 @@ function ReplayPanel({ sess, quality, rows, events, cmds, idx, evFilter,
           <InfoTip tip="樣本數＝這趟收到幾筆 5G 量測；SINR 與 RTT 是那些樣本的統計。「結束方式」分得出「上鎖」與「遙測中斷」——後者不代表飛行結束，只代表資料在那裡斷了。" />
         </h3>
         <div className="rp-facts">
-          <F k="任務" v={sess?.mission_name ?? "無"} />
+          <F k="任務" v={sess?.plan_name ?? "無"} />
           <F k="時長" v={sess?.ended_at
             ? secs((new Date(sess.ended_at).getTime()
               - new Date(sess.started_at).getTime()) / 1000) : "進行中"} />

@@ -127,7 +127,7 @@ async def ask_guard(sysid: int, action: str, intent_id: str | None = None,
         "code": "guard_refused", "state": res.get("state")})
 
 
-async def show_on_live(sysid: int, mission_id: str, why: str) -> None:
+async def show_on_live(sysid: int, plan_id: str, why: str) -> None:
     """把這份航線推到即時畫面上，並在事件流留一筆。
 
     **為什麼上傳完就要顯示**：上傳的那一刻起，機上的航線就是這一份了——
@@ -141,7 +141,7 @@ async def show_on_live(sysid: int, mission_id: str, why: str) -> None:
     def _post():
         q = urllib.parse.urlencode({"why": why, "sysid": sysid})
         req = urllib.request.Request(
-            f"{settings.backend_api}/api/missions/{mission_id}/show?{q}",
+            f"{settings.backend_api}/api/plans/{plan_id}/show?{q}",
             data=b"", method="POST",
             headers={"Content-Type": "application/json"})
         try:

@@ -97,8 +97,8 @@ async function openWithBrokenSummary(browser, path) {
         serial_no: "t-1", is_simulated: true, connection_url: "udpin://0.0.0.0:1",
         status: "idle", created_at: new Date().toISOString(), is_primary: true }] })
     : r.continue()));
-  // 任務頁的架次表按 mission_id 過濾，同理必須掛在畫面上那條路徑底下
-  await page.route("**/api/missions**", (r) => (r.request().method() === "GET"
+  // 任務頁的架次表按 plan_id 過濾，同理必須掛在畫面上那條路徑底下
+  await page.route("**/api/plans**", (r) => (r.request().method() === "GET"
     ? r.fulfill({ json: [{ id: MISSION_ID, name: "測試路徑", is_active: false,
         waypoints: [], created_at: new Date().toISOString() }] })
     : r.continue()));
@@ -396,7 +396,7 @@ const CASES = [
     async run(b) {
       const page = await (await b.newContext({ viewport: { width: 1400, height: 900 } })).newPage();
       await page.route("**/api/sessions**", (r) => r.fulfill({ status: 500, json: { detail: "boom" } }));
-      await page.route("**/api/missions/*/waypoints*", (r) => r.fulfill({ json: { waypoints: [] } }));
+      await page.route("**/api/plans/*/waypoints*", (r) => r.fulfill({ json: { waypoints: [] } }));
       await page.routeWebSocket(/\/ws\/telemetry/, () => {});
       await page.goto(`${URL_BASE}/replay-mission/test-mission`, { waitUntil: "networkidle", timeout: 30000 });
       await page.waitForTimeout(1500);

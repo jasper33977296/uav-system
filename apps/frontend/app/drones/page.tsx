@@ -41,7 +41,7 @@ function apChip(ap: string | null | undefined): string | null {
 }
 interface Session {
   id: string; drone_id: string; drone_name: string;
-  mission_name: string | null;
+  plan_name: string | null;
   started_at: string; ended_at: string | null;
   summary: {
     avg_sinr?: number | null; min_sinr?: number | null; avg_rtt_ms?: number | null;
@@ -562,7 +562,7 @@ function SessionTable({ rows, onRemove }: {
                   {s.video_mode === "off" &&
                     <span className="meta" style={{ marginLeft: 6 }}>未錄影</span>}
                 </td>
-                <td>{s.mission_name ?? "—"}</td>
+                <td>{s.plan_name ?? "—"}</td>
                 <td>{duration(s.started_at, s.ended_at)}</td>
                 <td className="num">{s.summary?.samples_total ?? "—"}</td>
                 <td className="num">

@@ -13,7 +13,7 @@
 | # | 表 | 一列代表 | 用途 | 保留 |
 |---|---|---|---|---|
 | 1 | `drones` | 一台無人機 | 機隊註冊（靜態） | 永久 |
-| 2 | `missions` | 一條路徑快照 | 匯入／生成的具體航線（**非任務庫**，見 §5.1） | 永久 |
+| 2 | `plans` | 一條路徑快照 | 匯入／生成的具體航線（**非任務庫**，見 §5.1） | 永久 |
 | 3 | `waypoints` | 一個航點 | 屬於某條路徑 | 隨 mission |
 | 4 | `flight_sessions` | 一次飛行（armed→disarmed；真正離地的區間另記 `airborne_from/to`） | 架次，所有時序資料的歸屬 | 永久 |
 | 5 | `telemetry` | 一筆遙測取樣 | 飛行狀態時序（**hypertable**，1Hz） | 30 天 |
@@ -39,18 +39,18 @@ drones ─┬─< flight_sessions ─┬─< telemetry        (CASCADE)
         │        │            ├─< link_metrics     (CASCADE)
         │        │            ├─< events           (CASCADE)
         │        │            └─< video_segments   (CASCADE)
-        │        ├── mission_id ──> missions       (SET NULL)
+        │        ├── plan_id ────> plans        (SET NULL)
         │        └── group_id ────> mission_groups (無 FK)
-        ├── current_mission_id ────> missions      (SET NULL)
+        ├── current_plan_id ──────> plans       (SET NULL)
         ├─< telemetry / link_metrics / events      (CASCADE)
         ├─< blackouts                              (CASCADE)
         ├─< captures                               (CASCADE)
         ├─< video_segments                         (CASCADE)
         └─< command_log.drone_id                   (SET NULL)
 
-missions ─┬─< waypoints                            (CASCADE)
-          ├─< group_assignments.mission_id         (SET NULL)
-          └─< mission_groups.base_mission_id       (SET NULL)
+plans ─┬─< waypoints                            (CASCADE)
+          ├─< group_assignments.plan_id         (SET NULL)
+          └─< mission_groups.base_plan_id          (SET NULL)
 
 mission_groups ─< group_assignments                (CASCADE)
 ```
@@ -59,13 +59,13 @@ mission_groups ─< group_assignments                (CASCADE)
 
 | 外鍵 | 指向 | ON DELETE |
 |---|---|---|
-| `waypoints.mission_id` | missions | CASCADE |
-| `flight_sessions.mission_id` | missions | SET NULL |
+| `waypoints.plan_id` | plans | CASCADE |
+| `flight_sessions.plan_id` | plans | SET NULL |
 | `flight_sessions.drone_id` | drones | NO ACTION |
-| `drones.current_mission_id` | missions | SET NULL |
-| `mission_groups.base_mission_id` | missions | SET NULL |
+| `drones.current_plan_id` | plans | SET NULL |
+| `mission_groups.base_plan_id` | plans | SET NULL |
 | `group_assignments.group_id` | mission_groups | CASCADE |
-| `group_assignments.mission_id` | missions | SET NULL |
+| `group_assignments.plan_id` | plans | SET NULL |
 | `video_segments.drone_id` | drones | CASCADE |
 | `video_segments.session_id` | flight_sessions | CASCADE |
 | `telemetry.drone_id` | drones | **CASCADE**（09-02 補） |
@@ -81,8 +81,8 @@ mission_groups ─< group_assignments                (CASCADE)
 
 原本兩處為 NO ACTION，使「刪除被編隊引用過的路徑」直接 FK 違反（API 500，已實測
 復現）。**023 已改為 SET NULL**：路徑刪得掉，而 assignment／架次那一列**留著**
-（只是 mission_id 變 NULL）——對應定案「飛過的路徑可以刪、飛行紀錄永存」。
-刪除後仍能說出飛的是哪條，靠 `flight_sessions.mission_name` 快照（§3.4）。
+（只是 plan_id 變 NULL）——對應定案「飛過的路徑可以刪、飛行紀錄永存」。
+刪除後仍能說出飛的是哪條，靠 `flight_sessions.plan_name` 快照（§3.4）。
 
 ### 2.2 `drone_id` 全數掛上外鍵（2026-09-02 改）
 
@@ -130,6 +130,15 @@ mission_groups ─< group_assignments                (CASCADE)
 
 ---
 
+> **⚠ 2026-09-08 改名**：`missions` 這張表已改名 `plans`（它裝的是 `.plan`
+> 路徑快照，不是任務），`*_mission_id` → `*_plan_id`、`mission_name` →
+> `plan_name`。**「任務」這個名字保留給階段 2 的新實體**——見
+> [mission-vs-plan-design.md](mission-vs-plan-design.md)。
+> 沒有改的：MAVLink 協定詞、`command_log.action` 與 `events.type` 的值
+> （那是歷史資料）、`mission_groups` 表名。
+> 約束名維持舊的（`RENAME` 不動約束名），例如
+> `drones_current_mission_id_fkey` 現在掛在 `current_plan_id` 上。
+
 ## 3. 各表欄位
 
 ### 3.1 `drones` — 機隊註冊
@@ -145,10 +154,10 @@ mission_groups ─< group_assignments                (CASCADE)
 | `status` | text NOT NULL | offline／idle／in_mission／maintenance |
 | `is_primary` | bool NOT NULL | MAVLink 主機，至多一台（唯一索引強制） |
 | `mav_sysid` | int | **MAVLink sysid ↔ 資料列身分**，單埠多機 demux 的核心（011） |
-| `current_mission_id` | uuid → missions | 上傳成功時設＝「這台現在要飛的路徑」，架次據此綁定（020） |
+| `current_plan_id` | uuid → plans | 上傳成功時設＝「這台現在要飛的路徑」，架次據此綁定（020） |
 | `created_at` | timestamptz NOT NULL | |
 
-### 3.2 `missions` — 路徑快照
+### 3.2 `plans` — 路徑快照
 
 | 欄位 | 型別 | 說明 |
 |---|---|---|
@@ -163,7 +172,7 @@ mission_groups ─< group_assignments                (CASCADE)
 
 | 欄位 | 型別 | 說明 |
 |---|---|---|
-| `mission_id` + `seq` | uuid, int | 複合主鍵 |
+| `plan_id` + `seq` | uuid, int | 複合主鍵 |
 | `lat` / `lon` / `alt` | float / real | DO_* 設定類（無座標）以 0 表示 |
 | `action` | text | takeoff／waypoint／hover／photo／land／rtl |
 | `params` | jsonb | **MAVLink 保真度**：原始 `command`／`frame`／`p1–p4` 全存，上傳時原樣送出 |
@@ -175,8 +184,8 @@ mission_groups ─< group_assignments                (CASCADE)
 | `id` | uuid PK | |
 | `drone_id` | uuid NOT NULL → drones | |
 | `started_at` / `ended_at` | timestamptz | armed→disarmed；`ended_at` NULL＝進行中 |
-| `mission_id` | uuid → missions | **解鎖那一刻**那台機要飛的路徑（綁定序見 §5.2）；手飛為 NULL。路徑被刪＝SET NULL。**飛行中換路徑不會更新這一欄**——見下方「一趟可以飛不只一份路徑」 |
-| `mission_name` | text | **路徑名稱快照（023）**：建立架次時複製當下的名字。路徑刪除後 `mission_id` 變 NULL，靠這欄仍能說「飛的是 X（路徑已刪除）」而非一片空白——對應「飛行紀錄要永遠存在」 |
+| `plan_id` | uuid → plans | **解鎖那一刻**那台機要飛的路徑（綁定序見 §5.2）；手飛為 NULL。路徑被刪＝SET NULL。**飛行中換路徑不會更新這一欄**——見下方「一趟可以飛不只一份路徑」 |
+| `plan_name` | text | **路徑名稱快照（023）**：建立架次時複製當下的名字。路徑刪除後 `plan_id` 變 NULL，靠這欄仍能說「飛的是 X（路徑已刪除）」而非一片空白——對應「飛行紀錄要永遠存在」 |
 | `group_id` | uuid | 屬於哪次編隊（013）；單飛為 NULL |
 | `summary` | jsonb | 落地後計算：航程、最大高度、SINR 統計等 |
 | `note` | text | 使用者自訂備註（標實驗條件，如「開干擾器那趟」） |
@@ -199,8 +208,8 @@ mission_groups ─< group_assignments                (CASCADE)
 | 即時頁疊圖 | 換上去的那份（`show_on_live`） |
 | **架次紀錄／資訊頁／回放頁疊的預計路徑** | **解鎖那一刻那份** |
 
-`create_session` 在 arm 的瞬間解析一次 `mission_id` 與 `mission_name` 快照，
-之後不再更新；飛行中上傳只改 `drones.current_mission_id`
+`create_session` 在 arm 的瞬間解析一次 `plan_id` 與 `plan_name` 快照，
+之後不再更新；飛行中上傳只改 `drones.current_plan_id`
 （`command/main.py`）。全 repo 沒有任何一行 `UPDATE flight_sessions SET mission_id`。
 
 **不加欄位。** 這件事**已經被記錄了**：`_audit` 解得出 `session_id`，所以
@@ -213,7 +222,7 @@ mission_groups ─< group_assignments                (CASCADE)
 * `/api/sessions` 與 `/api/sessions/{id}` 多回一個**衍生**欄位
   `plan_changes`：這一趟之內 `action='mission_upload'` 且 `result='accepted'`
   的筆數。0＝全程同一份。
-* `/api/sessions/{id}/commands` 的 `mission_upload` 列補上 `mission_name`
+* `/api/sessions/{id}/commands` 的 `mission_upload` 列補上 `plan_name`
   ——不然畫面只拿得到一個 uuid。
 * 畫面上：任務 chip 標「（飛行中換過 N 次）」，換了哪幾份、幾點換的住 ⓘ。
   比較頁的「任務」維度要標出來——**那個維度假設一趟＝一條路徑**。
@@ -366,9 +375,9 @@ MAVLink 擴充欄位（ArduPilot 4.5+ 才送），而 **pymavlink 對缺席的�
 | `id` | uuid PK | |
 | `name` | text NOT NULL | |
 | `mode` | text NOT NULL | `unified`（一條 base 展開成 N 條）／`separate`（各飛各的） |
-| `base_mission_id` | uuid → missions | unified 的展開來源 |
+| `base_plan_id` | uuid → plans | unified 的展開來源 |
 | `params` | jsonb | `vsep_m`／`rtl_stagger_m` 等 |
-| `status` | text NOT NULL | 生命週期見 [group-missions-design.md](group-missions-design.md) §7.1（預設 `draft`） |
+| `status` | text NOT NULL | 生命週期見 [group-plans-design.md](group-plans-design.md) §7.1（預設 `draft`） |
 | `created_at` | timestamptz NOT NULL | |
 
 ### 3.9 `group_assignments` — 編隊中的每台機
@@ -376,9 +385,9 @@ MAVLink 擴充欄位（ArduPilot 4.5+ 才送），而 **pymavlink 對缺席的�
 | 欄位 | 型別 | 說明 |
 |---|---|---|
 | `group_id` + `drone_id` | uuid | 複合主鍵 |
-| `mission_id` | uuid → missions | **地面展開後的具體路徑**（不是共用 base） |
+| `plan_id` | uuid → plans | **地面展開後的具體路徑**（不是共用 base） |
 | `layer_index` | int NOT NULL | 高度分層序（× `vsep_m`） |
-| `phase` | text NOT NULL | 執行期即時態，見 group-missions-design §7.1（預設 `idle`） |
+| `phase` | text NOT NULL | 執行期即時態，見 group-plans-design §7.1（預設 `idle`） |
 | `error` | jsonb | 異常態 `{msg, hint, autopilot_notes}` |
 | `updated_at` | timestamptz | 前端 1s 輪詢看新鮮度 |
 
@@ -438,10 +447,10 @@ sysid 猜出當時是哪一台，正是這兩個欄位要防的錯誤。
 
 ## 5. 設計註記（為什麼這樣）
 
-### 5.1 `missions` 是「路徑快照」不是「任務庫」
+### 5.1 `plans` 是「路徑快照」不是「任務庫」
 
 `.plan` 檔才是作者原稿（在 QGC／使用者檔案系統，本系統管不到、不保證還在）；
-`missions` 那一列是**匯入當下的不可變快照**——全庫沒有任何改航點的路徑
+`plans` 那一列是**匯入當下的不可變快照**——全庫沒有任何改航點的路徑
 （只有建立／啟用／刪除）。它存在只為三件事：給穩定 id 讓架次指向、讓同一條
 路徑的多次飛行可比較、提供上傳與回讀比對的具體航點。
 `status`／`drone_id`／`geometry` 是照「任務規劃工具」設計的欄位，但本系統刻意不做
@@ -451,8 +460,8 @@ sysid 猜出當時是哪一台，正是這兩個欄位要防的錯誤。
 
 ### 5.2 架次 ↔ 路徑的綁定序（020）
 
-**明示指定 > `drones.current_mission_id`（上傳時設＝操作員宣告要飛這條）>
-`missions.is_active`（後備）**。回放頁據此疊出「預計 vs 實際」。手飛為 NULL。
+**明示指定 > `drones.current_plan_id`（上傳時設＝操作員宣告要飛這條）>
+`plans.is_active`（後備）**。回放頁據此疊出「預計 vs 實際」。手飛為 NULL。
 舊架次回填見 `scripts/backfill-session-mission.sql`（事實源＝command_log，冪等）。
 
 ### 5.3 `origin`：測試殘留治理

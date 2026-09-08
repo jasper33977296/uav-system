@@ -200,11 +200,11 @@ function FlightDetail({ s, onReplay }: { s: SessionRow; onReplay: () => void }) 
           </span>
         </h3>
         <div className="chips info-chips">
-          {/* **飛行中換過路徑要說出來**（doc/data-schema §3.4）：`mission_name`
+          {/* **飛行中換過路徑要說出來**（doc/data-schema §3.4）：`plan_name`
               是解鎖那一刻那份，機上後來飛的可能是別份——不標的話這個 chip
               就是一句說錯的話。使用者定案：換路徑仍然是同一趟 */}
           <span className="chip">
-            {s.mission_name ?? "無任務"}
+            {s.plan_name ?? "無任務"}
             {!!s.plan_changes && `（飛行中換過 ${s.plan_changes} 次）`}
           </span>
           {!!s.plan_changes && (
@@ -357,9 +357,9 @@ function CommandsCard({ sessionId }: { sessionId: string }) {
                 <span className="info-cmdact">{actionLabel(c.action)}</span>
                 {/* 上傳／更換任務要說得出是哪一份——只有 uuid 的話，
                     「飛行中換成什麼」在畫面上答不出來 */}
-                {c.action.startsWith("mission_") && (obj?.mission_id || c.mission_name) && (
+                {c.action.startsWith("mission_") && (obj?.plan_id || c.plan_name) && (
                   <span className="hint-line">
-                    {c.mission_name ?? "已刪除的路徑"}
+                    {c.plan_name ?? "已刪除的路徑"}
                   </span>
                 )}
                 <span className={`chip cap-chip-${r.tone}`}>

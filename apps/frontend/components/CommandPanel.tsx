@@ -71,7 +71,7 @@ interface Mission {
   firmware_type?: number | null; vehicle_type?: number | null;
 }
 
-/** MAV_AUTOPILOT／MAV_TYPE → 人話。與 app/missions/page.tsx 同一組對照。
+/** MAV_AUTOPILOT／MAV_TYPE → 人話。與 app/plans/page.tsx 同一組對照。
  * **認不得的值原樣顯示 id**，不寫「未知」——那會讓「檔案沒說」與「說了但
  * 我們沒收錄這個型號」看起來一樣。 */
 const AP_NAMES: Record<number, string> = { 0: "通用", 3: "ArduPilot", 12: "PX4" };
@@ -126,7 +126,7 @@ function failText(action: string, status: number, d: any): string {
 export default function CommandPanel() {
   const [health, setHealth] = useState<Health | "off" | null>(null);
   const [missions, setMissions] = useState<Mission[]>([]);
-  const [missionId, setMissionId] = useState("");
+  const [planId, setMissionId] = useState("");
   const [busy, setBusy] = useState<string | null>(null);
   // `notes`＝成功了但**還是要看一眼**的話（目前是地形預檢）。成功不等於
   // 沒事：一份離地只剩 0.6 m 的航線上得去，而那正是要在起飛前知道的事
@@ -311,7 +311,7 @@ export default function CommandPanel() {
           drones: targetIds.map((id, i) => ({
             drone_id: id,
             layer_index: i,
-            mission_id: cfg.mode === "separate" ? cfg.assign[id] : undefined,
+            plan_id: cfg.mode === "separate" ? cfg.assign[id] : undefined,
           })),
           params: { vsep_m: cfg.spacing },
         }),
@@ -465,7 +465,7 @@ export default function CommandPanel() {
   }, []);
 
   useEffect(() => {
-    fetch(`${API}/api/missions`).then((r) => r.json())
+    fetch(`${API}/api/plans`).then((r) => r.json())
       .then((ms: Mission[]) => setMissions(ms)).catch(() => {});
   }, []);
 
@@ -480,10 +480,10 @@ export default function CommandPanel() {
     if (sysidNum == null) return;
     let dead = false;
     const pull = () => fetch(`${API}/api/drones`).then((r) => r.json())
-      .then((ds: { mav_sysid?: number | null; current_mission_id?: string | null }[]) => {
+      .then((ds: { mav_sysid?: number | null; current_plan_id?: string | null }[]) => {
         if (dead) return;
         const d = ds.find((x) => x.mav_sysid === sysidNum);
-        setOnboardId(d?.current_mission_id ?? null);
+        setOnboardId(d?.current_plan_id ?? null);
       }).catch(() => {});
     pull();
     const t = setInterval(pull, 5000);
@@ -598,7 +598,7 @@ export default function CommandPanel() {
         `${COMMAND_API}/api/command/${sid}/mission/change-route/proposal`,
         { method: "POST",
           headers: { "Content-Type": "application/json", ...CLIENT_HEADERS },
-          body: JSON.stringify({ mission_id: missionId, hold_alt: alt }) });
+          body: JSON.stringify({ plan_id: planId, hold_alt: alt }) });
       const p = await res.json();
       if (!res.ok) { setResult({ ok: false, text: p?.detail?.msg ?? "取不到提案" }); }
       else setProposal(p);
@@ -619,7 +619,7 @@ export default function CommandPanel() {
           // **送 intent_id，不是把提案送回去**（協定 §4.5）：提案留在機上，
           // 所以沒有「送回去的那份跟人看到的不一樣」的空間。代理收到確認後
           // 自己重算比對過期，守門也在那一刻再過一次
-          body: JSON.stringify({ mission_id: missionId, hold_alt: alt,
+          body: JSON.stringify({ plan_id: planId, hold_alt: alt,
                                  intent_id: p?.intent_id }) });
       const b = await res.json();
       if (!res.ok) {
@@ -673,7 +673,7 @@ export default function CommandPanel() {
         setResult({ ok: true, text: `${action}成功`,
                     notes: body?.check?.terrain?.notes });
         // 顯示到即時頁的事**已經搬到後端**（指令服務在上傳／啟動／改航線成功
-        // 後呼叫 /missions/{id}/show，前端由 mission_shown 事件觸發重畫）。
+        // 後呼叫 /plans/{id}/show，前端由 mission_shown 事件觸發重畫）。
         // 原因：上傳的呼叫端不只有這個畫面——驗收 rig、MCP、curl 都會上傳，
         // 綁在按鈕上等於只有自己按的那次會更新，別人上傳時畫面就與飛機對不上。
       }
@@ -1267,7 +1267,7 @@ export default function CommandPanel() {
             {holding && "・已暫停"}
           </div>
           <div className="cmd-row">
-            <select value={missionId} onChange={(e) => setMissionId(e.target.value)}>
+            <select value={planId} onChange={(e) => setMissionId(e.target.value)}>
               <option value="">選擇任務⋯</option>
               {missions.map((m) =>
                       <option key={m.id} value={m.id}>{missionLabel(m)}</option>)}
@@ -1280,7 +1280,7 @@ export default function CommandPanel() {
           {!airborne && (
             <div className="cmd-row">
               {btn("上傳", "上傳無人機", "/mission/upload",
-                   { disabled: !missionId, body: { mission_id: missionId },
+                   { disabled: !planId, body: { plan_id: planId },
                      cap: "mission_upload", accent: true })}
               {/* **沒有「離地高度」這一格**（2026-09-07 使用者指示）：起飛高度
                   跟著任務自己的 NAV_TAKEOFF 走，後端本來就是這樣算的。一個
@@ -1290,7 +1290,7 @@ export default function CommandPanel() {
                    { confirm: true, cap: "mission_fly", disabled: rcDown,
                      title: rcDown
                        ? "遙控器未連線——自動起飛的前提是有人能隨時接管" : undefined,
-                     body: { mission_id: missionId || undefined } })}
+                     body: { plan_id: planId || undefined } })}
               {/* **換任務不該被迫用「上傳另一份蓋過去」來達成**——那是一個
                   更重、更容易出錯的動作（完整握手＋逐項讀回比對）。
                   兩段式確認：清掉機上航線是不可復原的 */}
@@ -1312,7 +1312,7 @@ export default function CommandPanel() {
               {holding && btn("繼續任務", "▶ 繼續任務", "/mode/mission",
                               { confirm: true, cap: "mission_start" })}
               <button className="btn-plain btn-sm"
-                disabled={!missionId || inFlight}
+                disabled={!planId || inFlight}
                 title="飛行中換一份航線：先看系統打算怎麼調整（暫停→上傳→從最近的航點續飛），確認後才執行"
                 onClick={() => proposeChangeRoute()}>
                 {busy === "改航線" ? "⋯" : "⇄ 更換任務⋯"}
@@ -1392,7 +1392,7 @@ export default function CommandPanel() {
                 {proposal.current?.mission_seq != null && ` · 正在飛第 ${proposal.current.mission_seq} 點`}
               </div>
               <div style={{ marginTop: 10, fontWeight: 600 }}>
-                新航線「{proposal.mission_name}」
+                新航線「{proposal.plan_name}」
               </div>
               {proposal.resume_wp ? (
                 <div className="hint-line" style={{ marginTop: 4 }}>

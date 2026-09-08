@@ -22,7 +22,7 @@ import { API } from "@/lib/signal";
 
 interface Sess {
   id: string; drone_id: string; drone_name: string;
-  started_at: string; mission_name?: string | null;
+  started_at: string; plan_name?: string | null;
 }
 interface LinkRow {
   time: string; lat: number | null; lon: number | null;
@@ -76,7 +76,7 @@ function MultiChart({
 }
 
 export default function MissionReplay() {
-  const { missionId } = useParams<{ missionId: string }>();
+  const { planId } = useParams<{ planId: string }>();
   const router = useRouter();
   const [name, setName] = useState("");
   const [sessions, setSessions] = useState<Sess[]>([]);
@@ -96,20 +96,20 @@ export default function MissionReplay() {
   const containerRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
-    fetch(`${API}/api/missions/${missionId}/waypoints`)
+    fetch(`${API}/api/plans/${planId}/waypoints`)
       .then((r) => (r.ok ? r.json() : null))
       // planPath 補起飛爬升段與返航降落段：起飛項的高度是「爬到哪」，
       // 照 lat/lon 過濾直接畫會讓預計路徑從空中出發、與即時頁不同形狀
       .then((m) => m && setPlan(planPath(m.waypoints, m.home)))
       .catch(() => {});
     // 取得失敗不得說成「此路徑尚無已完成的航線」（見 lib/fetchJson.ts）
-    getJson<any[]>(`${API}/api/sessions?mission_id=${missionId}&limit=100`)
+    getJson<any[]>(`${API}/api/sessions?plan_id=${planId}&limit=100`)
       .then(async (rows: any[]) => {
         const done = rows.filter((r) => r.ended_at);
         setDropped(Math.max(0, done.length - MAX_OVERLAY));
         const take = done.slice(0, MAX_OVERLAY);
         setSessions(take);
-        if (take[0]?.mission_name) setName(take[0].mission_name);
+        if (take[0]?.plan_name) setName(take[0].plan_name);
         const result: Record<string, LinkRow[]> = {};
         for (const s of take) {
           const d = await getJson<{ link?: LinkRow[] }>(`${API}/api/sessions/${s.id}/track`);
@@ -119,7 +119,7 @@ export default function MissionReplay() {
         setLoaded(true);
       })
       .catch(() => setLoadErr(true));
-  }, [missionId]);
+  }, [planId]);
 
   // 每條航線的相對時間基準與總長
   const series = useMemo(() =>
@@ -242,7 +242,7 @@ export default function MissionReplay() {
   return (
     <div className="replay">
       <div className="replay-head">
-        <button className="btn-plain" onClick={() => router.push("/missions")}>← 路徑管理</button>
+        <button className="btn-plain" onClick={() => router.push("/plans")}>← 路徑管理</button>
         <span className="meta">
           任務回放{name && ` · ${name}`} · {series.length} 條航線同步重飛（相對時間）
           {dropped > 0 && `（另有 ${dropped} 條較舊未顯示）`}

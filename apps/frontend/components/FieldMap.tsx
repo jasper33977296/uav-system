@@ -27,7 +27,7 @@ import { aggregateCells, weakZones, type TrackRow, type WeakZone } from "@/lib/s
 
 interface SessRow {
   id: string; started_at: string; ended_at: string | null;
-  mission_id: string | null; mission_name: string | null;
+  plan_id: string | null; plan_name: string | null;
   drone_id: string; drone_name: string;
   note?: string | null;
   summary?: { samples_total?: number } | string | null;
@@ -123,7 +123,7 @@ export default function FieldMap() {
   }, [range]);
 
   const visible = useMemo(() => sessions.filter((s) =>
-    (missionF === "all" || s.mission_id === missionF)
+    (missionF === "all" || s.plan_id === missionF)
     && (droneF === "all" || s.drone_id === droneF)), [sessions, missionF, droneF]);
   const visLoaded = visible.filter((s) => tracks[s.id]);
 
@@ -303,7 +303,7 @@ export default function FieldMap() {
   // 篩選選項（由資料導出，零配置）
   const missionOpts = useMemo(() => {
     const m = new Map<string, string>();
-    for (const s of sessions) if (s.mission_id) m.set(s.mission_id, s.mission_name ?? s.mission_id);
+    for (const s of sessions) if (s.plan_id) m.set(s.plan_id, s.plan_name ?? s.plan_id);
     return [...m.entries()];
   }, [sessions]);
   const droneOpts = useMemo(() => {

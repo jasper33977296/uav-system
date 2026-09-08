@@ -164,9 +164,9 @@ export default function PlanPage() {
         }
         const q = wp != null ? `?wp_spd=${wp}${rad != null ? `&wp_radius=${rad}` : ""}` : "";
         const [ms, pr, ck] = await Promise.all([
-          getJson<{ name: string }[]>(`${API}/api/missions`),
-          getJson<Profile>(`${API}/api/missions/${id}/profile`),
-          getJson<Check>(`${API}/api/missions/${id}/check${q}`),
+          getJson<{ name: string }[]>(`${API}/api/plans`),
+          getJson<Profile>(`${API}/api/plans/${id}/profile`),
+          getJson<Check>(`${API}/api/plans/${id}/check${q}`),
         ]);
         if (stop) return;
         setName((ms as any).find?.((m: any) => m.id === id)?.name ?? id);
@@ -185,7 +185,7 @@ export default function PlanPage() {
   return (
     <div className="page">
       <div className="plan-head">
-        <Link href="/missions" className="btn-plain btn-sm">← 路徑管理</Link>
+        <Link href="/plans" className="btn-plain btn-sm">← 路徑管理</Link>
         <h1 className="mtitle">{name || "…"}</h1>
       </div>
 

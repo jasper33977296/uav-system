@@ -40,13 +40,13 @@ def check(autopilot: str) -> str:
     wps.append({"seq": len(wps), "lat": 0.0, "lon": 0.0, "alt": None,
                 "action": "rtl"})                     # ← 029 的回歸點
 
-    ok, r = post("/api/missions", {"name": f"conformance-{autopilot}",
+    ok, r = post("/api/plans", {"name": f"conformance-{autopilot}",
                                    "source": "plan-file", "waypoints": wps},
                  base=BACKEND)
     assert ok, f"建任務失敗：{r}"
-    mission_id = r["id"]
+    plan_id = r["id"]
     try:
-        ok, up = post(f"/api/command/{sysid}/mission/upload", {"mission_id": mission_id})
+        ok, up = post(f"/api/command/{sysid}/mission/upload", {"plan_id": plan_id})
         assert ok, (f"上傳被拒：{up}"
                     "\n    → 若是 MAV_MISSION_UNSUPPORTED，檢查無座標項的 frame"
                     "（issue 029：RTL 要 MAV_FRAME_MISSION=2）")
@@ -60,7 +60,7 @@ def check(autopilot: str) -> str:
             f"{autopilot} 的 home_at_seq0={drv.home_at_seq0}）")
     finally:
         # 只刪自己造的資料（共用環境紀律）
-        delete(f"/api/missions/{mission_id}", base=BACKEND)
+        delete(f"/api/plans/{plan_id}", base=BACKEND)
     return (f"sysid {sysid}：{sent} 航點（以 RTL 結尾）上傳並回讀比對通過，"
             f"上線 {wire} 項（home_at_seq0={drv.home_at_seq0}）")
 

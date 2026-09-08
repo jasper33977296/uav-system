@@ -51,7 +51,7 @@ const MODE_LABEL: Record<Mode, string> = {
 
 interface SessRow {
   id: string; drone_name: string; started_at: string;
-  mission_id: string | null; mission_name: string | null;
+  plan_id: string | null; plan_name: string | null;
   note: string | null;
   origin?: string | null;      // 'test'＝rig/驗收觸發的架次
   //: 飛行中換過幾次路徑（doc/data-schema §3.4）。**「任務」維度整個假設
@@ -100,7 +100,7 @@ export default function AbCompare() {
   const [loadErr, setLoadErr] = useState<string | null>(null);
   const [mode, setMode] = useState<Mode>("time");
   const [drone, setDrone] = useState<string | null>(null);
-  const [missionId, setMissionId] = useState<string | null>(null);
+  const [planId, setMissionId] = useState<string | null>(null);
   const [baseId, setBaseId] = useState<string | null>(null);
   const [sel, setSel] = useState<string[]>([]);
   const [heatId, setHeatId] = useState<string | null>(null);
@@ -140,8 +140,8 @@ export default function AbCompare() {
   const cand = useMemo(() => {
     if (mode === "cross") return listed;
     const d = listed.filter((r) => r.drone_name === drone);
-    return mode === "time" ? d : d.filter((r) => r.mission_id === missionId);
-  }, [listed, mode, drone, missionId]);
+    return mode === "time" ? d : d.filter((r) => r.plan_id === planId);
+  }, [listed, mode, drone, planId]);
 
   /** 標籤：帶到剛好能分辨為止，不多帶。 */
   const tripLabel = useCallback((s: SessRow | null | undefined): string => {
@@ -185,19 +185,19 @@ export default function AbCompare() {
   // 切到「任務」維度時，把機與任務換到**真的有任務紀錄**的那一組：
   // 停在一台沒有任務的機上，畫面會是空的，那不是這個維度的樣子
   const seatMission = () => {
-    const has = sessions.filter((s) => s.mission_id);
+    const has = sessions.filter((s) => s.plan_id);
     if (!has.length) return;
     const mine = has.filter((s) => s.drone_name === drone);
     if (mine.length) {
-      if (!mine.some((s) => s.mission_id === missionId))
-        setMissionId(mine[0].mission_id);
+      if (!mine.some((s) => s.plan_id === planId))
+        setMissionId(mine[0].plan_id);
       return;
     }
     const cnt: Record<string, number> = {};
     for (const r of has) cnt[r.drone_name] = (cnt[r.drone_name] ?? 0) + 1;
     const d = Object.entries(cnt).sort((a, b) => b[1] - a[1])[0][0];
     setDrone(d);
-    setMissionId(has.find((s) => s.drone_name === d)!.mission_id);
+    setMissionId(has.find((s) => s.drone_name === d)!.plan_id);
   };
 
   // 切到「機隊」維度時預設就挑到**別台機**去：沿用上一個維度的選擇會讓
@@ -230,14 +230,14 @@ export default function AbCompare() {
   // 參考路徑：任務維度下每一趟共用同一條計畫航線（共同 X 軸的最佳來源）；
   // 其他維度沒有共同航線，基準就是基準那一趟的軌跡
   useEffect(() => {
-    const mid = mode === "mission" ? missionId : null;
+    const mid = mode === "mission" ? planId : null;
     if (!mid) { setPlan(null); return; }
-    fetch(`${API}/api/missions/${mid}/waypoints`)
+    fetch(`${API}/api/plans/${mid}/waypoints`)
       .then((r) => (r.ok ? r.json() : null))
       .then((d) => setPlan((d?.waypoints ?? [])
         .filter((w: Pt) => w.lat && w.lon)))
       .catch(() => setPlan(null));
-  }, [mode, missionId]);
+  }, [mode, planId]);
 
   const baseRows = (baseId && tracks[baseId]) || [];
 
@@ -392,8 +392,8 @@ export default function AbCompare() {
   const missionsOf = (d: string | null) => {
     const seen = new Map<string, string>();
     for (const r of sessions) {
-      if (r.drone_name === d && r.mission_id)
-        seen.set(r.mission_id, r.mission_name ?? "（未命名航線）");
+      if (r.drone_name === d && r.plan_id)
+        seen.set(r.plan_id, r.plan_name ?? "（未命名航線）");
     }
     return [...seen.entries()];
   };
@@ -449,7 +449,7 @@ export default function AbCompare() {
             </select>
             {mode === "mission" && (<>
               <span className="hint-line">任務</span>
-              <select value={missionId ?? ""} disabled={noMission}
+              <select value={planId ?? ""} disabled={noMission}
                 onChange={(e) => setMissionId(e.target.value)}>
                 {noMission
                   ? <option value="">（沒有任務紀錄）</option>
@@ -486,8 +486,8 @@ export default function AbCompare() {
                 <option key={s.id} value={s.id}>{tripLabel(s)}</option>
               ))}
             </select>
-            {baseSess?.mission_name && (
-              <span className="chip">{baseSess.mission_name}</span>
+            {baseSess?.plan_name && (
+              <span className="chip">{baseSess.plan_name}</span>
             )}
           </div>
           <div className="sess-pills cmp-tripsel">
@@ -570,7 +570,7 @@ export default function AbCompare() {
                   {noteCell(baseSess)}
                 </td>
                 {mode === "cross" && (
-                  <td className="cmp-mis">{baseSess?.mission_name ?? "—"}</td>)}
+                  <td className="cmp-mis">{baseSess?.plan_name ?? "—"}</td>)}
                 <td className="num">{f1(rows[0].res.summary.a.mean)}</td>
                 <td className="num">{f1(rows[0].res.summary.a.p50)}</td>
                 <td className="num"><b>{f1(rows[0].res.summary.a.p5)}</b></td>
@@ -587,7 +587,7 @@ export default function AbCompare() {
                     {noteCell(r.sess)}
                   </td>
                   {mode === "cross" && (
-                    <td className="cmp-mis">{r.sess.mission_name ?? "—"}</td>)}
+                    <td className="cmp-mis">{r.sess.plan_name ?? "—"}</td>)}
                   <td className="num">{f1(r.res.summary.b.mean)}</td>
                   <td className="num">{f1(r.res.summary.b.p50)}</td>
                   <td className="num"><b>{f1(r.res.summary.b.p5)}</b></td>

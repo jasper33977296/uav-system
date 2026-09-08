@@ -38,12 +38,12 @@ def main():
             wp(2, BEYOND, ALT, 16, "waypoint"),
             wp(3, (0, 0), None, 20, "rtl", frame=2),
         ]}
-    res = call(f"{BACKEND}/api/missions", mission)
+    res = call(f"{BACKEND}/api/plans", mission)
     mid = res["id"]
     chk = res.get("check") or {}
     print(f"📄 任務入庫 {mid}（預檢 {'✅' if chk.get('ok') else '❌ ' + '；'.join(chk.get('problems', []))}）")
 
-    up = call(f"{COMMAND}/api/command/{sysid}/mission/upload", {"mission_id": mid})
+    up = call(f"{COMMAND}/api/command/{sysid}/mission/upload", {"plan_id": mid})
     print(f"⬆️  上傳：{up.get('uploaded')} 項，回讀比對 {'✅' if up.get('verified') else '❌'}")
     for note in up.get("px4_notes") or []:
         print(f"   📢 PX4: {note}")

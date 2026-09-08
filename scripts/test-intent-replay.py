@@ -101,7 +101,7 @@ time.sleep(0.6)
 
 # ── 2. 失聯中送 intent：壓下來，回 queued ──────────────────────
 r1 = post(kind="intent", action="change_route", board_uid=UID,
-          params={"mission_id": "m-1", "hold_alt": 30})
+          params={"plan_id": "m-1", "hold_alt": 30})
 check("失聯中的 intent 回 queued（不是 no_agent＝放行）",
       r1.get("verdict") == "queued", json.dumps(r1, ensure_ascii=False)[:140])
 check("回話說得出「沒有送出去」", "沒有送出去" in (r1.get("reason") or ""))

@@ -3,7 +3,8 @@ import logging
 import time
 from contextlib import asynccontextmanager
 
-from fastapi import FastAPI, WebSocket, WebSocketDisconnect
+from fastapi import FastAPI, Request, WebSocket, WebSocketDisconnect
+from fastapi.responses import RedirectResponse
 from fastapi.middleware.cors import CORSMiddleware
 
 from . import agent_link, db, mavlink_rx, msg_registry, video_rec
@@ -279,6 +280,19 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
+# ── 舊路徑相容（doc/mission-vs-plan-design.md §3.5）─────────────────────
+# `/api/missions*` 是「路徑」的舊名字。**308 而不是 301／302**：308 保留
+# method 與 body，POST／PATCH／DELETE 都轉得過去；301 會被某些 client 改成 GET。
+#
+# **這是有期限的。** 階段 2 要把 `missions` 這個名字拿回來當「任務」，
+# 兩者不能重疊——移除這段之前先看存取日誌確認沒有人還在打舊路徑。
+@app.api_route("/api/missions{rest:path}",
+               methods=["GET", "POST", "PATCH", "DELETE"], include_in_schema=False)
+async def _missions_moved(rest: str, request: Request):
+    q = f"?{request.url.query}" if request.url.query else ""
+    return RedirectResponse(f"/api/plans{rest}{q}", status_code=308)
+
 app.include_router(router)
 
 

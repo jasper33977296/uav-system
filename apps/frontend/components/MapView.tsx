@@ -86,7 +86,7 @@ export default function MapView() {
       const targets = st.targetIds.filter((id) => st.fleet[id]);
       const getWps = async (mid: string): Promise<Wp[]> => {
         if (!wpCacheRef.current.has(mid)) {
-          const d = await fetch(`${API}/api/missions/${mid}/waypoints`)
+          const d = await fetch(`${API}/api/plans/${mid}/waypoints`)
             .then((r) => r.json()).catch(() => null);
           wpCacheRef.current.set(mid, d?.waypoints ?? []);
         }
@@ -99,7 +99,7 @@ export default function MapView() {
         const per = [];
         for (const a of draftGroup.assignments) {
           per.push({ id: a.drone_id, color: colorFor(a.drone_id),
-                     wps: await getWps(a.mission_id) });
+                     wps: await getWps(a.plan_id) });
         }
         runs = separatePreview(per);
         if (draftGroup.mode === "unified" && fCfg.base) {
@@ -369,7 +369,7 @@ export default function MapView() {
           let planRally: any[] | null = null;
           // 沒有啟用中的航線時後端回 404——那是正常態不是錯誤（!ok 就清空
           // 疊圖）。console 會看到一則 404，不必追
-          const ra = await fetch(`${API}/api/missions/active`);
+          const ra = await fetch(`${API}/api/plans/active`);
           if (ra.ok) {
             const plan = await ra.json();
             planFence = plan.fence ?? null;

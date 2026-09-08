@@ -62,7 +62,7 @@ def on_intent(msg):
     if action == "change_route":
         prop = route.build_proposal(
             wps=WPS, cur=dict(POS), hold_alt=25.0,
-            mission_name="測試航線", mission_id="m1")
+            plan_name="測試航線", plan_id="m1")
         PROPS[msg["intent_id"]] = prop
         return {**base, "event": "proposal", "proposal": prop}
     if guard.executor(action) == "ground":
@@ -84,7 +84,7 @@ def on_decision(msg):
     if not ok:
         return {**base, "event": "guard_refused", "reason": why}
     now = route.build_proposal(wps=WPS, cur=dict(POS), hold_alt=25.0,
-                               mission_name="測試航線", mission_id="m1")
+                               plan_name="測試航線", plan_id="m1")
     drift = route.drift_reason(prior, now)
     if drift:
         PROPS[iid] = now

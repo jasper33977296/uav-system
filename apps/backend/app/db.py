@@ -25,8 +25,57 @@ async def init_pool() -> asyncpg.Pool:
             await asyncio.sleep(3)
 
 
+async def _rename_missions_to_plans() -> None:
+    """階段 1：`missions` → `plans`（doc/mission-vs-plan-design.md §3）。
+
+    **必須是 `migrate()` 的第一件事。** 本檔其餘的 SQL 已經全部改用新名字，
+    改名放在中段的話，同一支函式前段的 DDL 會先參照 `plans` 而它還不存在
+    ——啟動即 `relation "plans" does not exist`，服務起不來（實作時踩過）。
+
+    **七項在同一個 transaction 裡。** 中途失敗留下「三個新名字、四個舊名字」
+    是最難救的狀態；要嘛全改、要嘛全不改。
+
+    **用 `RENAME` 不用「新表＋複製＋刪舊表」**：`RENAME` 保住五條外鍵
+    （`waypoints` 是 CASCADE、其餘 SET NULL）、索引、既有資料，而且是原子的。
+    自己重建外鍵的話，錯一條就是刪除行為靜靜地變了。
+
+    冪等：名字已經是新的就整段跳過。
+    """
+    async with pool.acquire() as con:
+        async with con.transaction():
+            if await con.fetchval("SELECT to_regclass('public.missions')") is not None \
+                    and await con.fetchval("SELECT to_regclass('public.plans')") is None:
+                await con.execute("ALTER TABLE missions RENAME TO plans")
+                log.info("migrate: 表 missions → plans")
+            for table, old_c, new_c in (
+                    ("waypoints", "mission_id", "plan_id"),
+                    ("flight_sessions", "mission_id", "plan_id"),
+                    ("flight_sessions", "mission_name", "plan_name"),
+                    ("drones", "current_mission_id", "current_plan_id"),
+                    ("mission_groups", "base_mission_id", "base_plan_id"),
+                    ("group_assignments", "mission_id", "plan_id")):
+                has = await con.fetch(
+                    "SELECT column_name FROM information_schema.columns "
+                    "WHERE table_name = $1 AND column_name = ANY($2::text[])",
+                    table, [old_c, new_c])
+                names = {r["column_name"] for r in has}
+                if old_c in names and new_c not in names:
+                    await con.execute(
+                        f"ALTER TABLE {table} RENAME COLUMN {old_c} TO {new_c}")
+                    log.info("migrate: %s.%s → %s", table, old_c, new_c)
+                elif old_c in names and new_c in names:
+                    # **兩個名字同時在＝有人（或某次失敗的啟動）把新欄位另外
+                    # 建出來了。** 這時不能猜哪一個是真值，只能大聲說出來——
+                    # 靜靜跳過的下場是：舊欄位有資料、新欄位是空的，而程式
+                    # 從此讀空的那一個（2026-09-08 實際發生過）。
+                    log.error("migrate: %s 同時有 %s 與 %s——**沒有改名**。"
+                              "請人工確認哪一個是真值再處理", table, old_c, new_c)
+
+
 async def migrate() -> None:
     """既有資料庫的增量變更（db/init 只在全新 volume 執行）。冪等，啟動時跑。"""
+    # **這一行必須留在最前面**（見 _rename_missions_to_plans 的說明）
+    await _rename_missions_to_plans()
     await pool.execute("ALTER TABLE drones ADD COLUMN IF NOT EXISTS video_url TEXT")
     # 2026-08-10：模擬場景改為 link_sim 內建常數，拆除模擬器專用表
     await pool.execute("DROP TABLE IF EXISTS interference_zones")
@@ -35,15 +84,15 @@ async def migrate() -> None:
     # command 仍保留 IF NOT EXISTS 無妨）
     await pool.execute("ALTER TABLE drones ADD COLUMN IF NOT EXISTS mav_sysid INT")
     # issue 020：每機「當前飛的任務」——command 上傳任務時設，create_session
-    # 據此綁 session.mission_id（任務↔架次因果鏈，非一次性補丁）
-    await pool.execute("ALTER TABLE drones ADD COLUMN IF NOT EXISTS current_mission_id UUID")
+    # 據此綁 session.plan_id（任務↔架次因果鏈，非一次性補丁）
+    await pool.execute("ALTER TABLE drones ADD COLUMN IF NOT EXISTS current_plan_id UUID")
     # 037：.plan 自報的目標機種。QGC 的 firmwareType/vehicleType 用的是
     # MAV_AUTOPILOT／MAV_TYPE 這兩個 enum，**與 HEARTBEAT 同源**，所以可以
     # 直接跟機端偵測到的值比對。NULL＝這份任務沒說（手繪、舊資料、從機上讀回）
     await pool.execute(
-        "ALTER TABLE missions ADD COLUMN IF NOT EXISTS firmware_type INT")
+        "ALTER TABLE plans ADD COLUMN IF NOT EXISTS firmware_type INT")
     await pool.execute(
-        "ALTER TABLE missions ADD COLUMN IF NOT EXISTS vehicle_type INT")
+        "ALTER TABLE plans ADD COLUMN IF NOT EXISTS vehicle_type INT")
     # 038：飛控板的唯一 ID（AUTOPILOT_VERSION.uid2）。**目前唯一機器可驗證的
     # 身分**——sysid 只是機上可改的參數。NULL＝還沒問到（不是「沒有」）
     await pool.execute("ALTER TABLE drones ADD COLUMN IF NOT EXISTS board_uid TEXT")
@@ -86,21 +135,21 @@ async def migrate() -> None:
     # 航線自帶的圍欄（QGC .plan 的 geoFence）。**圍欄是每份航線自己的事**，
     # 不是系統的全域設定——測繪任務與定點巡檢的合理範圍可以差一個數量級。
     # NULL＝這份 .plan 沒畫圍欄（退回系統預設，而且報告會說出用的是哪一個）
-    await pool.execute("ALTER TABLE missions ADD COLUMN IF NOT EXISTS fence JSONB")
+    await pool.execute("ALTER TABLE plans ADD COLUMN IF NOT EXISTS fence JSONB")
     # QGC 的 plannedHomePosition [lat, lon, alt]。**RTL 沒有座標**——它的意思是
     # 「回到 home」，所以少了這個點，返航那一段在畫面上根本畫不出來，
     # 使用者會以為航線在最後一個航點就結束了（2026-08-26 使用者回報）。
     # 它同時也是距離量測該用的原點：起飛項在很多 .plan 裡是 0,0
-    await pool.execute("ALTER TABLE missions ADD COLUMN IF NOT EXISTS home JSONB")
+    await pool.execute("ALTER TABLE plans ADD COLUMN IF NOT EXISTS home JSONB")
     # .plan 宣告的速度，用來估預計時間。**沒宣告就不估**（不給預設值——
     # 猜一個看起來合理的數字，使用者會拿它安排電池）
     await pool.execute(
-        "ALTER TABLE missions ADD COLUMN IF NOT EXISTS cruise_speed REAL")
+        "ALTER TABLE plans ADD COLUMN IF NOT EXISTS cruise_speed REAL")
     await pool.execute(
-        "ALTER TABLE missions ADD COLUMN IF NOT EXISTS hover_speed REAL")
+        "ALTER TABLE plans ADD COLUMN IF NOT EXISTS hover_speed REAL")
     # QGC 的 rallyPoints（緊急備降點）。**QGC 畫得出來、我們畫不出來，
     # 兩邊的圖就不一樣**——而使用者是拿這張圖來確認「機會怎麼飛」的
-    await pool.execute("ALTER TABLE missions ADD COLUMN IF NOT EXISTS rally JSONB")
+    await pool.execute("ALTER TABLE plans ADD COLUMN IF NOT EXISTS rally JSONB")
     # 039/038 兩層身分的**人工維護那層**：機架序號與型號。
     # **不動 serial_no**——它現在扛著自動註冊的冪等性（四處 ON CONFLICT），
     # 改它的語意風險不對稱：那條路徑出錯會讓每次心跳都新增一筆機。
@@ -116,20 +165,20 @@ async def migrate() -> None:
     # 5G 模組、Wi-Fi 卡、代理版本屬於後者；混成一個欄位，換件時就說不清是哪邊變了。
     await pool.execute(
         "ALTER TABLE drones ADD COLUMN IF NOT EXISTS agent_uid TEXT")
-    # current_mission_id → missions 的參照完整性（ON DELETE SET NULL）：少了它，
-    # 刪任務會讓 current_mission_id 變懸空指標，之後 create_session 綁 mission_id
+    # current_plan_id → missions 的參照完整性（ON DELETE SET NULL）：少了它，
+    # 刪任務會讓 current_plan_id 變懸空指標，之後 create_session 綁 plan_id
     # 就撞 flight_sessions_mission_id_fkey → 解鎖建 session 每次拋錯 → 該機 armed
     # 永遠標不起來、不錄遙測（多機 bring-up 實測炸點：刪光飛行資料後殘留懸空
-    # current_mission_id）。先清懸空值再補約束（冪等；約束不存在才加）。
+    # current_plan_id）。先清懸空值再補約束（冪等；約束不存在才加）。
     await pool.execute(
         """DO $$ BEGIN
-             UPDATE drones d SET current_mission_id = NULL
-               WHERE current_mission_id IS NOT NULL
-                 AND NOT EXISTS (SELECT 1 FROM missions m WHERE m.id = d.current_mission_id);
+             UPDATE drones d SET current_plan_id = NULL
+               WHERE current_plan_id IS NOT NULL
+                 AND NOT EXISTS (SELECT 1 FROM plans m WHERE m.id = d.current_plan_id);
              IF NOT EXISTS (SELECT 1 FROM pg_constraint
                             WHERE conname = 'drones_current_mission_id_fkey') THEN
                ALTER TABLE drones ADD CONSTRAINT drones_current_mission_id_fkey
-                 FOREIGN KEY (current_mission_id) REFERENCES missions(id) ON DELETE SET NULL;
+                 FOREIGN KEY (current_plan_id) REFERENCES plans(id) ON DELETE SET NULL;
              END IF;
            END $$;""")
     # issue 014 STATUSTEXT Phase A：事件來源分類。'vehicle'＝自駕儀自己吐的 log
@@ -148,7 +197,7 @@ async def migrate() -> None:
     await pool.execute("""CREATE TABLE IF NOT EXISTS mission_groups (
         id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
         name TEXT NOT NULL,
-        base_mission_id UUID REFERENCES missions(id),   -- unified 展開來源
+        base_plan_id UUID REFERENCES plans(id),   -- unified 展開來源
         mode TEXT NOT NULL DEFAULT 'unified',            -- unified / separate
         params JSONB,                                    -- vsep_m/rtl_stagger_m 等
         status TEXT NOT NULL DEFAULT 'draft',            -- 見 §7.1 group.status
@@ -156,7 +205,7 @@ async def migrate() -> None:
     await pool.execute("""CREATE TABLE IF NOT EXISTS group_assignments (
         group_id UUID REFERENCES mission_groups(id) ON DELETE CASCADE,
         drone_id UUID NOT NULL,
-        mission_id UUID REFERENCES missions(id),         -- materialized 具體任務
+        plan_id UUID REFERENCES plans(id),         -- materialized 具體任務
         layer_index INT NOT NULL DEFAULT 0,
         phase TEXT NOT NULL DEFAULT 'idle',              -- 見 §7.1 assignment.phase
         PRIMARY KEY (group_id, drone_id))""")
@@ -284,9 +333,9 @@ async def migrate() -> None:
     # ── issue 023：missions 正名瘦身（路徑快照庫，不是任務庫）──────────────
     # kind 取代 created_by 兼差當判別欄。**加法不減法**：created_by 保留（歷史
     # 事實，留著零成本），只是不再被程式當分類用。
-    await pool.execute("ALTER TABLE missions ADD COLUMN IF NOT EXISTS kind TEXT")
+    await pool.execute("ALTER TABLE plans ADD COLUMN IF NOT EXISTS kind TEXT")
     await pool.execute("""
-        UPDATE missions SET kind = CASE created_by
+        UPDATE plans SET kind = CASE created_by
             WHEN 'plan-file'      THEN 'imported'      -- 使用者匯入 .plan
             WHEN 'vehicle'        THEN 'from-vehicle'  -- 從機上讀回
             WHEN 'group-gen'      THEN 'generated'     -- 編隊地面展開
@@ -294,31 +343,31 @@ async def migrate() -> None:
             ELSE 'imported' END
         WHERE kind IS NULL""")
     # 架次的路徑名稱快照：使用者定案「飛過的路徑可以刪，但飛行紀錄要永遠存在」。
-    # mission_id 是 ON DELETE SET NULL，刪路徑後回放頁只剩空白；留一份名字才能說
+    # plan_id 是 ON DELETE SET NULL，刪路徑後回放頁只剩空白；留一份名字才能說
     # 「飛的是 X（路徑已刪除）」而不是什麼都說不出來。
     await pool.execute(
-        "ALTER TABLE flight_sessions ADD COLUMN IF NOT EXISTS mission_name TEXT")
+        "ALTER TABLE flight_sessions ADD COLUMN IF NOT EXISTS plan_name TEXT")
     await pool.execute("""
-        UPDATE flight_sessions fs SET mission_name = m.name
-        FROM missions m WHERE m.id = fs.mission_id AND fs.mission_name IS NULL""")
+        UPDATE flight_sessions fs SET plan_name = m.name
+        FROM plans m WHERE m.id = fs.plan_id AND fs.plan_name IS NULL""")
     # 兩處外鍵原為 NO ACTION：刪「被編隊引用過的路徑」會 FK 違反丟 500（實測復現），
     # 與「飛過的路徑可以刪」的定案直接衝突。改 SET NULL 讓它真的刪得掉。
-    for tbl, col in (("group_assignments", "mission_id"),
-                     ("mission_groups", "base_mission_id")):
+    for tbl, col in (("group_assignments", "plan_id"),
+                     ("mission_groups", "base_plan_id")):
         await pool.execute(f"""
             DO $$ BEGIN
               IF EXISTS (SELECT 1 FROM pg_constraint
                          WHERE conname = '{tbl}_{col}_fkey' AND confdeltype <> 'n') THEN
                 ALTER TABLE {tbl} DROP CONSTRAINT {tbl}_{col}_fkey;
                 ALTER TABLE {tbl} ADD CONSTRAINT {tbl}_{col}_fkey
-                  FOREIGN KEY ({col}) REFERENCES missions(id) ON DELETE SET NULL;
+                  FOREIGN KEY ({col}) REFERENCES plans(id) ON DELETE SET NULL;
               END IF;
             END $$;""")
     # 三個死欄位（從建表至今從未被寫入或讀取；遷移前以資料驗證過全為預設/NULL）。
     # 它們是照「任務規劃工具」設計的，但本專案刻意不做規劃（規劃留 QGC）。
     # drone_id 的唯一用途（刪機時清 NULL）已同批從 api.py 移除。
     for col in ("status", "geometry", "drone_id"):
-        await pool.execute(f"ALTER TABLE missions DROP COLUMN IF EXISTS {col}")
+        await pool.execute(f"ALTER TABLE plans DROP COLUMN IF EXISTS {col}")
 
     # ══ 事實來源：drones 是那張 metadata 表，其他人用 FK 指回來 ══════════
     # （2026-09-02 使用者裁定）**所有資料都要靠 DB 存；事實來源由一張 metadata
@@ -767,31 +816,31 @@ async def create_default_primary(is_simulated: bool, connection_url: str) -> dic
 
 
 async def create_session(drone_id: str, link_mission: bool = True,
-                         mission_id: str | None = None) -> str:
-    """開一條航線紀錄。mission_id 指定時直接關聯（群飛模擬飛指定任務）；
+                         plan_id: str | None = None) -> str:
+    """開一條航線紀錄。plan_id 指定時直接關聯（群飛模擬飛指定任務）；
     否則 link_mission=True 時關聯任務庫當下的啟用路徑（is_active）——
     語意是「操作員宣告要飛的那條」。回放頁據此疊預計路徑。"""
-    # 綁定序（issue 020，任務↔架次因果鏈）：明示 mission_id > 該機當前任務
-    # （command 上傳時設 drones.current_mission_id，可靠事實源）> is_active 後備
+    # 綁定序（issue 020，任務↔架次因果鏈）：明示 plan_id > 該機當前任務
+    # （command 上傳時設 drones.current_plan_id，可靠事實源）> is_active 後備
     # 前向 origin 標記：該機 sysid 近 60s 有測試類 client（rig/test/acceptance）的
     # command_log → 'test'；否則 NULL（＝unknown，可由 backfill 再判）。用 command_log
     # 相關性、不做跨服務 drone 欄位 plumbing（會 racy）。與 backfill 同一判準。
-    # mission_name 快照（023）：路徑可被刪除（FK 是 SET NULL），但「飛行紀錄要
+    # plan_name 快照（023）：路徑可被刪除（FK 是 SET NULL），但「飛行紀錄要
     # 永遠存在」——留一份當下的名字，刪掉路徑後回放頁仍能說「飛的是 X（路徑已
-    # 刪除）」而不是一片空白。用 CTE 解一次 mission_id 再取名，避免把上面那串
+    # 刪除）」而不是一片空白。用 CTE 解一次 plan_id 再取名，避免把上面那串
     # COALESCE 抄第二遍（抄兩遍遲早會分岔）。
     row = await pool.fetchrow(
         """WITH resolved AS (
              SELECT COALESCE(
                $3::uuid,
-               (SELECT current_mission_id FROM drones WHERE id = $1),
-               CASE WHEN $2 THEN (SELECT id FROM missions WHERE is_active LIMIT 1) END
+               (SELECT current_plan_id FROM drones WHERE id = $1),
+               CASE WHEN $2 THEN (SELECT id FROM plans WHERE is_active LIMIT 1) END
              ) AS mid
            )
            INSERT INTO flight_sessions
-             (drone_id, started_at, mission_id, mission_name, origin)
+             (drone_id, started_at, plan_id, plan_name, origin)
            SELECT $1, now(), r.mid,
-                  (SELECT name FROM missions WHERE id = r.mid),
+                  (SELECT name FROM plans WHERE id = r.mid),
                   (CASE WHEN EXISTS (
                        SELECT 1 FROM command_log c
                        WHERE c.sysid = (SELECT mav_sysid FROM drones WHERE id = $1)
@@ -800,7 +849,7 @@ async def create_session(drone_id: str, link_mission: bool = True,
                    ) THEN 'test' END)
            FROM resolved r
            RETURNING id""",
-        drone_id, link_mission, mission_id,
+        drone_id, link_mission, plan_id,
     )
     return str(row["id"])
 

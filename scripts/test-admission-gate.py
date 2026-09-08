@@ -83,7 +83,7 @@ try:
             ("/mode/hold", "切模式", None),
             ("/takeoff", "起飛", {"alt": 10}),
             ("/mission/start", "開始任務", None),
-            ("/mission/upload", "上傳任務", {"mission_id": "00000000-0000-0000-0000-000000000000"})]:
+            ("/mission/upload", "上傳任務", {"plan_id": "00000000-0000-0000-0000-000000000000"})]:
         code, body = post(f"{COMMAND}/api/command/{a.fake_sysid}{path}", payload)
         d = body.get("detail") or {}
         good = code == 403 and d.get("code") == "not_admitted"

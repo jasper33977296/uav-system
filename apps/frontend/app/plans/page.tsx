@@ -11,7 +11,7 @@ import { type PlanPt, planPath } from "@/lib/geo";
 import { parseJsonb } from "@/lib/jsonb";
 import { API } from "@/lib/signal";
 
-interface Mission {
+interface Plan {
   id: string; name: string; source: string | null;
   created_at: string; is_active: boolean; waypoint_count: number;
   //: 預計飛行時間（秒）。**null＝算不出來**，eta_unknown 說明為什麼——
@@ -65,14 +65,14 @@ function parseFence(gf: any): Record<string, unknown> | null {
 
 /** 秒 → 人看的長度。**算不出來就說算不出來**，不要顯示「0 分」——
  * 那會被讀成「這條航線很短」而不是「我不知道」。 */
-function etaText(m: Mission): string {
+function etaText(m: Plan): string {
   if (m.eta_s == null) return "時間未知";
   const t = Math.round(m.eta_s);
   const mm = Math.floor(t / 60), ss = t % 60;
   return mm ? `約 ${mm} 分 ${String(ss).padStart(2, "0")} 秒` : `約 ${ss} 秒`;
 }
 
-function planTarget(m: Mission): { text: string; declared: boolean } {
+function planTarget(m: Plan): { text: string; declared: boolean } {
   const ap = m.firmware_type == null ? null
     : (AP_NAMES[m.firmware_type] ?? `firmware ${m.firmware_type}`);
   const vt = m.vehicle_type == null ? null
@@ -83,7 +83,7 @@ function planTarget(m: Mission): { text: string; declared: boolean } {
     : { text: "未宣告目標機種", declared: false };
 }
 interface Sess {
-  id: string; drone_id: string; drone_name: string; mission_id: string | null;
+  id: string; drone_id: string; drone_name: string; plan_id: string | null;
   started_at: string; ended_at: string | null;
   summary: { samples_total?: number; min_sinr?: number | null; avg_sinr?: number | null } | null;
 }
@@ -174,20 +174,20 @@ const fmtT = (t: string) =>
 
 interface WpRow extends PlanPt { frame?: number | null }
 
-export default function Missions() {
+export default function Plans() {
   const router = useRouter();
-  const [missions, setMissions] = useState<Mission[]>([]);
+  const [plans, setPlans] = useState<Plan[]>([]);
   const [sessions, setSessions] = useState<Sess[]>([]);
   const [err, setErr] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
   const [openId, setOpenId] = useState<string | null>(null);
   // 幾何預檢報告在這一頁**不顯示**（2026-09-07 使用者指示）。
-  // `GET /api/missions/{id}/check` 與上傳回應裡的 `check` 都還在，
+  // `GET /api/plans/{id}/check` 與上傳回應裡的 `check` 都還在，
   // **真正的守門也還在**：指令服務上傳到機上之前會自己檢查，沒過就是
   // `rejected_precheck`，理由會出現在任務控制面板上。這一頁拿掉的是
   // 「還沒要飛之前先讀一遍報告」那一層，不是安全網本身。
   const [menuId, setMenuId] = useState<string | null>(null);
-  const [toDelete, setToDelete] = useState<Mission | null>(null);
+  const [toDelete, setToDelete] = useState<Plan | null>(null);
   const [thumbs, setThumbs] = useState<Record<string, PlanPt[]>>({});
   const [frames, setFrames] = useState<Record<string, number[]>>({});
   const [sort, setSort] = useState<"used" | "new" | "name">("used");
@@ -197,10 +197,10 @@ export default function Missions() {
 
   // 縮圖與高度語意：每條路線抓一次 waypoints（路線數少，逐條抓可接受）
   useEffect(() => {
-    for (const m of missions) {
+    for (const m of plans) {
       if (thumbs[m.id]) continue;
       // 縮圖取不到＝該列無縮圖（顯性缺口，不會假裝沒事），沿用靜默 catch
-      getJson<{ waypoints?: WpRow[] }>(`${API}/api/missions/${m.id}/waypoints`)
+      getJson<{ waypoints?: WpRow[] }>(`${API}/api/plans/${m.id}/waypoints`)
         .then((d) => {
           const wps = d.waypoints ?? [];
           // **縮圖與三個地圖頁走同一支 planPath**（2026-09-07）：起飛爬升段、
@@ -214,11 +214,11 @@ export default function Missions() {
         .catch(() => {});
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [missions]);
+  }, [plans]);
 
   const reload = useCallback(() => {
     // 見 lib/fetchJson.ts：取不到不得變成「沒有路徑／沒有航線」
-    getJson<Mission[]>(`${API}/api/missions`).then(setMissions)
+    getJson<Plan[]>(`${API}/api/plans`).then(setPlans)
       .catch(() => setErr("無法取得路徑清單"));
     getJson<any[]>(`${API}/api/sessions?limit=200`)
       // 逐列解析：一筆 summary 壞掉不得讓整份架次清單消失（見 lib/jsonb.ts）
@@ -265,7 +265,7 @@ export default function Missions() {
     if (navCount < 2) { setErr("檔案內找不到足夠的導航航點"); return; }
     setBusy(true);
     try {
-      const res = await fetch(`${API}/api/missions`, {
+      const res = await fetch(`${API}/api/plans`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
@@ -289,15 +289,15 @@ export default function Missions() {
   }
 
   const usesOf = (id: string) => sessions
-    .filter((s) => s.mission_id === id)
+    .filter((s) => s.plan_id === id)
     .sort((a, b) => (a.started_at < b.started_at ? 1 : -1));
 
   // 排序與搜尋**只在多到會找不到的時候才出現**：兩三份航線時它們只是雜訊
-  const many = missions.length > 6;
+  const many = plans.length > 6;
   const shown = (() => {
     const needle = q.trim().toLowerCase();
-    const list = missions.filter((m) => !needle || m.name.toLowerCase().includes(needle));
-    const last = (m: Mission) => usesOf(m.id)[0]?.started_at ?? "";
+    const list = plans.filter((m) => !needle || m.name.toLowerCase().includes(needle));
+    const last = (m: Plan) => usesOf(m.id)[0]?.started_at ?? "";
     if (!many) return list;
     if (sort === "new") return [...list].sort((a, b) => (a.created_at < b.created_at ? 1 : -1));
     if (sort === "name") return [...list].sort((a, b) => a.name.localeCompare(b.name));
@@ -315,7 +315,7 @@ export default function Missions() {
         if (f) uploadPlan(f);
       }}>
       <div className="drone-head">
-        <span className="name">路徑{missions.length ? `（${missions.length}）` : ""}</span>
+        <span className="name">路徑{plans.length ? `（${plans.length}）` : ""}</span>
         <button className="btn-plain btn-sm" disabled={busy}
           onClick={() => fileRef.current?.click()}>＋ 上傳 .plan</button>
         <span className="spacer" />
@@ -341,12 +341,12 @@ export default function Missions() {
         </div>
       )}
 
-      {missions.length === 0 && !err && (
+      {plans.length === 0 && !err && (
         <div className="card"><div className="empty">
           還沒有存下任何航線——用上面的「＋ 上傳 .plan」加一份。
         </div></div>
       )}
-      {missions.length > 0 && shown.length === 0 && (
+      {plans.length > 0 && shown.length === 0 && (
         <div className="card"><div className="empty">沒有符合的名稱。</div></div>
       )}
 
@@ -432,14 +432,14 @@ export default function Missions() {
                 <button className="btn-plain btn-sm" disabled={busy}
                   onClick={() => {
                     setMenuId(null);
-                    call(`/api/missions/${m.id}/activate?active=${!m.is_active}`,
+                    call(`/api/plans/${m.id}/activate?active=${!m.is_active}`,
                          { method: "POST" });
                   }}>
                   {m.is_active ? "從即時頁隱藏" : "顯示於即時頁"}
                 </button>
                 {/* 規劃子頁（issues/048）。**放在這一頁底下，不另開頂層頁**
                     ——使用者 2026-09-08：「管理本身包含規劃」 */}
-                <a className="btn-plain btn-sm" href={`/missions/${m.id}/plan`}
+                <a className="btn-plain btn-sm" href={`/plans/${m.id}/plan`}
                   title="剖面圖（地面高程 vs 規劃高度）與逐段的離地／速度"
                   onClick={() => setMenuId(null)}>離地與速度</a>
                 {/* 地形跟隨（issues/047 §1-A）：**存成新的一份**，不就地改寫。
@@ -454,7 +454,7 @@ export default function Missions() {
                       + "會另存一份，原本這份不動。"}
                   onClick={() => {
                     setMenuId(null);
-                    call(`/api/missions/${m.id}/terrain-frame`, { method: "POST" });
+                    call(`/api/plans/${m.id}/terrain-frame`, { method: "POST" });
                   }}>
                   改成地形跟隨
                 </button>
@@ -525,7 +525,7 @@ export default function Missions() {
           const f = e.target.files?.[0]; if (f) uploadPlan(f); e.target.value = "";
         }} />
       {/* 「從機上讀回」按鈕移除（2026-09-07 使用者指示）。
-          `POST /api/missions/from-vehicle` 還在，rig 與 curl 叫得到——
+          `POST /api/plans/from-vehicle` 還在，rig 與 curl 叫得到——
           拿掉的是這一頁的入口 */}
 
       {toDelete && (
@@ -533,7 +533,7 @@ export default function Missions() {
           onConfirm={() => {
             const id = toDelete.id;
             setToDelete(null);
-            call(`/api/missions/${id}`, { method: "DELETE" });
+            call(`/api/plans/${id}`, { method: "DELETE" });
           }}
           onClose={() => setToDelete(null)}>
           <div>這份航線會從清單消失。</div>

@@ -34,9 +34,9 @@ CREATE UNIQUE INDEX idx_drones_one_primary ON drones ((true)) WHERE is_primary;
 CREATE TABLE flight_sessions (
   id         UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
   drone_id   UUID NOT NULL REFERENCES drones(id),
-  mission_id UUID,                   -- 開航線時任務庫的啟用路徑（操作員宣告要飛的那條）
+  plan_id    UUID,                   -- 開架次時的啟用路徑（操作員宣告要飛的那條）
                                        -- 回放頁據此疊出當時的預計路徑；手飛為 NULL
-                                       -- （FK 在 missions 建表後以 ALTER 補上，見檔尾）
+                                       -- （FK 在 plans 建表後以 ALTER 補上，見檔尾）
   started_at TIMESTAMPTZ NOT NULL,
   ended_at   TIMESTAMPTZ,
   summary    JSONB                     -- 落地後計算：航程、最大高度、SINR 統計等
@@ -112,7 +112,7 @@ CREATE UNIQUE INDEX idx_link_dedup ON link_metrics (drone_id, time);
 -- ============================================================
 -- 任務與航點
 -- ============================================================
-CREATE TABLE missions (
+CREATE TABLE plans (
   id         UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
   name       TEXT NOT NULL,
   drone_id   UUID REFERENCES drones(id),
@@ -124,12 +124,12 @@ CREATE TABLE missions (
 );
 
 CREATE TABLE waypoints (
-  mission_id UUID REFERENCES missions(id) ON DELETE CASCADE,
+  plan_id UUID REFERENCES plans(id) ON DELETE CASCADE,
   seq        INT,
   lat DOUBLE PRECISION, lon DOUBLE PRECISION, alt REAL,
   action     TEXT DEFAULT 'waypoint',  -- takeoff / waypoint / hover / photo / land / rtl
   params     JSONB,
-  PRIMARY KEY (mission_id, seq)
+  PRIMARY KEY (plan_id, seq)
 );
 
 -- ============================================================
@@ -152,7 +152,7 @@ CREATE INDEX idx_events_time ON events (time DESC);
 
 ALTER TABLE flight_sessions
   ADD CONSTRAINT fk_sessions_mission
-  FOREIGN KEY (mission_id) REFERENCES missions(id) ON DELETE SET NULL;
+  FOREIGN KEY (plan_id) REFERENCES plans(id) ON DELETE SET NULL;
 
 -- ============================================================
 -- 資料生命週期（2026-08-04 定案）：

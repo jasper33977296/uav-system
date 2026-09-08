@@ -43,11 +43,11 @@ def import_plan(path: str) -> str:
     name = name[:-5] if name.endswith(".plan") else name
     # issue 020 去重：同名任務重用既有記錄，不每飛新建一筆（否則比較頁按
     # mission 分組後每次飛都是不同 mission、無法「同任務多次比較」）
-    existing = [m for m in call(f"{BACKEND}/api/missions") if m["name"] == name]
+    existing = [m for m in call(f"{BACKEND}/api/plans") if m["name"] == name]
     if existing:
         print(f"📄 重用任務庫既有「{name}」（{existing[0]['id'][:8]}），不新建")
         return existing[0]["id"]
-    res = call(f"{BACKEND}/api/missions",
+    res = call(f"{BACKEND}/api/plans",
                {"name": name, "source": "plan-file", "waypoints": wps})
     chk = res.get("check") or {}
     print(f"📄 已匯入任務庫「{name}」（{len(wps)} 項，預檢 "
@@ -58,7 +58,7 @@ def import_plan(path: str) -> str:
 
 
 def resolve_mission(arg: str) -> str:
-    missions = call(f"{BACKEND}/api/missions")
+    missions = call(f"{BACKEND}/api/plans")
     for m in missions:
         if m["id"] == arg or m["name"] == arg:
             return m["id"]
@@ -73,7 +73,7 @@ def main():
     mid = import_plan(arg) if arg.endswith(".plan") else resolve_mission(arg)
 
     sysid = pick_sysid()
-    up = call(f"{COMMAND}/api/command/{sysid}/mission/upload", {"mission_id": mid})
+    up = call(f"{COMMAND}/api/command/{sysid}/mission/upload", {"plan_id": mid})
     print(f"⬆️  上傳 sysid={sysid}：{up.get('uploaded')} 項，"
           f"回讀比對 {'✅' if up.get('verified') else '❌'}")
     for note in up.get("px4_notes") or []:

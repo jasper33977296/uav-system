@@ -197,7 +197,7 @@ interface UavStore {
     mode: "unified" | "separate";
     base: string;                      // unified：base_mission_id
     spacing: number;                   // unified：垂直層距（GROUP_VSEP_M）
-    assign: Record<string, string>;    // separate：drone_id → mission_id
+    assign: Record<string, string>;    // separate：drone_id → plan_id
   };
   setFormationCfg: (p: Partial<UavStore["formationCfg"]>) => void;
   // 013-B 前半：draft 群組（POST /api/groups 的回應）——預覽自此改讀
@@ -214,7 +214,7 @@ interface UavStore {
     id: string; name: string; mode: string;
     conflictOk: boolean;
     conflicts: { a: string; b: string; why: string }[];
-    assignments: { drone_id: string; mission_id: string; layer_index: number;
+    assignments: { drone_id: string; plan_id: string; layer_index: number;
       phase: string; drone_name?: string; mav_sysid?: number | null }[];
   } | null;
   setDraftGroup: (g: UavStore["draftGroup"]) => void;
