@@ -17,6 +17,9 @@
   --mono:ui-monospace,"SF Mono","JetBrains Mono",Menlo,Consolas,monospace;
 }
 *{margin:0;padding:0;box-sizing:border-box}
+/* **`display:flex` 會壓過 UA 的 `[hidden]{display:none}`**——產品的
+   globals.css 有這條，原型漏了就會看到「隱藏的」表單照樣顯示 */
+[hidden]{display:none!important}
 body{font-family:system-ui,-apple-system,"Noto Sans TC","Segoe UI",sans-serif;
   background:var(--page);color:var(--ink);font-size:13px;line-height:1.5;
   -webkit-font-smoothing:antialiased}
@@ -101,6 +104,30 @@ tbody tr:last-child td{border-bottom:none}
 .honest{border-left:2px solid var(--hairline);padding-left:11px;color:var(--muted);
   font-size:12px;display:flex;flex-direction:column;gap:4px;max-width:76ch}
 .honest b{color:var(--ink-2);font-weight:600}
+/* 模式列：兩個入口（改既有／從零產生）*/
+.modes{display:flex;gap:8px;align-items:center;flex-wrap:wrap}
+.modes .seg button{padding:5px 12px}
+.newform{display:flex;gap:8px;align-items:flex-end;flex-wrap:wrap;
+  background:var(--surface);border:1px solid var(--border);border-radius:10px;padding:10px 12px}
+.newform .f{display:flex;flex-direction:column;gap:3px}
+.newform label{font-size:11px;color:var(--muted);letter-spacing:.04em}
+.newform input[type=text]{background:var(--surface-2);border:1px solid var(--border);
+  border-radius:6px;padding:5px 8px;font-family:var(--mono);width:132px}
+.newform .go{border:1px solid var(--accent);color:var(--accent);background:var(--accent-bg);
+  border-radius:7px;padding:6px 14px}
+.newform .hintx{color:var(--muted);font-size:12px;max-width:34ch}
+
+/* 3D 的滑鼠說明與 tooltip */
+.tip{position:absolute;pointer-events:none;background:rgba(27,26,23,.96);
+  border:1px solid var(--border);border-radius:8px;padding:8px 10px;font-size:12px;
+  line-height:1.55;white-space:nowrap;z-index:5;box-shadow:0 6px 18px rgba(0,0,0,.45)}
+.tip b{color:var(--ink)}
+.tip .k{color:var(--muted);margin-right:6px}
+.tip .bad{color:var(--danger)}
+.hintbar{position:absolute;left:10px;bottom:8px;color:var(--muted);font-size:11px}
+#scene{cursor:grab}
+#scene.drag{cursor:grabbing}
+#scene.place{cursor:crosshair}
 @media (max-width:900px){.work{grid-template-columns:1fr}}
 @media (prefers-reduced-motion:reduce){*{transition:none!important}}
 </style></head><body>
@@ -120,9 +147,31 @@ tbody tr:last-child td{border-bottom:none}
     </div>
   </div>
 
+  <div class="modes">
+    <div class="seg">
+      <button aria-pressed="true" data-entry="edit">改既有航線</button>
+      <button aria-pressed="false" data-entry="new">從零產生</button>
+    </div>
+    <span class="note" id="entryNote">在 3D 上選航點，右欄調高度與速度。</span>
+  </div>
+
+  <div class="newform" id="newform" hidden>
+    <div class="f"><label>起飛點緯度</label>
+      <input type="text" id="lat" value="24.773449"></div>
+    <div class="f"><label>起飛點經度</label>
+      <input type="text" id="lon" value="121.045864"></div>
+    <div class="f"><label>起飛高度</label>
+      <input type="text" id="tkalt" value="1.5"></div>
+    <button class="go" id="startNew">從這裡開始放點</button>
+    <span class="hintx">先定起飛點，再在地形上一個一個點出航線。
+      每放一個點就用目前的門檻檢查一次。</span>
+  </div>
+
   <div class="work">
     <div class="stage">
       <canvas id="scene" width="1000" height="440"></canvas>
+      <div class="tip" id="tip" hidden></div>
+      <div class="hintbar" id="hintbar">拖曳＝旋轉 ・ 滾輪＝縮放 ・ 滑過航點或航段看細節</div>
       <div class="stagebar">
         <button aria-pressed="true" data-view="3d">3D 地形</button>
         <button aria-pressed="false" data-view="top">俯視</button>
@@ -177,7 +226,7 @@ tbody tr:last-child td{border-bottom:none}
 
   <div class="tablewrap">
     <table><thead><tr>
-      <th>段</th><th>長度</th><th>離地</th><th>有效速度</th><th>速度來源</th><th>轉角</th><th>判定</th>
+      <th>段</th><th>長度</th><th>離地</th><th>有效速度</th><th>速度來源</th><th title="飛機在這一段起點要轉多少度：0°＝直直穿過去、90°＝直角、180°＝掉頭。轉角越大、速度越快，衝過頭越多">轉角 ⓘ</th><th>判定</th>
     </tr></thead><tbody id="legs"></tbody></table>
   </div>
 
@@ -186,6 +235,10 @@ tbody tr:last-child td{border-bottom:none}
     <div><b>「速度來源」那一欄是這張表存在的理由。</b>航線裡的 <code>DO_CHANGE_SPEED</code>
       只從它被執行到的那一項之後才生效；在那之前用的是機上的 <code>WP_SPD</code>。
       2026-09-07 使用者以為全程 0.3 m/s，起飛到第一個航點卻是 8 m/s。</div>
+    <div><b>「轉角」是飛機在那個航點要轉多少度</b>——0° 直直穿過去、90° 直角、
+      180° 掉頭。它重要是因為**飛機不會在點上原地轉**：以 V m/s 進入一個 R m 的
+      到達半徑，轉角越大衝過頭越多（實測 8 m/s 配 2 m 半徑，過衝約 9 m）。
+      <b>原型這一欄是佔位數字</b>，落地會用真的航點算。</div>
     <div><b>門檻是保守起點，不是算出來的公式。</b>離地 3 m／速度 1 m/s 來自
       2026-09-07 那一趟（1.5 m 加速通過 5 m/s 時失控），往安全側留。每台機可改。</div>
   </div>
@@ -220,68 +273,158 @@ let sel = 0, view = "3d", mode = "agl";
 const agl = w => HOME_AMSL + w.alt - groundAt(w.d);
 const legBad = i => i>0 && agl(WP[i]) < LOW_ALT && WP[i].spd > LOW_SPD;
 
-/* ── 3D 地形（canvas，不用任何函式庫）────────────────────── */
+/* ── 3D 地形：**真的可以轉、可以縮**（使用者 2026-09-08）──────
+   拖曳＝繞路徑中心旋轉、滾輪＝縮放、滑過去＝顯示細節。
+   落地要換成 maplibre 的地形（我們的 SRTM 得先轉成 terrain-RGB 圖磚），
+   但那不影響這裡要決定的事：**這樣的操作方式對不對**。 */
 const cv = document.getElementById("scene"), cx = cv.getContext("2d");
-/* 場地範圍（公尺）：航點就落在裡面，網格照 SRTM 的 30 m 格距畫
-   ——畫得比 30 m 細是騙人，那個解析度就是它能給的全部 */
-const GX0=-15, GX1=80, GY0=-15, GY1=155, GSTEP=30;
-function proj(x, y, z){
-  return [640 + (x - y) * 4.2, 66 + (x + y) * 1.5 - (z - 121.5) * 12];
-}
-function projTop(x, y){
-  return [640 + (x - 32) * 9.0, 220 + (y - 62) * 2.3];
-}
+const tip = document.getElementById("tip");
+const GX0=-20, GX1=85, GY0=-20, GY1=160, GSTEP=30;
+let bearing = -34, pitch = 56, zoom = 1, hover = null, placing = false;
+
 function terrainAt(gx, gy){
   return 121.6 + 1.0*Math.sin(gx/26) * Math.cos(gy/44) + 0.7*Math.sin(gy/30);
 }
+const CENTER = {x:32, y:62};
+function proj(x, y, z){
+  if (view === "top")
+    return [500 + (x-CENTER.x)*7.2*zoom, 220 + (y-CENTER.y)*2.4*zoom];
+  const b = bearing*Math.PI/180, p = pitch*Math.PI/180;
+  const dx = x-CENTER.x, dy = y-CENTER.y;
+  const xr = dx*Math.cos(b) - dy*Math.sin(b);
+  const yr = dx*Math.sin(b) + dy*Math.cos(b);
+  return [500 + xr*4.6*zoom,
+          230 + yr*4.6*zoom*Math.cos(p) - (z-121.5)*13*zoom*Math.sin(p)];
+}
+/* 反投影：只在「放點」時用，而且只解地面平面上的點 */
+function unproj(sx, sy){
+  const b = bearing*Math.PI/180, p = pitch*Math.PI/180;
+  const xr = (sx-500)/(4.6*zoom);
+  const yr = (sy-230)/(4.6*zoom*Math.cos(p));   /* 地面 z≈基準，忽略高度項 */
+  return {x: CENTER.x + xr*Math.cos(b) + yr*Math.sin(b),
+          y: CENTER.y - xr*Math.sin(b) + yr*Math.cos(b)};
+}
 function drawScene(){
   cx.clearRect(0,0,cv.width,cv.height);
-  const top = view === "top";
-  const P = top ? ((x,y)=>projTop(x,y)) : proj;
   cx.lineWidth = 1;
   for (let gy=GY0; gy<=GY1; gy+=GSTEP){
     cx.beginPath();
     for (let gx=GX0; gx<=GX1; gx+=5){
-      const [qx,qy] = P(gx,gy,terrainAt(gx,gy));
-      gx===GX0 ? cx.moveTo(qx,qy) : cx.lineTo(qx,qy);
+      const [qx,qy]=proj(gx,gy,terrainAt(gx,gy));
+      gx===GX0?cx.moveTo(qx,qy):cx.lineTo(qx,qy);
     }
-    cx.strokeStyle = "#5c574b"; cx.stroke();
+    cx.strokeStyle="#5c574b"; cx.stroke();
   }
   for (let gx=GX0; gx<=GX1; gx+=GSTEP){
     cx.beginPath();
     for (let gy=GY0; gy<=GY1; gy+=5){
-      const [qx,qy] = P(gx,gy,terrainAt(gx,gy));
-      gy===GY0 ? cx.moveTo(qx,qy) : cx.lineTo(qx,qy);
+      const [qx,qy]=proj(gx,gy,terrainAt(gx,gy));
+      gy===GY0?cx.moveTo(qx,qy):cx.lineTo(qx,qy);
     }
-    cx.strokeStyle = "#4a463d"; cx.stroke();
+    cx.strokeStyle="#4a463d"; cx.stroke();
   }
-  /* 每個航點往地面垂一根線＝離地空間，本身就是那張剖面圖的 3D 版 */
+  /* 每個航點往地面垂一根線＝離地空間 */
   WP.forEach((w,i)=>{
-    const g = groundAt(w.d), bad = legBad(i) || (i<WP.length-1 && legBad(i+1));
-    const [ax,ay]=P(w.x,w.y,HOME_AMSL+w.alt), [bx,by]=P(w.x,w.y,g);
+    const bad = legBad(i) || (i<WP.length-1 && legBad(i+1));
+    const [ax,ay]=proj(w.x,w.y,HOME_AMSL+w.alt), [bx,by]=proj(w.x,w.y,groundAt(w.d));
     cx.beginPath(); cx.moveTo(ax,ay); cx.lineTo(bx,by);
-    cx.strokeStyle = bad? "#e05e5e" : "rgba(57,135,229,.45)";
-    cx.lineWidth = i===sel? 2.5 : 1.5; cx.stroke();
+    cx.strokeStyle = bad?"#e05e5e":"rgba(57,135,229,.45)";
+    cx.lineWidth = i===sel?2.5:1.5; cx.stroke();
   });
-  /* 規劃路徑 */
   cx.beginPath();
-  WP.forEach((w,i)=>{ const [px,py]=P(w.x,w.y,HOME_AMSL+w.alt); i?cx.lineTo(px,py):cx.moveTo(px,py); });
+  WP.forEach((w,i)=>{const [qx,qy]=proj(w.x,w.y,HOME_AMSL+w.alt); i?cx.lineTo(qx,qy):cx.moveTo(qx,qy);});
   cx.strokeStyle="#3987e5"; cx.lineWidth=2.5; cx.lineJoin="round"; cx.stroke();
-  /* 不合格的段再描一次紅 */
-  for (let i=1;i<WP.length;i++){
+  for(let i=1;i<WP.length;i++){
     if(!legBad(i)) continue;
-    const a=P(WP[i-1].x,WP[i-1].y,HOME_AMSL+WP[i-1].alt), b=P(WP[i].x,WP[i].y,HOME_AMSL+WP[i].alt);
+    const a=proj(WP[i-1].x,WP[i-1].y,HOME_AMSL+WP[i-1].alt);
+    const b=proj(WP[i].x,WP[i].y,HOME_AMSL+WP[i].alt);
     cx.beginPath(); cx.moveTo(a[0],a[1]); cx.lineTo(b[0],b[1]);
     cx.strokeStyle="#e05e5e"; cx.lineWidth=3.5; cx.stroke();
   }
   WP.forEach((w,i)=>{
-    const [px,py]=P(w.x,w.y,HOME_AMSL+w.alt);
-    cx.beginPath(); cx.arc(px,py,i===sel?6:4,0,7);
-    cx.fillStyle = i===sel? "#d97757" : "#3987e5"; cx.fill();
+    const [qx,qy]=proj(w.x,w.y,HOME_AMSL+w.alt);
+    const hot = hover && hover.kind==="wp" && hover.i===i;
+    cx.beginPath(); cx.arc(qx,qy,i===sel?6:(hot?5:4),0,7);
+    cx.fillStyle = i===sel?"#d97757":(hot?"#f0eee6":"#3987e5"); cx.fill();
     cx.fillStyle="#8f8b80"; cx.font="11px ui-monospace,monospace";
-    cx.fillText(w.seq, px+8, py-6);
+    cx.fillText(w.seq, qx+8, qy-6);
   });
 }
+
+/* ── 滑過去顯示細節（使用者：速度不畫在 3D 上，用滑鼠看）────── */
+function pick(mx,my){
+  for(let i=0;i<WP.length;i++){
+    const [qx,qy]=proj(WP[i].x,WP[i].y,HOME_AMSL+WP[i].alt);
+    if(Math.hypot(mx-qx,my-qy)<11) return {kind:"wp",i};
+  }
+  for(let i=1;i<WP.length;i++){
+    const a=proj(WP[i-1].x,WP[i-1].y,HOME_AMSL+WP[i-1].alt);
+    const b=proj(WP[i].x,WP[i].y,HOME_AMSL+WP[i].alt);
+    const t=Math.max(0,Math.min(1,((mx-a[0])*(b[0]-a[0])+(my-a[1])*(b[1]-a[1]))/
+      ((b[0]-a[0])**2+(b[1]-a[1])**2||1)));
+    if(Math.hypot(mx-(a[0]+(b[0]-a[0])*t), my-(a[1]+(b[1]-a[1])*t))<8)
+      return {kind:"leg",i};
+  }
+  return null;
+}
+function showTip(h,mx,my){
+  if(!h){ tip.hidden=true; return; }
+  if(h.kind==="wp"){
+    const w=WP[h.i];
+    tip.innerHTML = `<b>seq ${w.seq}</b><br>
+      <span class="k">高度</span>${w.alt.toFixed(1)} m（離起飛點）<br>
+      <span class="k">離地</span>${agl(w).toFixed(1)} m<br>
+      <span class="k">地面</span>${groundAt(w.d).toFixed(1)} m 海拔`;
+  } else {
+    const a=WP[h.i-1], b=WP[h.i], bad=legBad(h.i);
+    tip.innerHTML = `<b>seq ${a.seq}→${b.seq}</b><br>
+      <span class="k">長度</span>${(b.d-a.d).toFixed(1)} m<br>
+      <span class="k">離地</span>${agl(b).toFixed(1)} m<br>
+      <span class="k">速度</span>${b.spd.toFixed(1)} m/s<br>
+      <span class="k">來源</span>${b.src}<br>
+      ${bad?'<span class="bad">低空帶速：擋上傳</span>':'<span class="k">判定</span>通過'}`;
+  }
+  tip.hidden=false;
+  const r=cv.getBoundingClientRect(), sc=r.width/cv.width;
+  tip.style.left = Math.min(mx*sc+14, r.width-190)+"px";
+  tip.style.top  = Math.max(mx? my*sc-10:0, 4)+"px";
+}
+let drag=null;
+cv.onpointerdown = e => {
+  if(placing) return;
+  drag={x:e.clientX,y:e.clientY,b:bearing,p:pitch};
+  cv.setPointerCapture(e.pointerId); cv.classList.add("drag");
+};
+cv.onpointermove = e => {
+  const r=cv.getBoundingClientRect();
+  const mx=(e.clientX-r.left)/r.width*cv.width, my=(e.clientY-r.top)/r.height*cv.height;
+  if(drag){
+    bearing = drag.b + (e.clientX-drag.x)*0.6;
+    /* 俯角夾在 12–86°：壓到 0 會變成側視，整個地形塌成一條線 */
+    pitch = Math.max(12, Math.min(86, drag.p + (e.clientY-drag.y)*0.35));
+    tip.hidden=true; drawScene(); return;
+  }
+  const h=pick(mx,my);
+  if(JSON.stringify(h)!==JSON.stringify(hover)){ hover=h; drawScene(); }
+  showTip(h,mx,my);
+};
+cv.onpointerup = () => { drag=null; cv.classList.remove("drag"); };
+cv.onpointerleave = () => { hover=null; tip.hidden=true; drawScene(); };
+cv.onwheel = e => {
+  e.preventDefault();
+  zoom = Math.max(0.45, Math.min(3.2, zoom * (e.deltaY<0?1.12:0.89)));
+  drawScene();
+};
+/* 從零產生：點地面就加一個航點 */
+cv.onclick = e => {
+  if(!placing) return;
+  const r=cv.getBoundingClientRect();
+  const q=unproj((e.clientX-r.left)/r.width*cv.width,(e.clientY-r.top)/r.height*cv.height);
+  const prev=WP[WP.length-1];
+  const d=prev.d+Math.hypot(q.x-prev.x,q.y-prev.y);
+  WP.push({seq:prev.seq+2,d,x:q.x,y:q.y,alt:prev.alt,spd:prev.spd,src:"沿用上一段"});
+  sel=WP.length-1; sync();
+};
 
 /* ── 剖面（離地為預設；海拔是 QGC 的那個視角）───────────── */
 const pc = document.getElementById("prof"), px = pc.getContext("2d");
@@ -393,6 +536,32 @@ document.querySelectorAll(".stagebar button").forEach(b => b.onclick = () => {
   document.querySelectorAll(".stagebar button").forEach(x=>
     x.setAttribute("aria-pressed", String(x===b)));
   drawScene(); });
+
+/* ── 兩個入口（使用者 2026-09-08：兩個都要）────────────────── */
+document.querySelectorAll(".modes .seg button").forEach(b => b.onclick = () => {
+  const isNew = b.dataset.entry === "new";
+  document.querySelectorAll(".modes .seg button").forEach(x=>
+    x.setAttribute("aria-pressed", String(x===b)));
+  document.getElementById("newform").hidden = !isNew;
+  document.getElementById("entryNote").textContent = isNew
+    ? "先輸入起飛點的經緯度，再在地形上一個一個點出航線。"
+    : "在 3D 上選航點，右欄調高度與速度。";
+  if(!isNew){ placing=false; cv.classList.remove("place");
+    document.getElementById("hintbar").textContent =
+      "拖曳＝旋轉 ・ 滾輪＝縮放 ・ 滑過航點或航段看細節"; }
+});
+document.getElementById("startNew").onclick = () => {
+  /* **起飛點的經緯度是第一個輸入**：沒有它，「離地多少」問不出來
+     ——地形高程要靠座標查（使用者 2026-09-08 指定的順序） */
+  WP.length = 0;
+  WP.push({seq:0,d:0,x:CENTER.x,y:CENTER.y,
+    alt:+document.getElementById("tkalt").value || 1.5,
+    spd:2.0, src:"機上 WP_SPD"});
+  sel=0; placing=true; cv.classList.add("place");
+  document.getElementById("hintbar").textContent =
+    "點地形＝放下一個航點 ・ 拖曳仍可旋轉（放點模式下請用滾輪縮放）";
+  sync();
+};
 document.querySelectorAll(".seg button").forEach(b => b.onclick = () => {
   mode=b.dataset.mode;
   document.querySelectorAll(".seg button").forEach(x=>
