@@ -233,6 +233,42 @@ max_rise_m 0.4    min_clearance_m 0.6    below_count 4
 
 （順帶：DNS 不是時間協定，同步時間要 NTP／GPS。）
 
+### 2026-09-08 量到的現況（不是「沒同步」，是「同步的來源不對」）
+
+| 量什麼 | 結果 |
+|---|---|
+| Pi 的同步狀態 | `System clock synchronized: yes`、`systemd-timesyncd` active |
+| Pi 現在對誰同步 | **`0.debian.pool.ntp.org`（103.186.118.219）——公用網際網路，走 5G 出網** |
+| jitter | 79.7 ms |
+| Pi 對地面站的實際偏差 | **Pi 快 1.7 ms**（從 Pi 直接查 `10.141.2.21:123`，往返 25.5 ms） |
+| 地面站自己 | `ntpd` stratum 3、offset 0.95 ms、`restrict default` 沒有 `noserve`／`ignore`＝**對 10.141.2.x 服務得到**（已從 Pi 實測收到回應） |
+| 鏈路樣本的「地面站收到時 − 機上採樣時」 | 中位 0.56 s、**最小 0.11 s** |
+
+**兩個結論：**
+
+1. **今天兩邊的時鐘只差約 2 ms，不是沒同步。** 鏈路樣本那 0.56 s 幾乎全是
+   取樣與傳輸延遲，不是時鐘偏差——最小值 0.11 s 才是偏差的上界。
+2. **但它同步在錯的東西上。** 現在靠的是「5G 出得了網」。現場沒有公網時，
+   Pi 沒有 RTC，時間就是 fake-hwclock 留下的值——**而那正是補傳時戳唯一的依據**。
+
+### 兩條要一起做，不是二選一
+
+* **NTP 指向地面站**（上面第 2 條）解決的是「**開機之後對得準**」。
+  地面站已經在服務、已經實測得到回應，只差 Pi 上一行設定。
+* **飛控的 GPS 時間**（第 1 條）解決的是「**斷線期間不會漂**」。
+  這條更要緊：**補傳時戳正是在鏈路斷掉的時候產生的**，而那一刻
+  NTP 指向地面站也不通。
+
+Pi 上要下的（需要 sudo，這台沒有免密碼 sudo）：
+
+```bash
+sudo install -d /etc/systemd/timesyncd.conf.d
+printf '[Time]\nNTP=10.141.2.21\nFallbackNTP=0.debian.pool.ntp.org 1.debian.pool.ntp.org\n' \
+  | sudo tee /etc/systemd/timesyncd.conf.d/10-gcs.conf
+sudo systemctl restart systemd-timesyncd
+timedatectl show-timesync | head -3      # ServerAddress 應該變成 10.141.2.21
+```
+
 ## 2026-09-08 實機對接結果（查核表第 4 段）
 
 **室內、未解鎖、沒有 GPS。** 18 項 PASS、4 項 SKIP、1 項記錄。
