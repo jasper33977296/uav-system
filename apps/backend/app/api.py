@@ -5,6 +5,7 @@ import asyncpg
 import json
 import os
 import time
+import urllib.request
 from datetime import datetime, timedelta, timezone
 from uuid import UUID
 
@@ -2381,7 +2382,7 @@ async def terrain_rgb(z: int, x: int, y: int):
         if png is None:
             raise HTTPException(404, "這一區沒有地形資料")
         try:
-            os.makedirs(os.path.dirname(path), exist_ok=True)
+            _mkcache(os.path.dirname(path))
             tmp = f"{path}.tmp"
             with open(tmp, "wb") as f:
                 f.write(png)
@@ -2390,6 +2391,61 @@ async def terrain_rgb(z: int, x: int, y: int):
             log.warning("地形圖磚寫不進快取（%s）——照常回應，只是下次還要再算", e)
     return Response(content=png, media_type="image/png",
                     headers={"Cache-Control": "public, max-age=86400"})
+
+
+def _mkcache(d: str) -> None:
+    """建快取目錄並開放寫入——容器是 root，而離線抓取的腳本跑在 host 上，
+    兩邊要寫同一份快取。"""
+    os.makedirs(d, exist_ok=True)
+    try:
+        os.chmod(d, 0o777)
+    except OSError:
+        pass
+
+
+ORTHO_CACHE = os.environ.get("ORTHO_CACHE", "/data/ortho")
+ORTHO_UPSTREAM = ("https://wmts.nlsc.gov.tw/wmts/PHOTO2/default/"
+                  "GoogleMapsCompatible/{z}/{y}/{x}")
+
+
+@router.get("/ortho/{z}/{x}/{y}.jpg")
+async def ortho_tile(z: int, x: int, y: int):
+    """NLSC 正射影像（PHOTO2）。**先看自己的快取，沒有才上游抓。**
+
+    現場是離線的，所以圖磚要在有網路的時候先抓好
+    （`scripts/fetch-ortho.py`）。這個端點在開發機上會順手補齊快取，
+    在現場則純粹是本地檔案伺服器——抓不到就 404，讓 maplibre 跳過那一格。
+    """
+    if not (0 <= z <= 21 and 0 <= x < 2 ** z and 0 <= y < 2 ** z):
+        raise HTTPException(400, "z/x/y 超出範圍")
+    path = os.path.join(ORTHO_CACHE, str(z), str(x), f"{y}.jpg")
+    if os.path.exists(path):
+        with open(path, "rb") as f:
+            data = f.read()
+    else:
+        url = ORTHO_UPSTREAM.format(z=z, y=y, x=x)
+
+        def grab():
+            req = urllib.request.Request(url, headers={"User-Agent": "uav-gcs"})
+            with urllib.request.urlopen(req, timeout=8) as r:
+                return r.read()
+
+        try:
+            data = await asyncio.get_running_loop().run_in_executor(None, grab)
+        except Exception as e:                                  # noqa: BLE001
+            raise HTTPException(404, f"這一格沒有影像（{e}）") from e
+        if not data.startswith(b"\xff\xd8"):
+            raise HTTPException(404, "上游回的不是 JPEG")
+        try:
+            _mkcache(os.path.dirname(path))
+            tmp = f"{path}.tmp"
+            with open(tmp, "wb") as f:
+                f.write(data)
+            os.replace(tmp, path)
+        except OSError as e:
+            log.warning("正射影像寫不進快取（%s）", e)
+    return Response(content=data, media_type="image/jpeg",
+                    headers={"Cache-Control": "public, max-age=604800"})
 
 
 @router.get("/plans/{plan_id}/profile")

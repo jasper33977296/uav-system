@@ -19,3 +19,4 @@ data/dem/*.hgt
 # 飛控撈回來的 dataflash：事故調查用，不進 git
 data/flight-logs/*.bin
 data/terrain-tiles/
+data/ortho/

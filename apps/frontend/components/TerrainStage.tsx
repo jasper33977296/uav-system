@@ -93,6 +93,7 @@ export default function TerrainStage({ wps, sel, onSelect, tipFor, placing,
     });
     mapRef.current = map;
     map.addControl(new maplibregl.ScaleControl({ maxWidth: 110, unit: "metric" }), "bottom-right");
+    map.addControl(new maplibregl.AttributionControl({ compact: true }), "bottom-right");
 
     map.on("load", () => {
       map.addSource("dem", {
@@ -103,13 +104,24 @@ export default function TerrainStage({ wps, sel, onSelect, tipFor, placing,
         // 所以呼叫端拿得到 `onTerrainMiss`（見下）
       });
       map.setTerrain({ source: "dem", exaggeration });
+      // 正射影像（NLSC PHOTO2）。走自己的端點而不是直連 NLSC：現場離線，
+      // 圖磚要能從 data/ortho 供出來（scripts/fetch-ortho.py 先抓）
+      map.addSource("ortho", {
+        type: "raster", tiles: [`${API}/api/ortho/{z}/{x}/{y}.jpg`],
+        tileSize: 256, maxzoom: 19,
+        attribution: "© 內政部國土測繪中心",
+      });
+      map.addLayer({ id: "ortho", type: "raster", source: "ortho",
+        paint: { "raster-opacity": 0.9 } });
       map.addLayer({
         id: "hillshade", type: "hillshade", source: "dem",
+        // 影像蓋上去之後陰影只用來讓地形的起伏還看得出來，不搶戲
+        maxzoom: 22,
         // 這個場地的起伏只有兩公尺——陰影對比拉高一點才看得出地形的形狀，
         // 但**不動高程**：誇張的是光影，不是資料
         paint: { "hillshade-shadow-color": "#0e0d0b",
                  "hillshade-highlight-color": "#8a8474",
-                 "hillshade-exaggeration": 0.9 },
+                 "hillshade-exaggeration": 0.35 },
       });
       map.addLayer(makeRouteLayer(map, dataRef, (p) => { projRef.current = p; }));
       fitRoute(map, dataRef.current.wps);
