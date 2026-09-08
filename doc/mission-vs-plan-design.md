@@ -340,30 +340,51 @@ CREATE UNIQUE INDEX IF NOT EXISTS idx_missions_one_active
        兩個以上 → **不可能**（見下面的限制）
 ```
 
-新的限制比舊的窄得多：**一台機同時只能參與一個進行中的任務**。
+新的限制比舊的窄得多，而且是使用者定的那一條：
+**一台機同時只能執行一個任務**（使用者原話 2026-09-08）。
+
+### 綁定：小隊或機，兩種都要（使用者定案）
+
+> 使用者原話：**「任務可以綁小隊也可以綁機，但機一定一次只能執行一個任務」**。
 
 ```sql
-CREATE TABLE IF NOT EXISTS mission_drones (
+ALTER TABLE missions ADD COLUMN IF NOT EXISTS squad_id UUID
+  REFERENCES squads(id) ON DELETE SET NULL;         -- 綁一整隊（活的連結）
+
+CREATE TABLE IF NOT EXISTS mission_drones (          -- 綁單台
   mission_id UUID NOT NULL REFERENCES missions(id) ON DELETE CASCADE,
   drone_id   UUID NOT NULL REFERENCES drones(id)   ON DELETE CASCADE,
   PRIMARY KEY (mission_id, drone_id)
 );
--- 一台機同時只能在一個「進行中」的任務裡——這是自動歸類唯一的前提
-CREATE UNIQUE INDEX IF NOT EXISTS idx_mission_drones_one_active
-  ON mission_drones (drone_id)
-  WHERE mission_id IN (SELECT id FROM missions WHERE ended_at IS NULL);
 ```
 
-> ⚠ **上面那個 index 的 WHERE 子句用了子查詢，PostgreSQL 不接受。**
-> partial index 的條件必須是不可變的、只吃本表的欄位。所以這條限制要改成
-> **觸發器**，或在 `missions` 上加一個冗餘的 `active BOOLEAN` 欄位並用
-> `WHERE active` 做 partial index，再用觸發器維持 `active = (ended_at IS NULL)`。
-> **落地時要挑一個並在文件裡寫明**——兩種都會多一個要維護的一致性，
-> 而「靠應用層自己記得檢查」是三者中最差的（那條規則會在某次改動被繞過）。
+**有效參與名單 ＝ 直接綁的機 ∪ 綁的小隊的成員**，**在查詢時展開，不存快照**。
 
-**參與名單怎麼填**：起飛時問名字的那個 modal 順便問「這次誰要飛」，預設帶
-**當下連線中的機**；小隊（`squads`）是選機的捷徑，勾一個小隊等於勾它的成員
-——與 `squads` 的定位一致（它是名單，不是任務設定）。
+> 為什麼是活的連結而不是快照：「綁小隊」的意思就是**小隊改成員，任務跟著變**。
+> 存快照的話那句話會變成假的——而使用者要的是綁，不是「用小隊挑一次機」。
+> 代價寫在下一段。
+
+### 不變式與它的三個檢查點
+
+**一台機不得同時出現在兩個「進行中」任務的有效名單裡。**
+
+partial unique index 做不到：它的 `WHERE` 需要問 `missions.ended_at`，
+而 partial index 的條件必須不可變、只吃本表欄位（**這是實際試出來的**，
+PostgreSQL 直接拒絕子查詢）。所以用**觸發器**，一個共用的檢查函式掛三個地方：
+
+| 寫入 | 為什麼要檢查 |
+|---|---|
+| `mission_drones` INSERT／UPDATE | 直接把一台機加進第二個任務 |
+| `missions` UPDATE（`squad_id`、`ended_at`） | 換綁小隊、或把已結束的任務重新開起來 |
+| **`squad_members` INSERT／UPDATE** | **最容易漏的那一個**：把一台已經在任務 B 的機加進小隊 S，而 S 綁在任務 A ——沒有人碰 `missions` 或 `mission_drones`，不變式卻被打破了 |
+
+不用「應用層自己記得檢查」：那條規則會在某次改動被繞過，而它是自動歸類唯一
+的前提。**約束要住在資料庫裡。**
+
+### 參與名單怎麼填
+
+起飛時問名字的那個 modal 順便問「這次誰要飛」：可以勾小隊（綁一整隊）、
+也可以勾單台。預設帶**當下連線中的機**。
 
 ### 這與 `mission_groups`、`squads` 的關係（三者不重疊）
 
