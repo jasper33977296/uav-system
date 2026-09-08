@@ -827,25 +827,18 @@ def route_profile(wps: list[dict], home: dict | None = None, dem=None,
 
 
 def build_plan(points: list[dict], takeoff_alt: float, speed: float,
-               home: dict | None = None) -> list[dict]:
-    """把「一串點 ＋ 一個高度 ＋ 一個速度」組成一份飛得起來的航線。
+               home: dict | None = None, land_at_home: bool = True,
+               land_mode: str = "vert") -> list[dict]:
+    """把「一串點 ＋ 高度 ＋ 速度」組成一份飛得起來的航線。
 
-    **這個函式存在的理由是「不需要先備知識就能規劃出可飛的路線」**
-    （使用者 2026-09-08，見 doc/route-planning-first-principles.md）。
-    操作員給的是意圖；起飛項、`frame`、改速度項、降落項這些**飛控要求的
-    結構**由系統補——那些正是 QGC／Mission Planner 要求使用者自己知道的東西。
+    起飛項、`frame`、改速度項、降落項由系統補——那些是飛控要求的結構，
+    不該要求操作員自己先知道（issues/048 F2）。
 
-    組出來的形狀，每一項都說得出為什麼：
+    `DO_CHANGE_SPEED` 擺在第一個航點**之前**：它只從被執行到的那一項之後
+    才生效，擺後面的話起飛到第一個航點會用機上的 `WP_SPD`。
 
-    * **起飛項的座標是 0,0**：`NAV_TAKEOFF` 只說「爬到多高」，位置就是
-      解鎖的地方。這是 ArduPilot 的慣例，也是既有航線的樣子。
-    * **`DO_CHANGE_SPEED` 擺在第一個航點之前**：它只從被執行到的那一項
-      之後才生效，擺在後面的話**起飛到第一個航點那一段會用機上的
-      `WP_SPD`** ——2026-09-07 摔機那一趟就是這樣（使用者以為 0.3，實際 8）。
-    * **降落在起飛點**，不是最後一個航點：那是操作員站的地方。
-      要落在別處是另一個決定，讓他自己改。
-    * 全部 `frame 3`（離起飛點）。要跟地形就用「改成地形跟隨」轉一次
-      ——那條路已經有了，而且會另存一份。
+    `land_mode="glide"` 會在降落點上方先補一個低高度的航點，最後一段因此
+    是平均降下來的；`"vert"` 是飛控的原生行為（平飛到定點再直下）。
     """
     out: list[dict] = []
 
@@ -855,15 +848,30 @@ def build_plan(points: list[dict], takeoff_alt: float, speed: float,
 
     add(lat=0.0, lon=0.0, alt=float(takeoff_alt), action="takeoff",
         command=_TAKEOFF, frame=3)
-    # **速度先設好再飛第一段**（見 docstring）
     add(lat=0.0, lon=0.0, alt=0.0, action="do", command=_DO_CHANGE_SPEED,
         frame=2, p1=1.0, p2=float(speed), p3=-1.0, p4=0.0)
+
+    marked = [p for p in points if p.get("kind") == "land"]
+    lz = None
+    if land_at_home and home and home.get("lat"):
+        lz = {"lat": home["lat"], "lon": home["lon"]}
+    elif marked:
+        lz = marked[-1]
+    elif points:
+        lz = points[-1]
+
     for p in points:
+        if p is lz and not land_at_home:
+            continue                      # 它是降落點，等一下才加
         add(lat=float(p["lat"]), lon=float(p["lon"]),
-            alt=float(p.get("alt", takeoff_alt)), action="waypoint",
+            alt=float(p.get("alt") or takeoff_alt), action="waypoint",
             command=16, frame=3)
-    if home and home.get("lat") and home.get("lon"):
-        add(lat=float(home["lat"]), lon=float(home["lon"]), alt=0.0,
+    if lz:
+        if land_mode == "glide":
+            add(lat=float(lz["lat"]), lon=float(lz["lon"]),
+                alt=float(MIN_TAKEOFF_ALT_M), action="waypoint",
+                command=16, frame=3)
+        add(lat=float(lz["lat"]), lon=float(lz["lon"]), alt=0.0,
             action="land", command=_LAND, frame=3)
     return out
 

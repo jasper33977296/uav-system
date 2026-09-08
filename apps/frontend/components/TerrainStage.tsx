@@ -24,6 +24,8 @@ export interface StageWp {
   /** 地面高程（AMSL）；null＝那一點沒有地形資料，不畫垂線 */
   ground: number | null;
   bad: boolean;
+  /** 起飛點：位置是解鎖的地方，不由規劃決定，所以拖不動 */
+  fixed?: boolean;
 }
 
 const BLUE = 0x3987e5, RED = 0xe05e5e, PICK = 0xd97757, HOT = 0xf0eee6;
@@ -35,13 +37,16 @@ export interface StageHit { kind: "wp" | "leg"; i: number }
 export interface StageTip { title: string; rows: [string, string][]; bad?: boolean }
 
 export default function TerrainStage({ wps, sel, onSelect, tipFor, placing,
-                                      onPlace, center, exaggeration = 1 }: {
+                                      onPlace, onMove, center,
+                                      exaggeration = 1 }: {
   wps: StageWp[]; sel: number; onSelect: (i: number) => void;
   tipFor?: (h: StageHit) => StageTip | null;
   /** 放點模式：點地形＝加一個航點（maplibre 自己有 3px 的 clickTolerance，
    *  所以拖曳轉視角不會誤放） */
   placing?: boolean;
   onPlace?: (lngLat: { lng: number; lat: number }) => void;
+  /** 拖曳航點：**只移動位置**，高度由右欄的滑桿或數字決定 */
+  onMove?: (i: number, lngLat: { lng: number; lat: number }) => void;
   center?: [number, number];
   exaggeration?: number;
 }) {
@@ -57,6 +62,9 @@ export default function TerrainStage({ wps, sel, onSelect, tipFor, placing,
   const tipRef = useRef(tipFor);
   tipRef.current = tipFor;
   const projRef = useRef<Projector | null>(null);
+  const moveRef = useRef(onMove);
+  moveRef.current = onMove;
+  const dragRef = useRef<number | null>(null);
   const placeRefBox = useRef<{ current: {
     placing?: boolean; onPlace?: (l: { lng: number; lat: number }) => void } } | null>(null);
   if (placeRefBox.current) placeRefBox.current.current = { placing, onPlace };
@@ -141,7 +149,27 @@ export default function TerrainStage({ wps, sel, onSelect, tipFor, placing,
       const h = hitTest(e.point);
       if (h) onSelect(h.i);
     });
+    map.on("mousedown", (e) => {
+      const h = hitTest(e.point);
+      if (h?.kind === "wp" && !dataRef.current.wps[h.i]?.fixed && moveRef.current) {
+        dragRef.current = h.i;
+        map.dragPan.disable(); map.dragRotate.disable();
+        onSelect(h.i);
+        e.preventDefault();
+      }
+    });
+    const endDrag = () => {
+      if (dragRef.current == null) return;
+      dragRef.current = null;
+      map.dragPan.enable(); map.dragRotate.enable();
+    };
+    map.on("mouseup", endDrag);
+    map.on("dragend", endDrag);
     map.on("mousemove", (e) => {
+      if (dragRef.current != null) {
+        moveRef.current?.(dragRef.current, e.lngLat);
+        return;
+      }
       const h = hitTest(e.point);
       const prev = dataRef.current.hover;
       if (JSON.stringify(h) !== JSON.stringify(prev)) {

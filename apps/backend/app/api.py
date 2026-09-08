@@ -2579,6 +2579,7 @@ class DraftPoint(BaseModel):
     lat: float
     lon: float
     alt: float | None = None
+    kind: str = "wp"          # wp／land
 
 
 class DraftIn(BaseModel):
@@ -2587,6 +2588,8 @@ class DraftIn(BaseModel):
     points: list[DraftPoint] = Field(default_factory=list, max_length=500)
     takeoff_alt: float = 1.5
     speed: float = 1.0
+    land_at_home: bool = True
+    land_mode: str = "vert"   # vert（飛到定點再垂直降落）／glide（逐漸降落）
     wp_spd: float | None = None
     wp_radius: float | None = None
     save_as: str | None = None
@@ -2605,7 +2608,8 @@ async def draft_plan(body: DraftIn):
     """
     h = {"lat": body.home[0], "lon": body.home[1]}
     wps = plan_check.build_plan(
-        [p.model_dump() for p in body.points], body.takeoff_alt, body.speed, h)
+        [p.model_dump() for p in body.points], body.takeoff_alt, body.speed, h,
+        land_at_home=body.land_at_home, land_mode=body.land_mode)
     if len(body.points) < 1:
         # **一個點都沒有時不要假裝算得出什麼**：回一份空的，讓畫面說
         # 「還沒放點」，而不是回一份「通過」的報告

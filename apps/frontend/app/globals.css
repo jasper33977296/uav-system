@@ -1890,3 +1890,26 @@ details.card summary { cursor: pointer; font-size: 14px; font-weight: 600; }
   border-radius: 6px; padding: 5px 8px; font-variant-numeric: tabular-nums; width: 124px; }
 .newform input:disabled { opacity: .6; }
 .chip.bad { color: var(--status-danger); border-color: var(--status-danger); }
+.seg2 { display: flex; border: 1px solid var(--border); border-radius: 7px;
+  overflow: hidden; }
+.seg2 button { flex: 1; padding: 4px 8px; font-size: 12px; color: var(--muted); }
+.seg2 button[aria-pressed="true"] { color: var(--accent); background: var(--accent-bg); }
+.opt { display: flex; align-items: center; gap: 6px; color: var(--ink-2);
+  font-size: 12px; }
+.opt input { accent-color: var(--accent); }
+.numin { background: var(--surface-2); border: 1px solid var(--border);
+  border-radius: 6px; padding: 3px 6px; width: 78px; text-align: right;
+  font-variant-numeric: tabular-nums; }
+.mask { position: fixed; inset: 0; background: rgba(0,0,0,.55); display: grid;
+  place-items: center; z-index: 60; }
+.modal { background: var(--surface); border: 1px solid var(--border);
+  border-radius: 12px; padding: 16px; min-width: 330px; display: flex;
+  flex-direction: column; gap: 11px; }
+.modal h3 { font-size: 14px; }
+.modal input { background: var(--surface-2); border: 1px solid var(--border);
+  border-radius: 7px; padding: 7px 9px; width: 100%; }
+.modal-row { display: flex; gap: 8px; justify-content: flex-end; }
+.newform .f { min-width: 132px; }
+.newform .f:has(.opt) { min-width: 190px; gap: 4px; }
+.newform .f:has(.seg2) { min-width: 148px; }
+.newform .seg2 button { white-space: nowrap; }

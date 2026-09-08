@@ -143,8 +143,13 @@ export default function PlanPage() {
   const [home, setHome] = useState({ lat: "24.773449", lon: "121.045864" });
   const [tkAlt, setTkAlt] = useState(1.5);
   const [drawSpd, setDrawSpd] = useState(1.0);
-  const [pts, setPts] = useState<{ lat: number; lon: number; alt: number }[]>([]);
+  const [pts, setPts] = useState<
+    { lat: number; lon: number; alt: number; kind: string }[]>([]);
   const [started, setStarted] = useState(false);
+  const [placeKind, setPlaceKind] = useState("wp");
+  const [landHome, setLandHome] = useState(true);
+  const [landMode, setLandMode] = useState("vert");
+  const [naming, setNaming] = useState<string | null>(null);
   const [name, setName] = useState("");
   const [prof, setProf] = useState<Profile | null>(null);
   const [chk, setChk] = useState<Check | null>(null);
@@ -231,7 +236,8 @@ export default function PlanPage() {
           method: "POST", headers: { "Content-Type": "application/json" },
           body: JSON.stringify({
             home: [Number(home.lat), Number(home.lon)], points: pts,
-            takeoff_alt: tkAlt, speed: drawSpd,
+            takeoff_alt: tkAlt, speed: drawSpd, land_at_home: landHome,
+            land_mode: landMode,
             wp_spd: spdRef.current.wp, wp_radius: spdRef.current.rad }),
         });
         const d = await r.json();
@@ -239,7 +245,7 @@ export default function PlanPage() {
       } finally { setBusy(false); }
     }, 220);
     return () => clearTimeout(t);
-  }, [isNew, started, pts, tkAlt, drawSpd, home.lat, home.lon]);
+  }, [isNew, started, pts, tkAlt, drawSpd, home.lat, home.lon, landHome, landMode]);
 
   // 改動 → 試算。**去抖**：拖滑桿一秒會產生幾十次變動，而每一次都要
   // 沿線取樣 DEM——沒有去抖等於用滑桿打後端
@@ -308,7 +314,7 @@ export default function PlanPage() {
     .filter((p) => p.seq != null && p.plan != null)
     .map((p) => ({ seq: p.seq as number, lat: p.lat ?? 0, lon: p.lon ?? 0,
       amsl: p.plan as number, ground: p.ground,
-      bad: badSeq.has(p.seq as number) }));
+      bad: badSeq.has(p.seq as number), fixed: p.seq === 0 }));
   const worst = legs.reduce<number | null>(
     (m, l) => (l.agl_m == null ? m : m == null || l.agl_m < m ? l.agl_m : m), null);
 
@@ -353,6 +359,30 @@ export default function PlanPage() {
           <label className="f"><span>速度 m/s</span>
             <input type="number" step="0.1" value={drawSpd} disabled={started}
               onChange={(e) => setDrawSpd(Number(e.target.value))} /></label>
+          {started && (
+            <>
+              <div className="f"><span>放點類型</span>
+                <div className="seg2">
+                  {[["wp", "航點"], ["land", "降落點"]].map(([k, t]) => (
+                    <button key={k} aria-pressed={placeKind === k}
+                      onClick={() => setPlaceKind(k)}>{t}</button>
+                  ))}
+                </div>
+              </div>
+              <div className="f"><span>降落在哪裡</span>
+                <label className="opt"><input type="radio" checked={landHome}
+                  onChange={() => setLandHome(true)} />起飛點</label>
+                <label className="opt"><input type="radio" checked={!landHome}
+                  onChange={() => setLandHome(false)} />標成降落點的位置</label>
+              </div>
+              <div className="f"><span>降落方式</span>
+                <label className="opt"><input type="radio" checked={landMode === "vert"}
+                  onChange={() => setLandMode("vert")} />飛到定點再垂直降落</label>
+                <label className="opt"><input type="radio" checked={landMode === "glide"}
+                  onChange={() => setLandMode("glide")} />逐漸降落</label>
+              </div>
+            </>
+          )}
           {!started
             ? <button className="btn-accent btn-sm" onClick={() => setStarted(true)}>
                 從這裡開始放點</button>
@@ -369,8 +399,17 @@ export default function PlanPage() {
             tipFor={tipFor}
             placing={isNew && started}
             center={isNew ? [Number(home.lon), Number(home.lat)] : undefined}
-            onPlace={(l) => setPts((p) =>
-              [...p, { lat: l.lat, lon: l.lng, alt: tkAlt }])} />
+            onPlace={(l) => setPts((p) => {
+              setSelWp(p.length + 1);
+              return [...p, { lat: l.lat, lon: l.lng, alt: tkAlt, kind: placeKind }];
+            })}
+            onMove={(i, l) => {
+              // stageWps 的第 0 筆是起飛點，之後才對應 pts
+              const k = i - 1;
+              if (k < 0 || k >= pts.length) return;
+              setPts((p) => p.map((q, j) =>
+                j === k ? { ...q, lat: l.lat, lon: l.lng } : q));
+            }} />
           <aside className="plan-rail">
             <h2>選取的航點</h2>
             {(() => {
@@ -380,23 +419,51 @@ export default function PlanPage() {
               const cur = ov[w.seq] ?? {};
               const alt = cur.alt ?? Math.round((w.amsl - (prof?.home_amsl_m ?? 0)) * 10) / 10;
               const spdNow = cur.speed ?? out?.speed_ms ?? null;
-              const set = (k: "alt" | "speed", v: number) =>
+              const set = (k: "alt" | "speed", v: number) => {
+                if (isNew) {
+                  if (k === "alt" && selWp > 0)
+                    setPts((p) => p.map((q, j) => j === selWp - 1 ? { ...q, alt: v } : q));
+                  if (k === "alt" && selWp === 0) setTkAlt(v);
+                  if (k === "speed") setDrawSpd(v);
+                  return;
+                }
                 setOv((o) => ({ ...o, [w.seq]: { ...o[w.seq], [k]: v } }));
+              };
               return (
                 <>
                   <div className="rail-row"><span>航點</span>
                     <b className="num">seq {w.seq}</b></div>
+                  {isNew && selWp > 0 && (
+                    <>
+                      <div className="seg2">
+                        {[["wp", "航點"], ["land", "降落點"]].map(([k, t]) => (
+                          <button key={k}
+                            aria-pressed={(pts[selWp - 1]?.kind ?? "wp") === k}
+                            onClick={() => setPts((p) => p.map((q, j) =>
+                              j === selWp - 1 ? { ...q, kind: k } : q))}>{t}</button>
+                        ))}
+                      </div>
+                      <button className="btn-plain btn-sm"
+                        onClick={() => { setPts((p) =>
+                          p.filter((_, j) => j !== selWp - 1)); setSelWp(0); }}>
+                        刪除這個點</button>
+                      <div className="hint-line">3D 上拖曳航點只移動位置；
+                        高度用下面的滑桿或數字。</div>
+                    </>
+                  )}
                   <label className="rail-field">
                     <div className="rail-row"><span>高度（離起飛點）</span>
-                      <b className="num">{alt.toFixed(1)} m</b></div>
-                    <input type="range" min={0} max={30} step={0.5} value={alt}
+                      <input className="numin" type="number" step={0.1} value={alt}
+                        onChange={(e) => set("alt", Number(e.target.value))} /></div>
+                    <input type="range" min={0} max={30} step={0.1} value={alt}
                       onChange={(e) => set("alt", Number(e.target.value))} />
                   </label>
                   {out && (
                     <label className="rail-field">
                       <div className="rail-row"><span>下一段速度</span>
-                        <b className="num">{spdNow == null ? "未讀到"
-                          : `${spdNow.toFixed(1)} m/s`}</b></div>
+                        <input className="numin" type="number" step={0.1}
+                          value={spdNow ?? 1}
+                          onChange={(e) => set("speed", Number(e.target.value))} /></div>
                       <input type="range" min={0.2} max={8} step={0.1}
                         value={spdNow ?? 1}
                         onChange={(e) => set("speed", Number(e.target.value))} />
@@ -431,43 +498,11 @@ export default function PlanPage() {
                     ? `已改 ${Object.keys(ov).length} 個航點——${busy ? "試算中…" : "只在畫面上，還沒存"}`
                     : "拖滑桿試算；原本這份不會被動到"}
               </div>
-              {isNew ? (
-                <button className="btn-accent btn-sm" disabled={pts.length < 1 || busy}
-                  onClick={async () => {
-                    setBusy(true);
-                    try {
-                      const r = await fetch(`${API}/api/plans/draft`, {
-                        method: "POST", headers: { "Content-Type": "application/json" },
-                        body: JSON.stringify({
-                          home: [Number(home.lat), Number(home.lon)], points: pts,
-                          takeoff_alt: tkAlt, speed: drawSpd,
-                          wp_spd: spdRef.current.wp, wp_radius: spdRef.current.rad,
-                          save_as: `新航線 ${new Date().toISOString().slice(5, 16)
-                            .replace("T", " ")}` }),
-                      });
-                      const d = await r.json();
-                      if (r.ok && d.saved_id) setSaved(d.saved_id);
-                    } finally { setBusy(false); }
-                  }}>存成新航線</button>
-              ) : (
-              <button className="btn-accent btn-sm" disabled={!Object.keys(ov).length || busy}
-                onClick={async () => {
-                  setBusy(true);
-                  try {
-                    const r = await fetch(`${API}/api/plans/${id}/preview`, {
-                      method: "POST", headers: { "Content-Type": "application/json" },
-                      body: JSON.stringify({
-                        overrides: Object.entries(ov).map(([seq, v]) =>
-                          ({ seq: Number(seq), ...v })),
-                        wp_spd: spdRef.current.wp, wp_radius: spdRef.current.rad,
-                        save_as: `${name}（調整）`,
-                      }),
-                    });
-                    const d = await r.json();
-                    if (r.ok && d.saved_id) { setSaved(d.saved_id); setOv({}); }
-                  } finally { setBusy(false); }
-                }}>另存一份</button>
-              )}
+              <button className="btn-accent btn-sm"
+                disabled={busy || (isNew ? pts.length < 1 : !Object.keys(ov).length)}
+                onClick={() => setNaming(isNew
+                  ? `新航線 ${new Date().toISOString().slice(5, 16).replace("T", " ")}`
+                  : `${name}（調整）`)}>另存新檔</button>
               {saved && (
                 <div className="hint-line">
                   已另存 · <a href={`/plans/${saved}/plan`}>打開新的那一份</a>
@@ -489,6 +524,46 @@ export default function PlanPage() {
           {chk.warnings.map((w, i) => <div key={i} className="hint-line">⚠ {emph(w)}</div>)}
         </div>
       ) : chk ? <div className="hint-line">這份航線沒有發現。</div> : null}
+
+      {naming !== null && (
+        <div className="mask" onClick={() => setNaming(null)}>
+          <div className="modal" onClick={(e) => e.stopPropagation()}>
+            <h3>另存新檔</h3>
+            <div className="hint-line">原本那份不會被動到。</div>
+            <input value={naming} autoFocus
+              onChange={(e) => setNaming(e.target.value)} />
+            <div className="modal-row">
+              <button className="btn-plain btn-sm"
+                onClick={() => setNaming(null)}>取消</button>
+              <button className="btn-accent btn-sm" disabled={busy}
+                onClick={async () => {
+                  setBusy(true);
+                  try {
+                    const url = isNew ? `${API}/api/plans/draft`
+                      : `${API}/api/plans/${id}/preview`;
+                    const body = isNew
+                      ? { home: [Number(home.lat), Number(home.lon)], points: pts,
+                          takeoff_alt: tkAlt, speed: drawSpd,
+                          land_at_home: landHome, land_mode: landMode,
+                          wp_spd: spdRef.current.wp, wp_radius: spdRef.current.rad,
+                          save_as: naming }
+                      : { overrides: Object.entries(ov).map(([seq, v]) =>
+                            ({ seq: Number(seq), ...v })),
+                          wp_spd: spdRef.current.wp, wp_radius: spdRef.current.rad,
+                          save_as: naming };
+                    const r = await fetch(url, { method: "POST",
+                      headers: { "Content-Type": "application/json" },
+                      body: JSON.stringify(body) });
+                    const d = await r.json();
+                    if (r.ok && d.saved_id) {
+                      setSaved(d.saved_id); setOv({}); setNaming(null);
+                    }
+                  } finally { setBusy(false); }
+                }}>存檔</button>
+            </div>
+          </div>
+        </div>
+      )}
 
       {legs.length > 0 && (
         <table className="plan-legs">
