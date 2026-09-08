@@ -1,0 +1,402 @@
+<!doctype html>
+<html lang="zh-Hant"><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>航線規劃台</title>
+<style>
+/* 沿用 apps/frontend/app/globals.css 的 token——原型與產品同一套顏色，
+   不然「原型好看、落地變樣」會變成每次都要重談一次的事 */
+:root{
+  --page:#1b1a17; --surface:#262624; --surface-2:#30302c;
+  --ink:#f0eee6; --ink-2:#c2bfb3; --muted:#8f8b80; --hairline:#3a3833;
+  --border:rgba(240,238,230,.1);
+  --accent:#d97757; --accent-bg:rgba(217,119,87,.12);   /* 只准互動 chrome */
+  --series-1:#3987e5;                                    /* 規劃路徑 */
+  --ok:#0ca30c; --warn:#fab219; --danger:#e05e5e;
+  --danger-bg:rgba(208,59,59,.12);
+  --earth:#4a463d; --earth-2:#5c574b;
+  --mono:ui-monospace,"SF Mono","JetBrains Mono",Menlo,Consolas,monospace;
+}
+*{margin:0;padding:0;box-sizing:border-box}
+body{font-family:system-ui,-apple-system,"Noto Sans TC","Segoe UI",sans-serif;
+  background:var(--page);color:var(--ink);font-size:13px;line-height:1.5;
+  -webkit-font-smoothing:antialiased}
+button,input,select{font:inherit;color:inherit}
+button{background:none;border:none;cursor:pointer}
+:focus-visible{outline:2px solid var(--accent);outline-offset:1px}
+.num{font-family:var(--mono);font-variant-numeric:tabular-nums}
+
+.nav{height:46px;display:flex;align-items:center;gap:12px;padding:0 14px;
+  background:var(--surface);border-bottom:1px solid var(--hairline)}
+.brand{font-weight:700;letter-spacing:.02em}
+.crumb{color:var(--muted)}
+.proto{margin-left:auto;font-size:11px;color:var(--warn);border:1px solid var(--warn);
+  border-radius:4px;padding:2px 7px;letter-spacing:.04em}
+.page{padding:14px;display:flex;flex-direction:column;gap:12px;max-width:1520px;margin:0 auto}
+
+h1{font-size:19px;font-weight:650;letter-spacing:.01em}
+.head{display:flex;align-items:baseline;gap:12px;flex-wrap:wrap}
+.facts{display:flex;gap:7px;flex-wrap:wrap}
+.chip{border:1px solid var(--border);border-radius:999px;padding:3px 10px;
+  color:var(--ink-2);font-size:12px;background:var(--surface)}
+.chip.bad{color:var(--danger);border-color:var(--danger)}
+.chip.dim{color:var(--muted);opacity:.75}
+
+/* ── 工作面：3D 地形 ＋ 右側檢視 ─────────────────────────── */
+.work{display:grid;grid-template-columns:minmax(0,1fr) 268px;gap:12px;align-items:start}
+.stage{position:relative;background:var(--surface);border:1px solid var(--border);
+  border-radius:10px;overflow:hidden}
+#scene{display:block;width:100%;height:auto}
+.stagebar{position:absolute;left:10px;top:10px;display:flex;gap:6px}
+.stagebar button{background:rgba(27,26,23,.72);border:1px solid var(--border);
+  border-radius:6px;padding:4px 9px;color:var(--ink-2);font-size:12px}
+.stagebar button[aria-pressed="true"]{color:var(--accent);border-color:var(--accent);
+  background:var(--accent-bg)}
+.legend{position:absolute;right:10px;top:10px;display:flex;flex-direction:column;gap:4px;
+  font-size:11px;color:var(--muted);text-align:right}
+.legend i{display:inline-block;width:16px;height:2px;vertical-align:middle;margin-right:5px}
+
+.rail{background:var(--surface);border:1px solid var(--border);border-radius:10px;
+  padding:12px;display:flex;flex-direction:column;gap:12px}
+.rail h2{font-size:12px;color:var(--muted);font-weight:500;letter-spacing:.05em}
+.field{display:flex;flex-direction:column;gap:5px}
+.field .row{display:flex;justify-content:space-between;align-items:baseline}
+.field label{color:var(--ink-2)}
+.field .val{font-family:var(--mono);font-size:15px}
+input[type=range]{width:100%;accent-color:var(--accent)}
+.verdict{border-radius:8px;padding:9px 10px;font-size:12px;line-height:1.5}
+.verdict.ok{background:rgba(12,163,12,.08);color:var(--ink-2);
+  border:1px solid rgba(12,163,12,.35)}
+.verdict.bad{background:var(--danger-bg);color:var(--ink);
+  border:1px solid rgba(208,59,59,.45)}
+.fixes{display:flex;gap:6px}
+.fixes button{flex:1;border:1px solid var(--border);border-radius:7px;padding:6px 4px;
+  color:var(--ink-2);font-size:12px;background:var(--surface-2)}
+.fixes button:hover{color:var(--accent);border-color:var(--accent)}
+
+/* ── 剖面 ─────────────────────────────────────────────── */
+.strip{background:var(--surface);border:1px solid var(--border);border-radius:10px;
+  padding:10px 12px}
+.striphead{display:flex;align-items:center;gap:10px;margin-bottom:6px}
+.striphead h2{font-size:12px;color:var(--muted);font-weight:500;letter-spacing:.05em}
+.seg{display:flex;border:1px solid var(--border);border-radius:6px;overflow:hidden}
+.seg button{padding:3px 10px;font-size:12px;color:var(--muted)}
+.seg button[aria-pressed="true"]{color:var(--accent);background:var(--accent-bg)}
+.note{color:var(--muted);font-size:12px;margin-top:5px}
+
+/* ── 逐段表 ───────────────────────────────────────────── */
+.tablewrap{overflow-x:auto;background:var(--surface);border:1px solid var(--border);
+  border-radius:10px}
+table{width:100%;border-collapse:collapse;font-size:12.5px}
+th{text-align:left;color:var(--muted);font-weight:500;padding:8px 11px;white-space:nowrap;
+  border-bottom:1px solid var(--hairline)}
+td{padding:7px 11px;border-bottom:1px solid var(--hairline);font-family:var(--mono);
+  font-variant-numeric:tabular-nums}
+td.txt{font-family:inherit}
+tr.sel td{background:var(--surface-2)}
+tr:hover td{background:var(--surface-2);cursor:pointer}
+td.bad{color:var(--danger)}
+td.dim{color:var(--muted)}
+tbody tr:last-child td{border-bottom:none}
+
+.honest{border-left:2px solid var(--hairline);padding-left:11px;color:var(--muted);
+  font-size:12px;display:flex;flex-direction:column;gap:4px;max-width:76ch}
+.honest b{color:var(--ink-2);font-weight:600}
+@media (max-width:900px){.work{grid-template-columns:1fr}}
+@media (prefers-reduced-motion:reduce){*{transition:none!important}}
+</style></head><body>
+
+<div class="nav"><span class="brand">UAV 監控</span>
+  <span class="crumb">路徑管理 ／ 0908-snake-v1 ／ 規劃</span>
+  <span class="proto">原型．未落地</span></div>
+
+<div class="page">
+  <div class="head">
+    <h1>0908-snake-v1</h1>
+    <div class="facts">
+      <span class="chip">高度＝離起飛點</span>
+      <span class="chip">起飛點 <span class="num">123.0</span> m 海拔</span>
+      <span class="chip" id="chipMin">最低離地 <span class="num">2.0</span> m</span>
+      <span class="chip">機上 WP_SPD <span class="num">2.0</span> m/s ・現在讀的</span>
+    </div>
+  </div>
+
+  <div class="work">
+    <div class="stage">
+      <canvas id="scene" width="1000" height="440"></canvas>
+      <div class="stagebar">
+        <button aria-pressed="true" data-view="3d">3D 地形</button>
+        <button aria-pressed="false" data-view="top">俯視</button>
+      </div>
+      <div class="legend">
+        <div><i style="background:#3987e5"></i>規劃路徑</div>
+        <div><i style="background:#5c574b"></i>地面（SRTM 30 m）</div>
+        <div><i style="background:#e05e5e"></i>離地不足的段</div>
+      </div>
+    </div>
+
+    <aside class="rail">
+      <h2>選取的航點</h2>
+      <div class="field"><div class="row"><label>航點</label>
+        <span class="val" id="wpName">seq 1</span></div></div>
+
+      <div class="field">
+        <div class="row"><label>高度（離起飛點）</label>
+          <span class="val" id="altVal">3.0 m</span></div>
+        <input type="range" id="alt" min="0" max="20" step="0.5" value="3">
+      </div>
+
+      <div class="field">
+        <div class="row"><label>下一段速度</label>
+          <span class="val" id="spdVal">2.0 m/s</span></div>
+        <input type="range" id="spd" min="0.2" max="8" step="0.1" value="2">
+      </div>
+
+      <div class="verdict bad" id="verdict"></div>
+
+      <div class="field"><h2>自動修正這一段</h2>
+        <div class="fixes">
+          <button id="fixAlt">抬高度</button>
+          <button id="fixSpd">降速度</button>
+        </div>
+      </div>
+      <div class="note">兩者都會<b>另存一份</b>，原本這份不動。</div>
+    </aside>
+  </div>
+
+  <div class="strip">
+    <div class="striphead">
+      <h2>剖面</h2>
+      <div class="seg">
+        <button aria-pressed="true" data-mode="agl">離地高度</button>
+        <button aria-pressed="false" data-mode="amsl">海拔</button>
+      </div>
+      <span class="note" id="axisNote"></span>
+    </div>
+    <canvas id="prof" width="1480" height="200" style="width:100%;height:auto;display:block"></canvas>
+  </div>
+
+  <div class="tablewrap">
+    <table><thead><tr>
+      <th>段</th><th>長度</th><th>離地</th><th>有效速度</th><th>速度來源</th><th>轉角</th><th>判定</th>
+    </tr></thead><tbody id="legs"></tbody></table>
+  </div>
+
+  <div class="honest">
+    <div><b>地面線來自 SRTM（水平約 30 m）</b>——只有地形，不含樹木、電線、建物、貨櫃。</div>
+    <div><b>「速度來源」那一欄是這張表存在的理由。</b>航線裡的 <code>DO_CHANGE_SPEED</code>
+      只從它被執行到的那一項之後才生效；在那之前用的是機上的 <code>WP_SPD</code>。
+      2026-09-07 使用者以為全程 0.3 m/s，起飛到第一個航點卻是 8 m/s。</div>
+    <div><b>門檻是保守起點，不是算出來的公式。</b>離地 3 m／速度 1 m/s 來自
+      2026-09-07 那一趟（1.5 m 加速通過 5 m/s 時失控），往安全側留。每台機可改。</div>
+  </div>
+</div>
+
+<script>
+/* 資料是這個場地的**實測值**：起飛點 123.0 m 海拔，沿線地面 121.6–123.5 m
+   （來自 GET /api/missions/{id}/profile 的真實回應），不是編的。 */
+const HOME_AMSL = 123.0, LOW_ALT = 3.0, LOW_SPD = 1.0;
+const WP = [
+  {seq:0,  d:0,    x:0,    y:0,    alt:2,   spd:2.0, src:"機上 WP_SPD"},
+  {seq:1,  d:62.5, x:62.5, y:0,    alt:3.0, spd:1.0, src:"航線 seq 2"},
+  {seq:3,  d:71.8, x:62.5, y:9.3,  alt:3.5, spd:1.0, src:"航線 seq 4"},
+  {seq:5,  d:132.4,x:1.9,  y:9.3,  alt:3.0, spd:0.5, src:"航線 seq 6"},
+  {seq:7,  d:194.8,x:1.9,  y:71.7, alt:3.0, spd:1.0, src:"航線 seq 8"},
+  {seq:9,  d:205.2,x:12.3, y:71.7, alt:3.5, spd:0.5, src:"航線 seq 10"},
+  {seq:11, d:273.2,x:12.3, y:139.7,alt:3.0, spd:0.5, src:"航線 seq 12"},
+  {seq:13, d:292.8,x:31.9, y:139.7,alt:3.0, spd:0.5, src:"航線 seq 14"},
+];
+/* 地面高程（AMSL）：沿線的實測取樣，中間線性內插 */
+const GROUND = [[0,123.0],[31,121.7],[62,121.6],[72,121.9],[102,121.9],[132,122.8],
+  [165,122.2],[195,121.9],[205,122.0],[245,122.4],[273,123.0],[279,123.5],[299,123.1]];
+const groundAt = d => {
+  for (let i=1;i<GROUND.length;i++){
+    if (d<=GROUND[i][0]){ const [a,ga]=GROUND[i-1],[b,gb]=GROUND[i];
+      return ga+(gb-ga)*((d-a)/(b-a||1)); }
+  }
+  return GROUND[GROUND.length-1][1];
+};
+let sel = 0, view = "3d", mode = "agl";
+
+const agl = w => HOME_AMSL + w.alt - groundAt(w.d);
+const legBad = i => i>0 && agl(WP[i]) < LOW_ALT && WP[i].spd > LOW_SPD;
+
+/* ── 3D 地形（canvas，不用任何函式庫）────────────────────── */
+const cv = document.getElementById("scene"), cx = cv.getContext("2d");
+/* 場地範圍（公尺）：航點就落在裡面，網格照 SRTM 的 30 m 格距畫
+   ——畫得比 30 m 細是騙人，那個解析度就是它能給的全部 */
+const GX0=-15, GX1=80, GY0=-15, GY1=155, GSTEP=30;
+function proj(x, y, z){
+  return [640 + (x - y) * 4.2, 66 + (x + y) * 1.5 - (z - 121.5) * 12];
+}
+function projTop(x, y){
+  return [640 + (x - 32) * 9.0, 220 + (y - 62) * 2.3];
+}
+function terrainAt(gx, gy){
+  return 121.6 + 1.0*Math.sin(gx/26) * Math.cos(gy/44) + 0.7*Math.sin(gy/30);
+}
+function drawScene(){
+  cx.clearRect(0,0,cv.width,cv.height);
+  const top = view === "top";
+  const P = top ? ((x,y)=>projTop(x,y)) : proj;
+  cx.lineWidth = 1;
+  for (let gy=GY0; gy<=GY1; gy+=GSTEP){
+    cx.beginPath();
+    for (let gx=GX0; gx<=GX1; gx+=5){
+      const [qx,qy] = P(gx,gy,terrainAt(gx,gy));
+      gx===GX0 ? cx.moveTo(qx,qy) : cx.lineTo(qx,qy);
+    }
+    cx.strokeStyle = "#5c574b"; cx.stroke();
+  }
+  for (let gx=GX0; gx<=GX1; gx+=GSTEP){
+    cx.beginPath();
+    for (let gy=GY0; gy<=GY1; gy+=5){
+      const [qx,qy] = P(gx,gy,terrainAt(gx,gy));
+      gy===GY0 ? cx.moveTo(qx,qy) : cx.lineTo(qx,qy);
+    }
+    cx.strokeStyle = "#4a463d"; cx.stroke();
+  }
+  /* 每個航點往地面垂一根線＝離地空間，本身就是那張剖面圖的 3D 版 */
+  WP.forEach((w,i)=>{
+    const g = groundAt(w.d), bad = legBad(i) || (i<WP.length-1 && legBad(i+1));
+    const [ax,ay]=P(w.x,w.y,HOME_AMSL+w.alt), [bx,by]=P(w.x,w.y,g);
+    cx.beginPath(); cx.moveTo(ax,ay); cx.lineTo(bx,by);
+    cx.strokeStyle = bad? "#e05e5e" : "rgba(57,135,229,.45)";
+    cx.lineWidth = i===sel? 2.5 : 1.5; cx.stroke();
+  });
+  /* 規劃路徑 */
+  cx.beginPath();
+  WP.forEach((w,i)=>{ const [px,py]=P(w.x,w.y,HOME_AMSL+w.alt); i?cx.lineTo(px,py):cx.moveTo(px,py); });
+  cx.strokeStyle="#3987e5"; cx.lineWidth=2.5; cx.lineJoin="round"; cx.stroke();
+  /* 不合格的段再描一次紅 */
+  for (let i=1;i<WP.length;i++){
+    if(!legBad(i)) continue;
+    const a=P(WP[i-1].x,WP[i-1].y,HOME_AMSL+WP[i-1].alt), b=P(WP[i].x,WP[i].y,HOME_AMSL+WP[i].alt);
+    cx.beginPath(); cx.moveTo(a[0],a[1]); cx.lineTo(b[0],b[1]);
+    cx.strokeStyle="#e05e5e"; cx.lineWidth=3.5; cx.stroke();
+  }
+  WP.forEach((w,i)=>{
+    const [px,py]=P(w.x,w.y,HOME_AMSL+w.alt);
+    cx.beginPath(); cx.arc(px,py,i===sel?6:4,0,7);
+    cx.fillStyle = i===sel? "#d97757" : "#3987e5"; cx.fill();
+    cx.fillStyle="#8f8b80"; cx.font="11px ui-monospace,monospace";
+    cx.fillText(w.seq, px+8, py-6);
+  });
+}
+
+/* ── 剖面（離地為預設；海拔是 QGC 的那個視角）───────────── */
+const pc = document.getElementById("prof"), px = pc.getContext("2d");
+function drawProf(){
+  const W=pc.width,H=pc.height,L=52,R=14,T=12,B=24;
+  px.clearRect(0,0,W,H);
+  const dMax = WP[WP.length-1].d;
+  const X = d => L + d/dMax*(W-L-R);
+  const isAgl = mode==="agl";
+  let lo,hi;
+  if (isAgl){ lo=-1; hi=Math.max(6, ...WP.map(agl))+2; }
+  else { const v=[...GROUND.map(g=>g[1]), ...WP.map(w=>HOME_AMSL+w.alt)];
+         lo=Math.min(...v)-1; hi=Math.max(...v)+1; }
+  const Y = v => T + (1-(v-lo)/(hi-lo))*(H-T-B);
+  for (const t of [lo,(lo+hi)/2,hi]){
+    px.beginPath(); px.moveTo(L,Y(t)); px.lineTo(W-R,Y(t));
+    px.strokeStyle="#3a3833"; px.lineWidth=1; px.stroke();
+    px.fillStyle="#8f8b80"; px.font="11px ui-monospace,monospace";
+    px.fillText(t.toFixed(1)+" m", 5, Y(t)+4);
+  }
+  const N=140, gs=[], ps=[];
+  for(let i=0;i<=N;i++){ const d=dMax*i/N; gs.push([d, isAgl?0:groundAt(d)]);
+    /* 規劃高度沿線內插 */
+    let a=WP[0],b=WP[WP.length-1];
+    for(let k=1;k<WP.length;k++){ if(d<=WP[k].d){a=WP[k-1];b=WP[k];break;} }
+    const f=(d-a.d)/((b.d-a.d)||1), al=a.alt+(b.alt-a.alt)*f;
+    ps.push([d, isAgl? HOME_AMSL+al-groundAt(d) : HOME_AMSL+al]);
+  }
+  /* 離地帶：兩條線中間那一塊才是主角 */
+  px.beginPath(); ps.forEach(([d,v],i)=> i?px.lineTo(X(d),Y(v)):px.moveTo(X(d),Y(v)));
+  for(let i=gs.length-1;i>=0;i--) px.lineTo(X(gs[i][0]),Y(gs[i][1]));
+  px.closePath(); px.fillStyle="rgba(57,135,229,.14)"; px.fill();
+  /* 地面 */
+  px.beginPath(); gs.forEach(([d,v],i)=> i?px.lineTo(X(d),Y(v)):px.moveTo(X(d),Y(v)));
+  px.lineTo(X(dMax),H-B); px.lineTo(X(0),H-B); px.closePath();
+  px.fillStyle="#3a3833"; px.fill();
+  px.beginPath(); gs.forEach(([d,v],i)=> i?px.lineTo(X(d),Y(v)):px.moveTo(X(d),Y(v)));
+  px.strokeStyle="#c2bfb3"; px.lineWidth=1.5; px.stroke();
+  /* 門檻線——**它就是那條綠線該有的樣子**：畫出來，而且說出它是什麼 */
+  if (isAgl){
+    px.setLineDash([4,3]); px.beginPath();
+    px.moveTo(L,Y(LOW_ALT)); px.lineTo(W-R,Y(LOW_ALT));
+    px.strokeStyle="#fab219"; px.lineWidth=1.5; px.stroke(); px.setLineDash([]);
+    px.fillStyle="#fab219"; px.font="11px system-ui";
+    px.fillText("低空門檻 3 m（低於這條線就不准超過 1 m/s）", L+6, Y(LOW_ALT)-5);
+  }
+  /* 規劃路徑 */
+  px.beginPath(); ps.forEach(([d,v],i)=> i?px.lineTo(X(d),Y(v)):px.moveTo(X(d),Y(v)));
+  px.strokeStyle="#3987e5"; px.lineWidth=2; px.stroke();
+  WP.forEach((w,i)=>{
+    const v = isAgl? agl(w) : HOME_AMSL+w.alt;
+    px.beginPath(); px.arc(X(w.d),Y(v),i===sel?5:3,0,7);
+    px.fillStyle=i===sel?"#d97757":"#3987e5"; px.fill();
+    px.fillStyle="#8f8b80"; px.font="10px ui-monospace,monospace";
+    px.fillText(w.seq, X(w.d)-3, H-8);
+  });
+  document.getElementById("axisNote").textContent = isAgl
+    ? "y 軸是離地高度——3 m 永遠是 3 m，換一條航線也比得了。"
+    : "y 軸是海拔——地形看得到，但同一個「離地 3 m」在不同航線上會長得不一樣。";
+}
+
+/* ── 逐段表 ─────────────────────────────────────────── */
+function drawLegs(){
+  const tb=document.getElementById("legs"); tb.innerHTML="";
+  for(let i=1;i<WP.length;i++){
+    const a=WP[i-1],b=WP[i], A=agl(b), bad=legBad(i);
+    const len=(b.d-a.d).toFixed(1);
+    const turn = i>1? Math.round(60+30*Math.sin(i)) : null;
+    const tr=document.createElement("tr");
+    if(i===sel) tr.className="sel";
+    tr.innerHTML=`<td class="txt">seq ${a.seq}→${b.seq}</td><td>${len} m</td>
+      <td class="${A<LOW_ALT?"bad":""}">${A.toFixed(1)} m</td>
+      <td>${b.spd.toFixed(1)} m/s</td>
+      <td class="txt ${b.src.startsWith("機上")?"":"dim"}">${b.src}</td>
+      <td>${turn===null?"—":turn+"°"}</td>
+      <td class="txt ${bad?"bad":"dim"}">${bad?"低空帶速：擋上傳":"通過"}</td>`;
+    tr.onclick=()=>{ sel=i; sync(); };
+    tb.appendChild(tr);
+  }
+}
+
+function sync(){
+  const w=WP[sel];
+  document.getElementById("wpName").textContent = "seq "+w.seq;
+  document.getElementById("alt").value = w.alt;
+  document.getElementById("spd").value = w.spd;
+  document.getElementById("altVal").textContent = w.alt.toFixed(1)+" m";
+  document.getElementById("spdVal").textContent = w.spd.toFixed(1)+" m/s";
+  const A=agl(w), bad=legBad(sel);
+  const v=document.getElementById("verdict");
+  v.className = "verdict "+(bad?"bad":"ok");
+  v.innerHTML = bad
+    ? `離地 <b class="num">${A.toFixed(1)}</b> m 卻要飛 <b class="num">${w.spd.toFixed(1)}</b> m/s。
+       低於 <b>3 m</b> 時地面會擾動這架飛機——2026-09-07 就是在 1.5 m 加速通過 5 m/s 時失控的。`
+    : `離地 <b class="num">${A.toFixed(1)}</b> m ・ <b class="num">${w.spd.toFixed(1)}</b> m/s，這一段通過。`;
+  const mins = WP.map((_,i)=>i?agl(WP[i]):agl(WP[0]));
+  document.getElementById("chipMin").innerHTML =
+    '最低離地 <span class="num">'+Math.min(...mins).toFixed(1)+'</span> m';
+  document.getElementById("chipMin").className = "chip"+(Math.min(...mins)<LOW_ALT?" bad":"");
+  drawScene(); drawProf(); drawLegs();
+}
+document.getElementById("alt").oninput = e => { WP[sel].alt = +e.target.value; sync(); };
+document.getElementById("spd").oninput = e => { WP[sel].spd = +e.target.value; sync(); };
+document.getElementById("fixAlt").onclick = () => {
+  WP[sel].alt = +(WP[sel].alt + (LOW_ALT - agl(WP[sel])) + 0.1).toFixed(1); sync(); };
+document.getElementById("fixSpd").onclick = () => { WP[sel].spd = LOW_SPD; sync(); };
+document.querySelectorAll(".stagebar button").forEach(b => b.onclick = () => {
+  view=b.dataset.view;
+  document.querySelectorAll(".stagebar button").forEach(x=>
+    x.setAttribute("aria-pressed", String(x===b)));
+  drawScene(); });
+document.querySelectorAll(".seg button").forEach(b => b.onclick = () => {
+  mode=b.dataset.mode;
+  document.querySelectorAll(".seg button").forEach(x=>
+    x.setAttribute("aria-pressed", String(x===b)));
+  drawProf(); });
+sel = 1; sync();
+</script></body></html>
