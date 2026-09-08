@@ -525,7 +525,7 @@ export default function PlanPage() {
       )}
       {prof && <Profile p={prof} />}
       <div className="hint-line">
-        {emph("地面線來自 SRTM（水平約 30 m），**只有地形，不含樹木、電線、建物**。")}
+        {emph("地面線來自 SRTM（水平約 30 m）——**被格子抹平的表面**：樹冠與屋頂混在裡面，但沒有一棟樓是它畫得出來的。既不能當乾淨的地面，也不能當障礙物圖。")}
       </div>
 
       {(chk?.problems?.length || chk?.warnings?.length) ? (
