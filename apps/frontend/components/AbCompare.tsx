@@ -1,5 +1,5 @@
 "use client";
-import { PolygonLayer } from "@deck.gl/layers";
+import { ColumnLayer } from "@deck.gl/layers";
 import { MapboxOverlay } from "@deck.gl/mapbox";
 import maplibregl from "maplibre-gl";
 import "maplibre-gl/dist/maplibre-gl.css";
@@ -7,8 +7,8 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 
 import CompareTabs from "@/components/CompareTabs";
 import InfoTip from "@/components/InfoTip";
-import { compareAlongPath, deltaCells, type AbResult, type ChainPoint,
-  type DeltaCell, type Pt, type Sample } from "@/lib/chainage";
+import { compareAlongPath, voxels, type AbResult, type ChainPoint,
+  type Pt, type Sample, type Voxel } from "@/lib/chainage";
 import { getJson } from "@/lib/fetchJson";
 import { CANVAS, groundGrid } from "@/lib/geo";
 import { API, CLIENT_HEADERS } from "@/lib/signal";
@@ -37,6 +37,10 @@ const IDC = ["#3987e5", "#d95926", "#199e70"];   // 識別色 1藍 2橘 3綠
 const OVER = "#8f8b80";                          // 第 4 趟起：顏色不再承載識別
 const tripColor = (i: number) => (i < IDC.length ? IDC[i] : OVER);
 const BASE_INK = "#c9c5bb";                      // 基準線（虛線、中性色）
+const VGRID = 10, VZ = 5;   // 體素 10×10×5 m
+// 垂直放大：27 m 的高度差擺在 150 m 的場域上，不放大幾乎看不出來。
+// **倍率一律寫在畫面上**（ⓘ）——偷偷放大的高度就是一張假的圖
+const VEX = 2;
 
 type Mode = "time" | "mission" | "cross";
 const MODE_LABEL: Record<Mode, string> = {
@@ -58,6 +62,11 @@ const fmtT = (t: string) =>
 const f1 = (v: number | null | undefined) => (v == null ? "—" : v.toFixed(1));
 const dd = (b: number | null, a: number | null) =>
   b == null || a == null ? "—" : `${b - a >= 0 ? "+" : ""}${(b - a).toFixed(1)}`;
+
+/** 高度區間的寫法。**負的高度是真的**（起飛點以下的地形），不藏也不夾到 0；
+ *  `-10–-5` 那種寫法沒有人讀得出來，所以用「至」。 */
+const zLabel = (z: number) =>
+  `${(z - VZ / 2).toFixed(0)} 至 ${(z + VZ / 2).toFixed(0)} m`;
 
 const median = (v: number[]): number | null => {
   if (!v.length) return null;
@@ -94,7 +103,8 @@ export default function AbCompare() {
   const [heatId, setHeatId] = useState<string | null>(null);
   const [tracks, setTracks] = useState<Record<string, Sample[]>>({});
   const [plan, setPlan] = useState<Pt[] | null>(null);
-  const [hover, setHover] = useState<DeltaCell | null>(null);
+  const [hover, setHover] = useState<Voxel | null>(null);
+  const [zSel, setZSel] = useState<number | null>(null);   // 高度切片（null＝全部）
   const [noteEdit, setNoteEdit] = useState<string | null>(null);
   const [showTest, setShowTest] = useState(false);   // 測試架次是否列入
 
@@ -244,11 +254,21 @@ export default function AbCompare() {
   }, [baseRows, sel, sessions, tracks, plan, tripLabel]);
 
   const heat = rows.find((r) => r.id === heatId) ?? rows[0] ?? null;
-  const cells = useMemo(() => {
+  // 體素而不是平面格：同一個地面格，飛 3 m 與飛 25 m 量到的是兩件事
+  const vox = useMemo(() => {
     if (!heat || !baseRows.length) return [];
     const o = baseRows.find((r) => r.lat != null && r.lon != null);
-    return o ? deltaCells(baseRows, tracks[heat.id] ?? [], o) : [];
+    return o ? voxels(baseRows, tracks[heat.id] ?? [], o, VGRID, VZ) : [];
   }, [heat, baseRows, tracks]);
+  // 高度層（高→低）；切到別趟時若那一層不存在就回「全部」
+  const zLayers = useMemo(() =>
+    [...new Set(vox.map((v) => v.z))].sort((a, b) => b - a), [vox]);
+  useEffect(() => {
+    if (zSel != null && !zLayers.includes(zSel)) setZSel(null);
+  }, [zLayers, zSel]);
+  const shown = useMemo(() =>
+    vox.filter((v) => zSel == null || v.z === zSel), [vox, zSel]);
+  const nBoth = shown.filter((v) => v.delta != null).length;
 
   const ready = rows.length > 0;
 
@@ -264,6 +284,8 @@ export default function AbCompare() {
     const map = new maplibregl.Map({
       container: boxRef.current, zoom: firstFleetPos() ? 16 : 1.5,
       center: firstFleetPos() ?? [0, 20],
+      // 體素是 3D 的，俯視角看不出高度——開頁就給俯仰，之後使用者自己轉
+      pitch: 45, bearing: -22, maxPitch: 80,
       attributionControl: false, cooperativeGestures: true,
       style: { version: 8, sources: {}, layers: [
         { id: "canvas", type: "background", paint: { "background-color": CANVAS } }] },
@@ -296,33 +318,42 @@ export default function AbCompare() {
     if (!mapReady || !ovRef.current) return;
     const grid = 10, M_LAT = 110574;
     const mLon = (lat: number) => 111320 * Math.cos((lat * Math.PI) / 180);
+    // 體素：ColumnLayer 的四邊柱（diskResolution 4 ＋ angle 45 ＝ 正方形）。
+    // 底面擺在 (z − vz/2)×VEX，高度 vz×VEX——**放大只作用在垂直**，
+    // 水平的 10 m 仍然是 10 m
+    const col = (id: string, data: Voxel[], both: boolean) => new ColumnLayer<Voxel>({
+      id, data,
+      diskResolution: 4, angle: 45,
+      radius: VGRID / Math.SQRT2,     // 外接圓 → 邊長剛好 10 m
+      extruded: true, filled: true,
+      wireframe: !both,               // 無對照只留框：填滿會蓋掉有對照的那幾顆
+      getPosition: (v) => [v.lon, v.lat, (v.z - VZ / 2) * VEX],
+      getElevation: VZ * VEX,
+      elevationScale: 1,
+      getFillColor: (v) => (both
+        ? [...divergeRGB(v.delta!), 235] as [number, number, number, number]
+        : [143, 139, 128, 26]),
+      getLineColor: [143, 139, 128, 150],
+      lineWidthUnits: "pixels" as const, getLineWidth: 1,
+      pickable: both,
+      onHover: (info) => setHover((info.object as Voxel) ?? null),
+      updateTriggers: { getPosition: data, getFillColor: data },
+    });
     ovRef.current.setProps({ layers: [
-      new PolygonLayer<DeltaCell>({
-        id: "delta-cells",
-        data: cells,
-        getPolygon: (c) => {
-          const dLat = grid / 2 / M_LAT, dLon = grid / 2 / mLon(c.lat);
-          return [[c.lon - dLon, c.lat - dLat], [c.lon + dLon, c.lat - dLat],
-            [c.lon + dLon, c.lat + dLat], [c.lon - dLon, c.lat + dLat]];
-        },
-        // 兩趟都有樣本才上色；單趟＝無對照（灰框空心，不冒充「沒變化」）
-        getFillColor: (c) => (c.delta == null ? [143, 139, 128, 30]
-          : [...divergeRGB(c.delta), 205] as [number, number, number, number]),
-        getLineColor: (c) => (c.delta == null ? [143, 139, 128, 120] : [0, 0, 0, 0]),
-        getLineWidth: 0.6,
-        stroked: true, filled: true, pickable: true,
-        onHover: (info) => setHover((info.object as DeltaCell) ?? null),
-        updateTriggers: { getFillColor: cells, getPolygon: cells },
-      }),
+      // 無對照先畫（在下），有對照的疊在上面——找得到差異在哪永遠優先
+      col("vox-none", shown.filter((v) => v.delta == null), false),
+      col("vox-both", shown.filter((v) => v.delta != null), true),
     ] });
-    if (cells.length && mapRef.current) {
+    if (shown.length && mapRef.current) {
       (mapRef.current.getSource("grid") as maplibregl.GeoJSONSource | undefined)
-        ?.setData(groundGrid(cells[0].lat, cells[0].lon));
+        ?.setData(groundGrid(shown[0].lat, shown[0].lon));
       const b = new maplibregl.LngLatBounds();
-      for (const c of cells) b.extend([c.lon, c.lat]);
-      mapRef.current.fitBounds(b, { padding: 40, animate: false, maxZoom: 18 });
+      for (const v of shown) b.extend([v.lon, v.lat]);
+      // 上方留多一點：體素是往上長的，只給地面足跡對齊會把柱子頂出畫面外
+      mapRef.current.fitBounds(b, { animate: false, maxZoom: 18,
+        padding: { top: 140, bottom: 40, left: 60, right: 60 } });
     }
-  }, [mapReady, cells]);
+  }, [mapReady, shown]);
 
   async function saveNote(id: string, note: string) {
     await fetch(`${API}/api/sessions/${id}`, {
@@ -589,9 +620,14 @@ export default function AbCompare() {
 
         <div className="card">
           <h3>差值熱區<span className="h3-note">
-            <InfoTip tip={"這一趟減基準，10 m 格。發散色盤：兩極用識別色、中點是灰"
+            <InfoTip tip={`這一趟減基準，體素 ${VGRID}×${VGRID}×${VZ} m。`
+              + "訊號分佈在空間裡：同一個地面格，飛 3 m 與飛 25 m 量到的是兩件事，"
+              + "壓成平面等於把它們平均掉。發散色盤：兩極用識別色、中點是灰"
               + "——中點絕不用第三個色相，否則「沒變化」會看起來像另一種變化。"
-              + "虛框＝只有其中一趟有樣本，那不是「沒變化」。"} />
+              + "線框＝只有其中一趟飛過那顆體素，那不是「沒變化」。"
+              + `垂直放大 ${VEX}×（高度差擺在整個場域上，不放大幾乎看不出來）；`
+              + "水平仍是實際尺度。後面的體素會被前面的擋住——要看清楚某一層"
+              + "就用高度切片，一次只看一層。地圖可以拖曳旋轉，俯視角即平面圖。"} />
           </span></h3>
           {/* 熱區本質是兩兩比對，所以要選一趟 */}
           <div className="sess-pills">
@@ -600,11 +636,23 @@ export default function AbCompare() {
                 onClick={() => setHeatId(r.id)}>{r.label}</button>
             ))}
           </div>
-          {cells.length === 0 ? (
+          {vox.length === 0 ? (
             <div className="empty" style={{ marginTop: 8 }}>
-              這一趟與基準沒有共同的里程區間——不畫空圖假裝有比較。
+              這一趟與基準沒有共同飛過的體素——不畫空圖假裝有比較。
             </div>
           ) : (<>
+            {/* 高度切片：遮擋是 3D 的固有代價，一次只看一層時那一層才是完整的 */}
+            <div className="cmp-scope">
+              <span className="hint-line">高度</span>
+              <div className="sess-pills">
+                <button className={`pill${zSel == null ? " on" : ""}`}
+                  onClick={() => setZSel(null)}>全部</button>
+                {zLayers.map((z) => (
+                  <button key={z} className={`pill${zSel === z ? " on" : ""}`}
+                    onClick={() => setZSel(z)}>{zLabel(z)}</button>
+                ))}
+              </div>
+            </div>
             <div className="ab-map" ref={boxRef} />
             <div className="ab-legend">
               <span className="sw" style={{
@@ -613,9 +661,13 @@ export default function AbCompare() {
               <span className="sw" style={{
                 background: `rgb(${divergeRGB(8).join(",")})` }} />比基準好
               <span className="sw sw-none" />無對照
+              <span className="cmp-vn2">
+                　共同體素 {nBoth}　只有一趟 {shown.length - nBoth}
+              </span>
               {hover && (
                 <span className="meta">
-                　基準 {f1(hover.a_sinr)}（{hover.a_n}）· 這趟 {f1(hover.b_sinr)}（{hover.b_n}）
+                　{zLabel(hover.z)}　基準 {f1(hover.a_sinr)}（{hover.a_n}）
+                  · 這趟 {f1(hover.b_sinr)}（{hover.b_n}）
                   {hover.delta != null ? `· Δ ${f1(hover.delta)} dB` : "· 無對照"}
                 </span>
               )}

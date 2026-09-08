@@ -13,6 +13,7 @@ export interface Pt { lat: number; lon: number }
 export interface Sample extends Pt {
   sinr?: number | null;
   rsrp?: number | null;
+  alt_rel?: number | null;   // 體素化用（voxels）；平面聚合不需要
 }
 
 const M_LAT = 110574;
@@ -197,6 +198,58 @@ export function deltaCells(
     out.push({
       lat: origin.lat + y / M_LAT, lon: origin.lon + x / k,
       // 兩趟都有樣本才給 delta；否則 null＝無對照（不用 0 冒充「沒變化」）
+      delta: av != null && bv != null ? bv - av : null,
+      a_sinr: av, b_sinr: bv, a_n: s.a.length, b_n: s.b.length,
+    });
+  }
+  return out;
+}
+
+
+/** 體素：**訊號分佈在空間裡，不是一個平面**（使用者要求 2026-09-08）。
+ *
+ * 同一個 10×10 m 的地面格，飛 3 m 與飛 25 m 量到的是兩件事——`deltaCells`
+ * 把它們平均掉，而那個平均值哪一個高度都不成立。這裡多切一軸：垂直
+ * `vz` 公尺一層，`alt_rel`（相對起飛點）為準。
+ *
+ * **負的高度是真的**（起飛點以下的地形），不夾到 0。
+ * 沒有高度的樣本一律略過——猜一個 0 會把它塞進地面那一層，那是無中生有。
+ */
+export interface Voxel {
+  lat: number; lon: number;
+  z: number;                 // 這一層的中心高度（alt_rel，公尺）
+  delta: number | null;      // null＝無對照（只有一趟飛過這顆體素）
+  a_sinr: number | null; b_sinr: number | null;
+  a_n: number; b_n: number;
+}
+
+export function voxels(
+  a: Sample[], b: Sample[], origin: Pt, grid = 10, vz = 5,
+): Voxel[] {
+  const k = mLon(origin.lat);
+  const bins = new Map<string, { a: number[]; b: number[] }>();
+  const put = (rows: Sample[], side: "a" | "b") => {
+    for (const r of rows) {
+      if (r.lat == null || r.lon == null || r.sinr == null) continue;
+      if (r.alt_rel == null) continue;   // 猜一個高度＝無中生有
+      const x = (r.lon - origin.lon) * k, y = (r.lat - origin.lat) * M_LAT;
+      const key = `${Math.floor(x / grid)}|${Math.floor(y / grid)}`
+        + `|${Math.floor(r.alt_rel / vz)}`;
+      const slot = bins.get(key) ?? { a: [], b: [] };
+      slot[side].push(r.sinr);
+      bins.set(key, slot);
+    }
+  };
+  put(a, "a");
+  put(b, "b");
+  const out: Voxel[] = [];
+  for (const [key, s] of bins) {
+    const [ix, iy, iz] = key.split("|").map(Number);
+    const x = (ix + 0.5) * grid, y = (iy + 0.5) * grid;
+    const av = med(s.a), bv = med(s.b);
+    out.push({
+      lat: origin.lat + y / M_LAT, lon: origin.lon + x / k,
+      z: (iz + 0.5) * vz,
       delta: av != null && bv != null ? bv - av : null,
       a_sinr: av, b_sinr: bv, a_n: s.a.length, b_n: s.b.length,
     });
