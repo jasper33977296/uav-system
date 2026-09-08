@@ -1859,3 +1859,23 @@ details.card summary { cursor: pointer; font-size: 14px; font-weight: 600; }
 .stage-tip b { color: var(--ink); }
 .stage-tip .k { color: var(--muted); margin-right: 6px; }
 .stage-tip .bad { color: var(--status-danger); }
+/* 規劃頁的工作面：3D ＋ 右欄（原型 §4.7.3）*/
+.plan-work { display: grid; grid-template-columns: minmax(0, 1fr) 264px; gap: 12px;
+  align-items: start; }
+.plan-rail { background: var(--surface); border: 1px solid var(--border);
+  border-radius: 10px; padding: 12px; display: flex; flex-direction: column; gap: 11px; }
+.plan-rail h2 { font-size: 12px; color: var(--muted); font-weight: 500;
+  letter-spacing: .05em; }
+.rail-row { display: flex; justify-content: space-between; align-items: baseline;
+  gap: 8px; color: var(--ink-2); }
+.rail-row .num { font-size: 15px; color: var(--ink); }
+.rail-field { display: flex; flex-direction: column; gap: 5px; }
+.rail-field input[type=range] { width: 100%; accent-color: var(--accent); }
+.rail-save { display: flex; flex-direction: column; gap: 7px;
+  border-top: 1px solid var(--hairline); padding-top: 10px; }
+.verdict { border-radius: 8px; padding: 9px 10px; font-size: 12px; line-height: 1.5; }
+.verdict.ok { background: var(--status-ok-bg); color: var(--ink-2);
+  border: 1px solid rgba(12, 163, 12, .35); }
+.verdict.bad { background: var(--status-danger-bg); color: var(--ink);
+  border: 1px solid var(--status-danger-border); }
+@media (max-width: 900px) { .plan-work { grid-template-columns: 1fr; } }

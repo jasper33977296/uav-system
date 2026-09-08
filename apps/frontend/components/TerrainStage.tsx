@@ -224,10 +224,10 @@ function frameRoute(map: maplibregl.Map, dataRef: { current: StageData },
     return {
       dx: (x0 + x1) / 2 - W / 2, dy: (y0 + y1) / 2 - H / 2,
       err: Math.hypot((x0 + x1) / 2 - W / 2, (y0 + y1) / 2 - H / 2),
-      // 航線佔畫面六成：留白是給地形看的——這一頁的重點之一就是
-      // 「航線周圍的地長什麼樣」，塞滿反而看不出它在什麼地形裡
-      want: Math.min(W * 0.6 / Math.max(1, x1 - x0),
-                     H * 0.6 / Math.max(1, y1 - y0)),
+  // 航線佔畫面四成（使用者 2026-09-08 從六成調下來）：留白是給地形看的
+      // ——一開頁就要看得出「航線在什麼地形裡」，那是這一頁的重點之一
+      want: Math.min(W * 0.4 / Math.max(1, x1 - x0),
+                     H * 0.4 / Math.max(1, y1 - y0)),
     };
   };
   /** 一個分數同時管「置中」與「大小」——只看其中一個會出現

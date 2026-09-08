@@ -227,6 +227,10 @@ def check_waypoints(wps: list[dict], fence_r: float, fence_alt: float,
             "terrain": terr["terrain"],
             # 逐段的事實：剖面圖、逐段表、自動修正共用的輸入
             "legs": prof["legs"],
+            # **門檻要跟著出來**：畫面要在剖面圖上畫那條線，而它不該自己
+            # 寫死一個數字（見 `leg_profile` 裡 `low_fast` 的說明）
+            "limits": {"low_alt_m": LOW_ALT_M, "low_speed_ms": LOW_SPEED_MS,
+                       "min_takeoff_alt_m": MIN_TAKEOFF_ALT_M},
             # **量測用的是哪一份圍欄，要跟著報告走**：同一句「超出圍欄」在
             # 兩種來源下的處置完全不同
             "fence_source": fence_src}
@@ -642,6 +646,11 @@ def leg_profile(wps: list[dict], home: dict | None = None, dem=None,
         leg: dict = {
             "from": a["seq"], "to": b["seq"], "length_m": round(d, 1),
             "speed_ms": b["speed"], "speed_src": b["speed_src"],
+            # **判定跟著資料走，呼叫端不要自己再判一次。** 門檻在這裡
+            # （`low_alt`／`low_speed`），前端若照著數字重寫一次條件，
+            # 改了這裡它不會跟著變——那就是 2026-08-26 抓到的「同源副本
+            # 早就漂移了」的同一種錯，而且更難發現（畫面看起來很正常）。
+            "low_fast": False,
         }
         # 離地：段內取最低的一點（含兩端）。frame 10 交給飛控，不判
         agl = None
@@ -689,9 +698,11 @@ def leg_profile(wps: list[dict], home: dict | None = None, dem=None,
             "**速度沒有檢查**：這一段的速度取決於機上的 `WP_SPD`，而還沒讀過"
             "那台機。連上線之後重看一次——**讀不到不等於沒問題**")
 
-    low = [l for l in out["legs"]
-           if l["agl_m"] is not None and l["agl_m"] < low_alt
-           and l["speed_ms"] is not None and l["speed_ms"] > low_speed]
+    for l in out["legs"]:
+        l["low_fast"] = bool(
+            l["agl_m"] is not None and l["agl_m"] < low_alt
+            and l["speed_ms"] is not None and l["speed_ms"] > low_speed)
+    low = [l for l in out["legs"] if l["low_fast"]]
     if low:
         w = min(low, key=lambda l: (l["agl_m"], -l["speed_ms"]))
         more = f"，另有 {len(low) - 1} 段相同" if len(low) > 1 else ""

@@ -2465,6 +2465,116 @@ async def check_mission(plan_id: str, wp_spd: float | None = None,
         wp_spd=wp_spd, wp_radius=wp_radius)
 
 
+class PlanOverride(BaseModel):
+    """把某一個航點的高度或速度換掉（試算用）。`speed` 改的是**那個航點之後**
+    的 `DO_CHANGE_SPEED`——與飛控的語意一致（見 `plan_check.leg_profile`）。"""
+    seq: int
+    alt: float | None = None
+    speed: float | None = None
+
+
+class PreviewIn(BaseModel):
+    overrides: list[PlanOverride] = Field(default_factory=list, max_length=500)
+    wp_spd: float | None = None
+    wp_radius: float | None = None
+    #: 給了就**存成新的一份**；不給就只算不存
+    save_as: str | None = None
+
+
+def _apply_overrides(wps: list[dict], ov: list[PlanOverride]) -> list[dict]:
+    """把改動套到航點上（就地不動原本那份，回一份新的 list）。"""
+    alt = {o.seq: o.alt for o in ov if o.alt is not None}
+    spd = {o.seq: o.speed for o in ov if o.speed is not None}
+    out = []
+    for w in wps:
+        w = dict(w)
+        if w.get("seq") in alt:
+            w["alt"] = alt[w["seq"]]
+        # 速度改的是**那個航點後面**的 DO_CHANGE_SPEED；航線裡沒有的話補一個
+        out.append(w)
+        s = spd.get(w.get("seq"))
+        if s is None:
+            continue
+        nxt = None
+        for x in wps:
+            if x.get("seq") == w["seq"] + 1 and (x.get("command") == 178):
+                nxt = x
+                break
+        if nxt is not None:
+            continue        # 既有的那一項由下面的迴圈改
+        out.append({"seq": w["seq"] + 0.5, "lat": 0, "lon": 0, "alt": 0,
+                    "action": "do", "command": 178, "frame": 2, "p2": s})
+    # 既有的 DO_CHANGE_SPEED：seq−1 有指定就換掉它的值
+    for w in out:
+        if w.get("command") == 178:
+            s = spd.get((w.get("seq") or 0) - 1)
+            if s is not None:
+                w["p2"] = s
+                w["params"] = {**(w.get("params") or {}), "p2": s}
+    return out
+
+
+@router.post("/plans/{plan_id}/preview")
+async def preview_plan(plan_id: str, body: PreviewIn):
+    """**試算：套上改動、跑同一套規則、不寫資料庫。**
+
+    規劃頁的高度／速度滑桿走這條路。**規則只有一份**（`libs/plan_check`）
+    ——讓前端照著門檻自己再算一次，改了後端的常數畫面不會跟著變，
+    而且看起來完全正常（2026-08-26 那個「同源副本早就漂移」的同一種錯）。
+
+    `save_as` 給了才存成**新的一份**，原本那份永遠不動——與「改成地形跟隨」
+    同一條紀律：改過的航線是另一份，操作員要先看過再決定要不要飛。
+    """
+    row = await db.pool.fetchrow(
+        "SELECT name, fence, home, firmware_type, vehicle_type, cruise_speed, "
+        "hover_speed, rally FROM plans WHERE id = $1", plan_id)
+    if row is None:
+        raise HTTPException(404, "無此路徑")
+    rows = await db.pool.fetch(
+        "SELECT seq, lat, lon, alt, action, params FROM waypoints "
+        "WHERE plan_id = $1 ORDER BY seq", plan_id)
+    wps = []
+    for r in rows:
+        w = dict(r)
+        pm = w.get("params")
+        pm = json.loads(pm) if isinstance(pm, str) else (pm or {})
+        w["params"] = pm
+        w.update({k: pm.get(k) for k in ("command", "frame", "p1", "p2", "p3", "p4")})
+        wps.append(w)
+    wps = _apply_overrides(wps, body.overrides)
+    fence = row["fence"]
+    if isinstance(fence, str):
+        fence = json.loads(fence)
+    home = row["home"]
+    if isinstance(home, str):
+        home = json.loads(home)
+    h = ({"lat": home[0], "lon": home[1]}
+         if home and len(home) >= 2 and (home[0] or home[1]) else
+         next(({"lat": w["lat"], "lon": w["lon"]} for w in wps
+               if w.get("lat") and w.get("lon")), None))
+    check = plan_check.check_waypoints(
+        wps, settings.geofence_radius_m, settings.geofence_alt_m,
+        settings.geofence_margin, fence=fence, autopilot=row["firmware_type"],
+        home=home, dem=terrain.shared(),
+        wp_spd=body.wp_spd, wp_radius=body.wp_radius)
+    profile = plan_check.route_profile(wps, h, dem=terrain.shared())
+    out: dict = {"check": check, "profile": profile, "saved_id": None}
+    if body.save_as:
+        stored = [{"seq": i, "lat": w.get("lat"), "lon": w.get("lon"),
+                   "alt": w.get("alt"), "action": w.get("action") or "waypoint",
+                   "command": w.get("command"), "frame": w.get("frame"),
+                   **{k: w.get(k) for k in ("p1", "p2", "p3", "p4")}}
+                  for i, w in enumerate(wps)]
+        rally = row["rally"]
+        if isinstance(rally, str):
+            rally = json.loads(rally)
+        out["saved_id"] = await _store_mission(
+            body.save_as.strip() or f"{row['name']}（調整）", "edited", stored,
+            row["firmware_type"], row["vehicle_type"], fence, home,
+            row["cruise_speed"], row["hover_speed"], rally)
+    return out
+
+
 @router.post("/plans/{plan_id}/activate")
 async def activate_mission(plan_id: str, active: bool = True):
     async with db.pool.acquire() as con:

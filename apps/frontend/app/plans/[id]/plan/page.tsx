@@ -10,7 +10,7 @@
  */
 import Link from "next/link";
 import { useParams } from "next/navigation";
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 
 import TerrainStage, { type StageHit, type StageTip, type StageWp }
   from "@/components/TerrainStage";
@@ -24,10 +24,14 @@ interface Profile { points: Pt[]; home_amsl_m: number | null; frames: number[] }
 interface Leg {
   from: number; to: number; length_m: number; agl_m: number | null;
   speed_ms: number | null; speed_src: string; turn_deg?: number | null;
+  /** **判定由後端給**（`plan_check.leg_profile`）。前端不要照門檻自己再判
+   *  一次——改了後端的常數，畫面不會跟著變，而且看起來完全正常 */
+  low_fast?: boolean;
 }
+interface Limits { low_alt_m: number; low_speed_ms: number; min_takeoff_alt_m: number }
 interface Check {
   ok: boolean; problems: string[]; warnings: string[]; legs?: Leg[];
-  terrain?: { home_amsl_m?: number };
+  limits?: Limits; terrain?: { home_amsl_m?: number };
 }
 
 /** 高度基準是這一頁最該講清楚的一件事——同一個「4.6 m」在兩種 frame 下
@@ -141,6 +145,12 @@ export default function PlanPage() {
     { wp: null, rad: null, src: "還沒讀過這台機" });
   const [err, setErr] = useState<string | null>(null);
   const [selWp, setSelWp] = useState(0);
+  /** **改動只存在畫面上**（使用者裁定 2026-09-08：先只算不存）。
+   *  每次變動送去後端試算——規則只有一份，前端不自己再算一次。 */
+  const [ov, setOv] = useState<Record<number, { alt?: number; speed?: number }>>({});
+  const [busy, setBusy] = useState(false);
+  const [saved, setSaved] = useState<string | null>(null);
+  const spdRef = useRef<{ wp: number | null; rad: number | null }>({ wp: null, rad: null });
 
   useEffect(() => {
     let stop = false;
@@ -175,6 +185,7 @@ export default function PlanPage() {
         if (stop) return;
         setName((ms as any).find?.((m: any) => m.id === id)?.name ?? id);
         setProf(pr); setChk(ck); setSpd({ wp, rad, src });
+        spdRef.current = { wp, rad };
       } catch (e) {
         if (!stop) setErr(errText((e as Error).message, "讀不到這份航線"));
       }
@@ -182,12 +193,32 @@ export default function PlanPage() {
     return () => { stop = true; };
   }, [id]);
 
+  // 改動 → 試算。**去抖**：拖滑桿一秒會產生幾十次變動，而每一次都要
+  // 沿線取樣 DEM——沒有去抖等於用滑桿打後端
+  useEffect(() => {
+    const list = Object.entries(ov).map(([seq, v]) => ({ seq: Number(seq), ...v }));
+    if (!list.length) return;
+    const t = setTimeout(async () => {
+      setBusy(true);
+      try {
+        const r = await fetch(`${API}/api/plans/${id}/preview`, {
+          method: "POST", headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ overrides: list, wp_spd: spdRef.current.wp,
+                                 wp_radius: spdRef.current.rad }),
+        });
+        const d = await r.json();
+        if (r.ok) { setChk(d.check); setProf(d.profile); }
+      } finally { setBusy(false); }
+    }, 260);
+    return () => clearTimeout(t);
+  }, [ov, id]);
+
   const legs = chk?.legs ?? [];
   // 3D 要的是「航點」，而剖面回的是沿線取樣——帶 seq 的那幾筆就是航點。
   // **高度換算在這裡做一次**（profile 的 `plan` 已經是 AMSL），
   // 3D 元件不猜高度基準
-  const badSeq = new Set(legs.filter((l) => l.agl_m != null && l.agl_m < 3)
-    .map((l) => l.to));
+  const lowAlt = chk?.limits?.low_alt_m ?? 3;
+  const badSeq = new Set(legs.filter((l) => l.low_fast).map((l) => l.to));
   /** 滑鼠指到東西時要顯示什麼。**由這一頁決定**：航段的長度、速度、來源、
    *  判定都住在這裡，讓 3D 那個元件自己再查一次就會有兩份可能不同步的資料。 */
   const tipFor = (h: StageHit): StageTip | null => {
@@ -221,8 +252,7 @@ export default function PlanPage() {
         ...(leg.turn_deg != null
           ? ([["轉角", `${leg.turn_deg}°`]] as [string, string][]) : []),
       ],
-      bad: leg.agl_m != null && leg.agl_m < 3
-        && leg.speed_ms != null && leg.speed_ms > 1,
+      bad: !!leg.low_fast,
     };
   };
 
@@ -260,8 +290,82 @@ export default function PlanPage() {
       {/* 3D 地形（issues/048 F1）。**地形是真的**：maplibre 吃我們自己從
           `.hgt` 產的圖磚。原型那張手繪線框到此為止 */}
       {stageWps.length > 1 && (
-        <TerrainStage wps={stageWps} sel={selWp} onSelect={setSelWp}
-          tipFor={tipFor} />
+        <div className="plan-work">
+          <TerrainStage wps={stageWps} sel={selWp} onSelect={setSelWp}
+            tipFor={tipFor} />
+          <aside className="plan-rail">
+            <h2>選取的航點</h2>
+            {(() => {
+              const w = stageWps[selWp];
+              if (!w) return <div className="hint-line">在 3D 上點一個航點</div>;
+              const out = legs.find((l) => l.from === w.seq);   // 從它出發的那一段
+              const cur = ov[w.seq] ?? {};
+              const alt = cur.alt ?? Math.round((w.amsl - (prof?.home_amsl_m ?? 0)) * 10) / 10;
+              const spdNow = cur.speed ?? out?.speed_ms ?? null;
+              const set = (k: "alt" | "speed", v: number) =>
+                setOv((o) => ({ ...o, [w.seq]: { ...o[w.seq], [k]: v } }));
+              return (
+                <>
+                  <div className="rail-row"><span>航點</span>
+                    <b className="num">seq {w.seq}</b></div>
+                  <label className="rail-field">
+                    <div className="rail-row"><span>高度（離起飛點）</span>
+                      <b className="num">{alt.toFixed(1)} m</b></div>
+                    <input type="range" min={0} max={30} step={0.5} value={alt}
+                      onChange={(e) => set("alt", Number(e.target.value))} />
+                  </label>
+                  {out && (
+                    <label className="rail-field">
+                      <div className="rail-row"><span>下一段速度</span>
+                        <b className="num">{spdNow == null ? "未讀到"
+                          : `${spdNow.toFixed(1)} m/s`}</b></div>
+                      <input type="range" min={0.2} max={8} step={0.1}
+                        value={spdNow ?? 1}
+                        onChange={(e) => set("speed", Number(e.target.value))} />
+                    </label>
+                  )}
+                  {out && (
+                    <div className={`verdict ${out.low_fast ? "bad" : "ok"}`}>
+                      {out.low_fast
+                        ? `離地 ${out.agl_m} m 卻要飛 ${out.speed_ms} m/s——低於 ${lowAlt} m 時地面會擾動這架飛機`
+                        : `離地 ${out.agl_m ?? "—"} m ・ ${out.speed_ms ?? "—"} m/s，這一段通過`}
+                    </div>
+                  )}
+                </>
+              );
+            })()}
+            {/* **改動不會動到原本那份**（使用者裁定）：按了才另存 */}
+            <div className="rail-save">
+              <div className="hint-line">
+                {Object.keys(ov).length
+                  ? `已改 ${Object.keys(ov).length} 個航點——${busy ? "試算中…" : "只在畫面上，還沒存"}`
+                  : "拖滑桿試算；原本這份不會被動到"}
+              </div>
+              <button className="btn-accent btn-sm" disabled={!Object.keys(ov).length || busy}
+                onClick={async () => {
+                  setBusy(true);
+                  try {
+                    const r = await fetch(`${API}/api/plans/${id}/preview`, {
+                      method: "POST", headers: { "Content-Type": "application/json" },
+                      body: JSON.stringify({
+                        overrides: Object.entries(ov).map(([seq, v]) =>
+                          ({ seq: Number(seq), ...v })),
+                        wp_spd: spdRef.current.wp, wp_radius: spdRef.current.rad,
+                        save_as: `${name}（調整）`,
+                      }),
+                    });
+                    const d = await r.json();
+                    if (r.ok && d.saved_id) { setSaved(d.saved_id); setOv({}); }
+                  } finally { setBusy(false); }
+                }}>另存一份</button>
+              {saved && (
+                <div className="hint-line">
+                  已另存 · <a href={`/plans/${saved}/plan`}>打開新的那一份</a>
+                </div>
+              )}
+            </div>
+          </aside>
+        </div>
       )}
       {prof && <Profile p={prof} />}
       <div className="hint-line">
@@ -287,7 +391,7 @@ export default function PlanPage() {
               <tr key={`${l.from}-${l.to}`}>
                 <td>seq {l.from}→{l.to}</td>
                 <td>{l.length_m} m</td>
-                <td className={l.agl_m != null && l.agl_m < 3 ? "bad" : undefined}>
+                <td className={l.agl_m != null && l.agl_m < lowAlt ? "bad" : undefined}>
                   {l.agl_m == null ? "—" : `${l.agl_m} m`}
                 </td>
                 <td>{l.speed_ms == null ? "—" : `${l.speed_ms} m/s`}</td>
