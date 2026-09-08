@@ -159,7 +159,8 @@ export default function PlanPage() {
   const [selWp, setSelWp] = useState(0);
   /** **改動只存在畫面上**（使用者裁定 2026-09-08：先只算不存）。
    *  每次變動送去後端試算——規則只有一份，前端不自己再算一次。 */
-  const [ov, setOv] = useState<Record<number, { alt?: number; speed?: number }>>({});
+  const [ov, setOv] = useState<Record<number,
+    { alt?: number; speed?: number; lat?: number; lon?: number }>>({});
   const [busy, setBusy] = useState(false);
   const [saved, setSaved] = useState<string | null>(null);
   const spdRef = useRef<{ wp: number | null; rad: number | null }>({ wp: null, rad: null });
@@ -314,7 +315,11 @@ export default function PlanPage() {
     .filter((p) => p.seq != null && p.plan != null)
     .map((p) => ({ seq: p.seq as number, lat: p.lat ?? 0, lon: p.lon ?? 0,
       amsl: p.plan as number, ground: p.ground,
-      bad: badSeq.has(p.seq as number), fixed: p.seq === 0 }));
+      bad: badSeq.has(p.seq as number), fixed: p.seq === 0 }))
+    .map((w) => {
+      const o = ov[w.seq];
+      return o?.lat != null ? { ...w, lat: o.lat, lon: o.lon as number } : w;
+    });
   const worst = legs.reduce<number | null>(
     (m, l) => (l.agl_m == null ? m : m == null || l.agl_m < m ? l.agl_m : m), null);
 
@@ -404,11 +409,17 @@ export default function PlanPage() {
               return [...p, { lat: l.lat, lon: l.lng, alt: tkAlt, kind: placeKind }];
             })}
             onMove={(i, l) => {
-              // stageWps 的第 0 筆是起飛點，之後才對應 pts
-              const k = i - 1;
-              if (k < 0 || k >= pts.length) return;
-              setPts((p) => p.map((q, j) =>
-                j === k ? { ...q, lat: l.lat, lon: l.lng } : q));
+              if (isNew) {
+                const k = i - 1;
+                if (k < 0 || k >= pts.length) return;
+                setPts((p) => p.map((q, j) =>
+                  j === k ? { ...q, lat: l.lat, lon: l.lng } : q));
+                return;
+              }
+              const w = stageWps[i];
+              if (!w || w.fixed) return;
+              setOv((o) => ({ ...o,
+                [w.seq]: { ...o[w.seq], lat: l.lat, lon: l.lng } }));
             }} />
           <aside className="plan-rail">
             <h2>選取的航點</h2>

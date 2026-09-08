@@ -2471,6 +2471,8 @@ class PlanOverride(BaseModel):
     seq: int
     alt: float | None = None
     speed: float | None = None
+    lat: float | None = None
+    lon: float | None = None
 
 
 class PreviewIn(BaseModel):
@@ -2485,11 +2487,14 @@ def _apply_overrides(wps: list[dict], ov: list[PlanOverride]) -> list[dict]:
     """把改動套到航點上（就地不動原本那份，回一份新的 list）。"""
     alt = {o.seq: o.alt for o in ov if o.alt is not None}
     spd = {o.seq: o.speed for o in ov if o.speed is not None}
+    pos = {o.seq: (o.lat, o.lon) for o in ov if o.lat is not None and o.lon is not None}
     out = []
     for w in wps:
         w = dict(w)
         if w.get("seq") in alt:
             w["alt"] = alt[w["seq"]]
+        if w.get("seq") in pos:
+            w["lat"], w["lon"] = pos[w["seq"]]
         # 速度改的是**那個航點後面**的 DO_CHANGE_SPEED；航線裡沒有的話補一個
         out.append(w)
         s = spd.get(w.get("seq"))
