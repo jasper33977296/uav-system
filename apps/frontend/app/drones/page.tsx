@@ -29,7 +29,7 @@ interface Drone {
 const STATE_TEXT: Record<string, string> = {
   DISCONNECTED: "飛控無心跳", NOT_READY: "地面未就緒", READY: "地面待命",
   ARMED_GROUND: "已解鎖・在地上", TAKING_OFF: "爬升中",
-  FLYING_MISSION: "執行任務中", HOLDING: "空中暫停", RETURNING: "返航中",
+  FLYING_MISSION: "執行路徑中", HOLDING: "空中暫停", RETURNING: "返航中",
   LANDING: "降落中", PILOT_CONTROL: "飛手接管", EMERGENCY: "飛控 failsafe",
 };
 
@@ -545,7 +545,7 @@ function SessionTable({ rows, onRemove }: {
     <div className="dw-tablewrap">
       <table className="table">
         <thead><tr>
-          <th>開始</th><th>任務</th><th>時長</th>
+          <th>開始</th><th>路徑</th><th>時長</th>
           <th className="num">樣本</th><th className="num">平均 SINR</th>
           <th className="num">最低</th><th className="num">RTT</th>
           <th className="num">最高高度</th><th>事件</th><th>結束方式</th><th />

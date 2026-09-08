@@ -491,7 +491,7 @@ export default function AbCompare() {
               <select value={planId ?? ""} disabled={noMission}
                 onChange={(e) => setPlanId(e.target.value)}>
                 {noMission
-                  ? <option value="">（沒有任務紀錄）</option>
+                  ? <option value="">（沒有路徑紀錄）</option>
                   : missionsOf(drone).map(([id, nm]) => (
                     <option key={id} value={id}>{nm}</option>))}
               </select>
@@ -565,7 +565,7 @@ export default function AbCompare() {
               + "（與 backend 事件門檻同一出處）。「逐段」只比對兩趟都飛過的區間、"
               + "逐段取差再取中位數；摘要表的 Δ 是各自整體統計之差，含各自獨飛的"
               + "部分——兩個都對，差很多代表兩趟走過的範圍差很多。持平門檻 ±2 dB。"
-              + (plan ? "　基準路徑＝這條任務的計畫航線。" : "　基準路徑＝基準那一趟的軌跡。")} />
+              + (plan ? "　基準路徑＝這份路徑的計畫航線。" : "　基準路徑＝基準那一趟的軌跡。")} />
           </span></h3>
           <MultiChart rows={rows} />
           <div className="cmp-verdicts">

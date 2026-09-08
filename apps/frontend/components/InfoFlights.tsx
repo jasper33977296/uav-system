@@ -37,10 +37,10 @@ import { API } from "@/lib/signal";
  * INTENT_LABELS）：漏一個就顯示原代號，比顯示一個猜錯的中文好。 */
 const ACTION_LABELS: Record<string, string> = {
   arm: "解鎖", disarm: "上鎖", takeoff: "起飛",
-  mission_upload: "上傳任務", mission_fly: "起飛→任務", mission_start: "啟動任務",
-  mission_clear: "清除任務", mission_change: "更換任務",
-  "mode:rtl": "返航", "mode:hold": "中斷任務（懸停）", "mode:land": "降落",
-  "mode:mission": "繼續任務", "mode:guided": "切 GUIDED",
+  mission_upload: "上傳路徑", mission_fly: "起飛→執行路徑", mission_start: "開始執行路徑",
+  mission_clear: "清除機上路徑", mission_change: "更換路徑",
+  "mode:rtl": "返航", "mode:hold": "中斷路徑（懸停）", "mode:land": "降落",
+  "mode:mission": "繼續路徑", "mode:guided": "切 GUIDED",
 };
 function actionLabel(a: string): string {
   if (ACTION_LABELS[a]) return ACTION_LABELS[a];
@@ -205,13 +205,13 @@ function FlightDetail({ s, onReplay }: { s: SessionRow; onReplay: () => void }) 
               是解鎖那一刻那份，機上後來飛的可能是別份——不標的話這個 chip
               就是一句說錯的話。使用者定案：換路徑仍然是同一趟 */}
           <span className="chip">
-            {s.plan_name ?? "無任務"}
+            {s.plan_name ?? "無路徑"}
             {!!s.plan_changes && `（飛行中換過 ${s.plan_changes} 次）`}
           </span>
           {!!s.plan_changes && (
             <InfoTip tip={"這一趟飛到一半換過路徑。上面寫的是**解鎖那一刻**那份，"
               .replace(/\*\*/g, "")
-              + "換成哪一份、幾點換的看下面「指令」那一段的「上傳任務」。"
+              + "換成哪一份、幾點換的看下面「指令」那一段的「上傳路徑」。"
               + "一趟可以飛不只一份路徑——架次的邊界是解鎖到上鎖，飛機沒落地，"
               + "中間那個切點在物理上什麼都沒發生。"} />
           )}
@@ -543,9 +543,9 @@ function SessionEventsCard({ sessionId, droneName }: {
               onClick={() => setKey(k)}>{label}</button>
           ))}
         </span>
-        <InfoTip tip={"「重點」＝危急、警告，加上模式切換、任務狀態、失效保護、"
+        <InfoTip tip={"「重點」＝危急、警告，加上模式切換、路徑狀態、失效保護、"
           + "遙控器鏈路這幾種會改變飛機在做什麼的事。其餘（飛控收到指令的 ACK、"
-          + "逐條機上訊息、任務進度）是同一件事的第二、第三種說法，"
+          + "逐條機上訊息、路徑進度）是同一件事的第二、第三種說法，"
           + "按「全部」看得到，不預設佔版面。來源（機上／系統）的篩選在「事件」分頁。"} />
         <span className="ev-filter">
           <button className={foldOn ? "on" : ""}

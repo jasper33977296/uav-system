@@ -16,7 +16,9 @@
  */
 export const MODE_VERB_TXT: Record<string, string> = {
   hold: "定點停懸",
-  mission: "任務執行",
+  // 這是**飛控的模式**（AUTO／MISSION），不是我們的「任務」。
+  // 協定層的詞留著，畫面上講的是「照機上那份路徑飛」
+  mission: "自動執行路徑",
   rtl: "返航",
   land: "降落",
   position: "位置控制",

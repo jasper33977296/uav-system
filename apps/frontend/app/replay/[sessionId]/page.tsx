@@ -831,12 +831,12 @@ function ReplayPanel({ sess, quality, rows, events, cmds, idx, evFilter,
   return (
     <>
       <div className="card">
-        <h3>任務資訊
+        <h3>這一趟
           <span className="spacer" />
           <InfoTip tip="樣本數＝這趟收到幾筆 5G 量測；SINR 與 RTT 是那些樣本的統計。「結束方式」分得出「上鎖」與「遙測中斷」——後者不代表飛行結束，只代表資料在那裡斷了。" />
         </h3>
         <div className="rp-facts">
-          <F k="任務" v={sess?.plan_name ?? "無"} />
+          <F k="路徑" v={sess?.plan_name ?? "無"} />
           <F k="時長" v={sess?.ended_at
             ? secs((new Date(sess.ended_at).getTime()
               - new Date(sess.started_at).getTime()) / 1000) : "進行中"} />

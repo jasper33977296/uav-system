@@ -78,7 +78,7 @@ export default function Squads({ drones }: { drones: DroneLite[] }) {
           ＋ 新增小隊
         </button>
         <span className="spacer" />
-        <InfoTip tip="小隊＝固定編組。先在這裡組好，派群飛任務時直接選一隊，不必每次重新勾機。一台機可以同時屬於多個小隊。小隊只是名單——隊形、高度分層與航線在派任務時才決定，而入列、預檢、守門仍然逐機判定。" />
+        <InfoTip tip="小隊＝固定編組。先在這裡組好，要派一隊出去群飛時直接選一隊，不必每次重新勾機。一台機可以同時屬於多個小隊。小隊只是名單——隊形、高度分層與航線在派飛時才決定，而入列、預檢、守門仍然逐機判定。" />
       </div>
 
       {err && <div className="form-err">{err}</div>}
@@ -99,8 +99,8 @@ export default function Squads({ drones }: { drones: DroneLite[] }) {
             <button className="btn-plain btn-sm" title="改名稱與成員"
               onClick={() => setEditing(s)}>編輯</button>{" "}
             <button className="btn-plain btn-sm" disabled={!s.members.length}
-              title="到即時頁的任務控制指派這一隊（隊形與高度分層在那裡決定）"
-              onClick={() => dispatch(s)}>派任務</button>{" "}
+              title="到即時頁的飛行控制派這一隊出去（隊形與高度分層在那裡決定）"
+              onClick={() => dispatch(s)}>派飛</button>{" "}
             <button className="btn-danger btn-sm"
               onClick={() => setToDelete(s)}>刪除</button>
           </div>

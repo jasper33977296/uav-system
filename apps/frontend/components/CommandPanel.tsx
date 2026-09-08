@@ -1,5 +1,5 @@
 "use client";
-/** 任務控制面板（GCS 取代階段 3）：即時頁的指令操作 UI。
+/** 飛行控制面板（GCS 取代階段 3）：即時頁的指令操作 UI。
  *
  * 對象是獨立的 command 服務（:38001，sysid 定址）。設計原則：
  *   - 危險操作兩段式確認（解鎖/上鎖/啟動/降落：再點一次才執行，3.5 秒逾時還原）
@@ -25,14 +25,14 @@ const CAP_KEYS = ["arm", "takeoff", "land", "rtl", "hold",
 type CapKey = (typeof CAP_KEYS)[number];
 const CAP_LABELS: Record<CapKey, string> = {
   arm: "解鎖", takeoff: "起飛", land: "降落", rtl: "RTL", hold: "Hold",
-  mission_upload: "上傳", mission_start: "啟動任務", mission_fly: "起飛→任務",
+  mission_upload: "上傳", mission_start: "開始執行路徑", mission_fly: "起飛→執行路徑",
 };
 const AP_LABELS: Record<string, string> = { px4: "PX4", ardupilot: "ArduPilot" };
 // 意圖協定的動作 → 畫面上的說法（039 複裁 G 的補送清單用）。**照枚舉列，
 // 不猜字串**：漏一個就顯示原文，比顯示一個猜錯的中文好
 const INTENT_LABELS: Record<string, string> = {
-  start_mission: "開始任務", pause: "中斷任務", resume: "繼續任務",
-  change_route: "更換任務", rtl: "返航", land: "降落",
+  start_mission: "開始執行路徑", pause: "中斷路徑", resume: "繼續路徑",
+  change_route: "更換路徑", rtl: "返航", land: "降落",
   abort: "中止（原地懸停）", disarm: "上鎖",
 };
 
@@ -139,16 +139,16 @@ export default function CommandPanel() {
   const cmdOpenReq = useUavStore((s) => s.cmdOpenReq);
   useEffect(() => { if (cmdOpenReq) setOpen(true); }, [cmdOpenReq]);
   // 編隊的 hold_alt（分層起飛的基準高度）。**單機起飛已經沒有這個數字**：
-  // 收合列的「↑ 起飛」在 2026-09-07 移除，任務起飛跟著航線的 NAV_TAKEOFF
+  // 收合列的「↑ 起飛」在 2026-09-07 移除，路徑起飛跟著航線的 NAV_TAKEOFF
   // ——這裡剩下的是編隊那條路，它的基準高度確實由操作員指定
   const [alt, setAltState] = useState(10);
   useEffect(() => {
     const saved = Number(localStorage.getItem("takeoff-alt"));
     if (saved >= 3 && saved <= 100) setAltState(saved);
   }, []);
-  // 「起飛→任務」的離地高度**沒有前端欄位**：後端跟著任務自己的 NAV_TAKEOFF
+  // 「起飛→執行路徑」的離地高度**沒有前端欄位**：後端跟著路徑自己的 NAV_TAKEOFF
   // 走。曾經有一格預設 10、下限 3，於是一份 takeoff 2 m、航點 3 m 的低空航線
-  // 會先被拉到 10 m 才切任務——實際飛行高度是規劃的三倍以上，而那個 10 不在
+  // 會先被拉到 10 m 才切自動模式——實際飛行高度是規劃的三倍以上，而那個 10 不在
   // 任何一份 .plan 裡（2026-09-07）。先改成留空預設，同日再整格移除：
   // **一個永遠應該留空的欄位，不該出現在畫面上**
   const live = useUavStore((s) => s.live);
@@ -398,7 +398,7 @@ export default function CommandPanel() {
     else if (posRef.current) savePos(posRef.current);
   }
 
-  // **面板永遠留在畫面內**（2026-09-07 使用者回報：任務控制的高度超出頁面，
+  // **面板永遠留在畫面內**（2026-09-07 使用者回報：飛行控制的高度超出頁面，
   // 連拖都拖不動）。兩件事一起做，因為它們是同一個失效的兩半：
   //
   //   1. **高度上限**＝從面板頂端到視口底。這個數字 CSS 算不出來：面板平時
@@ -469,7 +469,7 @@ export default function CommandPanel() {
       .then((ms: Mission[]) => setMissions(ms)).catch(() => {});
   }, []);
 
-  // 機上現在載的是哪一份任務。**四個任務動作全部是相對於它的**——不知道
+  // 機上現在載的是哪一份路徑。**四個路徑動作全部是相對於它的**——不知道
   // 現在載的是什麼，按哪一顆都是猜的。跟著遙測輪詢重取，因為上傳／改航線
   // 都會改變它
   // sid 是字串（給 URL 用），這裡比對的是數字欄位——**兩邊型別不同**，
@@ -518,7 +518,7 @@ export default function CommandPanel() {
   const sid = live?.mav_sysid != null ? String(live.mav_sysid) : null;
   const dh = sid ? health.drones[sid] ?? null : null;
   const armed = dh?.armed ?? null;
-  // 039 複裁 A：**RC 未連線不得起飛、不得開始任務**。「機在地上失聯只告警」
+  // 039 複裁 A：**RC 未連線不得起飛、不得開始執行路徑**。「機在地上失聯只告警」
   // 那格的前提是有人能用遙控器接管——沒有 RC 就沒有人。權威守門在機上代理，
   // 這裡把同一條規則畫成按不下去，免得人按了被擋卻不知道為什麼。
   // **`null` 不擋**：那是舊版代理還沒送這個欄位＝不知道，把「不知道」當成
@@ -533,7 +533,7 @@ export default function CommandPanel() {
   const admOffline = adm?.state === "admitted_offline";
   const notAdmitted = adm !== null && adm.state !== "admitted" && !admOffline;
   const replayList = focusId ? replays[focusId] ?? [] : [];
-  // ── 任務區要用的三個判斷（2026-08-26）───────────────────────
+  // ── 路徑區要用的三個判斷（2026-08-26）───────────────────────
   // **「在空中」全檔案共用同一個判準**（landed_state 或高度）——兩套判準
   // 會在邊界上互相矛盾，而這裡決定的是「顯示哪一組按鈕」
   // **在空中：優先信飛控自己說的 `landed_state`**，高度只是它不回報時的退路。
@@ -541,7 +541,7 @@ export default function CommandPanel() {
   // 2026-09-02 實測到的反例：一台**已上鎖、飛控回報 `on_ground`** 的機，
   // 因為沒有 GPS 定位（fix=1、0 顆衛星）而 `alt_rel` 漂到 4.4 m——舊的判準
   // `landed_state === "in_air" || alt_rel > 2` 因此判成「在天上」，
-  // 於是畫面長出「更換任務」按鈕與「飛手可能拿著遙控器」那句，
+  // 於是畫面長出「更換路徑」按鈕與「飛手可能拿著遙控器」那句，
   // **而飛控自己明明說它在地上**。
   //
   // 兩條規則：
@@ -760,7 +760,7 @@ export default function CommandPanel() {
       <div className="cmd-head" title="拖曳移動；點擊收合"
         onPointerDown={dragStart} onPointerMove={dragMove}
         onPointerUp={dragEnd} onPointerCancel={dragEnd}>
-        <span className="name">任務控制</span>
+        <span className="name">飛行控制</span>
         {/* 首行＝就緒點＋主按鈕（ui-spec §2：主按鈕併入面板，HUD 不放） */}
         {/* 收合態的就緒點同樣三分（§0.2b）：不知道＝灰空心，不可落成
             「未就緒」的橘實心（面板收合時這顆點是唯一的就緒訊息） */}
@@ -782,7 +782,7 @@ export default function CommandPanel() {
         {routerDead && <span className="meta meta-dead">指令服務失效</span>}
         <span className="spacer" />
         {/* **收合列上只留「返航」**（2026-09-07 使用者指示：外層的起飛鈕刪掉）。
-            起飛的入口是任務區的「起飛→任務」——它跟著航線的 NAV_TAKEOFF 飛；
+            起飛的入口是路徑區的「起飛→執行路徑」——它跟著航線的 NAV_TAKEOFF 飛；
             原本這顆「↑ 起飛」送的是寫死的 10 m，**而畫面上沒有任何地方寫著
             那個 10**（同 §2.3a 拿掉起飛高度欄位的理由）。返航留著：它是緊急
             出口，收合狀態下也必須按得到。 */}
@@ -859,7 +859,7 @@ export default function CommandPanel() {
                 操作員此刻都不需要決定什麼，他要知道的只有「現在能按什麼」。
                 來龍去脈搬進 tooltip：要查的人查得到，不佔版面。 */}
             <b title={"板號與配號都對得上，斷的只是意圖通道；指令走的是另一條路。"
-              + "問不到機上守門，所以暫停／續飛／開始任務都擋著——那些需要知道"
+              + "問不到機上守門，所以暫停／續飛／開始執行路徑都擋著——那些需要知道"
               + "「當下狀態允不允許」。實體遙控器不受影響。"}>
               意圖通道斷了——只剩返航與降落 ⋯
             </b>
@@ -1042,7 +1042,7 @@ export default function CommandPanel() {
                   <select value={cfg.base}
                     onChange={(e) => useUavStore.getState()
                       .setFormationCfg({ base: e.target.value })}>
-                    <option value="">選擇任務⋯</option>
+                    <option value="">選擇路徑⋯</option>
                     {missions.map((m) =>
                       <option key={m.id} value={m.id}>{missionLabel(m)}</option>)}
                   </select>
@@ -1059,7 +1059,7 @@ export default function CommandPanel() {
                     <select value={cfg.assign[id] ?? ""}
                       onChange={(e) => useUavStore.getState()
                         .setFormationCfg({ assign: { ...cfg.assign, [id]: e.target.value } })}>
-                      <option value="">選擇任務⋯</option>
+                      <option value="">選擇路徑⋯</option>
                       {missions.map((m) =>
                       <option key={m.id} value={m.id}>{missionLabel(m)}</option>)}
                     </select>
@@ -1244,23 +1244,23 @@ export default function CommandPanel() {
           )}
 
           {!linkLost && !observeOnly && !noChannel && !unseen && !admOffline && !!dh && (<>
-          {/* ── 任務區（2026-08-26 重排）─────────────────────────────
+          {/* ── 路徑區（2026-08-26 重排）─────────────────────────────
               **按操作員想做的事分組，不是按端點分組。** 原本一排是
-              上傳／起飛→任務／啟動任務、另一排是解鎖／懸停／降落——那是
+              上傳／起飛→執行路徑／開始執行、另一排是解鎖／懸停／降落——那是
               實作的形狀，不是「我現在要幹嘛」的形狀。四件事：
-              上傳任務、開始任務、中斷任務、更換任務。
+              上傳路徑、開始執行、中斷、更換路徑。
 
               而且**先講機上現在是哪一份**：這四個動作全部是相對於它的，
               不知道現在載的是什麼，按哪一顆都是猜的。 */}
-          <div className="cmd-sec">任務</div>
+          <div className="cmd-sec">路徑</div>
           <div className="hint-line">
             {/* 「未知」兩個字就夠（使用者指示 2026-09-07）。成因（本系統沒
                 上傳過／別的 GCS 傳的）搬進 tooltip：**要處置的人只需要知道
                 「我不知道機上載的是哪一份」**，成因不改變他下一步要做什麼 */}
-            機上任務：{onboardName
+            機上路徑：{onboardName
               ? <b>{onboardName}</b>
               : <span style={{ opacity: 0.6 }}
-                  title="本系統沒有上傳過這台機的任務——可能是別的地面站傳的，或機上本來就有一份">
+                  title="本系統沒有上傳過這台機的路徑——可能是別的地面站傳的，或機上本來就有一份">
                   未知
                 </span>}
             {inMission && "・執行中"}
@@ -1268,7 +1268,7 @@ export default function CommandPanel() {
           </div>
           <div className="cmd-row">
             <select value={planId} onChange={(e) => setMissionId(e.target.value)}>
-              <option value="">選擇任務⋯</option>
+              <option value="">選擇路徑⋯</option>
               {missions.map((m) =>
                       <option key={m.id} value={m.id}>{missionLabel(m)}</option>)}
             </select>
@@ -1283,18 +1283,18 @@ export default function CommandPanel() {
                    { disabled: !planId, body: { plan_id: planId },
                      cap: "mission_upload", accent: true })}
               {/* **沒有「離地高度」這一格**（2026-09-07 使用者指示）：起飛高度
-                  跟著任務自己的 NAV_TAKEOFF 走，後端本來就是這樣算的。一個
-                  空白、預設「跟任務」的輸入格只是在問一個已經有答案的問題
+                  跟著路徑自己的 NAV_TAKEOFF 走，後端本來就是這樣算的。一個
+                  空白、預設「跟路徑」的輸入格只是在問一個已經有答案的問題
                   ——而填錯它就會讓實際飛行高度與規劃的那份 .plan 不一致。 */}
-              {btn("起飛→任務", "開始任務", "/mission/fly",
+              {btn("起飛→執行路徑", "開始飛這份路徑", "/mission/fly",
                    { confirm: true, cap: "mission_fly", disabled: rcDown,
                      title: rcDown
                        ? "遙控器未連線——自動起飛的前提是有人能隨時接管" : undefined,
                      body: { plan_id: planId || undefined } })}
-              {/* **換任務不該被迫用「上傳另一份蓋過去」來達成**——那是一個
+              {/* **換路徑不該被迫用「上傳另一份蓋過去」來達成**——那是一個
                   更重、更容易出錯的動作（完整握手＋逐項讀回比對）。
                   兩段式確認：清掉機上航線是不可復原的 */}
-              {btn("清除任務", "清除任務", "/mission/clear",
+              {btn("清除機上路徑", "清除機上路徑", "/mission/clear",
                    { confirm: true, cap: "mission_upload", danger: true })}
               {/* 「遙控器未連線」那一行刪掉（2026-09-07 使用者指示：上面講過了）
                   ——沒有 RC 時飛控的預檢原因（`RC not found`）已經逐條列在
@@ -1307,29 +1307,29 @@ export default function CommandPanel() {
               「繼續」、暫停中不給「中斷」，那兩顆按下去只會被守門擋回來 */}
           {airborne && (
             <div className="cmd-row">
-              {inMission && btn("中斷任務", "⏸ 中斷任務", "/mode/hold",
+              {inMission && btn("中斷路徑", "⏸ 中斷路徑", "/mode/hold",
                                 { cap: "hold", title: "切到原地懸停，航線留在機上" })}
-              {holding && btn("繼續任務", "▶ 繼續任務", "/mode/mission",
+              {holding && btn("繼續路徑", "▶ 繼續路徑", "/mode/mission",
                               { confirm: true, cap: "mission_start" })}
               <button className="btn-plain btn-sm"
                 disabled={!planId || inFlight}
                 title="飛行中換一份航線：先看系統打算怎麼調整（暫停→上傳→從最近的航點續飛），確認後才執行"
                 onClick={() => proposeChangeRoute()}>
-                {busy === "改航線" ? "⋯" : "⇄ 更換任務⋯"}
+                {busy === "改航線" ? "⋯" : "⇄ 更換路徑⋯"}
               </button>
             </div>
           )}
           {/* **暫停的來源不明時要說**（039／守門三態）：溯源不明的 LOITER
               現在算 HOLDING、地面站指得動它，但那個 LOITER 也可能是飛手切的
-              ——操作員有權在按下「繼續任務」之前知道這件事 */}
+              ——操作員有權在按下「繼續路徑」之前知道這件事 */}
           {holding && agentHere?.mode_owner == null && (
             <div className="hint-line">
-              · 這個暫停<b>來源不明</b>——可能是本系統按的，也可能是飛手切到 LOITER。指令仍可下達；按「繼續任務」之前請先確認沒有人正在手動飛它。
+              · 這個暫停<b>來源不明</b>——可能是本系統按的，也可能是飛手切到 LOITER。指令仍可下達；按「繼續路徑」之前請先確認沒有人正在手動飛它。
             </div>
           )}
           {airborne && !inMission && !holding && (
             <div className="hint-line">
-              目前不在任務模式（{live?.flight_mode ?? "模式未知"}）——
+              目前不在自動模式（{live?.flight_mode ?? "模式未知"}）——
               {/* **不要在 `rc_link === false` 時說「飛手可能拿著遙控器」**：
                   我們**知道**沒有人拿著（039 複裁 A 的同一個事實來源）。
                   說一句已知為假的話，比不說更糟——它會讓人以為有人接得了手 */}
