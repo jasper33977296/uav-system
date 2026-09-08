@@ -312,42 +312,37 @@ function drawSel(){
   }
 }
 
-/* ── 比較（2026-09-08：從「前後兩趟」擴成 N 趟，並加上「比較單位」）─────
+/* ── 比較（2026-09-08：從「前後兩趟」擴成 N 趟，並加上「比較維度」）─────
  *
  * **基準是一趟，不是「前」。** 兩趟時可以叫前後，三趟以上就不能——所以是
  * 「基準 ＋ 對照 N 趟」：每一趟各自對基準算沿里程對照，摘要表逐列給 Δ。
  * 差值熱區本質是兩兩比對，所以留一排 pill 選「現在看哪一趟對基準」。
  *
- * **比較單位有三種**（使用者要求 2026-09-08）。三種共用同一套演算法
+ * **比較維度有三個**（使用者要求 2026-09-08）。三者共用同一套演算法
  * （沿基準軌跡的弧長對齊），差的是**候選怎麼圈、標籤帶什麼、以及差異可以
  * 怎麼解讀**——後面這件事最重要，所以每個模式都有一句話說清楚：
  *
- *   time    以時間      同一台機不同時間。路徑不保證一樣。
- *   mission 同機同任務  同一台機、同一條任務飛過多趟。**唯一路徑一致的模式**
- *                       ——共同區間會接近全滿，差異才真的是「這次比較差」。
- *   cross   跨機跨任務  不同機、不同任務。差異可能來自機／模組本身。
+ *   time    時間  同一台機不同時間。路徑不保證一樣。
+ *   mission 任務  同一台機、同一條任務飛過多趟。**唯一路徑一致的維度**
+ *                 ——共同區間會接近全滿，差異才真的是「這次比較差」。
+ *   cross   機隊  不同機、不同任務。差異可能來自機／模組本身。
  *
- * 標籤跟著模式換：只有時間時「08/13 16:37」就夠；跨機時不帶機名根本分不出
- * 誰是誰。**同一個畫面在不同模式下說不同的話，是因為它比的真的是不同的東西。**
+ * 標籤跟著維度換：只有時間時「08/13 16:37」就夠；跨機時不帶機名根本分不出
+ * 誰是誰。**同一個畫面在不同維度下說不同的話，是因為它比的真的是不同的東西。**
  */
 const IDC=["#3987e5","#d95926","#199e70"], OVER="#8f8b80";
 const tripColor=(i)=> i<IDC.length ? IDC[i] : OVER;
 const POOL=P.cmp.pool;
 const pairOf=(a,b)=> P.cmp.pairs[`${a}|${b}`] ?? null;
 
-const MODES={
-  time:{ label:"以時間",
-    say:"同一台機、不同時間的架次。路徑不保證一樣——「共同區間」就是兩趟實際重疊了多少。" },
-  mission:{ label:"同一台機・同一任務",
-    say:"同一台機把同一條任務飛過多趟。這是唯一路徑一致的模式：共同區間會接近全滿，差異才真的是「這一趟比較差」。" },
-  cross:{ label:"跨機・跨任務",
-    say:"不同機、不同任務。里程對齊是把每一趟投影到基準的軌跡上算的，路徑不同時共同區間會很少；而且差異可能來自機或模組本身，不只是位置。" },
-};
+// 三個維度是同一個層級的名詞：時間／任務／機隊。**不用「跨機・跨任務」
+// 這種把兩件事並排的說法**——它讀起來像在描述操作，不像在指一個維度
+const MODES={ time:{label:"時間"}, mission:{label:"任務"}, cross:{label:"機隊"} };
 
 const C={ mode:"time", drone:null, mission:null, base:null,
           sel:new Set(), heat:null };
 
-/** 這個模式下可以拿來比的架次（時間新→舊）。 */
+/** 這個維度下可以拿來比的架次（時間新→舊）。 */
 function candidates(){
   if(C.mode==="cross") return POOL;
   const byDrone=POOL.filter(s=>s.drone===C.drone);
@@ -366,10 +361,10 @@ function tripLabel(s){
 }
 const metaOf=(id)=>POOL.find(s=>s.id===id);
 
-/** 換模式／換範圍之後把選擇重新落在合法的架次上。
- *  **不保留上一個模式的選擇**——那會讓畫面上出現這個範圍裡根本沒有的趟次。 */
-/** 切到「同機同任務」時，把機換到**真的有任務紀錄**的那一台。
- *  停在一台沒有任務的機上，畫面會是空的——那不是這個模式的樣子。 */
+/** 換維度／換範圍之後把選擇重新落在合法的架次上。
+ *  **不保留上一個維度的選擇**——那會讓畫面上出現這個範圍裡根本沒有的趟次。 */
+/** 切到「任務」維度時，把機換到**真的有任務紀錄**的那一台。
+ *  停在一台沒有任務的機上，畫面會是空的——那不是這個維度的樣子。 */
 function seatMission(){
   const has=POOL.filter(s=>s.mission);
   if(!has.length || has.some(s=>s.drone===C.drone)) {
@@ -382,9 +377,9 @@ function seatMission(){
   C.mission=has.find(s=>s.drone===C.drone).mission;
 }
 
-/** 切到「跨機・跨任務」時，預設就挑到**別台機**去。
- *  沿用上一個模式的選擇會讓這個模式一進來全是同一台機的架次——
- *  那正是它要對照的反面。 */
+/** 切到「機隊」維度時，預設就挑到**別台機**去。
+ *  沿用上一個維度的選擇會讓它一進來全是同一台機的架次——
+ *  那正是這個維度要對照的反面。 */
 function seatCross(){
   const base=metaOf(C.base) ?? POOL[0];
   if(!base) return;
@@ -417,14 +412,14 @@ function drawAb(){
 
   // ① 比較單位：先講清楚在比什麼，再選誰跟誰
   const c0=el("div","card");
-  const h0=el("h3",null,"比較什麼");
+  const h0=el("h3",null,"比較維度");
   h0.appendChild(el("span","spacer"));
   const t0=el("span","info","ⓘ"); t0.tabIndex=0;
-  t0.dataset.tip="三種單位用同一套對齊：沿基準軌跡的弧長里程，不是時間"
+  t0.dataset.tip="三個維度用同一套對齊：沿基準軌跡的弧長里程，不是時間"
     +"（兩趟速度不同，時間對齊會錯位）；偏離基準路徑逾 60 m 的樣本不納入。"
-    +"　以時間＝同一台機不同時間，路徑不保證一樣。"
-    +"　同一台機・同一任務＝唯一路徑一致的模式，共同區間會接近全滿。"
-    +"　跨機・跨任務＝差異可能來自機或模組本身，不只是位置。";
+    +"　時間＝同一台機不同時間，路徑不保證一樣。"
+    +"　任務＝同一台機把同一條任務飛過多趟，唯一路徑一致的維度，共同區間會接近全滿。"
+    +"　機隊＝不同機、不同任務，差異可能來自機或模組本身，不只是位置。";
   h0.appendChild(t0);
   c0.appendChild(h0);
   const seg=el("div","pills");
@@ -437,7 +432,7 @@ function drawAb(){
     seg.appendChild(b);
   });
   c0.appendChild(seg);
-  // 範圍：時間／同任務要先定住是哪一台機（同任務再定住哪一條任務）
+  // 範圍：時間／任務維度要先定住是哪一台機（任務維度再定住哪一條任務）
   if(C.mode!=="cross"){
     const row=el("div","scoperow");
     row.appendChild(el("span","lab","機"));
@@ -479,10 +474,10 @@ function drawAb(){
     const noMission = C.mode==="mission"
       && !POOL.some(s=>s.drone===C.drone && s.mission);
     c.appendChild(el("div","empty",
-      noMission ? `${C.drone} 沒有任何一趟掛著任務——這個單位要先有任務紀錄。`
+      noMission ? `${C.drone} 沒有任何一趟掛著任務——這個維度要先有任務紀錄。`
       : cand.length===0 ? "這個範圍裡沒有任何架次。"
       : C.mode==="mission"
-        ? `${C.drone} 在「${C.mission}」上只有 1 趟——一趟不能比。要用這個單位，先讓同一條任務飛過兩趟以上。`
+        ? `${C.drone} 在「${C.mission}」上只有 1 趟——一趟不能比。要用這個維度，先讓同一條任務飛過兩趟以上。`
         : "這個範圍裡只有 1 趟——一趟不能比。"));
     box.appendChild(c); return;
   }
@@ -577,7 +572,7 @@ function drawAb(){
   h3.appendChild(t3);
   c2.appendChild(h3);
   const b0=rows[0].pair.summary.a_sinr;
-  const X=C.mode==="cross";   // 跨機模式才多一欄任務
+  const X=C.mode==="cross";   // 機隊維度才多一欄任務
   const mis=(m)=>X?`<td class="mis">${m ?? "—"}</td>`:"";
   const tb=el("table");
   let html=`<tr><td><span class="chip">基準 ${tripLabel(base)}</span></td>${mis(base.mission)}
@@ -635,7 +630,7 @@ function drawAb(){
 function dd(v){ return v==null?"—":(v>0?"+":"")+v.toFixed(1); }
 
 function multiChart(rows){
-  // 右側留白照**最長的標籤**算：跨機模式的標籤帶機名，固定寬度會把字切掉，
+  // 右側留白照**最長的標籤**算：機隊維度的標籤帶機名，固定寬度會把字切掉，
   // 而切掉的正是用來分辨誰是誰的那一段
   const tw=(t)=>[...t].reduce((a,ch)=>a+(ch.charCodeAt(0)>255?10:5.4),0);
   const R=Math.min(320, 26+Math.max(...[...rows.map(r=>r.label),"基準"].map(tw)));

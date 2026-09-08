@@ -16,17 +16,17 @@ import { firstFleetPos } from "@/lib/store";
 
 /** 比較頁（ui-spec §6b；2026-09-08 使用者核准的改版）。
  *
- * 從「前後兩趟」擴成「**基準 ＋ 對照 N 趟**」，並加上**比較單位**：
+ * 從「前後兩趟」擴成「**基準 ＋ 對照 N 趟**」，並加上**比較維度**：
  *
- *   time     以時間          同一台機不同時間的架次
- *   mission  同一台機・同一任務  同一條航線飛過多趟——**唯一路徑一致的模式**
- *   cross    跨機・跨任務      不同機、不同任務
+ *   time     時間  同一台機不同時間的架次
+ *   mission  任務  同一台機把同一條航線飛過多趟——**唯一路徑一致的維度**
+ *   cross    機隊  不同機、不同任務
  *
- * 三種共用同一套對齊（沿基準軌跡的弧長里程，lib/chainage），差別在候選怎麼
+ * 三個維度共用同一套對齊（沿基準軌跡的弧長里程，lib/chainage），差別在候選怎麼
  * 圈、標籤帶什麼，以及差異可以怎麼解讀。**基準是一趟，不是「前」**——兩趟時
  * 可以叫前後，三趟以上就不能。
  *
- * 標籤跟著模式換：只有時間時「08/13 16:37」就夠；跨機時不帶機名根本分不出
+ * 標籤跟著維度換：只有時間時「08/13 16:37」就夠；跨機時不帶機名根本分不出
  * 誰是誰。差值熱區本質是兩兩比對，所以留一排 pill 選「現在看哪一趟對基準」。
  *
  * 解釋一律住 ⓘ（使用者要求 2026-09-08：畫面上不要太多解釋的文字）——
@@ -40,7 +40,9 @@ const BASE_INK = "#c9c5bb";                      // 基準線（虛線、中性�
 
 type Mode = "time" | "mission" | "cross";
 const MODE_LABEL: Record<Mode, string> = {
-  time: "以時間", mission: "同一台機・同一任務", cross: "跨機・跨任務",
+  // 三個維度是同一個層級的名詞：時間／任務／機隊。**不用「跨機・跨任務」
+  // 這種把兩件事並排的說法**——它讀起來像在描述操作，不像在指一個維度
+  time: "時間", mission: "任務", cross: "機隊",
 };
 
 interface SessRow {
@@ -121,7 +123,7 @@ export default function AbCompare() {
     [sessions, showTest, chosen]);
   const hiddenTest = sessions.filter((r) => r.origin === "test").length;
 
-  /** 這個模式下可以拿來比的架次（時間新→舊，清單本來就是這個序）。 */
+  /** 這個維度下可以拿來比的架次（時間新→舊，清單本來就是這個序）。 */
   const cand = useMemo(() => {
     if (mode === "cross") return listed;
     const d = listed.filter((r) => r.drone_name === drone);
@@ -148,7 +150,7 @@ export default function AbCompare() {
     setDrone(Object.entries(cnt).sort((a, b) => b[1] - a[1])[0][0]);
   }, [sessions, drone]);
 
-  // 換模式／換範圍之後把選擇重新落在合法的架次上。**不保留上一個模式的
+  // 換維度／換範圍之後把選擇重新落在合法的架次上。**不保留上一個維度的
   // 選擇**——那會讓畫面上出現這個範圍裡根本沒有的趟次
   useEffect(() => {
     if (!cand.length) { setBaseId(null); setSel([]); return; }
@@ -164,8 +166,8 @@ export default function AbCompare() {
     if (!sel.includes(heatId ?? "")) setHeatId(sel[0] ?? null);
   }, [sel, heatId]);
 
-  // 切到「同機同任務」時，把機與任務換到**真的有任務紀錄**的那一組：
-  // 停在一台沒有任務的機上，畫面會是空的，那不是這個模式的樣子
+  // 切到「任務」維度時，把機與任務換到**真的有任務紀錄**的那一組：
+  // 停在一台沒有任務的機上，畫面會是空的，那不是這個維度的樣子
   const seatMission = () => {
     const has = sessions.filter((s) => s.mission_id);
     if (!has.length) return;
@@ -182,8 +184,8 @@ export default function AbCompare() {
     setMissionId(has.find((s) => s.drone_name === d)!.mission_id);
   };
 
-  // 切到「跨機・跨任務」時預設就挑到**別台機**去：沿用上一個模式的選擇會讓
-  // 這個模式一進來全是同一台機的架次，那正是它要對照的反面
+  // 切到「機隊」維度時預設就挑到**別台機**去：沿用上一個維度的選擇會讓
+  // 它一進來全是同一台機的架次，那正是這個維度要對照的反面
   const seatCross = () => {
     const base = listed.find((s) => s.id === baseId) ?? listed[0];
     if (!base) return;
@@ -209,8 +211,8 @@ export default function AbCompare() {
 
   const baseSess = sessions.find((s) => s.id === baseId) ?? null;
 
-  // 參考路徑：同任務模式下每一趟共用同一條計畫航線（共同 X 軸的最佳來源）；
-  // 其他模式沒有共同航線，基準就是基準那一趟的軌跡
+  // 參考路徑：任務維度下每一趟共用同一條計畫航線（共同 X 軸的最佳來源）；
+  // 其他維度沒有共同航線，基準就是基準那一趟的軌跡
   useEffect(() => {
     const mid = mode === "mission" ? missionId : null;
     if (!mid) { setPlan(null); return; }
@@ -378,12 +380,12 @@ export default function AbCompare() {
 
       {/* ① 比較單位：先講清楚在比什麼，再選誰跟誰 */}
       <div className="card">
-        <h3>比較什麼<span className="h3-note">
-          <InfoTip tip={"三種單位用同一套對齊：沿基準軌跡的弧長里程，不是時間"
+        <h3>比較維度<span className="h3-note">
+          <InfoTip tip={"三個維度用同一套對齊：沿基準軌跡的弧長里程，不是時間"
             + "（兩趟速度不同，時間對齊會錯位）；偏離基準路徑逾 60 m 的樣本不納入。"
-            + "　以時間＝同一台機不同時間，路徑不保證一樣。"
-            + "　同一台機・同一任務＝唯一路徑一致的模式，共同區間會接近全滿。"
-            + "　跨機・跨任務＝差異可能來自機或模組本身，不只是位置。"} />
+            + "　時間＝同一台機不同時間，路徑不保證一樣。"
+            + "　任務＝同一台機把同一條任務飛過多趟，唯一路徑一致的維度，共同區間會接近全滿。"
+            + "　機隊＝不同機、不同任務，差異可能來自機或模組本身，不只是位置。"} />
         </span></h3>
         <div className="sess-pills">
           {(Object.keys(MODE_LABEL) as Mode[]).map((k) => (
@@ -425,7 +427,7 @@ export default function AbCompare() {
       {!loadErr && sessions.length > 0 && cand.length < 2 && (
         <div className="card"><div className="empty">
           {noMission
-            ? `${drone} 沒有任何一趟掛著任務——這個單位要先有任務紀錄。`
+            ? `${drone} 沒有任何一趟掛著任務——這個維度要先有任務紀錄。`
             : cand.length === 0 ? "這個範圍裡沒有任何架次。"
             : mode === "mission"
               ? `${drone} 在這條任務上只有 1 趟——一趟不能比。`
@@ -647,7 +649,7 @@ function RsrpTip({ res, dS }: { res: AbResult; dS: number | null }) {
 /** 沿里程主圖：基準一條虛線＋每趟一條，線末標籤排在右側留白。 */
 function MultiChart({ rows }: { rows: TripRow[] }) {
   const H = 190, W = 1000, L = 44, T = 12, Bm = 22;
-  // 右側留白照**最長的標籤**算：跨機模式的標籤帶機名，固定寬度會把字切掉，
+  // 右側留白照**最長的標籤**算：機隊維度的標籤帶機名，固定寬度會把字切掉，
   // 而切掉的正是用來分辨誰是誰的那一段
   const tw = (t: string) => [...t]
     .reduce((a, ch) => a + (ch.charCodeAt(0) > 255 ? 10 : 5.4), 0);
