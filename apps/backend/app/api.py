@@ -2196,9 +2196,19 @@ def _require_aware(ts: datetime) -> datetime:
     return ts
 
 
-@router.post("/link-metrics/live", status_code=204)
+@router.post("/link-metrics/live")
 async def link_metrics_live(s: LinkSample):
     """即時通道：更新 live state 並跑鏈路狀態機。**不寫資料庫。**
+
+    **回應帶著「我最後收到你的遙測是多久以前」**（issues/047 項次 6）。
+    機上唯一能知道「我送的東西有沒有到」的方法，是地面站回話——而這條
+    每秒一次的通道本來就在跑，不必另開一個。回的是 `telem_age_s`
+    （**後端自己的單調時鐘算的秒數**，不是時間戳），所以兩邊時鐘差多少
+    都不影響；機上只要記住「這一刻我得到過確認」。
+
+    在這之前機上是用 `gs_link_ok`（＝我聽不聽得到地面站）來決定要不要
+    緩衝與暫停回傳——2026-09-08 實測那是錯的：單向中斷時它一邊每秒送出
+    九十幾則遙測，一邊宣告地面站失聯。
 
     不入庫是為了避免與記錄通道重複寫入——live 只負責顯示，記錄通道負責留存，
     職責不重疊就不需要去重邏輯。
@@ -2225,7 +2235,9 @@ async def link_metrics_live(s: LinkSample):
     target.link = m
     target.mark_link_seen()
     await link_transition(target, m)
-    return Response(status_code=204)
+    # `telem_age_s` 是 None ＝**從來沒收到過這台機的遙測**，那與「很久沒收到」
+    # 不同（機上據此判斷時要當成「還沒確認過」，不是「剛確認過」）
+    return {"uplink": {"telem_age_s": target.telem_age_s}}
 
 
 @router.post("/link-metrics/batch")
