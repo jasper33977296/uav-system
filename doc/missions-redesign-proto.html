@@ -1,0 +1,483 @@
+<title>UAV 路徑管理 v2</title>
+<style>
+/* tokens 同 doc/design-tokens.md（深色為預設與設計基準） */
+:root{
+  color-scheme:dark;
+  --page:#1b1a17; --surface:#262624; --surface-2:#30302c;
+  --ink:#f0eee6; --ink-2:#c2bfb3; --muted:#8f8b80; --hairline:#3a3833;
+  --border:rgba(240,238,230,.1);
+  --accent:#d97757; --accent-bg:rgba(217,119,87,.12);
+  --series-1:#3987e5;
+  --ok:#0ca30c; --warn:#fab219; --serious:#e05e0e; --danger:#a01818;
+  --danger-ink:#e05e5e; --rec:#d03b3b;
+  --sinr-good:#0ca30c; --sinr-fair:#fab219; --sinr-bad:#e05e0e; --sinr-crit:#a01818;
+  --mono:ui-monospace,"SF Mono","JetBrains Mono",Menlo,Consolas,monospace;
+}
+*{margin:0;padding:0;box-sizing:border-box}
+html,body{height:100%}
+body{font-family:system-ui,-apple-system,"Noto Sans TC","Segoe UI",sans-serif;
+  background:var(--page);color:var(--ink);font-size:13px;line-height:1.5;
+  -webkit-font-smoothing:antialiased}
+button,input,select{font:inherit;color:inherit}
+button{background:none;border:none;cursor:pointer}
+:focus-visible{outline:2px solid var(--accent);outline-offset:1px}
+.num{font-variant-numeric:tabular-nums}
+.spacer{flex:1}
+
+/* ── shell ─────────────────────────────────────────── */
+.shell{min-height:100dvh;display:flex;flex-direction:column}
+.nav{flex:none;height:46px;display:flex;align-items:center;gap:14px;padding:0 14px;
+  background:var(--surface);border-bottom:1px solid var(--hairline);position:sticky;top:0;z-index:20}
+.brand{font-size:13px;font-weight:700;letter-spacing:.02em}
+.navtabs{display:flex;gap:2px}
+.navtabs button{padding:5px 9px;border-radius:6px;color:var(--muted);display:grid;place-items:center}
+.navtabs button[aria-current="true"]{color:var(--accent);background:var(--accent-bg)}
+.navtabs button:hover{color:var(--ink)}
+.reclight{display:inline-flex;align-items:center;gap:6px;color:var(--muted);font-size:12px}
+.recdot{width:11px;height:11px;border-radius:50%;background:var(--muted)}
+.page{padding:14px;display:flex;flex-direction:column;gap:9px;max-width:1500px;width:100%}
+
+/* ⓘ：解釋只住這裡 */
+.info{width:15px;height:15px;border-radius:50%;border:1px solid var(--hairline);
+  color:var(--muted);font-size:10px;display:inline-grid;place-items:center;position:relative;
+  flex:none;cursor:help;line-height:1}
+.info:hover,.info:focus-visible{color:var(--ink);border-color:var(--border)}
+.info::after{content:attr(data-tip);position:absolute;right:-2px;top:20px;width:260px;z-index:40;
+  background:var(--surface-2);color:var(--ink-2);border:1px solid var(--border);border-radius:8px;
+  padding:8px 10px;font-size:11px;line-height:1.65;text-align:left;font-weight:400;
+  box-shadow:0 8px 24px rgba(0,0,0,.45);opacity:0;visibility:hidden;transition:opacity .12s}
+.info:hover::after,.info:focus-visible::after{opacity:1;visibility:visible}
+
+/* ── 頁首 ──────────────────────────────────────────── */
+.head{display:flex;align-items:center;gap:9px;padding:2px 2px 0}
+.head h1{font-size:15px;font-weight:700}
+.head .sub{font-size:12px;color:var(--muted)}
+.notice{display:flex;align-items:center;gap:8px;padding:6px 10px;border-radius:8px;
+  background:rgba(250,178,25,.09);border:1px solid rgba(250,178,25,.3);
+  font-size:11.5px;color:var(--ink-2)}
+.notice b{color:var(--warn);font-weight:600}
+
+/* ── 機列 ──────────────────────────────────────────── */
+.card{background:var(--surface);border:1px solid var(--border);border-radius:12px}
+.row{display:flex;align-items:center;gap:10px;padding:10px 12px;width:100%;text-align:left;
+  border-radius:12px}
+.row:hover{background:var(--surface-2)}
+.dot{width:9px;height:9px;border-radius:50%;flex:none}
+.dot.off{background:none;border:1.5px solid var(--muted)}
+.nm{font-size:14px;font-weight:700;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.state{font-size:12.5px;white-space:nowrap;letter-spacing:.01em}
+/* 飛行中用亮一階的紅（#d03b3b 在暖炭黑上偏糊）；模式另外一格，不併進狀態句 */
+.state.flying{color:#e05e5e;font-weight:700}
+.mode{font-family:var(--mono);font-size:11.5px;color:var(--ink-2);
+  background:var(--surface-2);border-radius:5px;padding:1px 7px;white-space:nowrap}
+.state.on{color:var(--ok)}
+.state.off{color:var(--muted)}
+.bars{display:inline-flex;align-items:flex-end;gap:2px;height:14px}
+.bars i{width:3px;border-radius:1px;display:block}
+.sig-n{font-family:var(--mono);font-size:12px;color:var(--ink-2)}
+.batt{width:24px;height:11px;border:1.5px solid var(--ink-2);border-radius:3px;padding:1px;position:relative}
+.batt::after{content:"";position:absolute;right:-4px;top:3px;width:2px;height:3px;background:var(--ink-2)}
+.batt i{display:block;height:100%;border-radius:1px}
+.chip{display:inline-flex;align-items:center;gap:5px;padding:1px 8px;border-radius:999px;
+  background:var(--surface-2);font-size:11px;color:var(--ink-2);white-space:nowrap}
+.chip.warn{background:rgba(250,178,25,.12);color:var(--warn);border:1px solid rgba(250,178,25,.3)}
+.chip.dan{background:rgba(160,24,24,.16);color:#f0a5a5;border:1px solid rgba(224,94,94,.35)}
+.count{font-size:12px;color:var(--muted);font-variant-numeric:tabular-nums;white-space:nowrap}
+.caret{color:var(--muted);font-size:11px;width:12px;text-align:center}
+.sub{display:flex;flex-wrap:wrap;gap:3px 12px;padding:0 12px 9px 31px;
+  font-size:11px;color:var(--muted);font-variant-numeric:tabular-nums}
+
+/* ── 展開工作區 ────────────────────────────────────── */
+.work{border-top:1px solid var(--hairline);padding:11px 12px 12px;
+  display:flex;flex-direction:column;gap:11px}
+.sect{display:flex;flex-direction:column;gap:7px}
+.sect h3{font-size:12px;font-weight:600;color:var(--ink-2);display:flex;align-items:center;gap:7px}
+.grid2{display:grid;grid-template-columns:repeat(auto-fit,minmax(230px,1fr));gap:9px}
+.box{background:var(--page);border:1px solid var(--hairline);border-radius:10px;padding:9px 11px;
+  display:flex;flex-direction:column;gap:6px}
+.box .cap{font-size:11px;color:var(--muted);display:flex;align-items:center;gap:6px}
+.kv{display:grid;grid-template-columns:76px minmax(0,1fr) auto;gap:4px 10px;align-items:baseline;font-size:12px}
+.kv .k{color:var(--muted);font-size:11px}
+.kv .v{color:var(--ink);font-family:var(--mono);word-break:break-all}
+.kv .v.empty{color:var(--muted);font-family:inherit}
+.mini{font-size:11px;color:var(--muted);border:1px solid var(--hairline);border-radius:6px;
+  padding:1px 7px}
+.mini:hover{color:var(--ink);border-color:var(--border)}
+.btn{padding:4px 11px;border:1px solid var(--hairline);border-radius:7px;color:var(--ink-2);
+  background:var(--surface-2);font-size:12px}
+.btn:hover{color:var(--ink);border-color:var(--border)}
+.btn.danger{color:var(--danger-ink);border-color:rgba(224,94,94,.4);background:transparent}
+.btn.danger:hover{background:rgba(208,59,59,.12)}
+.btn:disabled{opacity:.45;cursor:not-allowed}
+.actions{display:flex;gap:7px;flex-wrap:wrap;align-items:center}
+
+/* 架次表 */
+.tablewrap{overflow-x:auto}
+table{width:100%;border-collapse:collapse;font-size:12px}
+th{text-align:left;font-size:10.5px;font-weight:600;color:var(--muted);letter-spacing:.04em;
+  padding:0 8px 6px;border-bottom:1px solid var(--hairline);white-space:nowrap}
+td{padding:6px 8px;border-bottom:1px solid rgba(58,56,51,.55);color:var(--ink-2);white-space:nowrap}
+td.n{font-family:var(--mono);text-align:right;font-variant-numeric:tabular-nums}
+tr.tap{cursor:pointer}
+tr.tap:hover td{background:var(--surface-2)}
+.sdot{width:7px;height:7px;border-radius:50%;display:inline-block;margin-right:6px;vertical-align:1px}
+.evc{font-size:11px;color:var(--muted)}
+.evc b{color:#f0a5a5;font-weight:600}
+.rowacts{display:flex;gap:6px;justify-content:flex-end}
+.empty{color:var(--muted);font-size:12px;padding:10px 2px}
+.hint{font-size:11px;color:var(--muted);line-height:1.7}
+
+/* ── 小隊 ──────────────────────────────────────────── */
+.grp{padding:10px 12px;display:flex;flex-direction:column;gap:7px}
+.grp-head{display:flex;align-items:center;gap:9px;flex-wrap:wrap}
+.grp-name{font-size:13.5px;font-weight:700}
+.grp-meta{font-size:11px;color:var(--muted);font-variant-numeric:tabular-nums}
+.grp-members{display:flex;gap:6px;flex-wrap:wrap}
+.member{display:inline-flex;align-items:center;gap:6px;padding:3px 9px;border-radius:8px;
+  background:var(--page);border:1px solid var(--hairline);font-size:12px;color:var(--ink-2)}
+.member .dot{width:7px;height:7px}
+.grp-empty{font-size:12px;color:var(--muted)}
+.pickrow{display:flex;align-items:center;gap:9px;padding:7px 9px;border-radius:8px;
+  border:1px solid var(--hairline);background:var(--page);cursor:pointer;width:100%;text-align:left}
+.pickrow:hover{background:var(--surface-2)}
+.pickrow[aria-pressed="true"]{border-color:var(--accent);background:var(--accent-bg)}
+.pickbox{width:15px;height:15px;border-radius:4px;border:1.5px solid var(--muted);
+  display:grid;place-items:center;font-size:10px;color:var(--accent);flex:none}
+/* 小隊 chip 用中性色：**accent 只准互動 chrome**（design-tokens 鐵則），
+   而這是一個標籤不是按鈕 */
+.chip.grp{background:var(--surface-2);color:var(--ink-2);border:1px solid var(--hairline)}
+
+/* ── modal（全站同形：✕ 固定右上、label 靠左邊）──────── */
+.mask{position:fixed;inset:0;background:rgba(12,11,9,.62);z-index:60;display:grid;place-items:center;padding:20px}
+.mask[hidden]{display:none}
+.modal{background:var(--surface);border:1px solid var(--border);border-radius:14px;
+  width:min(560px,94vw);max-height:88dvh;display:flex;flex-direction:column;
+  box-shadow:0 24px 64px rgba(0,0,0,.55);overflow:hidden}
+.mhead{display:flex;align-items:center;gap:9px;padding:13px 15px 10px;flex:none}
+.mhead .t{font-size:14.5px;font-weight:600}
+.mhead .meta{font-size:11.5px;color:var(--muted)}
+.mbody{padding:0 15px 12px;overflow-y:auto;display:flex;flex-direction:column;gap:9px}
+.mfoot{display:flex;gap:8px;justify-content:flex-end;padding:10px 15px 13px;
+  border-top:1px solid var(--hairline)}
+label.field{display:flex;flex-direction:column;gap:4px;font-size:11px;color:var(--muted)}
+label.field input{background:var(--page);border:1px solid var(--hairline);border-radius:7px;
+  padding:6px 9px;font-size:13px;color:var(--ink)}
+</style>
+<style>
+/* ── 路徑列 ────────────────────────────────────────── */
+.mrow{display:flex;align-items:center;gap:12px;padding:10px 12px;width:100%;text-align:left;
+  border-radius:12px}
+.mrow:hover{background:var(--surface-2)}
+.thumb{width:104px;height:64px;flex:none;border-radius:8px;background:var(--page);
+  border:1px solid var(--hairline);overflow:hidden}
+.thumb svg{width:100%;height:100%;display:block}
+.mmain{display:flex;flex-direction:column;gap:3px;min-width:0;flex:1}
+.mname{font-size:14px;font-weight:700;word-break:break-all;line-height:1.35}
+.mmeta{display:flex;flex-wrap:wrap;gap:3px 10px;font-size:11.5px;color:var(--muted);
+  font-variant-numeric:tabular-nums;align-items:center}
+.mmeta .sep{color:var(--hairline)}
+.muse{font-size:12px;color:var(--ink-2);white-space:nowrap;font-variant-numeric:tabular-nums;
+  text-align:right}
+.muse .never{color:var(--muted)}
+/* 「顯示中」是狀態不是按鈕：**accent 只准互動 chrome**（design-tokens 鐵則），
+   所以用中性 chip ＋ 一個實心點，不用橘框把整張卡圈起來 */
+.chip.live{background:var(--surface-2);color:var(--ink);border:1px solid var(--border)}
+.chip.live .d{width:6px;height:6px;border-radius:50%;background:var(--ok)}
+.chip.terr{background:rgba(250,178,25,.1);color:var(--warn);border:1px solid rgba(250,178,25,.28)}
+.menu{position:absolute;right:10px;top:46px;z-index:30;background:var(--surface-2);
+  border:1px solid var(--border);border-radius:10px;padding:5px;display:flex;
+  flex-direction:column;gap:2px;box-shadow:0 12px 32px rgba(0,0,0,.5);min-width:168px}
+.menu button{padding:6px 9px;border-radius:7px;font-size:12px;color:var(--ink-2);text-align:left}
+.menu button:hover{background:var(--page);color:var(--ink)}
+.menu button.danger{color:var(--danger-ink)}
+.mwrap{position:relative}
+.toolbar{display:flex;align-items:center;gap:8px;flex-wrap:wrap}
+.pill{padding:3px 10px;border-radius:999px;border:1px solid transparent;color:var(--muted);
+  font-size:11.5px}
+.pill:hover{color:var(--ink-2)}
+.pill[aria-pressed="true"]{color:var(--ink);background:var(--surface-2);border-color:var(--border)}
+.search{background:var(--page);border:1px solid var(--hairline);border-radius:8px;
+  padding:4px 10px;font-size:12px;color:var(--ink);width:190px}
+.drop{border:1px dashed var(--hairline);border-radius:10px;padding:7px;text-align:center;
+  color:var(--muted);font-size:11.5px}
+.drop.hot{border-color:var(--accent);color:var(--ink-2);background:var(--accent-bg)}
+</style>
+<div class="shell">
+  <nav class="nav">
+    <span class="brand">UAV 監控</span>
+    <div class="navtabs">
+      <button title="即時監控"><svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><circle cx="12" cy="12" r="3.2"/><path d="M12 2.5v4M12 17.5v4M2.5 12h4M17.5 12h4"/></svg></button>
+      <button title="無人機"><svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><circle cx="5.5" cy="5.5" r="2.4"/><circle cx="18.5" cy="5.5" r="2.4"/><circle cx="5.5" cy="18.5" r="2.4"/><circle cx="18.5" cy="18.5" r="2.4"/><rect x="10" y="10" width="4" height="4" rx="1.4"/></svg></button>
+      <button aria-current="true" title="路徑管理"><svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M4 19c6 0 2-10 8-10 5 0 3 7 8 5"/></svg></button>
+      <button title="比較"><svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M3 16l5-6 4 3 6-8"/><path d="M3 20l5-4 4 2 6-6" opacity=".5"/></svg></button>
+      <button title="資訊"><svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M3 7.5l9-4.5 9 4.5-9 4.5-9-4.5z"/><path d="M3 12l9 4.5 9-4.5"/><path d="M3 16.5l9 4.5 9-4.5"/></svg></button>
+    </div>
+    <span class="spacer"></span>
+    <span class="reclight" id="reclight"><span class="recdot"></span>未記錄</span>
+  </nav>
+
+  
+  <div class="page">
+    <div class="head">
+      <h1>路徑<span id="n"></span></h1>
+      <button class="btn" id="up">＋ 上傳 .plan</button>
+      <span class="spacer"></span>
+      <span class="info" tabindex="0" data-tip="這裡是存下來的 QGC 航線。一列＝一份航線：縮圖是它的立體形狀（含高度），旁邊是航點數、預計時間、目標機種與高度語意。「顯示中」的那份會畫在即時頁的地圖上。點一列展開誰飛過它。預計時間是估計值，不含風、不含加減速、不含起飛前的解鎖與檢查。縮圖是等角視角，垂直放大 3 倍（固定倍率，所以兩張縮圖的高度可以互比）。">ⓘ</span>
+    </div>
+    <div class="toolbar" id="tools"></div>
+    <div id="list"></div>
+    <div class="drop" id="drop">或把 .plan 檔拖到這裡</div>
+  </div>
+</div>
+
+  <div class="mask" id="mask" hidden>
+    <div class="modal" role="dialog" aria-modal="true">
+      <div class="mhead">
+        <span class="t" id="mtitle"></span>
+        <span class="spacer"></span>
+        <button class="mini" id="mclose" aria-label="關閉">✕</button>
+      </div>
+      <div class="mbody" id="mbody"></div>
+      <div class="mfoot">
+        <button class="btn" id="mcancel">取消</button>
+        <button class="btn danger" id="mok">刪除</button>
+      </div>
+    </div>
+  </div>
+<script>window.PROTO={"missions":[{"id":"a23ed984-8902-4148-a0ff-9a9ca56c3694","name":"lowspeed-test-260907-v4（地形跟隨）","source":"terrain-frame","created_at":"2026-09-08T04:36:48.147043+00:00","is_active":false,"firmware_type":3,"vehicle_type":2,"home":[24.77344905,121.04586381,119.0],"cruise_speed":15.0,"hover_speed":1.0,"waypoint_count":8,"eta_s":299.1,"eta_unknown":[],"eta_assumptions":["巡航 15 m/s、爬升/下降 1 m/s（來自 .plan）","水平與垂直取大者不相加（多旋翼可同時平飛與爬升）","**不含風、不含加減速、不含起飛前的解鎖與檢查時間**","航線中有 DO_CHANGE_SPEED，後段用改過的速度算"],"clock":"09/08 12:36","wps":[{"seq":0,"lat":0,"lon":0,"alt":2,"action":"takeoff","frame":3,"command":22},{"seq":1,"lat":24.77325853,"lon":121.04577461,"alt":3.1,"action":"waypoint","frame":10,"command":16},{"seq":2,"lat":0,"lon":0,"alt":0,"action":"do","frame":2,"command":178},{"seq":3,"lat":24.77338532,"lon":121.0460963,"alt":4.6,"action":"waypoint","frame":10,"command":16},{"seq":4,"lat":0,"lon":0,"alt":0,"action":"do","frame":2,"command":178},{"seq":5,"lat":24.77320874,"lon":121.04598517,"alt":4.2,"action":"waypoint","frame":10,"command":16},{"seq":6,"lat":0,"lon":0,"alt":0,"action":"do","frame":2,"command":178},{"seq":7,"lat":24.773445067210737,"lon":121.04591854953372,"alt":0,"action":"land","frame":3,"command":21}],"frames":[10],"uses":[]},{"id":"fdd69fa2-d6db-4d10-91fc-0e0269da6cfb","name":"lowspeed-test-260907-v4","source":"plan-file","created_at":"2026-09-07T08:27:20.113052+00:00","is_active":true,"firmware_type":3,"vehicle_type":2,"home":[24.77344905,121.04586381,119.0],"cruise_speed":15.0,"hover_speed":1.0,"waypoint_count":8,"eta_s":298.4,"eta_unknown":[],"eta_assumptions":["巡航 15 m/s、爬升/下降 1 m/s（來自 .plan）","水平與垂直取大者不相加（多旋翼可同時平飛與爬升）","**不含風、不含加減速、不含起飛前的解鎖與檢查時間**","航線中有 DO_CHANGE_SPEED，後段用改過的速度算"],"clock":"09/07 16:27","wps":[{"seq":0,"lat":0,"lon":0,"alt":2,"action":"takeoff","frame":3,"command":22},{"seq":1,"lat":24.77325853,"lon":121.04577461,"alt":3.5,"action":"waypoint","frame":3,"command":16},{"seq":2,"lat":0,"lon":0,"alt":0,"action":"do","frame":2,"command":178},{"seq":3,"lat":24.77338532,"lon":121.0460963,"alt":3.5,"action":"waypoint","frame":3,"command":16},{"seq":4,"lat":0,"lon":0,"alt":0,"action":"do","frame":2,"command":178},{"seq":5,"lat":24.77320874,"lon":121.04598517,"alt":3.5,"action":"waypoint","frame":3,"command":16},{"seq":6,"lat":0,"lon":0,"alt":0,"action":"do","frame":2,"command":178},{"seq":7,"lat":24.773445067210737,"lon":121.04591854953372,"alt":0,"action":"land","frame":3,"command":21}],"frames":[3],"uses":[{"id":"eeb4e6de-3793-418b-b636-f6688757b5e0","drone_id":"1d2f19b1-a979-4f90-ad63-3d50a9ebad11","drone":"pi5-sdmodelh7v2-ardu","clock":"09/07 16:28","samples":77,"avg":21.006493506493506,"min":11.5}]}]};</script>
+
+<script>
+(()=>{
+const P=window.PROTO;
+const $=(s)=>document.querySelector(s);
+const el=(t,c,x)=>{const n=document.createElement(t); if(c)n.className=c; if(x!=null)n.textContent=x; return n;};
+
+/* ── 路徑管理頁 v2（2026-09-08）────────────────────────────────
+ *
+ * 舊版是縮圖卡格，三個問題：
+ *   1. **名字被截斷**（卡寬 ~195px → `lowspeed-test-26…`）。檔名正是使用者
+ *      用來認這份航線的東西，卻只看得到一半。
+ *   2. **要展開才知道有沒有人飛過**——那是挑航線時最先想知道的事之一。
+ *   3. **高度語意看不見**。這一頁現在同時有 frame 3（離起飛點）與 frame 10
+ *      （離地面）兩份幾乎同名的航線，而它們差的正是這件事——**這是飛安資訊，
+ *      不是細節**。
+ *
+ * 改成一列一份，與機隊頁同一種形狀：縮圖 ＋ 名稱 ＋ 一行事實 ＋ 使用次數，
+ * 就地展開使用紀錄。解釋一律住 ⓘ。
+ */
+const AP={0:"通用",3:"ArduPilot",12:"PX4"};
+const VT={1:"定翼",2:"四旋翼",10:"地面載具",12:"潛航器",13:"六旋翼",14:"八旋翼"};
+const IDC=["#3987e5","#d95926","#199e70"];
+const colorFor=(id)=>{let h=0; for(const c of id) h=(h*31+c.charCodeAt(0))>>>0;
+  return IDC[h%IDC.length];};
+
+const S={sort:"used", q:"", open:null, menu:null, del:null};
+
+/** 目標機種。**認不得的值原樣顯示 id**，不寫「未知」——「未知」會讓
+ *  「檔案沒說」與「說了但我們沒收錄這個型號」看起來一樣。 */
+function target(m){
+  const ap=m.firmware_type==null?null:(AP[m.firmware_type]??`firmware ${m.firmware_type}`);
+  const vt=m.vehicle_type==null?null:(VT[m.vehicle_type]??`type ${m.vehicle_type}`);
+  const p=[ap,vt].filter(Boolean);
+  return p.length?{t:p.join(" "),ok:true}:{t:"未宣告目標機種",ok:false};
+}
+/** 高度語意：MAV_FRAME 3＝離起飛點、10＝離地面（地形跟隨）。
+ *  **同一個「4.6 m」在兩者是不同的地方**，所以它必須在列上，不能藏在展開裡。 */
+function frameText(m){
+  const f=m.frames;
+  if(!f.length) return {t:"高度語意未知",ok:false};
+  if(f.length>1) return {t:`高度混用 frame ${f.join("/")}`,ok:false};
+  if(f[0]===10) return {t:"高度＝離地面",ok:true,terr:true};
+  if(f[0]===3) return {t:"高度＝離起飛點",ok:true};
+  return {t:`高度 frame ${f[0]}`,ok:false};
+}
+function etaText(m){
+  if(m.eta_s==null) return "時間未知";
+  const t=Math.round(m.eta_s), mm=Math.floor(t/60), ss=t%60;
+  return mm?`約 ${mm} 分 ${String(ss).padStart(2,"0")} 秒`:`約 ${ss} 秒`;
+}
+
+/** 縮圖：等角投影的航線，**高度就是垂直軸**；地面投影用細虛線，每個航點
+ *  拉一條垂線接回地面。平面縮圖看不出一份航線是貼地飛還是爬上去。
+ *
+ *  垂直放大**固定 3×**（寫在頁首 ⓘ）。不做「每份各自撐滿」的正規化——
+ *  那會讓一份爬 3 m 的航線和一份爬 60 m 的長得一樣高，兩張縮圖就不能互比。
+ */
+const THUMB_VEX=3;
+function thumb(m){
+  const pts=m.wps.filter(w=>w.lat&&w.lon);
+  const box=el("div","thumb");
+  if(pts.length<2){ box.innerHTML=`<svg viewBox="0 0 104 64"></svg>`; return box; }
+  const la=pts.map(p=>p.lat), lo=pts.map(p=>p.lon), al=pts.map(p=>p.alt??0);
+  const clat=(Math.min(...la)+Math.max(...la))/2;
+  const K=111320*Math.cos(clat*Math.PI/180), a0=Math.min(...al);
+  const E=pts.map(p=>(p.lon-lo[0])*K), N=pts.map(p=>(p.lat-la[0])*110574);
+  const sx=(i)=>(E[i]-N[i])*0.866;
+  const gy=(i)=>(E[i]+N[i])*0.5;
+  const sy=(i)=>gy(i)-(al[i]-a0)*THUMB_VEX;
+  const X=pts.map((_,i)=>sx(i));
+  const Y=pts.flatMap((_,i)=>[sy(i),gy(i)]);
+  const x0=Math.min(...X),x1=Math.max(...X),y0=Math.min(...Y),y1=Math.max(...Y);
+  const W=104,H=64,pad=7;
+  const k=Math.min((W-pad*2)/((x1-x0)||1),(H-pad*2)/((y1-y0)||1));
+  const px=(x)=>pad+(x-x0)*k+((W-pad*2)-(x1-x0)*k)/2;
+  const py=(y)=>pad+(y-y0)*k+((H-pad*2)-(y1-y0)*k)/2;
+  const path=(f)=>pts.map((_,i)=>`${i?"L":"M"}${px(sx(i)).toFixed(1)} ${py(f(i)).toFixed(1)}`).join(" ");
+  const drops=pts.map((_,i)=>`<line x1="${px(sx(i)).toFixed(1)}" y1="${py(sy(i)).toFixed(1)}"
+    x2="${px(sx(i)).toFixed(1)}" y2="${py(gy(i)).toFixed(1)}"
+    stroke="var(--hairline)" stroke-width="1"/>`).join("");
+  box.innerHTML=`<svg viewBox="0 0 ${W} ${H}">
+    <path d="${path(gy)}" fill="none" stroke="var(--hairline)" stroke-width="1" stroke-dasharray="2 2"/>
+    ${drops}
+    <path d="${path(sy)}" fill="none" stroke="var(--ink-2)" stroke-width="1.4"/>
+    <circle cx="${px(sx(0)).toFixed(1)}" cy="${py(sy(0)).toFixed(1)}" r="2.4" fill="var(--ok)"/>
+    </svg>`;
+  return box;
+}
+
+function sorted(){
+  const q=S.q.trim().toLowerCase();
+  let a=P.missions.filter(m=>!q||m.name.toLowerCase().includes(q));
+  const last=(m)=>m.uses.length?m.uses[0].clock:"";
+  if(S.sort==="used") a=[...a].sort((x,y)=>(y.uses.length-x.uses.length)||(last(y)<last(x)?-1:1));
+  else if(S.sort==="new") a=[...a].sort((x,y)=>x.created_at<y.created_at?1:-1);
+  else a=[...a].sort((x,y)=>x.name.localeCompare(y.name));
+  return a;
+}
+
+function draw(){
+  $("#n").textContent=` ${P.missions.length}`;
+  // 排序與搜尋只在**多到會找不到**的時候才出現：兩三條航線時它們只是雜訊
+  const tb=$("#tools"); tb.textContent="";
+  if(P.missions.length>6){
+    tb.appendChild(el("span","hint","排序"));
+    [["used","最常用"],["new","最新"],["name","名稱"]].forEach(([k,l])=>{
+      const b=el("button","pill",l);
+      b.setAttribute("aria-pressed",S.sort===k?"true":"false");
+      b.onclick=()=>{S.sort=k; draw();}; tb.appendChild(b);
+    });
+    const i=el("input","search"); i.placeholder="搜尋名稱"; i.value=S.q;
+    i.oninput=()=>{S.q=i.value; draw();}; tb.appendChild(i);
+  }
+
+  const list=$("#list"); list.textContent="";
+  const rows=sorted();
+  if(!rows.length){
+    const c=el("div","card");
+    c.appendChild(el("div","empty", P.missions.length
+      ? "沒有符合的名稱。" : "還沒有存下任何航線——用上面的「＋ 上傳 .plan」加一份。"));
+    list.appendChild(c); return;
+  }
+  rows.forEach(m=>{
+    const card=el("div","card mwrap");
+    const row=el("div","mrow");
+    row.tabIndex=0; row.setAttribute("role","button");
+    const toggle=()=>{S.open=S.open===m.id?null:m.id; S.menu=null; draw();};
+    row.onclick=toggle;
+    row.onkeydown=(e)=>{ if(e.key==="Enter"||e.key===" "){e.preventDefault(); toggle();} };
+    row.appendChild(thumb(m));
+    const main=el("div","mmain");
+    const l1=el("div","mmeta"); l1.style.gap="7px";
+    const nm=el("span","mname",m.name); l1.appendChild(nm);
+    if(m.is_active){
+      const c=el("span","chip live"); c.appendChild(el("span","d")); c.append("顯示中");
+      l1.appendChild(c);
+    }
+    const fr=frameText(m);
+    if(fr.terr) l1.appendChild(el("span","chip terr","地形跟隨"));
+    main.appendChild(l1);
+    const l2=el("div","mmeta");
+    const add=(t,dim)=>{ const s=el("span",null,t); if(dim) s.style.opacity=".6";
+      l2.appendChild(s); l2.appendChild(el("span","sep","·")); };
+    add(`${m.waypoint_count} 航點`);
+    add(etaText(m), m.eta_s==null);
+    const tg=target(m); add(tg.t, !tg.ok);
+    const fs=el("span",null,fr.t); if(!fr.ok) fs.style.opacity=".6";
+    if(fr.terr) fs.style.color="var(--warn)";
+    l2.appendChild(fs);
+    main.appendChild(l2);
+    row.appendChild(main);
+    const use=el("div","muse");
+    if(m.uses.length){
+      use.appendChild(el("div",null,`飛過 ${m.uses.length} 次`));
+      const d=el("div","never",`最近 ${m.uses[0].clock}`); d.style.fontSize="11px";
+      use.appendChild(d);
+    } else {
+      use.appendChild(el("div","never","還沒飛過"));
+    }
+    row.appendChild(use);
+    row.appendChild(el("span","caret", S.open===m.id?"▾":"▸"));
+    const more=el("button","mini","⋯"); more.title="更多";
+    more.onclick=(e)=>{e.stopPropagation(); S.menu=S.menu===m.id?null:m.id; S.del=null; draw();};
+    row.appendChild(more);
+    card.appendChild(row);
+    if(S.menu===m.id){
+      const mn=el("div","menu");
+      mn.onclick=(e)=>e.stopPropagation();
+      mn.appendChild(el("button",null,m.is_active?"從即時頁隱藏":"顯示於即時頁"));
+      const tf=el("button",null,"改成地形跟隨");
+      tf.title="把每個航點的高度改寫成離地面多少（frame 10），另存一份，原本這份不動";
+      if(fr.terr){ tf.disabled=true; tf.style.opacity=".4";
+        tf.title="這份已經是地形跟隨了"; }
+      mn.appendChild(tf);
+      const dl=el("button","danger","刪除");
+      dl.onclick=()=>{ S.del=m.id; S.menu=null; draw(); };
+      mn.appendChild(dl);
+      card.appendChild(mn);
+    }
+
+    if(S.open===m.id){
+      const work=el("div","work");
+      const h=el("div","sect");
+      const hh=el("h3",null,`使用紀錄`);
+      hh.appendChild(el("span","spacer"));
+      if(m.uses.length>1){
+        const b=el("button","mini",`比對回放（${m.uses.length} 條疊圖）`);
+        hh.appendChild(b);
+      }
+      h.appendChild(hh);
+      if(!m.uses.length){
+        // **「沒有人飛過」是一句話，不是一張空表**：畫五個欄位標題再說沒有資料，
+        // 讀的人要先掃過一遍表頭才知道那裡什麼都沒有
+        h.appendChild(el("div","empty","還沒有航次飛過這份航線。設為「顯示於即時頁」後起飛就會自動關聯。"));
+      } else {
+        const w=el("div","tablewrap");
+        const t=el("table");
+        t.innerHTML=`<thead><tr><th>無人機</th><th>開始</th><th class="n">樣本數</th>
+          <th class="n">平均 SINR</th><th class="n">最低 SINR</th></tr></thead><tbody>${
+          m.uses.map(u=>`<tr class="tap"><td><span class="sdot" style="background:${colorFor(u.drone_id)}"></span>${u.drone}</td>
+            <td>${u.clock}</td><td class="n">${u.samples??"—"}</td>
+            <td class="n">${u.avg!=null?u.avg.toFixed(1):"—"}</td>
+            <td class="n">${u.min!=null?u.min.toFixed(1):"—"}</td></tr>`).join("")}</tbody>`;
+        w.appendChild(t); h.appendChild(w);
+      }
+      work.appendChild(h);
+      card.appendChild(work);
+    }
+    list.appendChild(card);
+  });
+}
+
+/* 刪除走 modal（全站同形：✕ 固定右上、label 靠它左邊），不用卡上兩段式紅字
+   ——兩段式在別頁已經換掉了，這裡留著就是同一個動作有兩種樣子 */
+function drawDel(){
+  const mask=$("#mask");
+  if(!S.del){ mask.hidden=true; return; }
+  const m=P.missions.find(x=>x.id===S.del);
+  mask.hidden=false;
+  $("#mtitle").textContent=`刪除「${m.name}」？`;
+  $("#mbody").innerHTML=`<div class="hint">這份航線會從清單消失，${
+    m.uses.length?`已經飛過的 ${m.uses.length} 筆航次紀錄留著`:"它還沒有任何航次紀錄"}。</div>`;
+}
+$("#mclose").onclick=$("#mcancel").onclick=()=>{S.del=null; drawDel();};
+$("#mok").onclick=()=>{S.del=null; drawDel();};
+document.addEventListener("click",()=>{ if(S.menu){S.menu=null; draw();} });
+const dz=$("#drop");
+["dragenter","dragover"].forEach(k=>dz.addEventListener(k,(e)=>{e.preventDefault();dz.classList.add("hot");}));
+["dragleave","drop"].forEach(k=>dz.addEventListener(k,(e)=>{e.preventDefault();dz.classList.remove("hot");}));
+
+const _draw=draw;
+draw=function(){ _draw(); drawDel(); };
+draw();
+})();
+</script>
