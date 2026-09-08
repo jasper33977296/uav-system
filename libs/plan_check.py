@@ -18,6 +18,7 @@
 2026-08-26 發現它們早就漂移了：frame 檢查只存在於 backend 那份，於是
 匯入時擋下來的東西，上傳到機時反而不擋。同源副本靠人記得同步是行不通的。
 """
+import json
 import math
 
 import autopilot as _autopilot
@@ -96,7 +97,9 @@ def check_waypoints(wps: list[dict], fence_r: float, fence_alt: float,
                     margin: float = 0.7, fence: dict | None = None,
                     autopilot: int | None = None,
                     home: list[float] | None = None,
-                    dem=None, min_clear: float = MIN_CLEARANCE_M) -> dict:
+                    dem=None, min_clear: float = MIN_CLEARANCE_M,
+                    wp_spd: float | None = None,
+                    wp_radius: float | None = None) -> dict:
     """wps：本系統 waypoints 模型 [{seq, lat, lon, alt, action, command?}]。
     DO_* 設定類不計距離；回傳 {ok, problems, warnings, max_dist_m, ...}。
 
@@ -201,9 +204,19 @@ def check_waypoints(wps: list[dict], fence_r: float, fence_alt: float,
     problems += terr["problems"]
     warnings += terr["warnings"]
 
+    # 逐段剖面（issues/048）：離地與速度的**組合**。`check_terrain` 問的是
+    # 「會不會低於地面」，而 2026-09-07 那一趟離地 1.5 m 是正的、會被放行
+    # ——「在地面上方」不等於「飛得安全」。
+    prof = leg_profile(wps, home, dem=dem, home_amsl=None,
+                       wp_spd=wp_spd, wp_radius=wp_radius)
+    problems += prof["problems"]
+    warnings += prof["warnings"]
+
     return {"ok": not problems, "problems": problems, "warnings": warnings,
             "max_dist_m": round(max_d, 1), "max_alt_m": round(max_alt, 1),
             "terrain": terr["terrain"],
+            # 逐段的事實：剖面圖、逐段表、自動修正共用的輸入
+            "legs": prof["legs"],
             # **量測用的是哪一份圍欄，要跟著報告走**：同一句「超出圍欄」在
             # 兩種來源下的處置完全不同
             "fence_source": fence_src}
@@ -504,6 +517,195 @@ def check_terrain_ready(params: dict, max_rise_m: float = 0.0,
         wn.append(f"飛控的地形格距是 {sp:g} m——**比地面站檢查用的 30 m 還粗**，"
                   "它跟的是那個解析度下的地面")
     return {"problems": pr, "warnings": wn}
+
+
+# ── 逐段剖面（issues/048、doc/route-planning-first-principles.md）────────
+#
+# **每一個常數都要說得出出處，而且樣本數 1 的要標樣本數 1。**
+
+#: 低空的界線（m）。**不是算出來的**：2026-09-07 出事在離地 1.5 m，往外留。
+#: 教科書的地效區是 1–2 倍槳徑（這台約 0.5–0.7 m），**與實際出事的高度對不上**
+#: ——所以不拿槳徑推算，用實際事故的高度往安全側取，並且每台機可以改。
+#: 想量出這台機真正的界線：在不同高度各懸停 20 秒，看氣壓高度（`CTUN.BAlt`）
+#: 的抖動從哪裡開始收斂——09-07 在 1.6 m 懸停時它在 1.45～2.15 之間跳，
+#: 而 EKF 融合後的高度是平的，**那個差就是「地面還在干擾這架飛機」**。
+LOW_ALT_M = 3.0
+#: 低空時容許的速度上限（m/s，使用者裁定 2026-09-08）。同一個場地
+#: 0.3 m/s 貼地飛過好幾趟沒事，出事那趟是加速通過 5 m/s。
+LOW_SPEED_MS = 1.0
+#: 轉彎的提前量（秒）。**樣本數 1**：2026-09-07 實測 8 m/s 配 2 m 到達半徑
+#: 過衝約 9 m。報告裡一律寫「估計」並附這句出處——用單一樣本產生一個看起來
+#: 精確的數字，比不給還糟。
+TURN_LEAD_S = 1.1
+#: 轉角超過這個度數就算「急轉」。90° 是直角，超過就是要往回折。
+SHARP_TURN_DEG = 90.0
+
+_DO_CHANGE_SPEED = 178
+
+
+def _bearing(lat1, lon1, lat2, lon2) -> float:
+    y = math.sin(math.radians(lon2 - lon1)) * math.cos(math.radians(lat2))
+    x = (math.cos(math.radians(lat1)) * math.sin(math.radians(lat2))
+         - math.sin(math.radians(lat1)) * math.cos(math.radians(lat2))
+         * math.cos(math.radians(lon2 - lon1)))
+    return (math.degrees(math.atan2(y, x)) + 360.0) % 360.0
+
+
+def leg_profile(wps: list[dict], home: dict | None = None, dem=None,
+                home_amsl: float | None = None, wp_spd: float | None = None,
+                wp_radius: float | None = None,
+                low_alt: float = LOW_ALT_M,
+                low_speed: float = LOW_SPEED_MS) -> dict:
+    """把一份航線攤成**逐段的事實**：離地、有效速度與它的來源、長度、轉角。
+
+    這是剖面圖、逐段表、自動修正、擋門**四個功能共同的輸入**，所以它只算
+    事實與發現，不決定要不要擋——那是呼叫端的政策。
+
+    ## 有效速度為什麼要自己算
+
+    **`DO_CHANGE_SPEED` 只從被執行到的那一項之後才生效。** 2026-09-07：
+    使用者以為全程 0.3 m/s，而起飛到第一個航點那一段用的是機上的 `WP_SPD`
+    （實測 8 m/s）——那正是「速度感覺不是我設的」的答案。
+
+    所以每一段的速度是「上一次**在它之前**出現的 `DO_CHANGE_SPEED`」，
+    沒有的話就是 `wp_spd`。而 `wp_spd` 只有飛機說得準：**沒給就是不知道**，
+    那一段的速度相關判定一律不做（`speed_src` 為 `"unknown"`），
+    **不是當成安全**。
+
+    回 `{legs: [...], problems: [...], warnings: [...]}`。
+    """
+    out: dict = {"legs": [], "problems": [], "warnings": []}
+    ha = home_amsl
+    if ha is None and dem is not None and getattr(dem, "available", False) and home:
+        ha = dem.elevation(home["lat"], home["lon"])
+
+    # ── 走一遍，同時解出「每個導航項生效時的速度」────────────────
+    speed, src = wp_spd, ("機上 WP_SPD" if wp_spd is not None else "unknown")
+    pts: list[dict] = []
+    for w in wps:
+        c = _cmd(w)
+        if c == _DO_CHANGE_SPEED:
+            # `params` 在不同呼叫端可能是 dict 或還沒解開的 JSON 字串
+            # （`_with_command` 解出 command／frame，但沒把解好的寫回去）
+            p = w.get("params") or {}
+            if isinstance(p, str):
+                try:
+                    p = json.loads(p)
+                except ValueError:
+                    p = {}
+            v = w.get("p2")
+            if v is None:
+                v = p.get("p2")
+            # p2 <= 0 ＝「不改速度」，不是「速度 0」
+            if v is not None and float(v) > 0:
+                speed, src = float(v), f"航線 seq {w.get('seq')}"
+            continue
+        if not _is_nav(w):
+            continue
+        fr = w.get("frame")
+        fr = 3 if fr is None else int(fr)
+        lat, lon = w.get("lat"), w.get("lon")
+        if not lat or not lon:
+            # **起飛項通常是 0,0**（它只說「爬到多高」，位置就是起飛點）。
+            # 把它丟掉的話，**第一段就整段消失**——而 2026-09-07 出事的正是
+            # 那一段（起飛點→第一個航點，用機上的 WP_SPD 8 m/s 飛）。
+            # 有起飛點座標就用它補上；沒有才真的跳過。
+            if c == _TAKEOFF and home and home.get("lat") and home.get("lon"):
+                lat, lon = home["lat"], home["lon"]
+            else:
+                continue
+        pts.append({"seq": w.get("seq"), "lat": lat, "lon": lon,
+                    "alt": w.get("alt"), "frame": fr, "cmd": c,
+                    "speed": speed, "speed_src": src})
+
+    # ── 逐段 ──────────────────────────────────────────────────
+    for i in range(len(pts) - 1):
+        a, b = pts[i], pts[i + 1]
+        d = _dist_m(a["lat"], a["lon"], b["lat"], b["lon"])
+        leg: dict = {
+            "from": a["seq"], "to": b["seq"], "length_m": round(d, 1),
+            "speed_ms": b["speed"], "speed_src": b["speed_src"],
+        }
+        # 離地：段內取最低的一點（含兩端）。frame 10 交給飛控，不判
+        agl = None
+        if dem is not None and getattr(dem, "available", False) and ha is not None:
+            samples = []
+            n = max(1, int(d // DEM_STEP_M))
+            for k in range(n + 1):
+                f = k / n
+                la = a["lat"] + (b["lat"] - a["lat"]) * f
+                lo = a["lon"] + (b["lon"] - a["lon"]) * f
+                gz = dem.elevation(la, lo)
+                if gz is None or a["alt"] is None or b["alt"] is None:
+                    continue
+                if a["frame"] in _REL_FRAMES and b["frame"] in _REL_FRAMES:
+                    amsl = ha + float(a["alt"]) + (float(b["alt"]) - float(a["alt"])) * f
+                elif a["frame"] in _AMSL_FRAMES and b["frame"] in _AMSL_FRAMES:
+                    amsl = float(a["alt"]) + (float(b["alt"]) - float(a["alt"])) * f
+                else:
+                    continue          # frame 10 或混用：不在這裡判
+                samples.append(amsl - gz)
+            if samples:
+                agl = round(min(samples), 1)
+        leg["agl_m"] = agl
+
+        # 轉角：**這一段起點那個航點上的轉折**（進來的方向 vs 出去的方向）。
+        # 第一段沒有「進來的方向」，所以是 None——不是 0
+        if i > 0:
+            prev = pts[i - 1]
+            b1 = _bearing(prev["lat"], prev["lon"], a["lat"], a["lon"])
+            b2 = _bearing(a["lat"], a["lon"], b["lat"], b["lon"])
+            leg["turn_deg"] = round(abs((b2 - b1 + 180) % 360 - 180), 0)
+        out["legs"].append(leg)
+
+    # ── 發現 ──────────────────────────────────────────────────
+    v_unknown = any(l["speed_src"] == "unknown" for l in out["legs"])
+    if v_unknown:
+        out["warnings"].append(
+            "**速度沒有檢查**：這一段的速度取決於機上的 `WP_SPD`，而還沒讀過"
+            "那台機。連上線之後重看一次——**讀不到不等於沒問題**")
+
+    low = [l for l in out["legs"]
+           if l["agl_m"] is not None and l["agl_m"] < low_alt
+           and l["speed_ms"] is not None and l["speed_ms"] > low_speed]
+    if low:
+        w = min(low, key=lambda l: (l["agl_m"], -l["speed_ms"]))
+        more = f"，另有 {len(low) - 1} 段相同" if len(low) > 1 else ""
+        out["problems"].append(
+            f"seq {w['from']}→{w['to']}：離地 {w['agl_m']:.1f} m 卻要飛 "
+            f"{w['speed_ms']:g} m/s（速度來自{w['speed_src']}）{more}。"
+            f"**低於 {low_alt:g} m 時地面會擾動這架飛機**——2026-09-07 就是在 "
+            f"1.5 m 加速通過 5 m/s 時失控的。要嘛把這一段抬到 {low_alt:g} m 以上，"
+            f"要嘛把速度降到 {low_speed:g} m/s 以下")
+
+    if wp_radius:
+        short = [l for l in out["legs"] if l["length_m"] < wp_radius]
+        if short:
+            l = short[0]
+            out["problems"].append(
+                f"seq {l['from']}→{l['to']} 只有 {l['length_m']:.1f} m，"
+                f"比到達半徑 {wp_radius:g} m 還短——**飛機不會真的飛到那個點**，"
+                "它一開始就算「已到達」了")
+        for l in out["legs"]:
+            v = l["speed_ms"]
+            if v is None or l.get("turn_deg") is None:
+                continue
+            lead = v * TURN_LEAD_S
+            # **觸發條件要說得出口**：轉彎的提前量比你給它的到達半徑還大，
+            # 就代表飛機**做不到你指定的精度**——它會在半徑之外才轉完。
+            # （先前寫的是 `lead > 長度/2`，那個比較沒有可解釋的意義。）
+            # 過衝小於 1 m 不值得說——「估計會衝過頭約 0 m」是一句廢話，
+            # 而廢話會讓真正的警告被一起忽略
+            if l["turn_deg"] >= SHARP_TURN_DEG and lead - wp_radius >= 1.0:
+                out["warnings"].append(
+                    f"seq {l['from']}→{l['to']}：轉角 {l['turn_deg']:.0f}° 配 "
+                    f"{v:g} m/s，轉彎提前量估計 {lead:.1f} m > 到達半徑 "
+                    f"{wp_radius:g} m ——**估計會衝過頭約 {lead - wp_radius:.1f} m**"
+                    f"（這一段長 {l['length_m']:.0f} m）。這個估計來自"
+                    "**單一次實測**（8 m/s 配 2 m 半徑過衝約 9 m，樣本數 1），"
+                    "當成量級看，不要當成精確值")
+                break
+    return out
 
 
 def check_group(paths: list[dict], vsep_m: float, lsep_m: float) -> dict:

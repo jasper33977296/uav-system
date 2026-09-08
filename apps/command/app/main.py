@@ -1245,9 +1245,26 @@ async def mission_upload(sysid: int, body: UploadIn):
     # 上傳時**用實際偵測到的機種**，不是航線宣告的：這一刻我們知道真相，
     # 而航線的宣告可能是錯的（QGC 在離線狀態下規劃就會寫成預設的 PX4）
     ap = router.autopilot_of(sysid) if router else None
+    # **速度相關的檢查要拿機上的值，不能用猜的**（issues/048 C5）：
+    # 航線裡的 `DO_CHANGE_SPEED` 只從被執行到的那一項之後才生效，在那之前
+    # 用的是機上的 `WP_SPD`——2026-09-07 使用者以為全程 0.3，起飛到第一個
+    # 航點卻是 8。讀不到就是**不判定**（`leg_profile` 會說「速度沒有檢查」），
+    # 不是當成安全。
+    wp_spd = wp_radius = None
+    try:
+        got = await _run(sysid, "param_get", mav.job_get_params,
+                         ["WP_SPD", "WP_RADIUS_M"],
+                         params={"names": ["WP_SPD", "WP_RADIUS_M"],
+                                 "why": "leg_profile"})
+        wp_spd = got["values"].get("WP_SPD")
+        wp_radius = got["values"].get("WP_RADIUS_M")
+    except Exception as e:                                    # noqa: BLE001
+        log.warning("讀不到 WP_SPD／WP_RADIUS_M（%s）——速度相關的檢查會標成"
+                    "「沒有檢查」，不會當成通過", e)
     report = plan_check.check_waypoints(
         wps, settings.geofence_radius_m, settings.geofence_alt_m,
         settings.geofence_margin, fence=mf, dem=terrain.shared(),
+        wp_spd=wp_spd, wp_radius=wp_radius,
         autopilot=ap if ap is not None else (meta["firmware_type"] if meta else None),
         home=json.loads(meta["home"]) if meta and isinstance(meta["home"], str)
         else (meta["home"] if meta else None))
@@ -1352,6 +1369,19 @@ async def mission_upload(sysid: int, body: UploadIn):
                 "how_to": ["先把返航高度（RTL_ALT_M）改到訊息說的值",
                            "或改用原本那份非地形跟隨的航線"]})
 
+    # **低空帶速擋上傳**（使用者裁定 2026-09-08）。與地形穿地共用
+    # `TERRAIN_ENFORCE`：兩者都是「這條航線本身會讓飛機撞到東西」，
+    # 而圍欄那個開關管的是完全不同的一件事（系統預設範圍對不對得上場地）。
+    low = [p for p in report["problems"] if "地面會擾動這架飛機" in p]
+    if low and settings.terrain_enforce:
+        await _audit(sysid, "mission_upload", {"mission_id": body.mission_id},
+                     "rejected_low_fast", "；".join(low))
+        raise HTTPException(409, {
+            "msg": "低空又要跑快，未上傳", "problems": low,
+            "how_to": ["把那一段抬到門檻以上",
+                       "或把速度降下來——**第一段用的是機上的 WP_SPD**，"
+                       "航線裡的 DO_CHANGE_SPEED 管不到它",
+                       "確定這個組合安全就把 TERRAIN_ENFORCE 設成 false"]})
     if not report["ok"] and settings.geofence_enforce:
         await _audit(sysid, "mission_upload", {"mission_id": body.mission_id},
                      "rejected_precheck", "；".join(report["problems"]))
