@@ -5,6 +5,8 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import { colorFor } from "@/components/droneLayer";
 import MissionThumb3D from "@/components/MissionThumb3D";
 import { errText, getJson } from "@/lib/fetchJson";
+import ConfirmModal from "@/components/ConfirmModal";
+import InfoTip from "@/components/InfoTip";
 import { type PlanPt, planPath } from "@/lib/geo";
 import { parseJsonb } from "@/lib/jsonb";
 import { API } from "@/lib/signal";
@@ -147,6 +149,31 @@ function parsePlan(text: string): ParsedPlan {
   };
 }
 
+/** 高度語意：MAV_FRAME 躺在每個航點上。**3＝離起飛點、10＝離地面**
+ * （地形跟隨）——同一個「4.6 m」在兩者是不同的地方，所以它必須出現在列上，
+ * 不能藏在展開裡（ui-spec §4.6）。
+ *
+ * 只看導航航點：起飛項與 DO_* 的 frame 是另一回事（takeoff 恆為 3、
+ * DO_CHANGE_SPEED 是 2），把它們算進去會讓每一份航線都變成「混用」。
+ * **認不得就說認不得**，不猜。 */
+function frameText(frames: number[] | undefined):
+  { text: string; ok: boolean; terrain: boolean } {
+  if (!frames) return { text: "高度語意載入中", ok: false, terrain: false };
+  if (!frames.length) return { text: "高度語意未知", ok: false, terrain: false };
+  if (frames.length > 1) {
+    return { text: `高度混用 frame ${frames.join("/")}`, ok: false, terrain: false };
+  }
+  if (frames[0] === 10) return { text: "高度＝離地面", ok: true, terrain: true };
+  if (frames[0] === 3) return { text: "高度＝離起飛點", ok: true, terrain: false };
+  return { text: `高度 frame ${frames[0]}`, ok: false, terrain: false };
+}
+
+const fmtT = (t: string) =>
+  new Date(t).toLocaleString("zh-TW", { month: "2-digit", day: "2-digit",
+    hour: "2-digit", minute: "2-digit", hour12: false });
+
+interface WpRow extends PlanPt { frame?: number | null }
+
 export default function Missions() {
   const router = useRouter();
   const [missions, setMissions] = useState<Mission[]>([]);
@@ -160,27 +187,29 @@ export default function Missions() {
   // `rejected_precheck`，理由會出現在任務控制面板上。這一頁拿掉的是
   // 「還沒要飛之前先讀一遍報告」那一層，不是安全網本身。
   const [menuId, setMenuId] = useState<string | null>(null);
-  const [deleting, setDeleting] = useState<string | null>(null);
-  const delTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const [toDelete, setToDelete] = useState<Mission | null>(null);
   const [thumbs, setThumbs] = useState<Record<string, PlanPt[]>>({});
+  const [frames, setFrames] = useState<Record<string, number[]>>({});
+  const [sort, setSort] = useState<"used" | "new" | "name">("used");
+  const [q, setQ] = useState("");
+  const [hot, setHot] = useState(false);       // 拖放中
   const fileRef = useRef<HTMLInputElement>(null);
 
-  // 縮圖資料：每條路線抓一次 waypoints（路線數少，逐條抓可接受）
+  // 縮圖與高度語意：每條路線抓一次 waypoints（路線數少，逐條抓可接受）
   useEffect(() => {
     for (const m of missions) {
       if (thumbs[m.id]) continue;
-      // 縮圖取不到＝該卡無縮圖（顯性缺口，不會假裝沒事），沿用靜默 catch
-      getJson<{ waypoints?: PlanPt[] }>(`${API}/api/missions/${m.id}/waypoints`)
+      // 縮圖取不到＝該列無縮圖（顯性缺口，不會假裝沒事），沿用靜默 catch
+      getJson<{ waypoints?: WpRow[] }>(`${API}/api/missions/${m.id}/waypoints`)
         .then((d) => {
-          // **縮圖與三個地圖頁走同一支 planPath**（2026-09-07）。這裡原本
-          // 自己寫過一份補點邏輯，而它跟 geo.planPath 在兩件事上不一樣：
-          //   1. 補進來的 home 點**沒有帶高度**，縮圖的 `alt ?? 10` 就把它
-          //      畫在 10 m 的空中——一份全程 1 m 的低空航線，起點與終點
-          //      憑空飛起來（使用者回報：「為啥起始高度都超高的」）。
-          //   2. 只要有 land 就往尾巴接一個 home 點，不管那個 land 自己
-          //      有沒有座標——降落點與起飛點不同的航線因此被連成一圈。
-          // 同一份任務在四個畫面上必須是同一個形狀，所以不留第二份實作。
-          setThumbs((t) => ({ ...t, [m.id]: planPath(d.waypoints ?? [], m.home) }));
+          const wps = d.waypoints ?? [];
+          // **縮圖與三個地圖頁走同一支 planPath**（2026-09-07）：起飛爬升段、
+          // 降落段、缺值高度都在那裡補齊，這裡不留第二份實作——同一份任務
+          // 在四個畫面上必須是同一個形狀
+          setThumbs((t) => ({ ...t, [m.id]: planPath(wps, m.home) }));
+          setFrames((f) => ({ ...f, [m.id]: [...new Set(
+            wps.filter((w) => w.action === "waypoint" && w.frame != null)
+              .map((w) => w.frame as number))].sort((a, b) => a - b) }));
         })
         .catch(() => {});
     }
@@ -201,6 +230,14 @@ export default function Missions() {
   }, []);
   useEffect(reload, [reload]);
 
+  // 選單開著時點別處就收起來
+  useEffect(() => {
+    if (!menuId) return;
+    const off = () => setMenuId(null);
+    window.addEventListener("click", off);
+    return () => window.removeEventListener("click", off);
+  }, [menuId]);
+
   async function call(path: string, init?: RequestInit) {
     setErr(null); setBusy(true);
     try {
@@ -214,7 +251,6 @@ export default function Missions() {
       setBusy(false);
     }
   }
-
 
   async function uploadPlan(f: File) {
     setErr(null);
@@ -252,189 +288,255 @@ export default function Missions() {
     }
   }
 
+  const usesOf = (id: string) => sessions
+    .filter((s) => s.mission_id === id)
+    .sort((a, b) => (a.started_at < b.started_at ? 1 : -1));
+
+  // 排序與搜尋**只在多到會找不到的時候才出現**：兩三份航線時它們只是雜訊
+  const many = missions.length > 6;
+  const shown = (() => {
+    const needle = q.trim().toLowerCase();
+    const list = missions.filter((m) => !needle || m.name.toLowerCase().includes(needle));
+    const last = (m: Mission) => usesOf(m.id)[0]?.started_at ?? "";
+    if (!many) return list;
+    if (sort === "new") return [...list].sort((a, b) => (a.created_at < b.created_at ? 1 : -1));
+    if (sort === "name") return [...list].sort((a, b) => a.name.localeCompare(b.name));
+    return [...list].sort((a, b) =>
+      (usesOf(b.id).length - usesOf(a.id).length) || (last(b) < last(a) ? -1 : 1));
+  })();
+
   return (
-    <div className="page-pad">
+    <div className="page-pad mission-page"
+      onDragOver={(e) => { e.preventDefault(); setHot(true); }}
+      onDragLeave={() => setHot(false)}
+      onDrop={(e) => {
+        e.preventDefault(); setHot(false);
+        const f = e.dataTransfer.files?.[0];
+        if (f) uploadPlan(f);
+      }}>
+      <div className="drone-head">
+        <span className="name">路徑{missions.length ? `（${missions.length}）` : ""}</span>
+        <button className="btn-plain btn-sm" disabled={busy}
+          onClick={() => fileRef.current?.click()}>＋ 上傳 .plan</button>
+        <span className="spacer" />
+        <InfoTip tip={"這裡是存下來的 QGC 航線。一列一份：縮圖是它的立體形狀"
+          + "（拖曳可以轉動視角、往下拖壓低視角看高低差），旁邊是航點數、"
+          + "預計時間、目標機種與高度語意。「顯示中」的那份會畫在即時頁的地圖上。"
+          + "點一列展開誰飛過它。預計時間是估計值——不含風、不含加減速、"
+          + "不含起飛前的解鎖與檢查。"} />
+      </div>
+
       {err && <div className="form-err">{err}</div>}
 
-      {/* 縮圖卡格（§4 v3）：點卡＝展開使用紀錄；「顯示於即時頁」改由
-          任務開始自動 activate，手動切換降級收 ⋯ */}
-      <div className="mission-grid">
-        {missions.map((m) => {
-          const count = sessions.filter((s) => s.mission_id === m.id).length;
-          return (
-            <div key={m.id}
-              className={`mcard ${m.is_active ? "on" : ""}`
-                + ` ${openId === m.id ? "expanded" : ""}`}
-              title="點擊展開使用紀錄"
-              onClick={() => setOpenId(openId === m.id ? null : m.id)}>
-              <MissionThumb3D wps={thumbs[m.id]}
-                onTap={() => setOpenId(openId === m.id ? null : m.id)} />
-              {/* **膠囊自己一行**：卡片只有 ~195px 寬，膠囊跟名字擠同一列時
-                  名字被壓到 68px（實測：完整 159px），使用者看到的是半截檔名
-                  ——而檔名正是他用來認這份航線的東西。膠囊縮不得（縮了就讀不
-                  出是給哪家飛控的），所以讓出整列的只能是版面，不是內容。 */}
-              <div className="mcard-foot">
-                <span className="mcard-name">{m.name}</span>
-                <span className="spacer" />
-                <button className="btn-plain btn-sm" title="更多"
-                  onClick={(e) => {
-                    e.stopPropagation();
-                    setMenuId(menuId === m.id ? null : m.id);
-                    setDeleting(null);
-                  }}>⋯</button>
+      {many && (
+        <div className="mtools">
+          <span className="hint-line">排序</span>
+          {([["used", "最常用"], ["new", "最新"], ["name", "名稱"]] as const)
+            .map(([k, l]) => (
+              <button key={k} className={`pill${sort === k ? " on" : ""}`}
+                onClick={() => setSort(k)}>{l}</button>
+            ))}
+          <input className="msearch" placeholder="搜尋名稱" value={q}
+            onChange={(e) => setQ(e.target.value)} />
+        </div>
+      )}
+
+      {missions.length === 0 && !err && (
+        <div className="card"><div className="empty">
+          還沒有存下任何航線——用上面的「＋ 上傳 .plan」加一份。
+        </div></div>
+      )}
+      {missions.length > 0 && shown.length === 0 && (
+        <div className="card"><div className="empty">沒有符合的名稱。</div></div>
+      )}
+
+      {shown.map((m) => {
+        const uses = usesOf(m.id);
+        const fr = frameText(frames[m.id]);
+        const tg = planTarget(m);
+        const open = openId === m.id;
+        const toggle = () => { setOpenId(open ? null : m.id); setMenuId(null); };
+        return (
+          <div className="card mitem" key={m.id}>
+            <div className="mrow" role="button" tabIndex={0} onClick={toggle}
+              onKeyDown={(e) => {
+                if (e.key === "Enter" || e.key === " ") { e.preventDefault(); toggle(); }
+              }}>
+              <div className="mthumb-box">
+                <MissionThumb3D wps={thumbs[m.id]} onTap={toggle} />
               </div>
-              <div className="mcard-chips">
-                {m.is_active && <span className="chip on-chip">顯示中</span>}
-                {/* 預計時間：**估計值，不是承諾**——tooltip 攤開估了什麼、
-                    沒估什麼（不含風、不含加減速）。算不出來時說「時間未知」
-                    而不是顯示 0 分，後者會被讀成「這條航線很短」 */}
-                <span className="chip"
-                  style={m.eta_s == null ? { opacity: 0.5 } : undefined}
-                  title={m.eta_s == null
-                    ? (m.eta_unknown ?? []).join("；") || "算不出預計時間"
-                    : "預計飛行時間（估計值）：\n"
-                      + (m.eta_assumptions ?? []).map((a) => "· " + a).join("\n")}>
-                  {etaText(m)}
-                </span>
-                  {/* 目標機種：選檔當下就看得到這份航線是給誰寫的。
-                      沒宣告時**照樣顯示一顆弱化的膠囊**說「未宣告」——留白會被
-                      讀成「還沒載入」或「這版沒這功能」（issues/037 二修） */}
-                  {(() => {
-                    const t = planTarget(m);
-                    return (
-                      <span className="chip"
-                        style={t.declared ? undefined : { opacity: 0.5 }}
-                        title={t.declared
-                          // **把原始 enum 一起講出來**：2026-08-26 使用者回報
-                          // 「傳上來都變 PX4」，而資料庫裡是 3（ArduPilot）。
-                          // 只顯示翻譯後的名字時，要查「畫面說的」與「檔案寫的」
-                          // 是不是同一件事，得繞到資料庫——那不該是使用者的工作
-                          ? `這份航線宣告的目標機種（來自 .plan：firmwareType=${m.firmware_type ?? "—"}、vehicleType=${m.vehicle_type ?? "—"}）`
-                          : "這份 .plan 沒有寫 firmwareType／vehicleType——"
-                            + "系統無法替你確認它適不適合這台機，請自己確認"}>
-                        {t.text}
-                      </span>
-                    );
-                  })()}
+              <div className="mmain">
+                <div className="mtitle">
+                  {/* **名字完整顯示**：檔名正是使用者用來認這份航線的東西，
+                      舊版卡片寬 195px 只看得到半截（ui-spec §4.6） */}
+                  <span className="mname">{m.name}</span>
+                  {m.is_active && (
+                    // 「顯示中」是狀態不是按鈕：**accent 只准互動 chrome**，
+                    // 所以用中性 chip ＋ 一個點，不把整張卡圈成珊瑚色
+                    <span className="chip live-chip">
+                      <span className="dot" style={{ background: "var(--status-ok)" }} />
+                      顯示中
+                    </span>
+                  )}
+                  {fr.terrain && <span className="chip warn-chip">地形跟隨</span>}
+                </div>
+                <div className="mmeta">
+                  <span>{m.waypoint_count} 航點</span>
+                  <span className="msep">·</span>
+                  {/* 預計時間：**估計值，不是承諾**——tooltip 攤開估了什麼、
+                      沒估什麼。算不出來時說「時間未知」而不是顯示 0 分 */}
+                  <span style={m.eta_s == null ? { opacity: 0.6 } : undefined}
+                    title={m.eta_s == null
+                      ? (m.eta_unknown ?? []).join("；") || "算不出預計時間"
+                      : "預計飛行時間（估計值）：\n"
+                        + (m.eta_assumptions ?? []).map((a) => "· " + a).join("\n")}>
+                    {etaText(m)}
+                  </span>
+                  <span className="msep">·</span>
+                  <span style={tg.declared ? undefined : { opacity: 0.6 }}
+                    title={tg.declared
+                      // **把原始 enum 一起講出來**：2026-08-26 使用者回報
+                      // 「傳上來都變 PX4」，而資料庫裡是 3（ArduPilot）
+                      ? `這份航線宣告的目標機種（來自 .plan：firmwareType=${m.firmware_type ?? "—"}、vehicleType=${m.vehicle_type ?? "—"}）`
+                      : "這份 .plan 沒有寫 firmwareType／vehicleType——"
+                        + "系統無法替你確認它適不適合這台機，請自己確認"}>
+                    {tg.text}
+                  </span>
+                  <span className="msep">·</span>
+                  <span className={fr.terrain ? "mframe-terr" : undefined}
+                    style={fr.ok ? undefined : { opacity: 0.6 }}
+                    title={fr.terrain
+                      ? "航點高度是「離地面多少」（MAV_FRAME 10），由飛控用自己的地形圖庫跟著地面飛"
+                      : "航點高度是「離起飛點多少」（MAV_FRAME 3）"}>
+                    {fr.text}
+                  </span>
+                </div>
               </div>
-              {menuId === m.id && (
-                <div className="mcard-menu" onClick={(e) => e.stopPropagation()}>
-                  {/* 手動顯示切換（降級保留——常規路徑是任務開始自動浮現） */}
-                  <button className="btn-plain btn-sm" disabled={busy}
-                    onClick={() => {
-                      setMenuId(null);
-                      call(`/api/missions/${m.id}/activate?active=${!m.is_active}`,
-                           { method: "POST" });
-                    }}>
-                    {m.is_active ? "從即時頁隱藏" : "顯示於即時頁"}
-                  </button>
-                  {/* 地形跟隨（issues/047 §1-A）：**存成新的一份**，不就地
-                      改寫。改寫之後高度的意思從「離起飛點」變成「離地面」
-                      ——那是另一份航線，該讓人先看到縮圖再決定要不要飛 */}
-                  <button className="btn-plain btn-sm" disabled={busy}
-                    title={"把每個航點的高度改寫成「離地面多少」（frame 10），"
+              <div className="muse">
+                {uses.length ? (<>
+                  <div>飛過 {uses.length} 次</div>
+                  <div className="hint-line">最近 {fmtT(uses[0].started_at)}</div>
+                </>) : <div className="hint-line">還沒飛過</div>}
+              </div>
+              <span className="caret">{open ? "▾" : "▸"}</span>
+              <button className="btn-plain btn-sm" title="更多"
+                onClick={(e) => {
+                  e.stopPropagation();
+                  setMenuId(menuId === m.id ? null : m.id);
+                }}>⋯</button>
+            </div>
+
+            {menuId === m.id && (
+              <div className="mcard-menu" onClick={(e) => e.stopPropagation()}>
+                {/* 手動顯示切換（降級保留——常規路徑是任務開始自動浮現） */}
+                <button className="btn-plain btn-sm" disabled={busy}
+                  onClick={() => {
+                    setMenuId(null);
+                    call(`/api/missions/${m.id}/activate?active=${!m.is_active}`,
+                         { method: "POST" });
+                  }}>
+                  {m.is_active ? "從即時頁隱藏" : "顯示於即時頁"}
+                </button>
+                {/* 地形跟隨（issues/047 §1-A）：**存成新的一份**，不就地改寫。
+                    改寫之後高度的意思從「離起飛點」變成「離地面」——那是另一
+                    份航線，該讓人先看到縮圖再決定要不要飛 */}
+                <button className="btn-plain btn-sm"
+                  disabled={busy || fr.terrain}
+                  title={fr.terrain ? "這份已經是地形跟隨了"
+                    : "把每個航點的高度改寫成「離地面多少」（frame 10），"
                       + "由飛控用自己的地形圖庫跟著地面飛。\n"
                       + "起飛、降落、返航不改。查不到地形高程就整份不改。\n"
                       + "會另存一份，原本這份不動。"}
-                    onClick={() => {
-                      setMenuId(null);
-                      call(`/api/missions/${m.id}/terrain-frame`, { method: "POST" });
-                    }}>
-                    改成地形跟隨
-                  </button>
-                  {/* 刪除兩段式：卡上變紅「確定刪除？」（ui-spec §4.3） */}
-                  <button className="btn-danger btn-sm" disabled={busy}
-                    onClick={() => {
-                      if (deleting === m.id) {
-                        setDeleting(null); setMenuId(null);
-                        call(`/api/missions/${m.id}`, { method: "DELETE" });
-                      } else {
-                        setDeleting(m.id);
-                        if (delTimer.current) clearTimeout(delTimer.current);
-                        delTimer.current = setTimeout(() => setDeleting(null), 3500);
-                      }
-                    }}>
-                    {deleting === m.id ? "確定刪除？" : "刪除"}
-                  </button>
+                  onClick={() => {
+                    setMenuId(null);
+                    call(`/api/missions/${m.id}/terrain-frame`, { method: "POST" });
+                  }}>
+                  改成地形跟隨
+                </button>
+                <button className="btn-danger btn-sm" disabled={busy}
+                  onClick={() => { setMenuId(null); setToDelete(m); }}>刪除</button>
+              </div>
+            )}
+
+            {open && (
+              <div className="mwork">
+                <div className="drone-head">
+                  <span className="name">使用紀錄</span>
+                  {/* 哪幾台無人機用過（識別色點＋名） */}
+                  {[...new Map(uses.map((s) => [s.drone_id, s.drone_name])).entries()]
+                    .map(([did, name]) => (
+                      <span className="chip" key={did}>
+                        <span className="dot" style={{ background: colorFor(did) }} />
+                        {name}
+                      </span>
+                    ))}
+                  <span className="spacer" />
+                  {uses.length > 1 && (
+                    <button className="btn-plain btn-sm"
+                      onClick={() => router.push(`/replay-mission/${m.id}`)}>
+                      比對回放（{uses.length} 條疊圖）
+                    </button>
+                  )}
                 </div>
-              )}
-            </div>
-          );
-        })}
-        <button className="mcard mcard-add" disabled={busy}
-          onClick={() => fileRef.current?.click()}>
-          <span className="mcard-plus">＋</span>上傳 .plan
-        </button>
-        <input ref={fileRef} type="file" accept=".plan,application/json" hidden
-          onChange={(e) => { const f = e.target.files?.[0]; if (f) uploadPlan(f); e.target.value = ""; }} />
-      </div>
+                {uses.length === 0 ? (
+                  // **「沒有人飛過」是一句話，不是一張空表**：畫五個欄位標題
+                  // 再說沒有資料，讀的人要先掃過一遍表頭才知道那裡什麼都沒有
+                  <div className="empty">
+                    還沒有航次飛過這份航線。設為「顯示於即時頁」後起飛就會自動關聯。
+                  </div>
+                ) : (
+                  <table className="table">
+                    <thead>
+                      <tr><th>無人機</th><th>開始</th><th className="num">樣本數</th>
+                          <th className="num">平均 SINR</th><th className="num">最低 SINR</th></tr>
+                    </thead>
+                    <tbody>
+                      {uses.map((s) => (
+                        <tr key={s.id} className="row-link" title="回放這條航線"
+                            onClick={() => router.push(`/replay/${s.id}`)}>
+                          <td>
+                            <span className="dot" style={{ background: colorFor(s.drone_id),
+                              display: "inline-block", marginRight: 6 }} />
+                            {s.drone_name}
+                          </td>
+                          <td>{fmtT(s.started_at)}</td>
+                          <td className="num">{s.summary?.samples_total ?? "—"}</td>
+                          <td className="num">{s.summary?.avg_sinr?.toFixed(1) ?? "—"} dB</td>
+                          <td className="num">{s.summary?.min_sinr?.toFixed(1) ?? "—"} dB</td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                )}
+              </div>
+            )}
+          </div>
+        );
+      })}
+
+      <div className={`mdrop${hot ? " hot" : ""}`}>或把 .plan 檔拖到這裡</div>
+      <input ref={fileRef} type="file" accept=".plan,application/json" hidden
+        onChange={(e) => {
+          const f = e.target.files?.[0]; if (f) uploadPlan(f); e.target.value = "";
+        }} />
       {/* 「從機上讀回」按鈕移除（2026-09-07 使用者指示）。
           `POST /api/missions/from-vehicle` 還在，rig 與 curl 叫得到——
           拿掉的是這一頁的入口 */}
 
-      {missions.length === 0 && (
-        <div className="card">
-          <div className="empty">尚無儲存的路線——用「＋」上傳 .plan 檔</div>
-        </div>
+      {toDelete && (
+        <ConfirmModal title={`刪除「${toDelete.name}」？`} confirmLabel="刪除航線"
+          onConfirm={() => {
+            const id = toDelete.id;
+            setToDelete(null);
+            call(`/api/missions/${id}`, { method: "DELETE" });
+          }}
+          onClose={() => setToDelete(null)}>
+          <div>這份航線會從清單消失。</div>
+          <div>{usesOf(toDelete.id).length
+            ? `已經飛過的 ${usesOf(toDelete.id).length} 筆航次紀錄留著。`
+            : "它還沒有任何航次紀錄。"}</div>
+        </ConfirmModal>
       )}
-
-      {openId && <div className="card">
-        {(() => {
-          const mine = sessions.filter((s) => s.mission_id === openId);
-          const m = missions.find((x) => x.id === openId);
-          return (
-            <div style={{ marginTop: 12 }}>
-              {/* 預檢報告在**頁面最上方**，不在這裡——同一份航線的同一句話
-                  出現兩遍，會讓人開始略過它們，而那是唯一會說「這份不能飛」
-                  的地方（2026-08-26 使用者回報重複） */}
-              <div className="drone-head">
-                <span className="meta">「{m?.name}」被使用 {mine.length} 次</span>
-                {/* 哪幾台無人機用過（識別色點＋名） */}
-                {[...new Map(mine.map((s) => [s.drone_id, s.drone_name])).entries()]
-                  .map(([did, name]) => (
-                    <span className="chip" key={did}>
-                      <span className="dot" style={{ background: colorFor(did) }} />
-                      {name}
-                    </span>
-                  ))}
-                <span className="spacer" />
-                {mine.length > 1 && (
-                  <button className="btn-plain btn-sm"
-                    onClick={() => router.push(`/replay-mission/${openId}`)}>
-                    比對回放（{mine.length} 條疊圖）
-                  </button>
-                )}
-              </div>
-              <table className="table" style={{ marginTop: 6 }}>
-                <thead>
-                  <tr><th>無人機</th><th>開始時間</th><th className="num">樣本數</th>
-                      <th className="num">平均 SINR</th><th className="num">最低 SINR</th></tr>
-                </thead>
-                <tbody>
-                  {mine.length === 0 && (
-                    <tr><td colSpan={5} className="empty">
-                      尚無航線飛過此路徑——設為「顯示於即時頁」後起飛即自動關聯</td></tr>
-                  )}
-                  {mine.map((s) => (
-                    <tr key={s.id} className="row-link" title="回放這條航線"
-                        onClick={() => router.push(`/replay/${s.id}`)}>
-                      <td>
-                        <span className="dot" style={{ background: colorFor(s.drone_id),
-                          display: "inline-block", marginRight: 6 }} />
-                        {s.drone_name}
-                      </td>
-                      <td>{new Date(s.started_at).toLocaleString("zh-TW", { hour12: false })}</td>
-                      <td className="num">{s.summary?.samples_total ?? "—"}</td>
-                      <td className="num">{s.summary?.avg_sinr?.toFixed(1) ?? "—"} dB</td>
-                      <td className="num">{s.summary?.min_sinr?.toFixed(1) ?? "—"} dB</td>
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
-            </div>
-          );
-        })()}
-      </div>}
     </div>
   );
 }

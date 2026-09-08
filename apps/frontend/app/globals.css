@@ -209,7 +209,10 @@ a:focus-visible, button:focus-visible, input:focus-visible, select:focus-visible
   font-size: 13px; border-radius: 6px; padding: 7px 14px; cursor: pointer;
   background: var(--surface); color: var(--ink); border: 1px solid var(--hairline);
 }
-.form-row button:disabled, .btn-danger:disabled { opacity: 0.4; cursor: not-allowed; }
+/* `.btn-plain:disabled` 原本沒有規則——停用的按鈕跟能按的長得一模一樣，
+   點下去沒反應。全站都用得到（小隊的「派任務」、路徑頁的「改成地形跟隨」） */
+.form-row button:disabled, .btn-danger:disabled, .btn-plain:disabled
+  { opacity: 0.4; cursor: not-allowed; }
 .btn-danger { color: var(--status-danger); border-color: var(--status-danger-border); padding: 4px 12px; }
 .btn-danger:hover:not(:disabled) { background: var(--status-danger-bg); }
 .form-err { margin-top: 8px; font-size: 12px; color: var(--status-danger); }
@@ -1049,7 +1052,57 @@ a:focus-visible, button:focus-visible, input:focus-visible, select:focus-visible
   width: 100%; height: 100%; object-fit: contain;
 }
 
-/* 路徑管理縮圖卡（ui-spec §4）：縮圖即說明 */
+/* 路徑管理清單列（ui-spec §4.6，2026-09-08）：一列一份航線。
+   舊的卡格把名字截成半截、把「有沒有人飛過」藏進展開，而高度語意
+   （離起飛點／離地面）根本沒有位置——那是飛安資訊，不是細節。 */
+.mission-page { display: flex; flex-direction: column; gap: 9px; }
+.mitem { position: relative; padding: 0; }
+.mrow {
+  display: flex; align-items: center; gap: 12px; padding: 10px 12px;
+  width: 100%; text-align: left; border-radius: 10px; cursor: pointer;
+}
+.mrow:hover { background: var(--surface-2); }
+/* 正方形：縮圖的 viewBox 是 100×100，塞進長方形只會在兩側留白 */
+.mthumb-box {
+  width: 76px; height: 76px; flex: none; border-radius: 8px;
+  background: var(--page); border: 1px solid var(--hairline); overflow: hidden;
+}
+.mthumb-box .mthumb { width: 100%; height: 100%; aspect-ratio: auto; }
+.mmain { display: flex; flex-direction: column; gap: 3px; min-width: 0; flex: 1; }
+.mtitle { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+/* **不截斷**：檔名是使用者用來認這份航線的東西 */
+.mname { font-size: 14px; font-weight: 700; word-break: break-all; line-height: 1.35; }
+.mmeta {
+  display: flex; flex-wrap: wrap; gap: 2px 8px; align-items: center;
+  font-size: 11.5px; color: var(--muted); font-variant-numeric: tabular-nums;
+}
+.msep { color: var(--hairline); }
+.mframe-terr { color: var(--status-warn); }
+.muse {
+  text-align: right; white-space: nowrap; font-size: 12px; color: var(--ink-2);
+  font-variant-numeric: tabular-nums;
+}
+.live-chip { border-color: var(--border); color: var(--ink); }
+.warn-chip {
+  color: var(--status-warn); border-color: rgba(250, 178, 25, 0.32);
+  background: rgba(250, 178, 25, 0.1);
+}
+.mwork {
+  border-top: 1px solid var(--hairline); padding: 10px 12px 12px;
+  display: flex; flex-direction: column; gap: 6px;
+}
+.mtools { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; }
+.msearch {
+  background: var(--page); border: 1px solid var(--hairline); border-radius: 8px;
+  padding: 3px 9px; font-size: 12px; color: var(--ink); width: 190px;
+}
+.mdrop {
+  border: 1px dashed var(--hairline); border-radius: 10px; padding: 7px;
+  text-align: center; color: var(--muted); font-size: 11.5px;
+}
+.mdrop.hot { border-color: var(--accent); color: var(--ink-2); background: var(--accent-bg); }
+
+/* 路徑管理縮圖卡（ui-spec §4 v2，已由上面的清單列取代；縮圖元件仍共用） */
 .mission-grid {
   display: grid; grid-template-columns: repeat(auto-fill, minmax(180px, 1fr));
   gap: 14px;
@@ -1085,7 +1138,7 @@ a:focus-visible, button:focus-visible, input:focus-visible, select:focus-visible
 }
 .mcard-plus { font-size: 26px; line-height: 1; }
 .mcard-menu {
-  position: absolute; right: 8px; bottom: 42px; z-index: 5;
+  position: absolute; right: 8px; top: 46px; z-index: 5;
   display: flex; flex-direction: column; gap: 6px; padding: 8px;
   background: var(--surface); border: 1px solid var(--hairline); border-radius: 8px;
   box-shadow: 0 4px 16px rgba(0, 0, 0, 0.35);

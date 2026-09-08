@@ -1901,8 +1901,14 @@ async def active_mission():
 
 @router.get("/missions/{mission_id}/waypoints")
 async def mission_waypoints(mission_id: str):
+    # `frame` 一起回（MAV_FRAME，躺在 params 裡）：**高度的意思寫在它上面**
+    # ——3＝離起飛點、10＝離地面（地形跟隨）。同一個「4.6 m」在兩者是不同的
+    # 地方，而路徑管理頁要在列上說出這件事（ui-spec §4.6）。
     wps = await db.pool.fetch(
-        "SELECT seq, lat, lon, alt, action FROM waypoints WHERE mission_id = $1 ORDER BY seq",
+        "SELECT seq, lat, lon, alt, action, "
+        "       (params->>'frame')::int   AS frame, "
+        "       (params->>'command')::int AS command "
+        "  FROM waypoints WHERE mission_id = $1 ORDER BY seq",
         mission_id)
     if not wps:
         raise HTTPException(404, "無此路徑或無航點")
