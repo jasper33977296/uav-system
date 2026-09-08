@@ -275,7 +275,10 @@ QGC／MAVLink／飛控圈子把機上那份航點清單叫 **mission**。我們�
   └─ 問：「任務『X』要結束嗎？」 → 結束／還要再飛
 ```
 
-**「進行中」＝`ended_at IS NULL`，而且同時只能有一個。**
+**「進行中」＝`ended_at IS NULL`。**
+> ⚠ **「同時只能有一個」這條已於同日被 §4.6 取代**——使用者的目標是
+> 多組同時跑多個任務。下面這段留著是為了說明它當初回答的是哪個問題。
+> 原文：*而且同時只能有一個*。
 用 partial unique index 擋住：
 
 ```sql
@@ -318,6 +321,79 @@ CREATE UNIQUE INDEX IF NOT EXISTS idx_missions_one_active
 「任務叫 A，但這一趟寫著原屬 B」。這是與 §4 原本設計不同的一點，理由：
 起飛時打錯字是常態，而那個快照的用途是「任務被刪之後還說得出當時叫什麼」，
 不是「記住每一次改名前的舊名字」。
+
+## 4.6 多組同時跑多個任務（使用者目標 2026-09-08）——**§4.5 的限制要拿掉**
+
+使用者原話：**「我的目標是可多個無人機群組同時執行多個任務」**。
+
+§4.5 加的那條「同時只能有一個進行中的任務」**直接擋住這件事**，必須拿掉。
+但它當初是為了回答一個真問題：**起飛的那一刻，這一趟屬於哪個任務？**
+唯一時那句話才確定。所以不能只是把限制刪掉，要換一個同樣確定的答案。
+
+### 換的答案：任務有參與的機，起飛時按機查
+
+```
+起飛（建立架次）
+  └─ 找「這台機參與中、而且進行中」的任務
+       恰好一個 → 歸給它
+       零個     → 問（即時頁跳出來，同 §4.5）
+       兩個以上 → **不可能**（見下面的限制）
+```
+
+新的限制比舊的窄得多：**一台機同時只能參與一個進行中的任務**。
+
+```sql
+CREATE TABLE IF NOT EXISTS mission_drones (
+  mission_id UUID NOT NULL REFERENCES missions(id) ON DELETE CASCADE,
+  drone_id   UUID NOT NULL REFERENCES drones(id)   ON DELETE CASCADE,
+  PRIMARY KEY (mission_id, drone_id)
+);
+-- 一台機同時只能在一個「進行中」的任務裡——這是自動歸類唯一的前提
+CREATE UNIQUE INDEX IF NOT EXISTS idx_mission_drones_one_active
+  ON mission_drones (drone_id)
+  WHERE mission_id IN (SELECT id FROM missions WHERE ended_at IS NULL);
+```
+
+> ⚠ **上面那個 index 的 WHERE 子句用了子查詢，PostgreSQL 不接受。**
+> partial index 的條件必須是不可變的、只吃本表的欄位。所以這條限制要改成
+> **觸發器**，或在 `missions` 上加一個冗餘的 `active BOOLEAN` 欄位並用
+> `WHERE active` 做 partial index，再用觸發器維持 `active = (ended_at IS NULL)`。
+> **落地時要挑一個並在文件裡寫明**——兩種都會多一個要維護的一致性，
+> 而「靠應用層自己記得檢查」是三者中最差的（那條規則會在某次改動被繞過）。
+
+**參與名單怎麼填**：起飛時問名字的那個 modal 順便問「這次誰要飛」，預設帶
+**當下連線中的機**；小隊（`squads`）是選機的捷徑，勾一個小隊等於勾它的成員
+——與 `squads` 的定位一致（它是名單，不是任務設定）。
+
+### 這與 `mission_groups`、`squads` 的關係（三者不重疊）
+
+| | 是什麼 | 生命週期 |
+|---|---|---|
+| `squads` | **常設編組**：哪幾台常常一起飛 | 跨任務、跨飛行 |
+| `missions` | **要達成的那件事** | 一段實驗；可以有多趟、多份路徑、多台機 |
+| `mission_groups` | **一次群飛的執行實例**（同時起飛、分層、材料化的那一批） | 一次飛行 |
+
+一個任務底下可以有好幾次群飛（`mission_groups`），也可以有單機的架次。
+**`mission_groups` 應該多一個 `mission_id`** 指向任務——那才是它現在缺的
+上層歸屬（它今天只有 `squad_id` 與 `base_plan_id`）。
+
+### 要改的東西
+
+| 現在 | 改成 |
+|---|---|
+| `idx_missions_one_active`（全域只能一個） | **刪掉** |
+| `create_session` 取 `missions WHERE ended_at IS NULL` | 取「這台機參與中且進行中」的那一個 |
+| `GET /api/missions/active` 回單一 | 回**清單**；另加 `?drone_id=` 回那台機的那一個 |
+| 即時頁起飛 modal | 名字 ＋ **參與的機**（可勾小隊） |
+| 落地 modal | 問的是**這台機所屬的那個任務**要不要結束，不是「唯一那個」 |
+| 資訊頁建立時一律 `ended: true` | 不再需要——多個進行中本來就合法 |
+
+### 驗收
+
+1. 兩個任務同時進行，各自有不同的機；兩台機同時起飛 → 各自歸到自己的任務。
+2. 把一台機加進第二個進行中的任務 → **擋下來**，訊息說得出它已經在哪一個裡。
+3. 一台沒有參與任何進行中任務的機起飛 → 照樣問（不是靜靜不歸）。
+4. 結束其中一個任務 → 另一個不受影響，那幾台機可以再加入新的任務。
 
 ## 5. 不做的事
 
