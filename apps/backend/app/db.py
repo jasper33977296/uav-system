@@ -113,11 +113,71 @@ async def migrate() -> None:
     # 分得出（有 id），**人喊出來分不出**——與 squads 同一條理由
     await pool.execute("CREATE UNIQUE INDEX IF NOT EXISTS idx_missions_name "
                        "ON missions (lower(name))")
-    # **同時只能有一個「進行中」的任務**（§4.5）。起飛時「自動歸到進行中的
-    # 那個」只有在那個唯一時才是一句確定的話；兩個同時進行的話，自動歸類就得
-    # 猜——而猜錯的歸類比沒有歸類更難發現。
-    await pool.execute("CREATE UNIQUE INDEX IF NOT EXISTS idx_missions_one_active "
-                       "ON missions ((ended_at IS NULL)) WHERE ended_at IS NULL")
+    # §4.5 曾經限制「同時只能有一個進行中的任務」，**§4.6 拿掉了**——使用者的
+    # 目標是多組同時跑多個任務。改用「一台機同時只能執行一個任務」，那條窄得多
+    await pool.execute("DROP INDEX IF EXISTS idx_missions_one_active")
+    # 綁定：小隊（活的連結）與單台，兩種都可以（§4.6）
+    await pool.execute("ALTER TABLE missions ADD COLUMN IF NOT EXISTS squad_id UUID")
+    await pool.execute("""
+        DO $$ BEGIN
+          ALTER TABLE missions ADD CONSTRAINT missions_squad_id_fkey
+            FOREIGN KEY (squad_id) REFERENCES squads(id) ON DELETE SET NULL;
+        EXCEPTION WHEN duplicate_object THEN NULL; END $$""")
+    await pool.execute("""
+        CREATE TABLE IF NOT EXISTS mission_drones (
+          mission_id UUID NOT NULL REFERENCES missions(id) ON DELETE CASCADE,
+          drone_id   UUID NOT NULL REFERENCES drones(id)   ON DELETE CASCADE,
+          PRIMARY KEY (mission_id, drone_id)
+        )""")
+    # ── 不變式：一台機不得同時在兩個「進行中」任務的有效名單裡（§4.6）──
+    #
+    # **partial unique index 做不到**：它的 WHERE 要問 missions.ended_at，而
+    # partial index 的條件必須不可變、只吃本表欄位——PostgreSQL 直接拒絕子查詢。
+    # 所以用觸發器，而且要掛**三個**寫入點。第三個最容易漏：把一台已經在任務 B
+    # 的機加進小隊 S，而 S 綁在任務 A——沒有人碰 missions 或 mission_drones，
+    # 不變式卻被打破了。
+    #
+    # **不靠應用層自己記得檢查**：那條規則會在某次改動被繞過，而它是起飛時
+    # 自動歸類唯一的前提。約束要住在資料庫裡。
+    # 檢查方式刻意寫成「**看整體**」而不是「看這一列」：任何一次寫入之後，
+    # 只要有任何一台機落在兩個進行中任務的有效名單裡就擋。三個觸發點共用同一
+    # 段邏輯，不必各自推導「這次寫入可能造成什麼」——那種推導漏一種情況就破功。
+    # 進行中的任務只有個位數，全掃的成本可以忽略。
+    await pool.execute("""
+        CREATE OR REPLACE FUNCTION mission_drone_guard() RETURNS trigger AS $fn$
+        DECLARE c RECORD;
+        BEGIN
+          WITH eff AS (
+            SELECT m.id AS mission_id, m.name, x.drone_id
+              FROM missions m
+              JOIN LATERAL (
+                SELECT md.drone_id FROM mission_drones md WHERE md.mission_id = m.id
+                UNION
+                SELECT sm.drone_id FROM squad_members sm WHERE sm.squad_id = m.squad_id
+              ) x ON true
+             WHERE m.ended_at IS NULL)
+          SELECT d.name AS drone_name,
+                 string_agg(eff.name, '」與「' ORDER BY eff.name) AS names
+            INTO c
+            FROM eff JOIN drones d ON d.id = eff.drone_id
+           GROUP BY eff.drone_id, d.name
+          HAVING count(*) > 1
+           LIMIT 1;
+          IF FOUND THEN
+            RAISE EXCEPTION USING ERRCODE = 'unique_violation',
+              MESSAGE = format('「%s」同時被排進「%s」——一台機一次只能執行一個任務',
+                               c.drone_name, c.names);
+          END IF;
+          RETURN NULL;
+        END $fn$ LANGUAGE plpgsql""")
+    for tbl in ("mission_drones", "missions", "squad_members"):
+        await pool.execute(
+            f"DROP TRIGGER IF EXISTS trg_mission_drone_guard ON {tbl}")
+        await pool.execute(
+            f"CREATE CONSTRAINT TRIGGER trg_mission_drone_guard "
+            f"AFTER INSERT OR UPDATE ON {tbl} "
+            "DEFERRABLE INITIALLY IMMEDIATE "
+            "FOR EACH ROW EXECUTE FUNCTION mission_drone_guard()")
     await pool.execute(
         "ALTER TABLE flight_sessions ADD COLUMN IF NOT EXISTS mission_id UUID")
     # 名稱快照，與 plan_name 同一條理由：任務被刪掉之後，歷史仍要說得出
@@ -884,11 +944,25 @@ async def create_session(drone_id: str, link_mission: bool = True,
                          AND c.client ~* '(rig|test|acceptance)'
                          AND c.time > now() - interval '60 seconds'
                    ) THEN 'test' END),
-                  -- **進行中的任務自動接手這一趟**（§4.5）：人在起飛時決定過
-                  -- 一次「這是哪個任務」，之後每一趟不必再問。名字存快照，
-                  -- 理由同 plan_name
-                  (SELECT id FROM missions WHERE ended_at IS NULL),
-                  (SELECT name FROM missions WHERE ended_at IS NULL)
+                  -- **這台機參與中的那個任務自動接手這一趟**（§4.6）：
+                  -- 人在起飛時決定過一次「誰在跑哪個任務」，之後每一趟不必
+                  -- 再問。有效名單＝直接綁的機 ∪ 綁的小隊的成員；
+                  -- **恰好一個**是資料庫的不變式保證的（mission_drone_guard），
+                  -- 所以這裡不必處理「兩個」。名字存快照，理由同 plan_name
+                  (SELECT m.id FROM missions m WHERE m.ended_at IS NULL
+                     AND $1::uuid IN (
+                       SELECT md.drone_id FROM mission_drones md
+                        WHERE md.mission_id = m.id
+                       UNION
+                       SELECT sm.drone_id FROM squad_members sm
+                        WHERE sm.squad_id = m.squad_id) LIMIT 1),
+                  (SELECT m.name FROM missions m WHERE m.ended_at IS NULL
+                     AND $1::uuid IN (
+                       SELECT md.drone_id FROM mission_drones md
+                        WHERE md.mission_id = m.id
+                       UNION
+                       SELECT sm.drone_id FROM squad_members sm
+                        WHERE sm.squad_id = m.squad_id) LIMIT 1)
            FROM resolved r
            RETURNING id""",
         drone_id, link_mission, plan_id,

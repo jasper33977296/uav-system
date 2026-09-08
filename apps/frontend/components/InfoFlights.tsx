@@ -443,8 +443,9 @@ function MissionPicker({ s }: { s: SessionRow }) {
       return;
     }
     // **從這裡建的一律是「已結束」的任務**：這是回頭補歸歷史架次的入口，
-    // 而同時只能有一個進行中的任務（§4.5）——替以前那幾趟開一個，不該把
-    // 現在正在進行的那個擠掉。進行中的任務在即時頁起飛時開
+    // 不是開一個新的實驗。多個進行中本來就合法（§4.6），但一個「還沒有任何
+    // 機在跑」的進行中任務只會讓即時頁的自動歸類更難讀——進行中的任務從
+    // 即時頁的起飛流程開，那裡才問得到「誰要飛」
     const r = await fetch(`${API}/api/missions`, {
       method: "POST", headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ name: n, ended: true }),

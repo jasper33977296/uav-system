@@ -22,20 +22,35 @@ import { API } from "@/lib/signal";
 import { useUavStore } from "@/lib/store";
 
 interface Mission { id: string; name: string }
+interface Squad { id: string; name: string; members: { drone_id: string }[] }
 
 export default function MissionPrompt() {
   const live = useUavStore((s) => s.live);
+  const fleet = useUavStore((s) => s.fleet);
   const sessionId = live?.session_id ?? null;
+  const droneId = live?.drone_id ?? null;
   const prev = useRef<string | null | undefined>(undefined);
   const [ask, setAsk] = useState<"start" | "end" | null>(null);
   const [active, setActive] = useState<Mission | null>(null);
   const [name, setName] = useState("");
   const [err, setErr] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
+  // 誰要跑這個任務（§4.6）。**可以綁小隊，也可以綁單台**——綁小隊是活的連結
+  const [squads, setSquads] = useState<Squad[]>([]);
+  const [squadId, setSquadId] = useState<string>("");
+  const [crew, setCrew] = useState<string[]>([]);
 
-  const loadActive = () => getJson<Mission | null>(`${API}/api/missions/active`)
-    .then(setActive).catch(() => setActive(null));
-  useEffect(() => { loadActive(); }, []);
+  /** 這台機參與中的那個任務。**恰好一個**是資料庫的不變式保證的
+   *  （一台機一次只能執行一個任務），所以取 [0] 是安全的。 */
+  const activeOf = (did: string | null) =>
+    getJson<Mission[]>(`${API}/api/missions/active${did ? `?drone_id=${did}` : ""}`)
+      .then((r) => r[0] ?? null);
+
+  const loadActive = () => activeOf(droneId).then(setActive).catch(() => setActive(null));
+  useEffect(() => { loadActive(); }, [droneId]);
+  useEffect(() => {
+    getJson<Squad[]>(`${API}/api/squads`).then(setSquads).catch(() => setSquads([]));
+  }, []);
 
   useEffect(() => {
     const before = prev.current;
@@ -43,18 +58,25 @@ export default function MissionPrompt() {
     // 開頁的第一次觀察不算轉換——那不是一次起飛
     if (before === undefined) return;
     if (!before && sessionId) {
-      // 起飛：沒有進行中的任務才問。有的話後端已經把這一趟接進去了
-      getJson<Mission | null>(`${API}/api/missions/active`).then((m) => {
+      // 起飛：**這台機**沒有參與中的任務才問。有的話後端已經接手了
+      activeOf(droneId).then((m) => {
         setActive(m);
-        if (!m) { setName(""); setErr(null); setAsk("start"); }
+        if (!m) {
+          setName(""); setErr(null); setSquadId("");
+          // 預設帶**當下連線中的機**——那是「這次誰要飛」最可能的答案
+          setCrew(Object.entries(fleet)
+            .filter(([, t]) => t.connected).map(([id]) => id));
+          setAsk("start");
+        }
       }).catch(() => { /* 問不到就不問，不擋飛行 */ });
     } else if (before && !sessionId) {
-      // 落地：**問，不自動關**
-      getJson<Mission | null>(`${API}/api/missions/active`).then((m) => {
+      // 落地：**問，不自動關**。問的是**這台機所屬的那個任務**
+      activeOf(droneId).then((m) => {
         setActive(m);
         if (m) { setErr(null); setAsk("end"); }
       }).catch(() => {});
     }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [sessionId]);
 
   if (!ask) return null;
@@ -65,11 +87,13 @@ export default function MissionPrompt() {
     setBusy(true); setErr(null);
     const r = await fetch(`${API}/api/missions`, {
       method: "POST", headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ name: n }),
+      body: JSON.stringify({ name: n, squad_id: squadId || null, drones: crew }),
     });
     const b = await r.json().catch(() => null);
     setBusy(false);
-    if (!r.ok) { setErr(errText(b?.detail, "建立失敗")); return; }
+    // 撞名、或「一台機一次只能執行一個任務」，後端都給得出人話（說得出是哪一台、
+    // 撞到哪兩個任務），原文顯示
+    if (!r.ok) { setErr(errText(b?.detail?.msg ?? b?.detail, "建立失敗")); return; }
     // **這一趟要補歸**：後端建立架次時還沒有這個任務
     if (sessionId) {
       await fetch(`${API}/api/sessions/${sessionId}`, {
@@ -111,12 +135,37 @@ export default function MissionPrompt() {
         <div className="modal-text">
           {ask === "start" ? (<>
             <div className="hint-line">
-              取一個名字，接下來的每一趟都會自動歸到它底下，直到你把它結束。
+              取一個名字，這幾台機接下來的每一趟都會自動歸到它底下，直到你把它結束。
             </div>
             <input className="msearch" autoFocus value={name} style={{ width: "100%" }}
               placeholder="例如：低速測線實驗"
               onChange={(e) => setName(e.target.value)}
               onKeyDown={(e) => { if (e.key === "Enter" && name.trim()) create(); }} />
+            {/* 誰要跑：綁一整隊（活的連結，小隊改成員任務跟著變）或勾單台。
+                兩種可以並用——有效名單是聯集 */}
+            <div className="cmp-scope">
+              <span className="hint-line">小隊</span>
+              <select value={squadId} onChange={(e) => setSquadId(e.target.value)}>
+                <option value="">不綁小隊</option>
+                {squads.map((q) => (
+                  <option key={q.id} value={q.id}>{q.name}（{q.members.length} 台）</option>
+                ))}
+              </select>
+            </div>
+            <div className="sess-pills">
+              {Object.entries(fleet).map(([id, t]) => (
+                <button key={id}
+                  className={`pill${crew.includes(id) ? " on" : ""}`}
+                  onClick={() => setCrew((c) =>
+                    c.includes(id) ? c.filter((x) => x !== id) : [...c, id])}>
+                  {t.drone_name || id.slice(0, 6)}
+                </button>
+              ))}
+            </div>
+            <div className="hint-line">
+              一台機一次只能執行一個任務——已經在別的任務裡的會被擋下來，
+              訊息會說是哪一台。
+            </div>
           </>) : (
             <div className="hint-line">
               {/* 落地只是這一趟結束，不是任務結束——一個任務可以有多趟 */}

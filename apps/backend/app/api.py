@@ -1958,6 +1958,10 @@ async def _store_mission(name: str, source: str, wps: list[dict],
 class MissionIn(BaseModel):
     name: str
     note: str | None = None
+    #: 綁一整隊（**活的連結**：小隊改成員，任務跟著變）
+    squad_id: str | None = None
+    #: 直接綁的機。有效參與名單＝這個 ∪ 綁的小隊的成員
+    drones: list[str] = Field(default_factory=list)
     #: 建立時就標成已結束。**補歸歷史架次時要用**：同時只能有一個「進行中」
     #: 的任務（§4.5），而回頭替以前飛過的那幾趟開一個任務，不該把現在正在
     #: 進行的那個擠掉
@@ -1967,6 +1971,10 @@ class MissionIn(BaseModel):
 class MissionPatch(BaseModel):
     name: str | None = None
     note: str | None = None
+    #: 換綁小隊；空字串＝解除。**活的連結**，不是快照
+    squad_id: str | None = None
+    #: 直接綁的機（整份取代，與 squads 的 members 同一個約定）
+    drones: list[str] | None = None
     #: 顯式收尾。**只給畫面分「進行中／已結束」，不影響任何判定**——
     #: 不做狀態機（squads 的同一條：任務不該長成第二套規劃）
     ended: bool | None = None
@@ -1981,29 +1989,57 @@ async def list_missions():
     """
     rows = await db.pool.fetch("""
         SELECT m.*,
+               (SELECT s2.name FROM squads s2 WHERE s2.id = m.squad_id) AS squad_name,
+               -- 有效參與名單＝直接綁的機 ∪ 綁的小隊的成員（§4.6）。
+               -- **查詢時展開，不存快照**：綁小隊的意思就是小隊改成員、任務跟著變
+               (SELECT coalesce(json_agg(json_build_object(
+                          'id', d.id::text, 'name', d.name)), '[]'::json)
+                  FROM drones d WHERE d.id IN (
+                    SELECT md.drone_id FROM mission_drones md WHERE md.mission_id = m.id
+                    UNION
+                    SELECT sm.drone_id FROM squad_members sm WHERE sm.squad_id = m.squad_id))
+                 AS crew,
                (SELECT count(*) FROM flight_sessions s WHERE s.mission_id = m.id)
                  AS sessions,
+               -- 飛過的機數（歷史）。**與 crew（現在排定要跑的）是兩件事**
                (SELECT count(DISTINCT s.drone_id) FROM flight_sessions s
-                 WHERE s.mission_id = m.id) AS drones,
+                 WHERE s.mission_id = m.id) AS drones_flown,
                (SELECT count(DISTINCT s.plan_id) FROM flight_sessions s
                  WHERE s.mission_id = m.id AND s.plan_id IS NOT NULL) AS plans,
                (SELECT max(s.started_at) FROM flight_sessions s
                  WHERE s.mission_id = m.id) AS last_flight
           FROM missions m ORDER BY m.created_at DESC""")
-    return [dict(r) for r in rows]
+    # asyncpg 把 json 當字串回，前端拿到會是一串引號包起來的東西
+    out = []
+    for r in rows:
+        d = dict(r)
+        if isinstance(d.get("crew"), str):
+            d["crew"] = json.loads(d["crew"])
+        out.append(d)
+    return out
 
 
 @router.get("/missions/active")
-async def active_mission():
-    """現在進行中的那個任務（`ended_at IS NULL`），沒有就回 null。
+async def active_missions(drone_id: str | None = None):
+    """進行中的任務（`ended_at IS NULL`）。
 
-    **同時只會有一個**（DB 的 partial unique index 擋著）——起飛時「自動歸到
-    進行中的那個」只有在那個唯一時才是一句確定的話。
+    * 不帶參數＝**全部**進行中的（多組可以同時跑，§4.6）。
+    * 帶 `drone_id`＝那台機參與中的那一個，沒有就回空清單。
+      **恰好一個**是資料庫的不變式保證的（一台機一次只能執行一個任務）。
     """
-    row = await db.pool.fetchrow(
-        "SELECT id::text, name, note, created_at FROM missions "
-        "WHERE ended_at IS NULL")
-    return dict(row) if row else None
+    if drone_id:
+        rows = await db.pool.fetch(
+            "SELECT m.id::text, m.name, m.note, m.created_at, m.squad_id::text "
+            "  FROM missions m WHERE m.ended_at IS NULL AND $1::uuid IN ("
+            "    SELECT md.drone_id FROM mission_drones md WHERE md.mission_id = m.id"
+            "    UNION"
+            "    SELECT sm.drone_id FROM squad_members sm WHERE sm.squad_id = m.squad_id)",
+            drone_id)
+    else:
+        rows = await db.pool.fetch(
+            "SELECT id::text, name, note, created_at, squad_id::text "
+            "FROM missions WHERE ended_at IS NULL ORDER BY created_at DESC")
+    return [dict(r) for r in rows]
 
 
 @router.post("/missions", status_code=201)
@@ -2012,18 +2048,26 @@ async def create_mission(body: MissionIn):
     if not name:
         raise HTTPException(422, "任務要有名字")
     try:
-        row = await db.pool.fetchrow(
-            "INSERT INTO missions (name, note, ended_at) "
-            "VALUES ($1, $2, CASE WHEN $3 THEN now() END) RETURNING id::text",
-            name, (body.note or "").strip() or None, body.ended)
+        async with db.pool.acquire() as con:
+            async with con.transaction():
+                row = await con.fetchrow(
+                    "INSERT INTO missions (name, note, ended_at, squad_id) "
+                    "VALUES ($1, $2, CASE WHEN $3 THEN now() END, $4::uuid) "
+                    "RETURNING id::text",
+                    name, (body.note or "").strip() or None, body.ended,
+                    body.squad_id or None)
+                for did in body.drones:
+                    await con.execute(
+                        "INSERT INTO mission_drones (mission_id, drone_id) "
+                        "VALUES ($1::uuid, $2::uuid) ON CONFLICT DO NOTHING",
+                        row["id"], did)
     except asyncpg.UniqueViolationError as e:
-        # 兩種撞法要分得開：撞名字、撞「同時只能有一個進行中」
-        if "idx_missions_one_active" in str(e):
-            cur = await db.pool.fetchval(
-                "SELECT name FROM missions WHERE ended_at IS NULL")
-            raise HTTPException(409, {
-                "msg": f"「{cur}」還在進行中——同時只能有一個任務",
-                "how_to": ["先把它結束，再開新的"]})
+        # 兩種撞法要分得開：撞名字、撞「一台機一次只能執行一個任務」。
+        # 後者由 DB 的觸發器丟出來，訊息已經說得出是哪一台、撞到哪兩個任務
+        msg = str(e)
+        if "一台機一次只能執行一個任務" in msg:
+            raise HTTPException(409, {"msg": msg,
+                                      "how_to": ["先把那台機從另一個任務移出，或結束那個任務"]})
         # **說得出撞到哪一個**：只講「名稱重複」的話，人得自己去清單裡找
         raise HTTPException(409, f"已經有一個任務叫「{name}」")
     return {"id": row["id"], "name": name}
@@ -2047,13 +2091,21 @@ async def patch_mission(mission_id: str, body: MissionPatch):
         sets.append(f"note = {arg(body.note.strip() or None)}")
     if body.ended is not None:
         sets.append(f"ended_at = {'now()' if body.ended else 'NULL'}")
-    if not sets:
+    if body.squad_id is not None:
+        # 空字串＝解除綁定（與 mission_id 同一個約定）
+        sets.append(f"squad_id = {arg(body.squad_id.strip() or None)}::uuid")
+    if not sets and body.drones is None:
         raise HTTPException(422, "沒有要改的欄位")
+    if not sets:
+        sets.append("name = name")          # 只改名單時也要有一個 SET
     try:
         row = await db.pool.fetchrow(
             f"UPDATE missions SET {', '.join(sets)} WHERE id = $1 "
             "RETURNING id::text, name", mission_id, *args)
-    except asyncpg.UniqueViolationError:
+    except asyncpg.UniqueViolationError as e:
+        if "一台機一次只能執行一個任務" in str(e):
+            raise HTTPException(409, {"msg": str(e),
+                                      "how_to": ["先把那台機從另一個任務移出，或結束那個任務"]})
         raise HTTPException(409, f"已經有一個任務叫「{body.name}」")
     if row is None:
         raise HTTPException(404, "無此任務")
@@ -2064,6 +2116,25 @@ async def patch_mission(mission_id: str, body: MissionPatch):
         await db.pool.execute(
             "UPDATE flight_sessions SET mission_name = $2 WHERE mission_id = $1",
             mission_id, row["name"])
+    if body.drones is not None:
+        # 整份取代（差異比對在前端做，避免「加一台」與「換一批」兩種語意
+        # 混在同一支——與 squads 的 members 同一條）
+        try:
+            async with db.pool.acquire() as con:
+                async with con.transaction():
+                    await con.execute(
+                        "DELETE FROM mission_drones WHERE mission_id = $1::uuid",
+                        mission_id)
+                    for did in body.drones:
+                        await con.execute(
+                            "INSERT INTO mission_drones (mission_id, drone_id) "
+                            "VALUES ($1::uuid, $2::uuid) ON CONFLICT DO NOTHING",
+                            mission_id, did)
+        except asyncpg.UniqueViolationError as e:
+            # **不變式的例外要在這裡也翻成人話**：它是觸發器丟的，而觸發器在
+            # 這一段才被踩到——上面那個 try 只包了 UPDATE missions
+            raise HTTPException(409, {"msg": str(e),
+                                      "how_to": ["先把那台機從另一個任務移出，或結束那個任務"]})
     return {"id": row["id"], "name": row["name"]}
 
 
