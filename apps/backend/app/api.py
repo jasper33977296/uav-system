@@ -1432,6 +1432,13 @@ async def list_sessions(limit: int = 50, mission_id: str | None = None,
         conds.append(
             f"COALESCE((s.summary->>'samples_total')::int, 0) >= ${len(args) + 1}")
     where = ("WHERE " + " AND ".join(conds)) if conds else ""
+    # 飛行中換過幾次路徑（doc/data-schema §3.4）。**衍生，不存欄位**——
+    # 這件事已經在 command_log 裡（_audit 解得出 session_id），再開一欄等於
+    # 同一件事有兩個家。0＝全程同一份
+    plans = """,
+          (SELECT count(*) FROM command_log c WHERE c.session_id = s.id
+             AND c.action = 'mission_upload' AND c.result = 'accepted')
+            AS plan_changes"""
     ev = """,
           (SELECT count(*) FROM events e WHERE e.session_id = s.id) AS events_total,
           (SELECT count(*) FROM events e WHERE e.session_id = s.id
@@ -1439,7 +1446,7 @@ async def list_sessions(limit: int = 50, mission_id: str | None = None,
           (SELECT count(*) FROM events e WHERE e.session_id = s.id
              AND e.severity = 'critical') AS events_critical""" if with_events else ""
     q = f"""
-        SELECT s.*, d.name AS drone_name, m.name AS mission_name{ev}
+        SELECT s.*, d.name AS drone_name, m.name AS mission_name{plans}{ev}
         FROM flight_sessions s
         JOIN drones d ON d.id = s.drone_id
         LEFT JOIN missions m ON m.id = s.mission_id
@@ -1456,6 +1463,9 @@ async def get_session(session_id: str):
     ——那時候手上只有一個 id，而清單可能根本沒載到那一頁。"""
     row = await db.pool.fetchrow(
         """SELECT s.*, d.name AS drone_name, m.name AS mission_name,
+                  (SELECT count(*) FROM command_log c WHERE c.session_id = s.id
+                     AND c.action = 'mission_upload' AND c.result = 'accepted')
+                    AS plan_changes,
                   (SELECT count(*) FROM events e WHERE e.session_id = s.id)
                     AS events_total,
                   (SELECT count(*) FROM events e WHERE e.session_id = s.id
@@ -1783,9 +1793,17 @@ async def session_commands(session_id: str):
 
     `/sessions/{id}/track` 也回這一段，但它同時拖著整條遙測——資訊頁只要
     指令那一列時，不該為此把幾萬筆 telemetry 拉過網路。"""
+    # `params.mission_id` 補上名字：畫面上只拿得到一個 uuid 的話，
+    # 「飛行中換成哪一份」就答不出來（doc/data-schema §3.4）。
+    # **路徑被刪掉時 name 是 NULL**——那就顯示成「已刪除的路徑」，
+    # 不是留白（留白會被讀成「沒有換」）
     rows = await db.pool.fetch(
-        "SELECT time, action, result, detail, client, params FROM command_log "
-        "WHERE session_id = $1 ORDER BY time", session_id)
+        "SELECT c.time, c.action, c.result, c.detail, c.client, c.params, "
+        "       m.name AS mission_name "
+        "  FROM command_log c "
+        "  LEFT JOIN missions m "
+        "    ON m.id = NULLIF(c.params->>'mission_id', '')::uuid "
+        " WHERE c.session_id = $1 ORDER BY c.time", session_id)
     return [dict(r) for r in rows]
 
 

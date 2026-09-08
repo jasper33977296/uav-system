@@ -20,6 +20,9 @@ export interface SessionRow {
   origin: string | null;
   video_mode: string | null;
   end_reason: string | null;
+  //: 飛行中換過幾次路徑（後端衍生，讀 command_log）。**0＝全程同一份**；
+  //: >0 時 `mission_name` 說的只是**解鎖那一刻**那份（doc/data-schema §3.4）
+  plan_changes?: number;
   summary: {
     avg_sinr?: number | null; min_sinr?: number | null; avg_rtt_ms?: number | null;
     max_alt_rel?: number | null; samples_total?: number | null;
@@ -40,6 +43,9 @@ export interface CommandRow {
   time: string; action: string; result: string;
   detail: string | null; client: string | null;
   params: Record<string, unknown> | null;
+  //: `params.mission_id` 對到的路徑名。**路徑被刪掉時是 null**——
+  //: 顯示成「已刪除的路徑」，不是留白（留白會被讀成「沒有換」）
+  mission_name?: string | null;
 }
 
 export interface DroneRow { id: string; name: string }

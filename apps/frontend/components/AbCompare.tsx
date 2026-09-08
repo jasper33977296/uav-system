@@ -54,6 +54,9 @@ interface SessRow {
   mission_id: string | null; mission_name: string | null;
   note: string | null;
   origin?: string | null;      // 'test'＝rig/驗收觸發的架次
+  //: 飛行中換過幾次路徑（doc/data-schema §3.4）。**「任務」維度整個假設
+  //: 一趟＝一條路徑**，換過的那幾趟必須標出來，否則這個維度在說謊
+  plan_changes?: number;
 }
 
 const fmtT = (t: string) =>
@@ -147,7 +150,10 @@ export default function AbCompare() {
     if (mode === "mission") {
       const seq = [...cand].reverse();   // 舊→新才數得出「第幾趟」
       const i = seq.findIndex((x) => x.id === s.id);
-      return i >= 0 ? `第 ${i + 1} 趟 · ${fmtT(s.started_at)}` : fmtT(s.started_at);
+      // 飛行中換過路徑的那一趟，**這個維度的前提對它不成立**——標出來，
+      // 不要讓它混在「同一條任務飛過多趟」裡假裝可比
+      const w = s.plan_changes ? " ⚠換過路徑" : "";
+      return (i >= 0 ? `第 ${i + 1} 趟 · ${fmtT(s.started_at)}` : fmtT(s.started_at)) + w;
     }
     return fmtT(s.started_at);
   }, [mode, cand]);
@@ -415,7 +421,8 @@ export default function AbCompare() {
           <InfoTip tip={"三個維度用同一套對齊：沿基準軌跡的弧長里程，不是時間"
             + "（兩趟速度不同，時間對齊會錯位）；偏離基準路徑逾 60 m 的樣本不納入。"
             + "　時間＝同一台機不同時間，路徑不保證一樣。"
-            + "　任務＝同一台機把同一條任務飛過多趟，唯一路徑一致的維度，共同區間會接近全滿。"
+            + "　任務＝同一台機把同一條任務飛過多趟，唯一路徑一致的維度，共同區間會接近全滿"
+            + "（飛行中換過路徑的那一趟會標 ⚠：這個維度的前提對它不成立）。"
             + "　機隊＝不同機、不同任務，差異可能來自機或模組本身，不只是位置。"} />
         </span></h3>
         <div className="sess-pills">

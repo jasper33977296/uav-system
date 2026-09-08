@@ -200,7 +200,20 @@ function FlightDetail({ s, onReplay }: { s: SessionRow; onReplay: () => void }) 
           </span>
         </h3>
         <div className="chips info-chips">
-          <span className="chip">{s.mission_name ?? "無任務"}</span>
+          {/* **飛行中換過路徑要說出來**（doc/data-schema §3.4）：`mission_name`
+              是解鎖那一刻那份，機上後來飛的可能是別份——不標的話這個 chip
+              就是一句說錯的話。使用者定案：換路徑仍然是同一趟 */}
+          <span className="chip">
+            {s.mission_name ?? "無任務"}
+            {!!s.plan_changes && `（飛行中換過 ${s.plan_changes} 次）`}
+          </span>
+          {!!s.plan_changes && (
+            <InfoTip tip={"這一趟飛到一半換過路徑。上面寫的是**解鎖那一刻**那份，"
+              .replace(/\*\*/g, "")
+              + "換成哪一份、幾點換的看下面「指令」那一段的「上傳任務」。"
+              + "一趟可以飛不只一份路徑——架次的邊界是解鎖到上鎖，飛機沒落地，"
+              + "中間那個切點在物理上什麼都沒發生。"} />
+          )}
           <span className="chip">{VIDEO_LABELS[s.video_mode ?? ""] ?? s.video_mode ?? "影像未知"}</span>
         </div>
         <div className="metrics info-metrics">
@@ -342,6 +355,13 @@ function CommandsCard({ sessionId }: { sessionId: string }) {
                 })}>
                 <time>{hms(c.time)}</time>
                 <span className="info-cmdact">{actionLabel(c.action)}</span>
+                {/* 上傳／更換任務要說得出是哪一份——只有 uuid 的話，
+                    「飛行中換成什麼」在畫面上答不出來 */}
+                {c.action.startsWith("mission_") && (obj?.mission_id || c.mission_name) && (
+                  <span className="hint-line">
+                    {c.mission_name ?? "已刪除的路徑"}
+                  </span>
+                )}
                 <span className={`chip cap-chip-${r.tone}`}>
                   <span className={`dot cap-dot-${r.tone}`} />{r.label}
                 </span>
