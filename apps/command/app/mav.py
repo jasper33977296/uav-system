@@ -13,6 +13,7 @@ API 層用 submit() 丟工作進佇列、等 future。對話期間 _wait() 內�
 處理心跳與路由表更新。
 """
 import json
+import math
 import os
 
 os.environ.setdefault("MAVLINK20", "1")     # 強制 MAVLink 2（MISSION_ITEM_INT 需要）
@@ -560,6 +561,18 @@ def job_get_params(r: MavRouter, sysid: int, names: list) -> dict:
 #: 8 個點 × 2.5 秒 ＝ 最壞 20 秒，留得下 `JOB_TIMEOUT_S` 的餘裕。
 TERRAIN_PROBE_MAX = 8
 TERRAIN_PROBE_TIMEOUT_S = 2.5
+#: 回覆的座標離問的點多遠還算「這是我問的那一點」。飛控會把查詢吸附到自己的
+#: 格點（`TERRAIN_SPACING`，實測 100 m），所以容忍度要比格距大；200 m 夠寬，
+#: 又足以擋掉不請自來的那種（實測是 `0,0`——離現場 12541 km）。
+TERRAIN_MATCH_M = 200.0
+#: 送第一個查詢之前先清掉緩衝區裡的舊報告，最多花這麼久。
+TERRAIN_DRAIN_S = 0.4
+
+
+def _ll_dist_m(lat1, lon1, lat2, lon2) -> float:
+    dy = (lat2 - lat1) * 111320.0
+    dx = (lon2 - lon1) * 111320.0 * math.cos(math.radians(lat1))
+    return math.hypot(dx, dy)
 
 
 def job_terrain_check(r: MavRouter, sysid: int, points: list) -> dict:
@@ -569,10 +582,17 @@ def job_terrain_check(r: MavRouter, sysid: int, points: list) -> dict:
     `TERRAIN_REPORT`。回每一點的 `terrain_height`（飛控認為的地面 AMSL）、
     `pending`（它還缺幾格）、`loaded`（已載入幾格）、`spacing`（它的格距）。
 
-    **一次只有一個未回覆的請求。** `TERRAIN_REPORT` 不保證把問的座標原樣
-    回填——ArduPilot 會回它查表用的位置，可能已經吸附到格點上。同時問多點
-    再靠座標配對，會在航點相距小於格距（100 m）時配錯，而配錯的後果是
-    「用 A 點的地面高度去判斷 B 點安不安全」。慢一點換配得對。
+    **一次只有一個未回覆的請求，而且回覆的座標要對得上。**
+
+    先前只做了前半，2026-09-08 實機打臉：飛控**自己會送不請自來的
+    `TERRAIN_REPORT`**（室內沒有 GPS 時內容是 `0,0`）。那一則卡在緩衝區裡，
+    被當成第一個查詢的答案，於是**整串答案錯開一格**——每個航點拿到的是
+    前一個航點的地面高度。五個點全部「有答案」、數字也都很合理，
+    **看不出哪裡不對**，這正是它危險的地方。
+
+    所以現在兩道都做：送第一個查詢之前先清一次緩衝區；每一則回覆都要
+    離問的那一點 `TERRAIN_MATCH_M` 以內才收（吸附到格點會差幾十公尺，
+    不請自來的那種差幾千公里）。收不到就是收不到，**不拿隔壁的答案頂替**。
 
     **`pending > 0` 是一個獨立的結論，不是雜訊**：那代表飛控自己也沒有那塊
     地形資料。ArduPilot 的地形圖磚來自 SD 卡或**會供圖的地面站**（Mission
@@ -581,6 +601,20 @@ def job_terrain_check(r: MavRouter, sysid: int, points: list) -> dict:
     """
     out: list[dict] = []
     seen_any = 0
+    stray = 0                 # 收到但配不上任何問題的報告：證據要留著
+    # 開場先清緩衝區裡的舊報告（只丟 TERRAIN_REPORT，其他照舊留在佇列裡
+    # 由後面的迴圈跑掉）。這條 socket 上一直有遙測在流，所以是**限時**清，
+    # 不是「清到空為止」——後者在一條每秒 100 則的鏈路上不會結束
+    drain_until = time.monotonic() + TERRAIN_DRAIN_S
+    while time.monotonic() < drain_until:
+        m0 = r._recv(0.05)
+        if m0 is None:
+            continue
+        # 清場讀到的也算進 `seen_any`——那是「鏈路還活著」的證據，
+        # 不能因為清場先讀走就消失（否則會誤判成「鏈路斷了」）
+        seen_any += 1
+        if m0.get_type() == "TERRAIN_REPORT":
+            stray += 1
     for lat, lon, label in points[:TERRAIN_PROBE_MAX]:
         r._sendto(sysid, lambda m, a=lat, o=lon: m.terrain_check_encode(
             int(round(a * 1e7)), int(round(o * 1e7))))
@@ -592,6 +626,10 @@ def job_terrain_check(r: MavRouter, sysid: int, points: list) -> dict:
                 continue
             seen_any += 1
             if msg.get_type() != "TERRAIN_REPORT" or msg.get_srcSystem() != sysid:
+                continue
+            off = _ll_dist_m(lat, lon, msg.lat / 1e7, msg.lon / 1e7)
+            if off > TERRAIN_MATCH_M:
+                stray += 1        # 不是這一點的答案——丟掉，繼續等
                 continue
             rec.update({
                 "terrain_height_m": float(msg.terrain_height),
@@ -610,7 +648,10 @@ def job_terrain_check(r: MavRouter, sysid: int, points: list) -> dict:
             f"飛控沒有回應地形查詢（這段期間收到 {seen_any} 則其他訊息，"
             "鏈路是通的）。兩種可能：TERRAIN_ENABLE 是 0（它根本不做地形），"
             "或 TERRAIN_REPORT 跟 PARAM_VALUE 一樣被塞滿的序列埠丟掉了")
-    return {"points": out, "answered": len(answered), "asked": len(out)}
+    return {"points": out, "answered": len(answered), "asked": len(out),
+            # **配不上的報告要說出來**：它是「答案錯開一格」那個 bug 唯一的
+            # 外顯訊號，數字看起來全都很合理的時候就只剩它了
+            "stray": stray}
 
 
 def job_set_params(r: MavRouter, sysid: int, items: dict) -> dict:

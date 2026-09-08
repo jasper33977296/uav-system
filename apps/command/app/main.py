@@ -1147,8 +1147,14 @@ async def terrain_crosscheck(sysid: int, mission_id: str | None = None):
         notes.append(
             f"兩份地形資料最大差 {max_diff:.1f} m（門檻 {TERRAIN_AGREE_M:g} m）"
             "——代表它們不同源。**飛機跟的是它自己那份**，地面站的預檢只能當參考")
+    if res.get("stray"):
+        notes.append(
+            f"期間收到 {res['stray']} 則配不上任何查詢的地形報告（已丟棄）。"
+            "**飛控會自己送不請自來的 TERRAIN_REPORT**——沒有丟掉的話，"
+            "整串答案會錯開一格，而且每個數字看起來都很合理")
     return {
         "asked": res["asked"], "answered": res["answered"],
+        "stray": res.get("stray", 0),
         "pending_total": pending_total,
         "max_diff_m": round(max_diff, 1) if res["answered"] else None,
         "agree": bool(res["answered"] == res["asked"] and not pending_total

@@ -110,13 +110,34 @@ chk("answered 少一個，asked 不變", res["answered"] == 2 and res["asked"] =
 print("\n── 4. 全部沒回應，但鏈路在動 → 說得出兩種可能 ────────────")
 noise = FakeMsg(0, 0, 0, typ="ATTITUDE")
 r = FakeRouter([None, None, None])
-r._queue = [noise] * 6
+r._queue = [noise] * 20      # 清場也會讀走一些——鏈路活著的證據不能因此消失
 try:
     mav.job_terrain_check(r, 1, PTS)
     chk("應該要丟 CommandError", False)
 except mav.CommandError as e:
     chk("丟 CommandError 並指出 TERRAIN_ENABLE 與頻寬兩種可能",
         "TERRAIN_ENABLE" in str(e) and "序列埠" in str(e), str(e)[:60])
+
+print("\n── 4b. 不請自來的報告不得讓答案錯開一格（2026-09-08 實機抓到）──")
+# 實機現象：室內沒有 GPS，飛控自己送了一則 lat/lon = 0,0 的 TERRAIN_REPORT。
+# 它卡在緩衝區被當成第一個查詢的答案，於是**每個航點拿到的是前一個航點的
+# 地面高度**——五個點全部「有答案」、數字也都合理，看不出哪裡不對。
+ghost = FakeMsg(0.0, 0.0, 0.0)
+r = FakeRouter([FakeMsg(la, lo, 123.0 + i) for i, (la, lo, _) in enumerate(PTS)])
+r._queue = [ghost]                      # 送第一個查詢之前就躺在緩衝區裡
+res = mav.job_terrain_check(r, 1, PTS)
+chk("**每一點拿到的是自己的答案，不是前一點的**",
+    [p["terrain_height_m"] for p in res["points"]] == [123.0, 124.0, 125.0],
+    [p.get("terrain_height_m") for p in res["points"]])
+chk("配不上的那則算進 stray（唯一的外顯訊號）", res["stray"] >= 1, res["stray"])
+# 就算清場沒清到（時序不同），距離門檻也要擋下來：0,0 離現場 12541 km。
+# **只有 0,0 可收時，寧可回報「沒有答案」，也不拿它頂替**
+r = FakeRouter([ghost])
+try:
+    mav.job_terrain_check(r, 1, PTS[:1])
+    chk("距離門檻擋得掉 0,0（不拿它頂替）", False, "竟然收下了")
+except mav.CommandError:
+    chk("距離門檻擋得掉 0,0——寧可說沒有答案，也不拿它頂替", True)
 
 print("\n── 5. pending 與 loaded 分得開 ──────────────────────")
 r = FakeRouter([FakeMsg(*PTS[0][:2], 123.0, pending=0, loaded=336),
