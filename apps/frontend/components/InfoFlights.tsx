@@ -63,6 +63,9 @@ const END_LABELS: Record<string, string> = {
 /** 影像那一欄的說法。**認不得的原樣顯示代碼**，同 END_LABELS 的理由。 */
 const VIDEO_LABELS: Record<string, string> = {
   on: "有錄影", off: "未錄影", no_source: "沒有影像源",
+  // 這一趟從未離地（飛控說全程 on_ground），影像已自動刪除
+  // ——**架次紀錄留著**，刪的只有影像（flight-video-design §8c）
+  discarded: "未離地・影像已刪",
 };
 
 /** 指令的下場。**「被擋下」與「送出後失敗」不是同一件事**——前者是守門

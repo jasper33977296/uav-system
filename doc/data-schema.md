@@ -181,7 +181,7 @@ mission_groups ─< group_assignments                (CASCADE)
 | `summary` | jsonb | 落地後計算：航程、最大高度、SINR 統計等 |
 | `note` | text | 使用者自訂備註（標實驗條件，如「開干擾器那趟」） |
 | `origin` | text | `research`／`test`／`unknown`（NULL 視為 unknown）——見 §5.3 |
-| `video_mode` | text | `on`／`off`（本趟刻意不錄）／`no_source`（該機無影像來源）——見 §5.4 |
+| `video_mode` | text | `on`／`off`（本趟刻意不錄）／`no_source`（該機無影像來源）／`discarded`（從未離地，影像已自動刪除）——見 §5.4 與 flight-video-design §8c |
 | `airborne_from` / `airborne_to` | timestamptz | **這一趟真正離地的區間**（飛控的 `landed_state` 說的，不是高度門檻）。NULL＝沒有離地過，**或**我們沒收到過 `landed_state`——兩者靠下一欄分辨 |
 | `landed_state_seen` | bool NOT NULL DEFAULT false | 這一趟有沒有收到過任何 `landed_state`。**false＝不知道有沒有飛**，不是「沒飛」——影像的自動刪除只在 `true 且 airborne_from IS NULL` 時才成立（見 flight-video-design §8c） |
 

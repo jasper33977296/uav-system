@@ -147,6 +147,113 @@ async def _emit(st, type_: str, reason: str, severity: str = "warning") -> None:
         log.exception("影像：事件送出失敗（不影響飛行資料）")
 
 
+def should_stop_for_landing(st, now: float) -> bool:
+    """落地夠久了沒——**判準只有一份**，迴圈與離線測試共用（§8c）。
+
+    四個條件缺一不可：
+      1. 這一趟還在（`session_id`）；
+      2. **曾經離地**——`on_ground` 一出現就停會把 arm→起飛那 10–25 秒殺掉；
+      3. 現在飛控說在地上，而且**這個說法沒有過期**（`on_ground_since` 是在
+         收到 `on_ground` 的那一刻設的；過期由呼叫端的 `landed_state` 判）；
+      4. 已經停了就不再停（否則每秒對錄製器打一次 PATCH）。
+    """
+    return bool(
+        st.session_id and st.airborne_seen and not st.landed_stopped
+        and st.landed_state == "on_ground" and st.on_ground_since is not None
+        and now - st.on_ground_since >= settings.video_landed_stop_s)
+
+
+async def stop_for_landing(st) -> None:
+    """落地滿 `VIDEO_LANDED_STOP_S` 秒 → 停止錄影，**但架次不收**。
+
+    架次的邊界是 arm／disarm（那是「這一趟」的定義），錄影的邊界是飛行——
+    落地之後停在地上 armed 著做檢查、看資料的那幾分鐘沒有錄的價值。
+    **兩件事分開，才可以一個停一個不停。**
+
+    只做一次（`landed_stopped`）：這個判斷在每秒的迴圈裡，不設旗標會每秒
+    對錄製器打一次 PATCH。
+    """
+    if st is None or st.sysid is None or st.landed_stopped:
+        return
+    st.landed_stopped = True
+    try:
+        await set_record(st.sysid, False)
+        log.info("影像：%s 落地滿 %.0f 秒，停止錄影（架次仍在）",
+                 st.drone_name, settings.video_landed_stop_s)
+        await _emit(st, "video_recording_stopped",
+                    f"落地滿 {settings.video_landed_stop_s:.0f} 秒，錄影已停",
+                    severity="info")
+        for delay in (5.0, 15.0):
+            await asyncio.sleep(delay)
+            await sync_segments()
+    except Exception:
+        log.exception("影像：落地停錄失敗（不影響架次記錄）")
+
+
+async def discard_if_never_airborne(session_id: str, sysid: int | None, st=None) -> None:
+    """**確定沒離地**的那一趟，把影像刪掉（使用者定案 2026-09-08）。
+
+    三種情況要分得開（flight-video-design §8c）：
+
+    | `landed_state_seen` | `airborne_from` | 結論 | 影像 |
+    |---|---|---|---|
+    | true | 有值 | 飛過 | 留 |
+    | true | NULL | **確定沒飛過** | **刪** |
+    | false | — | **不知道有沒有飛** | **留** |
+
+    **「不知道」不得觸發刪除**：飛控沒送 `landed_state`、或那一趟我們根本沒
+    收到，都不能推論成「沒飛」（§0.2e 的同一條）。
+
+    刪除**走錄製器自己的 API**，不是 backend 去動 `/rec`——那個目錄 backend
+    是唯讀掛載，而且「寫入是 uav-video 的職責」。刪掉的要發事件，不能悄悄消失。
+    """
+    if sysid is None:
+        return
+    try:
+        row = await db.airborne_of_session(session_id)
+        if not row or row.get("video_mode") != "on":
+            return                                   # 本來就沒錄，沒有東西要刪
+        if not row.get("landed_state_seen"):
+            log.info("影像：架次 %s 沒收到過 landed_state——不知道有沒有飛，"
+                     "影像照留", session_id[:8])
+            return
+        if row.get("airborne_from") is not None:
+            return                                   # 飛過了
+        n = await _delete_segments(session_id, sysid)
+        await db.pool.execute(
+            "UPDATE flight_sessions SET video_mode = 'discarded' WHERE id = $1",
+            session_id)
+        await _emit(st, "video_discarded",
+                    f"這一趟從未離地（飛控說全程 on_ground），已刪除 {n} 段影像",
+                    severity="info")
+        log.info("影像：架次 %s 從未離地，刪除 %d 段", session_id[:8], n)
+    except Exception:
+        log.exception("影像：未離地影像清理失敗（不影響架次記錄）")
+
+
+async def _delete_segments(session_id: str, sysid: int) -> int:
+    """刪掉這一趟時間範圍內的錄影片段，並把 `video_segments` 那幾列一併移除。
+
+    以**資料庫裡已入庫的片段**為準：它們的 `started_at` 就是錄製器要的
+    `start`，不必自己解析檔名（檔名的 strftime 是寫檔當下的牆鐘）。
+    還沒入庫的先同步一次再刪。
+    """
+    await sync_segments()
+    rows = await db.pool.fetch(
+        "SELECT started_at FROM video_segments WHERE session_id = $1", session_id)
+    name, n = path_for(sysid), 0
+    for r in rows:
+        start = r["started_at"].astimezone(timezone.utc).isoformat().replace("+00:00", "Z")
+        try:
+            await _api(f"{API}/v3/recordings/deletesegment"
+                       f"?path={name}&start={start}", "DELETE")
+            n += 1
+        except Exception as e:
+            log.warning("影像：刪除片段 %s 失敗（%s）", start, type(e).__name__)
+    await db.pool.execute("DELETE FROM video_segments WHERE session_id = $1", session_id)
+    return n
+
+
 async def on_session_end(sysid: int | None, st=None) -> None:
     """架次結束：延遲收錄——收尾片段還在寫，馬上關會切掉最後幾秒。"""
     if sysid is None:

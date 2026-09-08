@@ -92,6 +92,18 @@ class LiveState:
     sensors_unhealthy: list = field(default_factory=list)
     ekf_ok: bool | None = None
     landed_state: str | None = None       # on_ground / in_air / takeoff / landing
+    #: 這一趟有沒有**曾經**離地（flight-video-design §8c）。`on_ground` 一出現
+    #: 就停會把 arm→起飛那 10–25 秒殺掉，所以停止條件必須有記憶。
+    #: **三個非 on_ground 的值都算**：短跳可能來不及進 IN_AIR 就落地
+    #: （實測 20260902-081800.tlog 整份只有 on_ground 與 takeoff）
+    airborne_seen: bool = False
+    #: 落地之後停在地上多久了（單調時鐘）。None＝現在不在地上，或還不知道
+    on_ground_since: float | None = None
+    #: 這一趟收到過 landed_state 沒有。**與「有沒有離地」是兩件事**——
+    #: 從沒收到過＝不知道，不得推論成「沒飛」
+    landed_state_seen: bool = False
+    #: 錄影已經因為「落地」而收掉了（避免每一圈都重收）
+    landed_stopped: bool = False
     #: 機端正在飛第幾個任務項（MISSION_CURRENT.seq）。**這是機端的 seq，不是
     #: 我方航點索引**——ArduPilot 把 home 當 seq 0，兩者相差 1（issues/026 差異 5）。
     #: 換算是驅動層的事，這裡只忠實記錄機端說的數字。

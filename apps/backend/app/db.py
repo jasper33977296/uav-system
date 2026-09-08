@@ -47,6 +47,19 @@ async def migrate() -> None:
     # 038：飛控板的唯一 ID（AUTOPILOT_VERSION.uid2）。**目前唯一機器可驗證的
     # 身分**——sysid 只是機上可改的參數。NULL＝還沒問到（不是「沒有」）
     await pool.execute("ALTER TABLE drones ADD COLUMN IF NOT EXISTS board_uid TEXT")
+    # 錄製起訖條件（flight-video-design §8c，使用者定案 2026-09-08）。
+    # `landed_state` 是飛控自己算的「我在地上還是空中」——**它原本只活在
+    # 記憶體裡**，於是事後查不出「這一趟到底離地了沒」。
+    await pool.execute(
+        "ALTER TABLE telemetry ADD COLUMN IF NOT EXISTS landed_state TEXT")
+    # 真正離地的區間。NULL 有兩種意思，靠 landed_state_seen 分辨：
+    # 「確定沒離地」與「不知道有沒有離地」——後者不得觸發影像刪除
+    for col, typ in (("airborne_from", "TIMESTAMPTZ"),
+                     ("airborne_to", "TIMESTAMPTZ"),
+                     ("landed_state_seen", "BOOLEAN NOT NULL DEFAULT false")):
+        await pool.execute(
+            f"ALTER TABLE flight_sessions ADD COLUMN IF NOT EXISTS {col} {typ}")
+
     # **這筆記錄該是哪一家的自駕儀**（issues/038 的比對半邊，2026-09-02）。
     # 沒有它就沒有「期望值」可比：sysid 撞號時新來的機會直接繼承舊記錄，
     # 而廠牌從 ArduPilot 變成 PX4 這種明顯矛盾也沒有任何人看得出來。
@@ -831,15 +844,48 @@ async def insert_telemetry(s: LiveState) -> None:
         INSERT INTO telemetry (time, drone_id, session_id, lat, lon, alt_msl, alt_rel,
           heading, ground_speed, vertical_speed, battery_pct, battery_voltage,
           gps_fix, satellites, flight_mode, armed,
-          battery_current, battery_consumed_mah)
+          battery_current, battery_consumed_mah, landed_state)
         VALUES (now(), $1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15,
-                $16, $17)
+                $16, $17, $18)
         """,
         s.drone_id, s.session_id, s.lat, s.lon, s.alt_msl, s.alt_rel,
         s.heading, s.ground_speed, s.vertical_speed, s.battery_pct, s.battery_voltage,
         s.gps_fix, s.satellites, s.flight_mode, s.armed,
         s.battery_current, s.battery_consumed_mah,
+        # 飛控自己算的「在地上還是空中」。**NULL＝那一秒沒收到**，
+        # 不是「在地上」（flight-video-design §8c）
+        s.landed_state,
     )
+
+
+async def mark_airborne(session_id: str, first: bool) -> None:
+    """記下這一趟真正離地的區間。`first` ＝這是起點（否則是終點）。
+
+    **起點只寫一次**（`COALESCE` 不覆蓋），終點每次覆蓋——一趟可能起降好幾次，
+    我們要的是「第一次離地」到「最後一次落地」。
+    只在**狀態轉換的那一刻**呼叫，不是每一則 `EXTENDED_SYS_STATE` 都呼叫
+    （它 4 Hz，逐則寫等於每秒四次無謂的 UPDATE）。
+    """
+    sql = ("UPDATE flight_sessions SET airborne_from = COALESCE(airborne_from, now()), "
+           "landed_state_seen = true WHERE id = $1") if first else (
+          "UPDATE flight_sessions SET airborne_to = now(), "
+          "landed_state_seen = true WHERE id = $1")
+    await pool.execute(sql, session_id)
+
+
+async def mark_landed_seen(session_id: str) -> None:
+    """這一趟收到過 `landed_state`。**與「有沒有離地」是兩件事**：
+    收到過而且一直是 on_ground＝確定沒飛；從沒收到過＝不知道。 """
+    await pool.execute(
+        "UPDATE flight_sessions SET landed_state_seen = true WHERE id = $1", session_id)
+
+
+async def airborne_of_session(session_id: str) -> dict | None:
+    """這一趟飛過沒有。回傳 None＝查不到那一趟。"""
+    row = await pool.fetchrow(
+        "SELECT airborne_from, airborne_to, landed_state_seen, video_mode "
+        "FROM flight_sessions WHERE id = $1", session_id)
+    return dict(row) if row else None
 
 
 async def insert_link(s: LiveState) -> None:

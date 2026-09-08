@@ -50,6 +50,9 @@ class Settings(BaseSettings):
     video_retention_days: int = 7
     video_record_enabled: bool = True   # 預設開；特定實驗可關（關閉會在架次留痕）
     video_rec_dir: str = "/rec"         # 與 uav-video 共掛的錄影根目錄
+    #: 落地後多久停止錄影（flight-video-design §8c）。**不是零**：落地彈跳或
+    #: 重心轉移時飛控可能短暫跳回 in_air，而多錄 10 秒的成本遠低於少錄那 10 秒
+    video_landed_stop_s: float = 10.0
     # 鏈路狀態門檻（ok / degraded / lost 三態，見 app/main.py:_link_transition）
     sinr_degraded_db: float = 5.0    # 低於此值進入 degraded
     sinr_lost_db: float = -2.0       # 低於此值進入 lost

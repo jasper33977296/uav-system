@@ -49,6 +49,14 @@ async def _close_orphan_sessions() -> None:
     """
     now = time.monotonic()
     for st in list(fleet.values()):
+        # ── 落地停錄（flight-video-design §8c）─────────────────────
+        # **架次不收、只收錄影**：架次的邊界是 arm／disarm，錄影的邊界是飛行。
+        # 落地後停在地上 armed 著看資料的那幾分鐘沒有錄的價值。
+        # `landed_state` 過期時**不得當成「已降落」**（LANDED_STALE_S 的同一條
+        # 紀律）——這裡只在真的收到過、而且現在說在地上時才動
+        if video_rec.should_stop_for_landing(st, now):
+            asyncio.create_task(video_rec.stop_for_landing(st))
+
         # ── B 層：失明區間的開與收（**與架次收尾分開**）───────────
         # 失明從「最後一次收到資料」算起，不是從「發現失聯」算起——
         # 兩者差一個逾時門檻，而那段時間我們其實也沒有資料
@@ -82,6 +90,11 @@ async def _close_orphan_sessions() -> None:
         # 失明記錄會被當成新的一段重開，事後看起來像斷了兩次
         log.warning("架次 %s 因失去遙測而收尾（%s，已 %.0f 秒沒有資料）",
                     sid, st.drone_name, now - seen)
+        # **失聯收架次時錄影也要收**：原本只呼叫 db.end_session，而
+        # video_rec.reconcile() 只負責「飛行中的機要在錄」、不負責關——
+        # 於是 disarm 沒收到時錄影就一直開著（實測 08/13 那趟 8.6 小時）
+        asyncio.create_task(video_rec.on_session_end(st.sysid, st))
+        asyncio.create_task(video_rec.discard_if_never_airborne(sid, st.sysid, st))
         try:
             await db.end_session(sid, reason="telemetry_lost")
             ev = await db.insert_event(

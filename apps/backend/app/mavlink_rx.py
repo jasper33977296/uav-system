@@ -642,6 +642,7 @@ class MavlinkRx:
             await self._rc_event(st, ent, prev_rc)
         elif t == "EXTENDED_SYS_STATE":
             st.landed_state = _LANDED.get(msg.landed_state)
+            await self._landed_transition(st)
         elif t == "STATUSTEXT":
             await self._statustext(ent, st, msg)
         elif t in ("COMMAND_ACK", "MISSION_ACK"):
@@ -1015,12 +1016,49 @@ class MavlinkRx:
         ent["evt_last"] = {"id": ev["id"], "event_id": eid, "count": 1, "t": now}
         await manager.broadcast({"type": "event", "event": ev})
 
+    async def _landed_transition(self, st: LiveState) -> None:
+        """飛控說的「我在地上還是空中」→ 這一趟的離地區間（§8c）。
+
+        **三個非 `on_ground` 的值都算離地**：短跳可能來不及進 `IN_AIR` 就落地
+        （實測 `20260902-081800.tlog` 整份只有 `on_ground` 與 `takeoff`）。
+
+        停止錄影不在這裡做——它需要「在地上持續 N 秒」，而那是一個時間條件，
+        由每秒跑一次的迴圈判（`main._close_orphan_sessions` 同一圈）。
+        """
+        ls = st.landed_state
+        if ls is None:
+            return
+        if not st.landed_state_seen:
+            st.landed_state_seen = True
+            if st.session_id:
+                await db.mark_landed_seen(st.session_id)
+        if ls == "on_ground":
+            if st.on_ground_since is not None:
+                return                      # 已經在地上了，不是轉換
+            st.on_ground_since = time.monotonic()
+            # 落地那一刻記終點（每次覆蓋——一趟可能起降好幾次，要最後一次）
+            if st.airborne_seen and st.session_id:
+                await db.mark_airborne(st.session_id, first=False)
+            return
+        # 非 on_ground＝在空中（含 takeoff / landing）
+        st.on_ground_since = None
+        if not st.airborne_seen:
+            st.airborne_seen = True
+            if st.session_id:
+                await db.mark_airborne(st.session_id, first=True)
+
     async def _armed_transition(self, st: LiveState, armed: bool):
         """架次邊界。賦值順序沿用原 ingest.py 的紀律（見該處歷史註解）：
         解鎖先建 session 再標 armed；上鎖先清旗標再結算。"""
         if armed and not st.armed:
             st.session_id = await db.create_session(st.drone_id)
             st.armed = True
+            # **每一趟從零開始**：上一趟的「飛過了」留著會讓這一趟一 arm 就
+            # 具備停止錄影的條件
+            st.airborne_seen = False
+            st.landed_state_seen = False
+            st.landed_stopped = False
+            st.on_ground_since = None
             log.info("session started: %s（%s）", st.session_id, st.drone_name)
             # 影像（022）走背景：本 worker 是單執行緒，這裡 await 住（HTTP 逾時
             # 2s）會讓整條 MAVLink 處理停擺。影像是附加價值，不准拖累飛行資料。
@@ -1034,6 +1072,11 @@ class MavlinkRx:
                 await db.end_session(sid)
                 log.info("session ended: %s", sid)
             asyncio.create_task(video_rec.on_session_end(st.sysid, st))
+            # 從未離地的那一趟，影像自動不留（使用者定案 2026-09-08）。
+            # **架次紀錄一律留著**——它真的發生過，刪的只有影像
+            if sid:
+                asyncio.create_task(
+                    video_rec.discard_if_never_airborne(sid, st.sysid, st))
 
     # ── 任務讀回（白名單內的查詢對話）───────────────────────────
     def _send(self, sysid: int, msg_obj) -> None:
