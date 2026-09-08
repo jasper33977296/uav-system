@@ -1957,6 +1957,10 @@ async def _store_mission(name: str, source: str, wps: list[dict],
 class MissionIn(BaseModel):
     name: str
     note: str | None = None
+    #: 建立時就標成已結束。**補歸歷史架次時要用**：同時只能有一個「進行中」
+    #: 的任務（§4.5），而回頭替以前飛過的那幾趟開一個任務，不該把現在正在
+    #: 進行的那個擠掉
+    ended: bool = False
 
 
 class MissionPatch(BaseModel):
@@ -1988,6 +1992,19 @@ async def list_missions():
     return [dict(r) for r in rows]
 
 
+@router.get("/missions/active")
+async def active_mission():
+    """現在進行中的那個任務（`ended_at IS NULL`），沒有就回 null。
+
+    **同時只會有一個**（DB 的 partial unique index 擋著）——起飛時「自動歸到
+    進行中的那個」只有在那個唯一時才是一句確定的話。
+    """
+    row = await db.pool.fetchrow(
+        "SELECT id::text, name, note, created_at FROM missions "
+        "WHERE ended_at IS NULL")
+    return dict(row) if row else None
+
+
 @router.post("/missions", status_code=201)
 async def create_mission(body: MissionIn):
     name = (body.name or "").strip()
@@ -1995,9 +2012,17 @@ async def create_mission(body: MissionIn):
         raise HTTPException(422, "任務要有名字")
     try:
         row = await db.pool.fetchrow(
-            "INSERT INTO missions (name, note) VALUES ($1, $2) RETURNING id::text",
-            name, (body.note or "").strip() or None)
-    except asyncpg.UniqueViolationError:
+            "INSERT INTO missions (name, note, ended_at) "
+            "VALUES ($1, $2, CASE WHEN $3 THEN now() END) RETURNING id::text",
+            name, (body.note or "").strip() or None, body.ended)
+    except asyncpg.UniqueViolationError as e:
+        # 兩種撞法要分得開：撞名字、撞「同時只能有一個進行中」
+        if "idx_missions_one_active" in str(e):
+            cur = await db.pool.fetchval(
+                "SELECT name FROM missions WHERE ended_at IS NULL")
+            raise HTTPException(409, {
+                "msg": f"「{cur}」還在進行中——同時只能有一個任務",
+                "how_to": ["先把它結束，再開新的"]})
         # **說得出撞到哪一個**：只講「名稱重複」的話，人得自己去清單裡找
         raise HTTPException(409, f"已經有一個任務叫「{name}」")
     return {"id": row["id"], "name": name}
@@ -2025,13 +2050,20 @@ async def patch_mission(mission_id: str, body: MissionPatch):
         raise HTTPException(422, "沒有要改的欄位")
     try:
         row = await db.pool.fetchrow(
-            f"UPDATE missions SET {', '.join(sets)} WHERE id = $1 RETURNING id::text",
-            mission_id, *args)
+            f"UPDATE missions SET {', '.join(sets)} WHERE id = $1 "
+            "RETURNING id::text, name", mission_id, *args)
     except asyncpg.UniqueViolationError:
         raise HTTPException(409, f"已經有一個任務叫「{body.name}」")
     if row is None:
         raise HTTPException(404, "無此任務")
-    return {"id": row["id"]}
+    if body.name is not None:
+        # **改名要同步既有架次的快照**（§4.5）：不然畫面上會出現「任務叫 A，
+        # 但這一趟寫著原屬 B」。快照的用途是「任務被刪之後還說得出當時叫什麼」，
+        # 不是「記住每一次改名前的舊名字」——起飛時打錯字是常態
+        await db.pool.execute(
+            "UPDATE flight_sessions SET mission_name = $2 WHERE mission_id = $1",
+            mission_id, row["name"])
+    return {"id": row["id"], "name": row["name"]}
 
 
 @router.delete("/missions/{mission_id}")

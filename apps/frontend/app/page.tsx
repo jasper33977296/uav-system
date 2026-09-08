@@ -2,6 +2,7 @@
 import dynamic from "next/dynamic";
 import { useEffect } from "react";
 
+import MissionPrompt from "@/components/MissionPrompt";
 import SidePanel from "@/components/SidePanel";
 import { useUavStore } from "@/lib/store";
 
@@ -28,6 +29,9 @@ export default function Home() {
     <main className={`app ${panelOpen ? "" : "app-solo"}`}>
       <MapView />
       {panelOpen && <SidePanel />}
+      {/* 任務的生命週期：起飛時問名字、落地時問要不要結束（§4.5）。
+          **不擋飛行**——任務是紀錄，取消掉照樣飛，事後在資訊頁補歸 */}
+      <MissionPrompt />
     </main>
   );
 }

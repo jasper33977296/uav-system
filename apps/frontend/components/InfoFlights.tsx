@@ -424,15 +424,34 @@ function MissionPicker({ s }: { s: SessionRow }) {
     if (!r.ok) { setErr(errText(b?.detail, "指派失敗")); return; }
     setCur({ id: b.mission_id, name: b.mission_name });
   };
-  const create = async () => {
+  /** 沒歸＝建立並歸入；已經歸了＝改這個任務的名字。
+   *  **改名會同步該任務底下所有架次的名稱快照**（後端做）——不然畫面上會
+   *  出現「任務叫 A，但這一趟寫著原屬 B」。 */
+  const save = async () => {
     setErr(null);
+    const n = name.trim();
+    if (cur.id) {
+      const r = await fetch(`${API}/api/missions/${cur.id}`, {
+        method: "PATCH", headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ name: n }),
+      });
+      const b = await r.json().catch(() => null);
+      if (!r.ok) { setErr(errText(b?.detail, "改名失敗")); return; }
+      setAdding(false); setName("");
+      setCur({ id: cur.id, name: b.name });
+      await load();
+      return;
+    }
+    // **從這裡建的一律是「已結束」的任務**：這是回頭補歸歷史架次的入口，
+    // 而同時只能有一個進行中的任務（§4.5）——替以前那幾趟開一個，不該把
+    // 現在正在進行的那個擠掉。進行中的任務在即時頁起飛時開
     const r = await fetch(`${API}/api/missions`, {
       method: "POST", headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ name: name.trim() }),
+      body: JSON.stringify({ name: n, ended: true }),
     });
     const b = await r.json().catch(() => null);
-    // 撞名（409）後端給得出人話（說得出撞到哪一個），原文顯示
-    if (!r.ok) { setErr(errText(b?.detail, "建立失敗")); return; }
+    // 撞名／撞「同時只能有一個進行中」，後端都給得出人話，原文顯示
+    if (!r.ok) { setErr(errText(b?.detail?.msg ?? b?.detail, "建立失敗")); return; }
     setAdding(false); setName("");
     await load();
     await assign(b.id);
@@ -444,9 +463,9 @@ function MissionPicker({ s }: { s: SessionRow }) {
       {adding ? (<>
         <input className="msearch" autoFocus value={name} placeholder="例如：低速測線實驗"
           onChange={(e) => setName(e.target.value)}
-          onKeyDown={(e) => { if (e.key === "Enter" && name.trim()) create(); }} />
+          onKeyDown={(e) => { if (e.key === "Enter" && name.trim()) save(); }} />
         <button className="btn-plain btn-sm" disabled={!name.trim()}
-          onClick={create}>建立並指派</button>
+          onClick={save}>{cur.id ? "改名" : "建立並歸入"}</button>
         <button className="btn-plain btn-sm" onClick={() => setAdding(false)}>取消</button>
       </>) : (<>
         <select value={cur.id ?? ""} onChange={(e) => assign(e.target.value)}>
@@ -455,8 +474,13 @@ function MissionPicker({ s }: { s: SessionRow }) {
             <option key={m.id} value={m.id}>{m.name}</option>
           ))}
         </select>
+        {/* **一顆按鈕，標籤說得出它按下去會做什麼**（§4.5）：
+            已經歸了就是改名（起飛時打錯字是常態），沒歸才是建立
+            （這個流程之前飛的那些歷史架次要有辦法補歸） */}
         <button className="btn-plain btn-sm"
-          onClick={() => { setAdding(true); setName(s.note ?? ""); }}>＋ 新任務</button>
+          onClick={() => { setAdding(true); setName(cur.id ? (cur.name ?? "") : (s.note ?? "")); }}>
+          {cur.id ? "改名" : "＋ 新任務"}
+        </button>
         {/* **任務被刪掉之後快照還在**：這時下拉是「未指派」，但歷史說得出
             當時屬於哪個任務——兩件事都要看得到 */}
         {!cur.id && cur.name && (

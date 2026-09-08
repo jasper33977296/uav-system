@@ -113,6 +113,11 @@ async def migrate() -> None:
     # 分得出（有 id），**人喊出來分不出**——與 squads 同一條理由
     await pool.execute("CREATE UNIQUE INDEX IF NOT EXISTS idx_missions_name "
                        "ON missions (lower(name))")
+    # **同時只能有一個「進行中」的任務**（§4.5）。起飛時「自動歸到進行中的
+    # 那個」只有在那個唯一時才是一句確定的話；兩個同時進行的話，自動歸類就得
+    # 猜——而猜錯的歸類比沒有歸類更難發現。
+    await pool.execute("CREATE UNIQUE INDEX IF NOT EXISTS idx_missions_one_active "
+                       "ON missions ((ended_at IS NULL)) WHERE ended_at IS NULL")
     await pool.execute(
         "ALTER TABLE flight_sessions ADD COLUMN IF NOT EXISTS mission_id UUID")
     # 名稱快照，與 plan_name 同一條理由：任務被刪掉之後，歷史仍要說得出
@@ -869,7 +874,8 @@ async def create_session(drone_id: str, link_mission: bool = True,
              ) AS mid
            )
            INSERT INTO flight_sessions
-             (drone_id, started_at, plan_id, plan_name, origin)
+             (drone_id, started_at, plan_id, plan_name, origin,
+              mission_id, mission_name)
            SELECT $1, now(), r.mid,
                   (SELECT name FROM plans WHERE id = r.mid),
                   (CASE WHEN EXISTS (
@@ -877,7 +883,12 @@ async def create_session(drone_id: str, link_mission: bool = True,
                        WHERE c.sysid = (SELECT mav_sysid FROM drones WHERE id = $1)
                          AND c.client ~* '(rig|test|acceptance)'
                          AND c.time > now() - interval '60 seconds'
-                   ) THEN 'test' END)
+                   ) THEN 'test' END),
+                  -- **進行中的任務自動接手這一趟**（§4.5）：人在起飛時決定過
+                  -- 一次「這是哪個任務」，之後每一趟不必再問。名字存快照，
+                  -- 理由同 plan_name
+                  (SELECT id FROM missions WHERE ended_at IS NULL),
+                  (SELECT name FROM missions WHERE ended_at IS NULL)
            FROM resolved r
            RETURNING id""",
         drone_id, link_mission, plan_id,
