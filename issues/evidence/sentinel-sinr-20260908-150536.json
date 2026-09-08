@@ -1,0 +1,78 @@
+[
+  {
+    "time": "2026-08-11T08:10:24.487186+00:00",
+    "drone_id": "9b4c4ca0-2491-4b0b-afad-fc407c75e940",
+    "session_id": "4dbfb46b-cf9c-4973-bdae-563734a80610",
+    "lat": 24.7735911,
+    "lon": 121.0459182,
+    "alt_rel": -0.006000000052154064,
+    "rsrp": -95.0,
+    "rsrq": -12.0,
+    "sinr": -3276.0,
+    "cqi": null,
+    "source": "modem",
+    "raw": {
+      "at_qeng": "AT+QENG=\"servingcell\"\r\r\n+QENG: \"servingcell\",\"LIMSRV\",\"NR5G-SA\",\"TDD\",999,66,000234002,142,8D,720288,79,12,-95,-12,-3276,1,-\r\n\r\nOK"
+    },
+    "_will_null": {
+      "sinr": -3276.0
+    }
+  },
+  {
+    "time": "2026-08-11T08:10:25.487011+00:00",
+    "drone_id": "9b4c4ca0-2491-4b0b-afad-fc407c75e940",
+    "session_id": "4dbfb46b-cf9c-4973-bdae-563734a80610",
+    "lat": 24.7735906,
+    "lon": 121.0459156,
+    "alt_rel": 0.009999999776482582,
+    "rsrp": -93.0,
+    "rsrq": -11.0,
+    "sinr": -3276.0,
+    "cqi": null,
+    "source": "modem",
+    "raw": {
+      "at_qeng": "AT+QENG=\"servingcell\"\r\r\n+QENG: \"servingcell\",\"NOCONN\",\"NR5G-SA\",\"TDD\",999,66,000234002,142,8D,720288,79,12,-93,-11,-3276,1,-\r\n\r\nOK"
+    },
+    "_will_null": {
+      "sinr": -3276.0
+    }
+  },
+  {
+    "time": "2026-08-11T08:19:22.096493+00:00",
+    "drone_id": "9b4c4ca0-2491-4b0b-afad-fc407c75e940",
+    "session_id": "cc12aad7-ee9a-4948-89c2-39c752671730",
+    "lat": null,
+    "lon": null,
+    "alt_rel": null,
+    "rsrp": -98.0,
+    "rsrq": -12.0,
+    "sinr": -3276.0,
+    "cqi": null,
+    "source": "modem",
+    "raw": {
+      "at_qeng": "AT+QENG=\"servingcell\"\r\r\n+QENG: \"servingcell\",\"NOCONN\",\"NR5G-SA\",\"TDD\",999,66,000234001,141,8D,720288,79,12,-98,-12,-3276,1,-\r\n\r\nOK\r\n\r\n+QIND: SMS DONE"
+    },
+    "_will_null": {
+      "sinr": -3276.0
+    }
+  },
+  {
+    "time": "2026-08-11T08:19:23.096683+00:00",
+    "drone_id": "9b4c4ca0-2491-4b0b-afad-fc407c75e940",
+    "session_id": "cc12aad7-ee9a-4948-89c2-39c752671730",
+    "lat": null,
+    "lon": null,
+    "alt_rel": null,
+    "rsrp": -99.0,
+    "rsrq": -12.0,
+    "sinr": -3276.0,
+    "cqi": null,
+    "source": "modem",
+    "raw": {
+      "at_qeng": "AT+QENG=\"servingcell\"\r\r\n+QENG: \"servingcell\",\"NOCONN\",\"NR5G-SA\",\"TDD\",999,66,000234001,141,8D,720288,79,12,-99,-12,-3276,1,-\r\n\r\nOK"
+    },
+    "_will_null": {
+      "sinr": -3276.0
+    }
+  }
+]

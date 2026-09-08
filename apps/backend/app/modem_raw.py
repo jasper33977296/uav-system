@@ -131,6 +131,53 @@ def enrich(sample: dict[str, Any]) -> list[str]:
     return filled
 
 
+# ── 哨兵值：模組說「沒有值」的時候，那不是一個很差的量測 ──────────────
+#
+# 實測（2026-09-08）：`link_metrics` 有 4 筆 `sinr = -3276`。原始回應是
+#     +QENG: "servingcell","LIMSRV",...,-95,-12,-3276,1,-
+# ——`LIMSRV`（受限服務）狀態下模組把 SINR 回成無效標記（-32768 的縮放值），
+# 而 RSRP／RSRQ 是好的。**代理照抄成一個數字送上來，我方照單全收存進資料庫**，
+# 於是場域頁的弱區標籤寫著「最差 -3276 dB」，那一格的最差值從此永遠是它。
+#
+# 守門放在後端而不是等代理改：理由與這個模組存在的理由同一條——**代理不在
+# 這個 repo 裡，而資料庫現在就在收假值**。這是最後一道我方控制得到的關卡。
+#
+# 上下界取物理上量得出來的範圍，不取「合理」範圍：目的是擋哨兵值，
+# 不是替使用者判斷訊號好不好。範圍內的爛值是真的爛值，要照樣存。
+SANE_RANGE: dict[str, tuple[float, float]] = {
+    "sinr": (-30.0, 40.0),      # 3GPP SS-SINR 的量測範圍約 -23…40
+    "rsrp": (-156.0, -20.0),
+    "rsrq": (-45.0, 10.0),
+    "cqi": (0, 31),
+}
+
+
+def drop_sentinels(m: dict) -> dict[str, float]:
+    """把超出量測範圍的欄位就地改成 None，回傳被拿掉的那些。
+
+    **拿掉要留痕**：丟掉的值寫進 `raw._dropped`。悄悄丟掉與當成真值一樣糟
+    ——事後要查「這一筆為什麼沒有 SINR」時，答案必須在資料裡，不是在某個人的
+    記憶裡。
+    """
+    dropped: dict[str, float] = {}
+    for field, (lo, hi) in SANE_RANGE.items():
+        v = m.get(field)
+        if v is None:
+            continue
+        try:
+            fv = float(v)
+        except (TypeError, ValueError):
+            continue
+        if fv < lo or fv > hi:
+            dropped[field] = fv
+            m[field] = None
+    if dropped:
+        raw = m.get("raw")
+        m["raw"] = {**raw, "_dropped": dropped} if isinstance(raw, dict) \
+            else {"_dropped": dropped}
+    return dropped
+
+
 if __name__ == "__main__":       # 自我檢查：兩筆已知輸入，值都在文件裡對過
     ours = ('AT+GTCCINFO?\r\r\n+GTCCINFO: \r\nNR service cell: \r\n'
             '1,9,999,66,8D,234001,AFDA0,8D,5079,100,85,53,53,64\r\n\r\nOK')
@@ -156,5 +203,12 @@ if __name__ == "__main__":       # 自我檢查：兩筆已知輸入，值都在
     chk("T-Mobile 範例 PCI（0x290）", b["pci"], 656)
     chk("欄位不足時不猜", parse_gtccinfo("NR service cell: \r\n1,9,999\r\n"), None)
     chk("沒有 NR 段時不猜", parse_gtccinfo("+GTCCINFO: \r\nLTE service cell:\r\n"), None)
+
+    sent = {"sinr": -3276.0, "rsrp": -95.0, "raw": {"at_qeng": "…"}}
+    got = drop_sentinels(sent)
+    chk("哨兵值拿掉", (got, sent["sinr"], sent["rsrp"]), ({"sinr": -3276.0}, None, -95.0))
+    chk("拿掉要留痕", sent["raw"]["_dropped"], {"sinr": -3276.0})
+    keep = {"sinr": -12.0, "rsrp": -120.0}
+    chk("範圍內的爛值照樣留著", (drop_sentinels(keep), keep["sinr"]), ({}, -12.0))
     print("全部通過" if ok else "有項目不通過")
     raise SystemExit(0 if ok else 1)

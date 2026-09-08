@@ -2297,6 +2297,10 @@ async def link_metrics_live(s: LinkSample):
     m = s.model_dump(mode="json", exclude_none=False)
     m.pop("drone_id", None)
     m["source"] = "modem"
+    # **哨兵值先拿掉再說**：模組在受限服務下會把 SINR 回成無效標記
+    # （實測 -3276），照單全收的話畫面會把它當成「最差 -3276 dB」。
+    # 拿掉的值寫進 raw._dropped（見 modem_raw.drop_sentinels）
+    modem_raw.drop_sentinels(m)
     # **值一直都在 raw 裡，只是沒有人解**（modem_raw.py）：pci／cell_id／band
     # 三欄今天全是 null，而畫面上的「—」會被讀成「這個場域量不到細胞資訊」。
     # 只補 null，不覆蓋機上自己填的
@@ -2328,7 +2332,8 @@ async def link_metrics_batch(batch: LinkBatch):
         # 這裡不能用 mode="json"：time 要保持 datetime 才能寫進 TIMESTAMPTZ
         m = s.model_dump(exclude_none=False)
         m["source"] = "modem"
-        modem_raw.enrich(m)          # 同 live 那條路（見 modem_raw.py）
+        modem_raw.drop_sentinels(m)  # 同 live 那條路（見 modem_raw.py）
+        modem_raw.enrich(m)
         session_id = await db.find_session_at(drone_id, s.time)
         if session_id is None:
             outside += 1                      # 架次外：等同 issues/004 的 gate，丟棄
