@@ -65,6 +65,8 @@ h1{font-size:19px;font-weight:650;letter-spacing:.01em}
 .field .row{display:flex;justify-content:space-between;align-items:baseline}
 .field label{color:var(--ink-2)}
 .field .val{font-family:var(--mono);font-size:15px}
+.numin{background:var(--surface-2);border:1px solid var(--border);border-radius:6px;
+  padding:3px 6px;width:74px;font-family:var(--mono);text-align:right}
 input[type=range]{width:100%;accent-color:var(--accent)}
 .verdict{border-radius:8px;padding:9px 10px;font-size:12px;line-height:1.5}
 .verdict.ok{background:rgba(12,163,12,.08);color:var(--ink-2);
@@ -230,18 +232,26 @@ tbody tr:last-child td{border-bottom:none}
       <div class="field"><div class="row"><label>航點</label>
         <span class="val" id="wpName">seq 1</span></div>
         <div class="fixes"><button id="delWp">刪除這個點</button></div>
-        <div class="note">在 3D 上<b>拖曳航點可以移動它</b>；拖曳空白處是轉視角。</div>
+        <div class="note">3D 上拖曳航點只移動<b>位置</b>；高度用上面的滑桿或數字。</div>
+      </div>
+
+      <div class="field">
+        <div class="row"><label>這個點的類型</label></div>
+        <div class="seg" id="wpKind">
+          <button aria-pressed="true" data-k="wp">航點</button>
+          <button aria-pressed="false" data-k="land">降落點</button>
+        </div>
       </div>
 
       <div class="field">
         <div class="row"><label>高度（離起飛點）</label>
-          <span class="val" id="altVal">3.0 m</span></div>
-        <input type="range" id="alt" min="0" max="20" step="0.5" value="3">
+          <input class="numin" type="number" id="altNum" step="0.1" value="3"> m</div>
+        <input type="range" id="alt" min="0" max="20" step="0.1" value="3">
       </div>
 
       <div class="field">
         <div class="row"><label>下一段速度</label>
-          <span class="val" id="spdVal">2.0 m/s</span></div>
+          <input class="numin" type="number" id="spdNum" step="0.1" value="2"> m/s</div>
         <input type="range" id="spd" min="0.2" max="8" step="0.1" value="2">
       </div>
 
@@ -608,8 +618,10 @@ function sync(){
   document.getElementById("wpName").textContent = "seq "+w.seq;
   document.getElementById("alt").value = w.alt;
   document.getElementById("spd").value = w.spd;
-  document.getElementById("altVal").textContent = w.alt.toFixed(1)+" m";
-  document.getElementById("spdVal").textContent = w.spd.toFixed(1)+" m/s";
+  document.getElementById("altNum").value = w.alt.toFixed(1);
+  document.getElementById("spdNum").value = w.spd.toFixed(1);
+  document.querySelectorAll("#wpKind button").forEach(b =>
+    b.setAttribute("aria-pressed", String(b.dataset.k === (w.kind==="land"?"land":"wp"))));
   const A=agl(w), bad=legBad(sel);
   const v=document.getElementById("verdict");
   // **穿地與低空帶速是兩條不同的規則**，兩條都要判。只看低空帶速的話，
@@ -625,7 +637,7 @@ function sync(){
     : `離地 <b class="num">${A.toFixed(1)}</b> m ・ <b class="num">${w.spd.toFixed(1)}</b> m/s，這一段通過。`;
   const ln=document.getElementById("lmNote");
   if(ln) ln.textContent = lm==="glide"
-    ? "最後一段會一路降下來——路徑比較長，但落地前的姿態穩定。"
+    ? "最後一段平均降下來。要降得更快就把最後兩個點拉近。"
     : "維持高度飛到定點正上方，再直直下降——飛控的原生行為。";
   const sn=document.getElementById("saveNote");
   if(sn) sn.textContent = placing
@@ -637,8 +649,16 @@ function sync(){
   document.getElementById("chipMin").className = "chip"+(Math.min(...mins)<LOW_ALT?" bad":"");
   drawScene(); drawProf(); drawLegs();
 }
-document.getElementById("alt").oninput = e => { WP[sel].alt = +e.target.value; dirty++; sync(); };
-document.getElementById("spd").oninput = e => { WP[sel].spd = +e.target.value; dirty++; sync(); };
+const setAlt = v => { WP[sel].alt = +v; dirty++; sync(); };
+const setSpd = v => { WP[sel].spd = +v; dirty++; sync(); };
+document.getElementById("alt").oninput = e => setAlt(e.target.value);
+document.getElementById("altNum").oninput = e => setAlt(e.target.value);
+document.getElementById("spd").oninput = e => setSpd(e.target.value);
+document.getElementById("spdNum").oninput = e => setSpd(e.target.value);
+document.querySelectorAll("#wpKind button").forEach(b => b.onclick = () => {
+  if(WP[sel].kind==="takeoff") { alert("起飛點的類型不能改。"); return; }
+  WP[sel].kind = b.dataset.k; dirty++; sync();
+});
 document.getElementById("delWp").onclick = () => {
   // **起飛點刪不得**：那是解鎖的地方，不是規劃出來的一個點
   if(WP[sel].kind==="takeoff"){ alert("起飛點不能刪除——那是解鎖的地方。"); return; }
