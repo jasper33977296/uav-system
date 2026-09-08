@@ -1,5 +1,5 @@
 "use client";
-import { IconLayer } from "@deck.gl/layers";
+import { IconLayer, TextLayer } from "@deck.gl/layers";
 import { MapboxOverlay } from "@deck.gl/mapbox";
 import maplibregl from "maplibre-gl";
 import "maplibre-gl/dist/maplibre-gl.css";
@@ -35,8 +35,11 @@ interface Ev {
   source?: string | null;
   drone_id?: string | null;
 }
-/** 模式帶要用的遙測（track 回應本來就有，之前整批丟掉）。 */
-interface TeleRow { time: string; flight_mode: string | null; alt_rel: number | null }
+/** 模式帶與球體標籤要用的遙測（track 回應本來就有，之前整批丟掉）。 */
+interface TeleRow {
+  time: string; flight_mode: string | null; alt_rel: number | null;
+  ground_speed: number | null;
+}
 interface CmdRow {
   time: string; action: string; result: string;
   detail: string | null; client: string | null;
@@ -346,6 +349,10 @@ export default function Replay() {
   //: 球體游標的當下位置。**放 ref 不放 state**：自訂層在 render 迴圈裡讀，
   //: 每次 scrub 都重建 React 樹是白工
   const cursorRef = useRef<{ lat: number; lon: number; alt: number; color: string } | null>(null);
+  //: 球體旁的標籤文字（機名／高度／速度）——同上，放 ref 供圖層讀
+  const labelRef = useRef<string>("");
+  const teleRef = useRef<TeleRow[]>([]);
+  const metaRef = useRef<{ drone_name?: string | null } | null>(null);
   const pushLayersRef = useRef<() => void>(() => {});
   useEffect(() => {
     pushLayersRef.current = () => {
@@ -386,8 +393,44 @@ export default function Replay() {
             Math.cos(((mapRef.current?.getPitch() ?? 55) * Math.PI) / 180)), -0.75)),
           parameters: { depthCompare: "always" as const, depthWriteEnabled: false },
         })] : []),
+        // **球體旁的標籤**（使用者要求 2026-09-08）：機名／高度／速度。
+        // 速度來自遙測（鏈路樣本沒有這一欄），取不晚於當下的最後一筆——
+        // 兩條序列時間不對齊，**不內插**：內插會生出一個沒有人量到的速度
+        ...(r && r.lat != null && r.lon != null ? [new TextLayer({
+          id: "cursor-label",
+          data: [{ pos: [r.lon, r.lat, r.alt_rel ?? 0] as [number, number, number] }],
+          getPosition: (d: { pos: [number, number, number] }) => d.pos,
+          getText: () => labelRef.current,
+          getSize: 12, sizeUnits: "pixels",
+          getColor: [240, 238, 230, 235],
+          getTextAnchor: "start", getAlignmentBaseline: "center",
+          getPixelOffset: [16, -14],
+          background: true,
+          getBackgroundColor: [27, 26, 23, 205],
+          backgroundPadding: [6, 4, 6, 4],
+          outlineWidth: 0,
+          // **characterSet 預設只有 ASCII**：中文（與 ▲→ 這類符號）會被靜靜
+          // 丟掉，畫面上只剩數字（實測）。deck 9 支援 "auto"——用到什麼字就
+          // 產生什麼字，不必自己維護字元表
+          characterSet: "auto",
+          fontFamily: "ui-monospace, SFMono-Regular, Menlo, monospace",
+          // 標籤要永遠讀得到：不做深度比較（否則會被自己的球體遮住一半）
+          parameters: { depthCompare: "always" as const, depthWriteEnabled: false },
+          updateTriggers: { getPosition: idx, getText: labelRef.current },
+        })] : []),
       ] });
       // 球體游標：更新 ref 後叫地圖重畫（自訂層不吃 deck 的 props 更新）
+      {
+        const tl = teleAtRow(teleRef.current, r?.time);
+        const nm = metaRef.current?.drone_name ?? "";
+        // **用字不用符號**：deck 的 TextLayer 沒有把 ▲／→ 這類字元畫出來
+        // （實測標籤只剩數字）。高度／速度兩個字本來就比箭頭好懂
+        labelRef.current = [
+          nm,
+          `高度 ${r?.alt_rel != null ? r.alt_rel.toFixed(1) : "—"} m`,
+          `速度 ${tl?.ground_speed != null ? tl.ground_speed.toFixed(1) : "—"} m/s`,
+        ].filter(Boolean).join("\n");
+      }
       cursorRef.current = (r && r.lat != null && r.lon != null)
         ? { lat: r.lat, lon: r.lon, alt: r.alt_rel ?? 0,
             // **id 還沒到就不要去登記顏色**：colorFor 依「首次出現順序」配色，
@@ -430,6 +473,12 @@ export default function Replay() {
   useEffect(() => {
     setDrawerOpen(localStorage.getItem("replay-drawer-open") !== "0");
   }, []);
+
+  useEffect(() => { teleRef.current = tele; }, [tele]);
+  useEffect(() => { metaRef.current = { drone_name: sess?.drone_name ?? meta?.drone_name }; },
+    [sess?.drone_name, meta?.drone_name]);
+  // 標籤內容變了要重推圖層（機名是非同步到的）
+  useEffect(() => { pushLayersRef.current(); }, [tele, sess?.drone_name, meta?.drone_name]);
 
   const cur = rows[idx];
 
@@ -654,6 +703,18 @@ export default function Replay() {
 }
 
 /* ── 回放頁的輔助與元件（2026-09-08，對齊 doc/replay-redesign-proto.html）── */
+
+/** 那一刻的遙測（速度用）。**不內插**：兩條序列時間不對齊，內插會生出
+ * 一個沒有人量到的速度。 */
+function teleAtRow(tele: TeleRow[], time: string | undefined): TeleRow | null {
+  if (!time || !tele.length) return null;
+  const t = new Date(time).getTime();
+  let r: TeleRow | null = null;
+  for (const x of tele) {
+    if (new Date(x.time).getTime() <= t) r = x; else break;
+  }
+  return r;
+}
 
 /** 那一刻的飛行模式。遙測與鏈路樣本是兩條序列，時間不對齊——取最後一筆
  * 不晚於該時刻的（不內插：模式是離散狀態，插值沒有意義）。 */

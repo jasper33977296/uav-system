@@ -1,0 +1,508 @@
+<title>UAV 場域訊號比較 v2</title>
+<style>
+:root{
+  color-scheme:dark;
+  --page:#1b1a17; --surface:#262624; --surface-2:#30302c;
+  --ink:#f0eee6; --ink-2:#c2bfb3; --muted:#8f8b80; --hairline:#3a3833;
+  --border:rgba(240,238,230,.1);
+  --accent:#d97757; --accent-bg:rgba(217,119,87,.12);
+  --series-1:#3987e5; --series-2:#d95926; --series-3:#199e70;
+  --ok:#0ca30c; --warn:#fab219; --serious:#e05e0e; --danger:#a01818; --danger-ink:#e05e5e;
+  --sinr-good:#0ca30c; --sinr-fair:#fab219; --sinr-bad:#e05e0e; --sinr-crit:#a01818;
+  --mono:ui-monospace,"SF Mono","JetBrains Mono",Menlo,Consolas,monospace;
+}
+*{margin:0;padding:0;box-sizing:border-box}
+html,body{height:100%}
+body{font-family:system-ui,-apple-system,"Noto Sans TC","Segoe UI",sans-serif;
+  background:var(--page);color:var(--ink);font-size:13px;line-height:1.5;-webkit-font-smoothing:antialiased}
+button,input,select{font:inherit;color:inherit}
+button{background:none;border:none;cursor:pointer}
+:focus-visible{outline:2px solid var(--accent);outline-offset:1px}
+.spacer{flex:1}
+.mono{font-family:var(--mono);font-variant-numeric:tabular-nums}
+
+.shell{height:100dvh;display:flex;flex-direction:column;overflow:hidden}
+.nav{flex:none;height:46px;display:flex;align-items:center;gap:14px;padding:0 14px;
+  background:var(--surface);border-bottom:1px solid var(--hairline)}
+.brand{font-size:13px;font-weight:700}
+.navtabs{display:flex;gap:2px}
+.navtabs button{padding:5px 9px;border-radius:6px;color:var(--muted);display:grid;place-items:center}
+.navtabs button[aria-current="true"]{color:var(--accent);background:var(--accent-bg)}
+.reclight{display:inline-flex;align-items:center;gap:6px;color:var(--muted);font-size:12px}
+.recdot{width:11px;height:11px;border-radius:50%;background:var(--muted)}
+
+.info{width:15px;height:15px;border-radius:50%;border:1px solid var(--hairline);
+  color:var(--muted);font-size:10px;display:inline-grid;place-items:center;position:relative;
+  flex:none;cursor:help;line-height:1}
+.info:hover,.info:focus-visible{color:var(--ink);border-color:var(--border)}
+.info::after{content:attr(data-tip);position:absolute;right:-2px;top:20px;width:266px;z-index:60;
+  background:var(--surface-2);color:var(--ink-2);border:1px solid var(--border);border-radius:8px;
+  padding:8px 10px;font-size:11px;line-height:1.65;text-align:left;font-weight:400;
+  box-shadow:0 8px 24px rgba(0,0,0,.45);opacity:0;visibility:hidden;transition:opacity .12s}
+.info:hover::after,.info:focus-visible::after{opacity:1;visibility:visible}
+
+/* 分頁切換 */
+.tabs{flex:none;display:flex;gap:3px;padding:8px 14px 0;background:var(--page);
+  border-bottom:1px solid var(--hairline)}
+.tabs button{padding:6px 13px;font-size:12.5px;color:var(--muted);border-bottom:2px solid transparent;margin-bottom:-1px}
+.tabs button[aria-selected="true"]{color:var(--accent);border-bottom-color:var(--accent)}
+.tabs button:hover{color:var(--ink-2)}
+
+.body{flex:1;min-height:0;position:relative;overflow:hidden}
+#map{position:absolute;inset:0;width:100%;height:100%;background:#14181c}
+.overlay{position:absolute;left:12px;top:12px;display:flex;flex-direction:column;gap:9px;
+  width:288px;max-height:calc(100% - 24px);overflow-y:auto}
+.card{background:var(--surface);border:1px solid var(--border);border-radius:12px;padding:11px 12px;
+  box-shadow:0 4px 16px rgba(0,0,0,.35)}
+.card h3{font-size:12px;font-weight:600;color:var(--ink-2);display:flex;align-items:center;gap:7px;margin-bottom:8px}
+.h3-note{font-size:11px;color:var(--muted);font-weight:400}
+.row{display:flex;align-items:center;gap:7px;margin-top:7px}
+.lab{font-size:11px;color:var(--muted);white-space:nowrap}
+.pills{display:inline-flex;gap:3px}
+.pill{padding:2px 9px;border-radius:6px;border:1px solid transparent;color:var(--muted);font-size:11.5px}
+.pill:hover{color:var(--ink-2)}
+.pill[aria-pressed="true"]{color:var(--ink);background:var(--surface-2);border-color:var(--border)}
+select{background:var(--page);border:1px solid var(--hairline);border-radius:7px;
+  padding:4px 8px;font-size:12px;color:var(--ink);flex:1;min-width:0}
+.hint{font-size:11px;color:var(--muted);line-height:1.7;margin-top:7px}
+.chip{display:inline-flex;align-items:center;gap:5px;padding:1px 8px;border-radius:999px;
+  background:var(--surface-2);font-size:11px;color:var(--ink-2)}
+.chip .dot{width:7px;height:7px;border-radius:50%}
+.btn{padding:3px 10px;border:1px solid var(--hairline);border-radius:7px;color:var(--ink-2);
+  background:var(--surface-2);font-size:12px}
+.btn:hover{color:var(--ink);border-color:var(--border)}
+.name-lg{font-size:13.5px;font-weight:700}
+
+.legend{position:absolute;left:12px;bottom:12px;background:var(--surface);
+  border:1px solid var(--border);border-radius:12px;padding:8px 11px;font-size:11.5px;
+  display:flex;align-items:center;gap:9px;box-shadow:0 4px 16px rgba(0,0,0,.35)}
+.legend-lab{color:var(--muted)}
+.legend-seg{display:inline-flex;align-items:center;gap:5px;color:var(--ink-2)}
+.legend-sw{width:14px;height:6px;border-radius:2px;flex:none}
+.scalebar{position:absolute;right:12px;bottom:14px;font-size:11px;color:var(--ink-2)}
+
+/* 前後比較 */
+.ab{position:absolute;inset:0;overflow-y:auto;padding:12px 14px;display:flex;flex-direction:column;gap:10px}
+.ab .card{box-shadow:none}
+.picker{display:flex;align-items:center;gap:9px;flex-wrap:wrap}
+.picker .side{display:flex;align-items:center;gap:6px;flex:1;min-width:260px}
+.sidedot{width:9px;height:9px;border-radius:50%;flex:none}
+table{width:100%;border-collapse:collapse;font-size:12.5px}
+th{text-align:left;font-size:10.5px;font-weight:600;color:var(--muted);letter-spacing:.04em;
+  padding:0 8px 6px;border-bottom:1px solid var(--hairline)}
+td{padding:5px 8px;border-bottom:1px solid rgba(58,56,51,.55);color:var(--ink-2)}
+td.n,th.n{text-align:right;font-family:var(--mono);font-variant-numeric:tabular-nums}
+.verdict{margin-top:8px;padding:7px 10px;border-radius:8px;background:var(--surface-2);
+  font-size:12px;color:var(--ink-2);line-height:1.7}
+.verdict .why{color:var(--muted);font-size:11px}
+.abchart svg{width:100%;height:170px;display:block}
+.abmap svg{width:100%;height:260px;display:block;background:#14181c;border-radius:8px}
+.ablegend{display:flex;align-items:center;gap:9px;font-size:11.5px;color:var(--ink-2);margin-top:7px}
+.ablegend .sw{width:16px;height:8px;border-radius:2px;display:inline-block}
+.ablegend .sw-none{border:1px dashed var(--muted);background:none}
+</style>
+
+<div class="shell">
+  <nav class="nav">
+    <span class="brand">UAV 監控</span>
+    <div class="navtabs">
+      <button title="即時監控"><svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><circle cx="12" cy="12" r="3.2"/><path d="M12 2.5v4M12 17.5v4M2.5 12h4M17.5 12h4"/></svg></button>
+      <button title="無人機"><svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><circle cx="5.5" cy="5.5" r="2.4"/><circle cx="18.5" cy="5.5" r="2.4"/><circle cx="5.5" cy="18.5" r="2.4"/><circle cx="18.5" cy="18.5" r="2.4"/><rect x="10" y="10" width="4" height="4" rx="1.4"/></svg></button>
+      <button title="路徑管理"><svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M4 19c6 0 2-10 8-10 5 0 3 7 8 5"/></svg></button>
+      <button aria-current="true" title="比較"><svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M3 16l5-6 4 3 6-8"/><path d="M3 20l5-4 4 2 6-6" opacity=".5"/></svg></button>
+      <button title="資訊"><svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M3 7.5l9-4.5 9 4.5-9 4.5-9-4.5z"/><path d="M3 12l9 4.5 9-4.5"/><path d="M3 16.5l9 4.5 9-4.5"/></svg></button>
+    </div>
+    <span class="spacer"></span>
+    <span class="reclight"><span class="recdot"></span>未記錄</span>
+  </nav>
+
+  <div class="tabs" role="tablist">
+    <button role="tab" id="tabField" aria-selected="true">場域訊號</button>
+    <button role="tab" id="tabAb" aria-selected="false">前後比較</button>
+  </div>
+
+  <div class="body">
+    <!-- ── 場域訊號 ───────────────────────────────── -->
+    <section id="field">
+      <svg id="map" viewBox="0 0 1200 800" preserveAspectRatio="xMidYMid meet"></svg>
+      <div class="overlay">
+        <div class="card">
+          <h3>場域訊號<span class="h3-note" id="tripcount"></span>
+            <span class="spacer"></span>
+            <span class="info" tabindex="0" data-tip="把選定範圍內的每一趟疊在一起：單趟半透明，多趟一致的弱區越疊越濃——濃淡直接表達「每次都爛」與「偶爾爛」。弱區輪廓＝10 m 格的 P10 落在劣化以下、而且至少兩趟都飛過的格子；只圈飛過的地方，不插值、不腦補。">ⓘ</span>
+          </h3>
+          <div class="row">
+            <span class="lab">時間</span>
+            <span class="pills" id="ranges"></span>
+          </div>
+          <div class="row"><select id="fMission"></select></div>
+          <div class="row"><select id="fDrone"></select></div>
+          <div class="row">
+            <span class="pills">
+              <button class="pill" id="zonesBtn" aria-pressed="true">弱區輪廓</button>
+            </span>
+            <span class="spacer"></span>
+            <span class="lab" id="weakcount"></span>
+          </div>
+          <div class="hint" id="honesty"></div>
+        </div>
+        <div class="card" id="selcard" hidden></div>
+      </div>
+      <div class="legend">
+        <span class="legend-lab">訊號品質</span>
+        <span class="legend-seg"><i class="legend-sw" style="background:var(--sinr-good)"></i>良好</span>
+        <span class="legend-seg"><i class="legend-sw" style="background:var(--sinr-fair)"></i>尚可</span>
+        <span class="legend-seg"><i class="legend-sw" style="background:var(--sinr-bad)"></i>劣化</span>
+        <span class="legend-seg"><i class="legend-sw" style="background:var(--sinr-crit)"></i>瀕斷</span>
+        <span class="info" tabindex="0" data-tip="門檻與 backend 事件門檻同一出處：良好 ≥13、尚可 5–13、劣化 −2–5、瀕斷 −2 dB 以下。線的濃淡＝有幾趟疊在同一處（淡＝單趟、濃＝多趟一致）。白色虛框＝弱區，框上的 ▼ 是那一格量到的最差值。顏色永不單獨傳達語意。">ⓘ</span>
+      </div>
+      <div class="scalebar">格 10 m · 傾斜 55°</div>
+    </section>
+
+    <!-- ── 前後比較 ───────────────────────────────── -->
+    <section id="ab" class="ab" hidden></section>
+  </div>
+</div>
+
+<script>window.PROTO={"origin":{"lat":24.77343305848681,"lon":121.04593819143852},"cell":10.0,"sessions":[{"id":"a0e8bf4c-6324-42df-9428-d47dcbbce732","start":"2026-08-13T08:37:35.735446+00:00","drone":"ai-model-rb5 [啪 沒了]","mission":null,"n":464,"note":null,"clock":"08/13 16:37"},{"id":"3b212564-c346-4ba8-9753-4ef437aa0fad","start":"2026-08-11T08:22:37.661532+00:00","drone":"ai-model-rb5 [啪 沒了]","mission":null,"n":208,"note":null,"clock":"08/11 16:22"},{"id":"45839299-5462-4d74-865c-3b271e146dac","start":"2026-08-11T08:31:11.771976+00:00","drone":"ai-model-rb5 [啪 沒了]","mission":null,"n":196,"note":null,"clock":"08/11 16:31"},{"id":"4420e64e-1c7b-4ce2-afae-23ccc48527ef","start":"2026-08-10T08:29:44.040117+00:00","drone":"ai-model-rb5 [啪 沒了]","mission":null,"n":172,"note":null,"clock":"08/10 16:29"},{"id":"091a642e-807c-443d-926f-fc6176771709","start":"2026-08-11T08:03:30.353841+00:00","drone":"ai-model-rb5 [啪 沒了]","mission":null,"n":165,"note":null,"clock":"08/11 16:03"},{"id":"ee8a1d3a-b21f-4598-acd7-7bb03a2f1f7c","start":"2026-08-11T08:12:09.977827+00:00","drone":"ai-model-rb5 [啪 沒了]","mission":null,"n":144,"note":null,"clock":"08/11 16:12"},{"id":"cd4c4ab0-fdb4-4b10-a8f3-fdca33ab2461","start":"2026-08-11T08:46:20.798399+00:00","drone":"ai-model-rb5 [啪 沒了]","mission":null,"n":137,"note":null,"clock":"08/11 16:46"},{"id":"cc12aad7-ee9a-4948-89c2-39c752671730","start":"2026-08-11T08:18:32.794513+00:00","drone":"ai-model-rb5 [啪 沒了]","mission":null,"n":129,"note":null,"clock":"08/11 16:18"},{"id":"d0a74178-8a91-4229-88de-815409bea0c0","start":"2026-08-10T08:19:15.033933+00:00","drone":"ai-model-rb5 [啪 沒了]","mission":null,"n":122,"note":null,"clock":"08/10 16:19"},{"id":"a2434885-fdf4-4dcd-b692-af7b617a29da","start":"2026-08-11T08:49:38.803708+00:00","drone":"ai-model-rb5 [啪 沒了]","mission":null,"n":101,"note":null,"clock":"08/11 16:49"},{"id":"91c3d4d9-5c3a-4909-ad29-45357d40603f","start":"2026-08-10T08:43:35.072534+00:00","drone":"ai-model-rb5 [啪 沒了]","mission":null,"n":87,"note":null,"clock":"08/10 16:43"},{"id":"c75efc42-e9e7-4556-851c-014f303de88f","start":"2026-08-10T08:40:38.693231+00:00","drone":"ai-model-rb5 [啪 沒了]","mission":null,"n":82,"note":null,"clock":"08/10 16:40"}],"runs":{"a0e8bf4c-6324-42df-9428-d47dcbbce732":[{"e":-3.4,"north":7.1,"s":1.0},{"e":-3.3,"north":7.2,"s":0.0},{"e":-3.2,"north":7.3,"s":2.0},{"e":-2.8,"north":7.3,"s":1.0},{"e":-2.5,"north":7.3,"s":-1.0},{"e":-2.1,"north":7.3,"s":3.0},{"e":-1.6,"north":7.3,"s":2.0},{"e":-1.4,"north":7.3,"s":2.0},{"e":-1.2,"north":7.2,"s":2.0},{"e":-1.0,"north":7.1,"s":5.0},{"e":-0.8,"north":7.1,"s":3.0},{"e":-0.9,"north":7.1,"s":2.0},{"e":-1.0,"north":7.2,"s":3.0},{"e":-1.1,"north":7.3,"s":3.0},{"e":-1.1,"north":7.3,"s":4.0},{"e":-1.2,"north":7.2,"s":4.0},{"e":-1.3,"north":7.1,"s":4.0},{"e":-1.4,"north":7.1,"s":3.0},{"e":-1.5,"north":7.1,"s":5.0},{"e":-1.5,"north":7.0,"s":4.0},{"e":-1.7,"north":7.0,"s":5.0},{"e":-1.8,"north":7.0,"s":2.0},{"e":-2.0,"north":7.0,"s":3.0},{"e":-2.1,"north":7.0,"s":4.0},{"e":-2.1,"north":7.0,"s":4.0},{"e":-2.2,"north":7.1,"s":5.0},{"e":-2.5,"north":7.2,"s":5.0},{"e":-3.0,"north":7.2,"s":6.0},{"e":-3.6,"north":7.3,"s":7.0},{"e":-4.0,"north":7.2,"s":4.0},{"e":-4.3,"north":7.2,"s":5.0},{"e":-4.6,"north":7.2,"s":4.0},{"e":-4.6,"north":7.2,"s":5.0},{"e":-4.6,"north":7.2,"s":5.0},{"e":-4.6,"north":7.2,"s":5.0},{"e":-4.6,"north":7.1,"s":5.0},{"e":-4.5,"north":7.0,"s":6.0},{"e":-4.5,"north":6.9,"s":7.0},{"e":-4.5,"north":6.8,"s":6.0},{"e":-4.4,"north":6.6,"s":5.0},{"e":-4.2,"north":6.5,"s":5.0},{"e":-3.8,"north":6.4,"s":5.0},{"e":-3.4,"north":6.2,"s":3.0},{"e":-2.7,"north":6.0,"s":4.0},{"e":-2.1,"north":5.8,"s":7.0},{"e":-1.6,"north":5.6,"s":5.0},{"e":-1.3,"north":5.4,"s":5.0},{"e":-1.2,"north":5.3,"s":2.0},{"e":-1.4,"north":5.3,"s":3.0},{"e":-1.6,"north":5.3,"s":3.0},{"e":-1.7,"north":5.2,"s":2.0},{"e":-1.7,"north":5.3,"s":3.0},{"e":-1.8,"north":5.3,"s":3.0},{"e":-2.0,"north":5.3,"s":2.0},{"e":-2.4,"north":5.4,"s":2.0},{"e":-2.8,"north":5.5,"s":3.0},{"e":-3.3,"north":5.5,"s":2.0},{"e":-3.7,"north":5.6,"s":3.0},{"e":-3.9,"north":5.5,"s":3.0},{"e":-4.0,"north":5.5,"s":5.0},{"e":-3.8,"north":5.5,"s":4.0},{"e":-3.6,"north":5.6,"s":5.0},{"e":-3.6,"north":5.7,"s":4.0},{"e":-3.4,"north":5.8,"s":4.0},{"e":-3.3,"north":6.0,"s":3.0},{"e":-3.3,"north":6.1,"s":2.0},{"e":-3.5,"north":6.2,"s":1.0},{"e":-3.6,"north":6.3,"s":2.0},{"e":-3.6,"north":6.1,"s":4.0},{"e":-3.7,"north":5.9,"s":2.0},{"e":-4.0,"north":5.8,"s":3.0},{"e":-4.3,"north":5.5,"s":2.0},{"e":-4.4,"north":5.1,"s":2.0},{"e":-4.5,"north":4.8,"s":2.0},{"e":-4.5,"north":4.6,"s":0.0},{"e":-4.4,"north":4.4,"s":2.0},{"e":-4.2,"north":4.3,"s":1.0},{"e":-4.0,"north":4.2,"s":2.0},{"e":-3.7,"north":4.1,"s":3.0},{"e":-3.5,"north":4.0,"s":1.0},{"e":-3.3,"north":3.7,"s":1.0},{"e":-3.3,"north":3.4,"s":6.0},{"e":-3.3,"north":3.2,"s":6.0},{"e":-3.3,"north":3.1,"s":3.0},{"e":-3.3,"north":2.9,"s":6.0},{"e":-3.2,"north":2.7,"s":3.0},{"e":-3.0,"north":2.4,"s":3.0},{"e":-3.0,"north":2.3,"s":1.0},{"e":-3.0,"north":2.1,"s":-1.0},{"e":-2.9,"north":1.8,"s":2.0},{"e":-2.9,"north":1.7,"s":2.0},{"e":-2.8,"north":1.5,"s":2.0},{"e":-2.7,"north":1.5,"s":2.0},{"e":-2.8,"north":1.5,"s":2.0},{"e":-2.9,"north":1.4,"s":2.0},{"e":-0.6,"north":-2.1,"s":9.0},{"e":4.3,"north":-10.2,"s":2.0},{"e":8.1,"north":-17.9,"s":12.0},{"e":9.9,"north":-21.9,"s":11.0},{"e":10.3,"north":-23.1,"s":5.0},{"e":12.8,"north":-24.7,"s":6.0},{"e":20.4,"north":-29.9,"s":6.0},{"e":24.0,"north":-32.9,"s":8.0},{"e":25.2,"north":-33.9,"s":12.0},{"e":25.4,"north":-34.1,"s":9.0},{"e":25.3,"north":-34.1,"s":9.0},{"e":25.4,"north":-33.9,"s":9.0},{"e":25.4,"north":-33.9,"s":6.0},{"e":25.5,"north":-33.9,"s":4.0},{"e":25.6,"north":-33.9,"s":2.0},{"e":25.5,"north":-33.9,"s":2.0},{"e":25.5,"north":-33.9,"s":5.0},{"e":25.5,"north":-33.9,"s":10.0},{"e":25.5,"north":-34.0,"s":7.0},{"e":25.4,"north":-34.1,"s":9.0},{"e":25.5,"north":-34.4,"s":6.0},{"e":25.6,"north":-34.2,"s":5.0},{"e":25.6,"north":-34.1,"s":5.0},{"e":25.7,"north":-33.6,"s":10.0},{"e":25.6,"north":-33.4,"s":8.0},{"e":25.4,"north":-31.2,"s":4.0},{"e":25.0,"north":-30.6,"s":10.0},{"e":24.6,"north":-27.6,"s":6.0},{"e":24.5,"north":-27.1,"s":11.0},{"e":24.1,"north":-24.4,"s":9.0},{"e":24.0,"north":-24.1,"s":14.0},{"e":24.0,"north":-22.9,"s":13.0},{"e":23.1,"north":-22.0,"s":14.0},{"e":22.0,"north":-21.0,"s":12.0},{"e":21.1,"north":-19.5,"s":11.0},{"e":20.1,"north":-18.3,"s":12.0},{"e":21.2,"north":-17.5,"s":11.0},{"e":22.1,"north":-17.4,"s":8.0},{"e":22.8,"north":-17.7,"s":5.0},{"e":21.8,"north":-16.6,"s":6.0},{"e":20.9,"north":-15.2,"s":7.0},{"e":19.3,"north":-13.2,"s":3.0},{"e":15.5,"north":-9.7,"s":-1.0},{"e":11.4,"north":-6.2,"s":-1.0},{"e":8.1,"north":-3.3,"s":-1.0},{"e":4.9,"north":-0.6,"s":2.0},{"e":1.7,"north":1.6,"s":6.0},{"e":-1.0,"north":3.5,"s":9.0},{"e":-3.8,"north":5.9,"s":3.0},{"e":-5.6,"north":7.8,"s":2.0},{"e":-5.6,"north":8.0,"s":3.0},{"e":-5.3,"north":8.3,"s":6.0},{"e":-5.0,"north":8.5,"s":5.0},{"e":-4.8,"north":8.7,"s":5.0},{"e":-4.5,"north":8.8,"s":3.0},{"e":-4.4,"north":8.9,"s":3.0},{"e":-4.5,"north":9.1,"s":3.0},{"e":-4.7,"north":9.2,"s":4.0},{"e":-4.8,"north":9.2,"s":1.0},{"e":-4.7,"north":9.2,"s":0.0},{"e":-4.7,"north":9.1,"s":1.0},{"e":-4.7,"north":8.9,"s":4.0},{"e":-4.7,"north":8.9,"s":4.0},{"e":-4.7,"north":8.8,"s":3.0},{"e":-4.6,"north":8.8,"s":2.0},{"e":-4.5,"north":8.8,"s":3.0},{"e":-4.2,"north":8.7,"s":5.0},{"e":-4.0,"north":8.6,"s":3.0},{"e":-4.0,"north":8.5,"s":4.0},{"e":-4.0,"north":8.3,"s":5.0},{"e":-4.0,"north":8.1,"s":6.0},{"e":-4.2,"north":8.1,"s":0.0},{"e":-4.1,"north":7.8,"s":0.0},{"e":-3.6,"north":7.1,"s":3.0},{"e":-2.9,"north":6.2,"s":4.0},{"e":-2.6,"north":5.7,"s":4.0},{"e":-2.1,"north":5.2,"s":2.0},{"e":-2.4,"north":5.0,"s":4.0},{"e":-2.8,"north":5.0,"s":1.0},{"e":-3.2,"north":5.1,"s":2.0},{"e":-3.4,"north":5.3,"s":4.0},{"e":-3.5,"north":5.5,"s":4.0},{"e":-3.5,"north":5.6,"s":4.0},{"e":-3.4,"north":5.5,"s":6.0},{"e":-3.3,"north":5.4,"s":3.0},{"e":-3.3,"north":5.3,"s":5.0},{"e":-3.4,"north":5.3,"s":4.0},{"e":-3.4,"north":5.3,"s":12.0},{"e":-3.4,"north":5.3,"s":6.0},{"e":-3.4,"north":5.3,"s":8.0},{"e":-3.6,"north":5.3,"s":8.0},{"e":-3.7,"north":5.2,"s":-2.0},{"e":-3.4,"north":5.4,"s":-2.0},{"e":1.6,"north":6.6,"s":0.0},{"e":3.1,"north":7.0,"s":5.0},{"e":3.7,"north":7.2,"s":10.0},{"e":3.9,"north":7.4,"s":15.0},{"e":4.4,"north":8.1,"s":16.0},{"e":4.3,"north":7.9,"s":15.0},{"e":4.3,"north":7.7,"s":17.0},{"e":4.1,"north":7.5,"s":15.0},{"e":3.9,"north":7.4,"s":17.0},{"e":3.8,"north":7.3,"s":16.0},{"e":3.7,"north":7.3,"s":16.0},{"e":3.7,"north":7.2,"s":13.0},{"e":3.6,"north":7.2,"s":14.0},{"e":3.6,"north":7.3,"s":15.0},{"e":3.7,"north":7.3,"s":14.0},{"e":3.8,"north":7.3,"s":15.0},{"e":3.8,"north":7.2,"s":13.0},{"e":3.8,"north":7.3,"s":13.0},{"e":3.8,"north":7.3,"s":14.0},{"e":3.8,"north":7.3,"s":11.0},{"e":3.8,"north":7.3,"s":16.0},{"e":4.2,"north":7.3,"s":14.0},{"e":4.3,"north":7.3,"s":13.0},{"e":4.4,"north":7.3,"s":16.0},{"e":4.3,"north":7.3,"s":13.0},{"e":4.1,"north":7.2,"s":16.0},{"e":3.9,"north":7.3,"s":12.0},{"e":3.7,"north":7.3,"s":13.0},{"e":3.6,"north":7.3,"s":12.0},{"e":3.6,"north":7.4,"s":15.0},{"e":3.5,"north":7.4,"s":12.0},{"e":3.6,"north":7.3,"s":14.0},{"e":3.6,"north":7.2,"s":14.0},{"e":3.6,"north":7.2,"s":15.0},{"e":3.6,"north":7.2,"s":15.0},{"e":3.7,"north":7.3,"s":14.0},{"e":3.7,"north":7.3,"s":14.0},{"e":3.7,"north":7.3,"s":12.0},{"e":3.8,"north":7.2,"s":14.0},{"e":4.0,"north":7.3,"s":14.0},{"e":4.2,"north":7.4,"s":15.0},{"e":4.3,"north":7.4,"s":17.0},{"e":4.2,"north":7.4,"s":15.0},{"e":4.1,"north":7.4,"s":15.0}],"3b212564-c346-4ba8-9753-4ef437aa0fad":[{"e":-7.0,"north":14.3,"s":10.0},{"e":-7.0,"north":14.4,"s":11.0},{"e":-7.1,"north":14.2,"s":12.0},{"e":-6.9,"north":12.9,"s":7.0},{"e":-3.3,"north":11.2,"s":1.0},{"e":-3.5,"north":10.5,"s":1.0},{"e":-3.9,"north":9.9,"s":3.0},{"e":-4.2,"north":9.4,"s":3.0},{"e":-4.3,"north":8.9,"s":0.0},{"e":-3.9,"north":8.6,"s":4.0},{"e":-3.5,"north":8.4,"s":4.0},{"e":-3.1,"north":8.3,"s":4.0},{"e":-2.9,"north":8.1,"s":3.0},{"e":-2.9,"north":8.2,"s":0.0},{"e":-2.9,"north":8.2,"s":6.0},{"e":-2.9,"north":8.2,"s":2.0},{"e":-3.0,"north":8.1,"s":1.0},{"e":-3.0,"north":8.1,"s":-3.0},{"e":-3.0,"north":8.1,"s":10.0},{"e":-3.1,"north":8.2,"s":7.0},{"e":-3.1,"north":8.3,"s":5.0},{"e":1.2,"north":7.5,"s":3.0},{"e":3.0,"north":7.0,"s":2.0},{"e":3.4,"north":6.7,"s":10.0},{"e":3.6,"north":6.7,"s":12.0},{"e":3.5,"north":6.6,"s":9.0},{"e":3.4,"north":6.6,"s":10.0},{"e":3.3,"north":6.7,"s":12.0},{"e":3.3,"north":5.8,"s":11.0},{"e":4.1,"north":-2.2,"s":15.0},{"e":4.8,"north":-10.6,"s":15.0},{"e":5.1,"north":-14.6,"s":9.0},{"e":5.2,"north":-15.9,"s":9.0},{"e":3.6,"north":-16.2,"s":11.0},{"e":-4.5,"north":-17.1,"s":6.0},{"e":-12.5,"north":-17.9,"s":1.0},{"e":-17.1,"north":-18.4,"s":12.0},{"e":-19.2,"north":-18.6,"s":14.0},{"e":-20.1,"north":-18.6,"s":16.0},{"e":-20.7,"north":-18.6,"s":16.0},{"e":-20.9,"north":-18.6,"s":18.0},{"e":-21.1,"north":-18.6,"s":16.0},{"e":-21.2,"north":-18.6,"s":16.0},{"e":-20.8,"north":-18.6,"s":17.0},{"e":-20.5,"north":-18.7,"s":16.0},{"e":-20.7,"north":-18.7,"s":13.0},{"e":-20.7,"north":-18.7,"s":14.0},{"e":-20.7,"north":-18.7,"s":12.0},{"e":-20.7,"north":-18.6,"s":12.0},{"e":-20.6,"north":-18.7,"s":16.0},{"e":-20.7,"north":-18.7,"s":15.0},{"e":-20.7,"north":-18.8,"s":13.0},{"e":-20.6,"north":-18.7,"s":15.0},{"e":-20.7,"north":-18.8,"s":13.0},{"e":-20.7,"north":-18.7,"s":14.0},{"e":-20.6,"north":-18.8,"s":13.0},{"e":-20.6,"north":-18.7,"s":16.0},{"e":-20.5,"north":-18.7,"s":15.0},{"e":-20.4,"north":-18.7,"s":16.0},{"e":-20.4,"north":-18.7,"s":14.0},{"e":-20.5,"north":-18.7,"s":14.0},{"e":-20.6,"north":-18.7,"s":15.0},{"e":-20.5,"north":-18.8,"s":13.0},{"e":-20.4,"north":-18.8,"s":13.0},{"e":-20.4,"north":-18.7,"s":14.0},{"e":-20.4,"north":-18.9,"s":18.0},{"e":-20.7,"north":-18.7,"s":16.0},{"e":-19.0,"north":-18.5,"s":16.0},{"e":-18.7,"north":-18.4,"s":19.0},{"e":-16.9,"north":-18.4,"s":18.0},{"e":-16.0,"north":-18.6,"s":0.0},{"e":-15.3,"north":-18.7,"s":3.0},{"e":-14.9,"north":-18.8,"s":-1.0},{"e":-14.7,"north":-18.9,"s":19.0},{"e":-14.6,"north":-18.9,"s":21.0},{"e":-14.8,"north":-19.0,"s":17.0},{"e":-15.2,"north":-18.9,"s":17.0},{"e":-15.5,"north":-18.9,"s":17.0},{"e":-15.8,"north":-18.9,"s":18.0},{"e":-16.1,"north":-18.8,"s":18.0},{"e":-16.4,"north":-18.8,"s":18.0},{"e":-16.8,"north":-18.7,"s":15.0},{"e":-15.8,"north":-18.8,"s":16.0},{"e":-12.2,"north":-16.9,"s":14.0},{"e":-12.2,"north":-13.6,"s":13.0},{"e":-11.6,"north":-11.4,"s":-1.0},{"e":-11.5,"north":-9.9,"s":18.0},{"e":-11.5,"north":-7.4,"s":20.0},{"e":-11.7,"north":-4.0,"s":18.0},{"e":-12.7,"north":-0.7,"s":1.0},{"e":-14.5,"north":2.4,"s":5.0},{"e":-15.2,"north":3.1,"s":4.0},{"e":-15.3,"north":3.1,"s":0.0},{"e":-14.7,"north":4.0,"s":3.0},{"e":-14.6,"north":3.9,"s":1.0},{"e":-14.0,"north":5.2,"s":2.0},{"e":-12.6,"north":6.9,"s":3.0},{"e":-12.1,"north":8.7,"s":3.0},{"e":-9.7,"north":10.5,"s":4.0},{"e":-8.6,"north":12.1,"s":4.0},{"e":-8.8,"north":13.1,"s":0.0},{"e":-8.5,"north":13.8,"s":8.0},{"e":-8.0,"north":13.8,"s":6.0},{"e":-8.2,"north":13.7,"s":8.0}],"45839299-5462-4d74-865c-3b271e146dac":[{"e":-4.3,"north":14.1,"s":4.0},{"e":-4.0,"north":14.0,"s":3.0},{"e":-4.3,"north":14.0,"s":3.0},{"e":-4.4,"north":13.9,"s":1.0},{"e":-4.0,"north":14.1,"s":1.0},{"e":-3.5,"north":13.9,"s":6.0},{"e":-2.7,"north":13.6,"s":3.0},{"e":-2.4,"north":12.3,"s":7.0},{"e":-1.3,"north":11.7,"s":9.0},{"e":-0.1,"north":11.3,"s":10.0},{"e":0.8,"north":10.9,"s":14.0},{"e":1.0,"north":10.4,"s":14.0},{"e":3.5,"north":8.3,"s":12.0},{"e":10.9,"north":2.9,"s":13.0},{"e":17.2,"north":-2.3,"s":12.0},{"e":22.0,"north":-6.2,"s":14.0},{"e":24.4,"north":-8.2,"s":15.0},{"e":25.7,"north":-9.0,"s":13.0},{"e":25.0,"north":-10.1,"s":15.0},{"e":20.0,"north":-15.9,"s":13.0},{"e":16.4,"north":-19.9,"s":9.0},{"e":15.1,"north":-21.3,"s":6.0},{"e":14.3,"north":-22.4,"s":5.0},{"e":10.3,"north":-28.0,"s":3.0},{"e":7.2,"north":-32.1,"s":8.0},{"e":5.8,"north":-33.7,"s":5.0},{"e":5.0,"north":-34.2,"s":5.0},{"e":2.3,"north":-32.3,"s":3.0},{"e":-5.2,"north":-27.6,"s":14.0},{"e":-12.6,"north":-22.8,"s":17.0},{"e":-16.3,"north":-20.2,"s":12.0},{"e":-17.6,"north":-19.4,"s":15.0},{"e":-16.0,"north":-17.8,"s":17.0},{"e":-10.4,"north":-11.9,"s":11.0},{"e":-8.0,"north":-9.4,"s":2.0},{"e":-7.2,"north":-8.8,"s":7.0},{"e":-7.0,"north":-8.7,"s":2.0},{"e":-7.0,"north":-8.6,"s":5.0},{"e":-7.0,"north":-8.6,"s":12.0},{"e":-7.0,"north":-8.2,"s":11.0},{"e":-7.0,"north":-8.2,"s":11.0},{"e":-7.0,"north":-8.1,"s":9.0},{"e":-6.8,"north":-6.9,"s":8.0},{"e":-6.3,"north":-2.6,"s":4.0},{"e":-5.6,"north":1.9,"s":7.0},{"e":-5.1,"north":6.1,"s":15.0},{"e":-4.4,"north":6.5,"s":1.0},{"e":-4.3,"north":6.3,"s":5.0},{"e":-4.4,"north":5.8,"s":7.0},{"e":-4.3,"north":5.7,"s":6.0},{"e":-4.4,"north":5.8,"s":6.0},{"e":-4.5,"north":6.1,"s":11.0},{"e":-4.3,"north":6.0,"s":8.0},{"e":-3.4,"north":4.3,"s":10.0},{"e":-1.3,"north":1.5,"s":3.0},{"e":-0.5,"north":2.2,"s":4.0},{"e":0.6,"north":3.3,"s":3.0},{"e":3.7,"north":3.9,"s":4.0},{"e":2.9,"north":6.2,"s":4.0},{"e":2.1,"north":7.3,"s":4.0},{"e":0.6,"north":9.6,"s":0.0},{"e":0.7,"north":9.2,"s":5.0},{"e":-0.8,"north":8.6,"s":2.0},{"e":0.2,"north":4.8,"s":0.0},{"e":-2.2,"north":2.1,"s":3.0},{"e":-1.0,"north":2.4,"s":3.0},{"e":-1.9,"north":2.1,"s":5.0},{"e":1.3,"north":2.3,"s":9.0},{"e":-1.0,"north":1.3,"s":9.0},{"e":-1.3,"north":-0.1,"s":4.0},{"e":-0.8,"north":-1.5,"s":3.0},{"e":-5.9,"north":-2.9,"s":3.0},{"e":-6.0,"north":-2.7,"s":7.0},{"e":-4.2,"north":-4.4,"s":6.0},{"e":-5.0,"north":-6.9,"s":7.0},{"e":-8.1,"north":-8.3,"s":9.0},{"e":-11.8,"north":-10.5,"s":9.0},{"e":-13.9,"north":-13.1,"s":9.0},{"e":-16.4,"north":-16.2,"s":4.0},{"e":-18.4,"north":-14.5,"s":5.0},{"e":-20.6,"north":-13.7,"s":3.0},{"e":-21.7,"north":-11.7,"s":5.0},{"e":-22.4,"north":-10.3,"s":7.0},{"e":-19.0,"north":-10.3,"s":5.0},{"e":-15.7,"north":-5.6,"s":5.0},{"e":-13.6,"north":-0.8,"s":4.0},{"e":-14.3,"north":-0.1,"s":7.0},{"e":-11.3,"north":3.7,"s":8.0},{"e":-10.7,"north":5.1,"s":4.0},{"e":-8.8,"north":7.3,"s":3.0},{"e":-7.2,"north":7.8,"s":5.0},{"e":-8.2,"north":7.9,"s":3.0},{"e":-6.6,"north":8.9,"s":-2.0},{"e":-7.7,"north":10.0,"s":8.0},{"e":-8.2,"north":11.6,"s":5.0},{"e":-8.8,"north":13.6,"s":6.0},{"e":-8.6,"north":14.4,"s":6.0},{"e":-8.9,"north":14.3,"s":13.0},{"e":-9.1,"north":14.1,"s":15.0}],"4420e64e-1c7b-4ce2-afae-23ccc48527ef":[{"e":2.2,"north":12.7,"s":10.0},{"e":1.9,"north":12.7,"s":13.0},{"e":1.8,"north":12.6,"s":10.0},{"e":1.7,"north":12.6,"s":8.0},{"e":1.7,"north":12.4,"s":8.0},{"e":1.6,"north":12.3,"s":4.0},{"e":1.7,"north":12.3,"s":7.0},{"e":1.6,"north":12.3,"s":7.0},{"e":1.8,"north":12.4,"s":4.0},{"e":1.7,"north":12.4,"s":8.0},{"e":1.7,"north":12.4,"s":9.0},{"e":1.7,"north":12.4,"s":4.0},{"e":1.7,"north":12.4,"s":6.0},{"e":1.7,"north":12.5,"s":6.0},{"e":1.7,"north":12.5,"s":10.0},{"e":1.8,"north":12.5,"s":5.0},{"e":1.8,"north":12.5,"s":6.0},{"e":1.8,"north":12.4,"s":6.0},{"e":1.7,"north":12.4,"s":6.0},{"e":1.6,"north":12.4,"s":8.0},{"e":1.6,"north":12.4,"s":9.0},{"e":1.6,"north":12.4,"s":10.0},{"e":1.5,"north":12.5,"s":5.0},{"e":1.6,"north":12.5,"s":6.0},{"e":1.7,"north":12.6,"s":5.0},{"e":1.7,"north":12.6,"s":8.0},{"e":1.7,"north":12.5,"s":8.0},{"e":1.6,"north":12.5,"s":11.0},{"e":1.7,"north":12.5,"s":10.0},{"e":1.8,"north":12.6,"s":9.0},{"e":1.8,"north":12.7,"s":8.0},{"e":1.9,"north":12.7,"s":8.0},{"e":1.9,"north":12.6,"s":9.0},{"e":1.7,"north":12.6,"s":11.0},{"e":1.6,"north":12.6,"s":12.0},{"e":1.6,"north":12.5,"s":12.0},{"e":1.7,"north":12.6,"s":9.0},{"e":1.7,"north":12.6,"s":11.0},{"e":1.8,"north":12.7,"s":10.0},{"e":1.8,"north":12.6,"s":11.0},{"e":1.8,"north":12.7,"s":10.0},{"e":1.8,"north":12.6,"s":9.0},{"e":1.9,"north":12.7,"s":5.0},{"e":1.9,"north":12.7,"s":7.0},{"e":1.8,"north":12.6,"s":7.0},{"e":2.0,"north":12.5,"s":10.0},{"e":2.1,"north":12.4,"s":9.0},{"e":2.3,"north":12.4,"s":10.0},{"e":2.2,"north":9.2,"s":9.0},{"e":2.0,"north":-0.2,"s":9.0},{"e":1.9,"north":-5.3,"s":4.0},{"e":1.8,"north":-5.3,"s":6.0},{"e":1.7,"north":-5.4,"s":4.0},{"e":1.6,"north":-5.3,"s":4.0},{"e":1.6,"north":-5.3,"s":0.0},{"e":1.5,"north":-5.3,"s":1.0},{"e":1.6,"north":-5.4,"s":-3.0},{"e":1.7,"north":-5.4,"s":9.0},{"e":1.7,"north":-5.4,"s":9.0},{"e":1.9,"north":-5.4,"s":8.0},{"e":1.8,"north":-5.3,"s":11.0},{"e":1.7,"north":-5.3,"s":5.0},{"e":1.9,"north":-5.2,"s":3.0},{"e":1.8,"north":-5.3,"s":5.0},{"e":1.6,"north":-5.2,"s":5.0},{"e":1.8,"north":-5.0,"s":5.0},{"e":1.9,"north":-4.8,"s":3.0},{"e":2.1,"north":-4.6,"s":3.0},{"e":2.4,"north":-4.5,"s":3.0},{"e":2.1,"north":-4.2,"s":3.0},{"e":1.6,"north":-3.3,"s":8.0},{"e":1.3,"north":-3.0,"s":6.0},{"e":1.5,"north":-2.7,"s":10.0},{"e":1.8,"north":-2.3,"s":10.0},{"e":1.8,"north":-1.6,"s":6.0},{"e":1.4,"north":-1.1,"s":12.0},{"e":1.4,"north":-0.9,"s":10.0},{"e":1.4,"north":-0.9,"s":8.0},{"e":1.9,"north":-0.9,"s":4.0},{"e":1.7,"north":-0.9,"s":5.0},{"e":1.5,"north":-0.9,"s":4.0},{"e":1.4,"north":-0.9,"s":4.0},{"e":1.4,"north":-0.9,"s":4.0},{"e":1.3,"north":-0.9,"s":4.0},{"e":1.1,"north":-1.0,"s":4.0},{"e":0.9,"north":-1.0,"s":5.0}],"091a642e-807c-443d-926f-fc6176771709":[{"e":-1.0,"north":11.4,"s":4.0},{"e":-0.9,"north":11.2,"s":5.0},{"e":-0.9,"north":11.0,"s":6.0},{"e":-1.0,"north":11.0,"s":6.0},{"e":-1.1,"north":11.1,"s":4.0},{"e":-1.0,"north":11.0,"s":3.0},{"e":-0.8,"north":10.8,"s":2.0},{"e":-0.6,"north":10.4,"s":7.0},{"e":-0.5,"north":9.5,"s":4.0},{"e":1.0,"north":1.2,"s":6.0},{"e":2.6,"north":-5.7,"s":9.0},{"e":6.8,"north":-5.4,"s":11.0},{"e":10.4,"north":-6.7,"s":6.0},{"e":15.3,"north":-14.0,"s":6.0},{"e":12.1,"north":-20.3,"s":10.0},{"e":10.1,"north":-23.2,"s":6.0},{"e":9.6,"north":-24.2,"s":11.0},{"e":9.4,"north":-24.7,"s":9.0},{"e":9.7,"north":-24.9,"s":10.0},{"e":10.1,"north":-24.8,"s":8.0},{"e":10.2,"north":-24.9,"s":12.0},{"e":9.9,"north":-25.1,"s":9.0},{"e":9.4,"north":-25.1,"s":9.0},{"e":9.1,"north":-25.1,"s":10.0},{"e":8.9,"north":-25.2,"s":12.0},{"e":9.6,"north":-25.3,"s":9.0},{"e":10.3,"north":-25.2,"s":6.0},{"e":10.6,"north":-25.1,"s":6.0},{"e":10.8,"north":-25.1,"s":7.0},{"e":10.9,"north":-25.1,"s":5.0},{"e":10.2,"north":-25.0,"s":8.0},{"e":9.4,"north":-24.9,"s":8.0},{"e":8.0,"north":-23.7,"s":9.0},{"e":7.1,"north":-22.0,"s":5.0},{"e":6.0,"north":-20.1,"s":6.0},{"e":5.0,"north":-18.6,"s":5.0},{"e":4.2,"north":-19.0,"s":7.0},{"e":5.0,"north":-19.0,"s":2.0},{"e":5.9,"north":-18.8,"s":3.0},{"e":6.3,"north":-18.9,"s":7.0},{"e":6.2,"north":-18.9,"s":7.0},{"e":5.7,"north":-19.2,"s":7.0},{"e":4.6,"north":-19.8,"s":5.0},{"e":4.1,"north":-19.6,"s":4.0},{"e":2.3,"north":-20.3,"s":6.0},{"e":0.2,"north":-21.6,"s":4.0},{"e":-1.4,"north":-23.6,"s":6.0},{"e":-0.0,"north":-22.0,"s":6.0},{"e":1.5,"north":-20.2,"s":7.0},{"e":3.5,"north":-18.0,"s":8.0},{"e":3.2,"north":-17.1,"s":8.0},{"e":3.5,"north":-15.3,"s":6.0},{"e":4.1,"north":-14.2,"s":10.0},{"e":5.0,"north":-12.9,"s":8.0},{"e":6.4,"north":-11.8,"s":7.0},{"e":7.1,"north":-10.0,"s":5.0},{"e":8.0,"north":-8.9,"s":0.0},{"e":8.0,"north":-6.9,"s":-1.0},{"e":8.6,"north":-5.8,"s":1.0},{"e":9.4,"north":-5.1,"s":-2.0},{"e":9.1,"north":-3.9,"s":-1.0},{"e":8.9,"north":-3.1,"s":1.0},{"e":8.7,"north":-2.3,"s":-2.0},{"e":9.0,"north":-2.0,"s":-4.0},{"e":9.3,"north":-1.7,"s":7.0},{"e":9.7,"north":-1.4,"s":7.0},{"e":10.0,"north":-1.0,"s":6.0},{"e":9.2,"north":0.6,"s":5.0},{"e":8.1,"north":2.0,"s":7.0},{"e":6.4,"north":3.8,"s":9.0},{"e":5.0,"north":4.9,"s":8.0},{"e":4.3,"north":5.1,"s":8.0},{"e":3.3,"north":6.1,"s":2.0},{"e":0.8,"north":8.1,"s":5.0},{"e":-0.6,"north":9.3,"s":6.0},{"e":-2.0,"north":10.7,"s":7.0},{"e":-2.6,"north":11.4,"s":5.0},{"e":-3.2,"north":12.5,"s":3.0},{"e":-5.1,"north":14.1,"s":4.0},{"e":-5.3,"north":14.1,"s":5.0},{"e":-5.3,"north":14.0,"s":5.0},{"e":-5.4,"north":14.0,"s":7.0},{"e":-5.3,"north":14.0,"s":6.0}],"ee8a1d3a-b21f-4598-acd7-7bb03a2f1f7c":[{"e":-2.7,"north":15.4,"s":14.0},{"e":-2.8,"north":15.4,"s":17.0},{"e":-3.0,"north":15.5,"s":21.0},{"e":-3.1,"north":15.6,"s":18.0},{"e":-3.0,"north":15.9,"s":19.0},{"e":-2.9,"north":16.2,"s":19.0},{"e":-3.2,"north":16.3,"s":18.0},{"e":-3.4,"north":16.2,"s":8.0},{"e":-3.7,"north":16.2,"s":8.0},{"e":-3.3,"north":15.9,"s":10.0},{"e":-3.5,"north":15.3,"s":9.0},{"e":-3.7,"north":15.0,"s":8.0},{"e":-3.9,"north":14.9,"s":6.0},{"e":-3.9,"north":14.8,"s":4.0},{"e":-4.0,"north":14.8,"s":4.0},{"e":-4.1,"north":14.8,"s":5.0},{"e":-4.1,"north":14.7,"s":4.0},{"e":-4.4,"north":14.7,"s":4.0},{"e":-4.4,"north":14.7,"s":5.0},{"e":-4.1,"north":14.8,"s":8.0},{"e":-4.1,"north":14.8,"s":6.0},{"e":-4.3,"north":14.9,"s":8.0},{"e":-4.2,"north":15.0,"s":8.0},{"e":-4.0,"north":14.9,"s":8.0},{"e":-3.7,"north":14.9,"s":4.0},{"e":-3.6,"north":15.0,"s":8.0},{"e":-3.4,"north":15.0,"s":8.0},{"e":-3.4,"north":15.0,"s":11.0},{"e":-3.3,"north":15.0,"s":10.0},{"e":-3.3,"north":15.0,"s":7.0},{"e":-3.3,"north":15.0,"s":6.0},{"e":-3.5,"north":14.9,"s":6.0},{"e":-3.4,"north":15.0,"s":11.0},{"e":-3.4,"north":15.1,"s":7.0},{"e":-3.3,"north":15.0,"s":10.0},{"e":-3.3,"north":14.9,"s":10.0},{"e":-3.2,"north":14.9,"s":9.0},{"e":-3.2,"north":14.9,"s":9.0},{"e":-2.8,"north":14.9,"s":9.0},{"e":-2.8,"north":15.0,"s":8.0},{"e":-2.8,"north":14.9,"s":4.0},{"e":-3.1,"north":14.6,"s":6.0},{"e":-3.1,"north":14.4,"s":6.0},{"e":-3.9,"north":13.7,"s":6.0},{"e":-4.7,"north":13.2,"s":6.0},{"e":-4.5,"north":13.3,"s":3.0},{"e":-5.2,"north":13.1,"s":2.0},{"e":-5.4,"north":13.0,"s":3.0},{"e":-5.6,"north":12.9,"s":4.0},{"e":-5.5,"north":12.8,"s":12.0},{"e":-4.4,"north":13.1,"s":6.0},{"e":-4.0,"north":13.3,"s":4.0},{"e":-3.4,"north":13.5,"s":5.0},{"e":-3.2,"north":13.4,"s":5.0},{"e":-2.8,"north":13.4,"s":7.0},{"e":-2.3,"north":13.3,"s":5.0},{"e":-2.2,"north":13.4,"s":3.0},{"e":-2.1,"north":13.5,"s":6.0},{"e":-2.1,"north":13.5,"s":7.0},{"e":-2.2,"north":13.5,"s":7.0},{"e":-2.2,"north":13.5,"s":10.0},{"e":-2.3,"north":13.5,"s":12.0},{"e":-2.4,"north":13.5,"s":12.0},{"e":-2.4,"north":13.4,"s":12.0},{"e":-2.3,"north":13.4,"s":8.0},{"e":-2.3,"north":13.5,"s":9.0},{"e":-2.3,"north":13.5,"s":9.0},{"e":-2.4,"north":13.7,"s":4.0},{"e":-2.5,"north":13.7,"s":5.0},{"e":-2.4,"north":13.5,"s":1.0},{"e":-2.2,"north":13.3,"s":0.0},{"e":-2.3,"north":13.3,"s":0.0}],"cd4c4ab0-fdb4-4b10-a8f3-fdca33ab2461":[{"e":-9.4,"north":11.8,"s":14.0},{"e":-9.8,"north":12.0,"s":14.0},{"e":-10.1,"north":12.1,"s":14.0},{"e":-10.4,"north":12.4,"s":14.0},{"e":-10.6,"north":12.8,"s":13.0},{"e":-10.6,"north":13.0,"s":14.0},{"e":-10.5,"north":13.2,"s":14.0},{"e":-10.3,"north":13.3,"s":14.0},{"e":-10.3,"north":13.4,"s":15.0},{"e":-10.2,"north":13.5,"s":15.0},{"e":-10.2,"north":13.4,"s":16.0},{"e":-9.2,"north":12.2,"s":4.0},{"e":-7.0,"north":10.6,"s":4.0},{"e":-6.1,"north":9.4,"s":6.0},{"e":-5.9,"north":8.5,"s":11.0},{"e":-5.5,"north":7.8,"s":11.0},{"e":-2.5,"north":6.2,"s":6.0},{"e":6.3,"north":2.0,"s":12.0},{"e":14.5,"north":-2.8,"s":17.0},{"e":22.3,"north":-7.4,"s":14.0},{"e":25.9,"north":-9.8,"s":15.0},{"e":26.9,"north":-10.5,"s":15.0},{"e":25.0,"north":-12.3,"s":18.0},{"e":18.7,"north":-18.0,"s":15.0},{"e":15.5,"north":-20.6,"s":15.0},{"e":14.2,"north":-21.5,"s":10.0},{"e":12.5,"north":-23.5,"s":11.0},{"e":13.0,"north":-22.6,"s":8.0},{"e":13.2,"north":-22.6,"s":10.0},{"e":13.3,"north":-22.6,"s":8.0},{"e":13.2,"north":-22.6,"s":8.0},{"e":13.2,"north":-22.6,"s":12.0},{"e":13.1,"north":-22.6,"s":12.0},{"e":13.1,"north":-22.7,"s":12.0},{"e":13.1,"north":-22.7,"s":10.0},{"e":13.1,"north":-22.7,"s":12.0},{"e":13.2,"north":-22.7,"s":10.0},{"e":13.1,"north":-22.6,"s":13.0},{"e":13.1,"north":-22.7,"s":12.0},{"e":12.6,"north":-26.3,"s":9.0},{"e":9.8,"north":-30.1,"s":10.0},{"e":13.1,"north":-32.0,"s":8.0},{"e":12.0,"north":-32.0,"s":8.0},{"e":10.9,"north":-32.1,"s":7.0},{"e":10.9,"north":-33.2,"s":6.0},{"e":11.8,"north":-27.5,"s":12.0},{"e":10.5,"north":-19.5,"s":10.0},{"e":7.8,"north":-13.6,"s":14.0},{"e":6.2,"north":-10.5,"s":7.0},{"e":3.4,"north":-3.3,"s":2.0},{"e":0.0,"north":1.6,"s":4.0},{"e":0.0,"north":4.5,"s":4.0},{"e":0.1,"north":4.3,"s":8.0},{"e":0.2,"north":4.4,"s":13.0},{"e":0.2,"north":4.4,"s":15.0},{"e":-0.2,"north":5.4,"s":13.0},{"e":-2.5,"north":7.0,"s":6.0},{"e":-5.0,"north":6.9,"s":3.0},{"e":-4.6,"north":7.8,"s":5.0},{"e":-4.4,"north":7.3,"s":4.0},{"e":-5.2,"north":7.9,"s":4.0},{"e":-7.2,"north":7.5,"s":5.0},{"e":-6.6,"north":8.8,"s":7.0},{"e":-6.5,"north":10.0,"s":3.0},{"e":-7.3,"north":10.3,"s":6.0},{"e":-7.4,"north":10.9,"s":10.0},{"e":-7.4,"north":11.5,"s":11.0},{"e":-7.3,"north":11.2,"s":5.0},{"e":-7.4,"north":11.0,"s":5.0}],"cc12aad7-ee9a-4948-89c2-39c752671730":[{"e":1.3,"north":11.0,"s":1.0},{"e":1.4,"north":11.0,"s":1.0},{"e":1.4,"north":10.9,"s":7.0},{"e":1.4,"north":10.9,"s":7.0},{"e":1.2,"north":11.1,"s":4.0},{"e":0.9,"north":11.1,"s":5.0},{"e":0.8,"north":11.3,"s":3.0},{"e":0.7,"north":11.5,"s":4.0},{"e":0.9,"north":11.8,"s":3.0},{"e":1.2,"north":12.1,"s":3.0},{"e":1.1,"north":12.0,"s":0.0},{"e":0.7,"north":11.5,"s":2.0},{"e":0.4,"north":11.0,"s":2.0},{"e":-0.0,"north":10.5,"s":8.0},{"e":-0.3,"north":10.1,"s":3.0},{"e":-0.2,"north":10.1,"s":3.0},{"e":-0.2,"north":10.1,"s":4.0},{"e":-0.2,"north":10.2,"s":5.0},{"e":-0.3,"north":10.2,"s":8.0},{"e":-0.2,"north":10.1,"s":1.0},{"e":-0.1,"north":10.1,"s":1.0},{"e":-0.0,"north":10.2,"s":1.0},{"e":-0.0,"north":10.2,"s":8.0},{"e":-0.0,"north":10.2,"s":10.0},{"e":0.7,"north":9.5,"s":10.0},{"e":3.0,"north":7.4,"s":5.0},{"e":3.5,"north":7.1,"s":10.0},{"e":3.9,"north":7.3,"s":11.0},{"e":3.9,"north":7.2,"s":11.0},{"e":3.9,"north":7.3,"s":13.0},{"e":3.8,"north":7.2,"s":13.0},{"e":3.7,"north":7.1,"s":9.0},{"e":3.6,"north":7.2,"s":12.0},{"e":3.4,"north":7.2,"s":11.0},{"e":3.4,"north":7.1,"s":12.0},{"e":3.3,"north":6.8,"s":12.0},{"e":3.3,"north":6.7,"s":13.0},{"e":3.1,"north":6.7,"s":8.0},{"e":3.2,"north":6.7,"s":12.0},{"e":3.2,"north":6.7,"s":12.0},{"e":3.1,"north":6.6,"s":9.0},{"e":3.1,"north":6.7,"s":9.0},{"e":2.0,"north":9.6,"s":9.0},{"e":1.5,"north":10.3,"s":4.0},{"e":1.4,"north":10.0,"s":10.0},{"e":1.4,"north":10.1,"s":6.0},{"e":1.2,"north":10.2,"s":5.0},{"e":1.3,"north":10.4,"s":6.0},{"e":1.1,"north":10.7,"s":6.0},{"e":1.3,"north":10.8,"s":4.0},{"e":1.6,"north":10.9,"s":11.0},{"e":1.9,"north":10.8,"s":12.0},{"e":2.2,"north":10.8,"s":13.0},{"e":1.4,"north":10.3,"s":16.0},{"e":1.8,"north":10.3,"s":17.0},{"e":1.7,"north":9.6,"s":13.0},{"e":-0.2,"north":10.5,"s":11.0},{"e":-2.6,"north":11.6,"s":8.0},{"e":-4.3,"north":11.9,"s":6.0},{"e":-5.7,"north":13.5,"s":5.0},{"e":-6.2,"north":13.9,"s":5.0},{"e":-7.4,"north":14.9,"s":4.0},{"e":-8.1,"north":15.5,"s":6.0},{"e":-8.3,"north":15.7,"s":7.0},{"e":-8.5,"north":15.5,"s":4.0}],"d0a74178-8a91-4229-88de-815409bea0c0":[{"e":-0.2,"north":11.7,"s":4.0},{"e":0.0,"north":11.8,"s":6.0},{"e":0.2,"north":11.8,"s":6.0},{"e":0.4,"north":11.7,"s":6.0},{"e":0.5,"north":11.7,"s":4.0},{"e":0.6,"north":11.8,"s":5.0},{"e":0.4,"north":11.6,"s":6.0},{"e":0.4,"north":11.6,"s":6.0},{"e":0.3,"north":11.6,"s":1.0},{"e":0.4,"north":11.6,"s":3.0},{"e":0.4,"north":11.6,"s":6.0},{"e":0.5,"north":11.7,"s":7.0},{"e":0.5,"north":11.6,"s":7.0},{"e":0.5,"north":11.6,"s":3.0},{"e":0.5,"north":10.6,"s":10.0},{"e":1.1,"north":2.0,"s":9.0},{"e":2.0,"north":-5.4,"s":9.0},{"e":6.1,"north":-5.4,"s":8.0},{"e":9.1,"north":-5.8,"s":5.0},{"e":15.0,"north":-12.2,"s":11.0},{"e":13.1,"north":-18.9,"s":10.0},{"e":10.6,"north":-22.7,"s":10.0},{"e":9.8,"north":-23.8,"s":11.0},{"e":9.4,"north":-24.2,"s":13.0},{"e":9.1,"north":-24.5,"s":13.0},{"e":8.8,"north":-24.7,"s":10.0},{"e":8.5,"north":-24.9,"s":12.0},{"e":8.4,"north":-25.0,"s":12.0},{"e":8.3,"north":-25.1,"s":9.0},{"e":8.3,"north":-25.1,"s":10.0},{"e":8.2,"north":-25.1,"s":10.0},{"e":8.2,"north":-25.2,"s":2.0},{"e":8.3,"north":-25.1,"s":0.0},{"e":8.4,"north":-25.1,"s":-1.0},{"e":8.4,"north":-25.2,"s":-1.0},{"e":8.3,"north":-25.3,"s":2.0},{"e":8.2,"north":-25.3,"s":1.0},{"e":8.0,"north":-25.4,"s":1.0},{"e":8.0,"north":-25.4,"s":0.0},{"e":7.9,"north":-25.4,"s":1.0},{"e":7.7,"north":-25.4,"s":1.0},{"e":7.5,"north":-25.5,"s":1.0},{"e":7.4,"north":-25.5,"s":0.0},{"e":7.5,"north":-25.5,"s":0.0},{"e":7.9,"north":-25.3,"s":4.0},{"e":8.4,"north":-25.1,"s":7.0},{"e":8.4,"north":-25.1,"s":5.0},{"e":8.4,"north":-25.1,"s":7.0},{"e":8.4,"north":-25.1,"s":10.0},{"e":8.3,"north":-25.1,"s":10.0},{"e":8.3,"north":-25.1,"s":1.0},{"e":8.3,"north":-25.0,"s":4.0},{"e":8.3,"north":-25.0,"s":6.0},{"e":8.3,"north":-25.1,"s":12.0},{"e":8.3,"north":-25.1,"s":7.0},{"e":8.2,"north":-25.1,"s":7.0},{"e":8.3,"north":-25.1,"s":2.0},{"e":8.3,"north":-25.1,"s":3.0},{"e":8.3,"north":-25.0,"s":0.0},{"e":8.5,"north":-24.9,"s":3.0},{"e":8.8,"north":-24.7,"s":2.0}],"a2434885-fdf4-4dcd-b692-af7b617a29da":[{"e":-10.8,"north":10.9,"s":5.0},{"e":-10.8,"north":10.9,"s":7.0},{"e":-10.8,"north":11.0,"s":7.0},{"e":-11.1,"north":11.1,"s":6.0},{"e":-11.5,"north":11.2,"s":6.0},{"e":-11.8,"north":11.2,"s":6.0},{"e":-12.2,"north":11.3,"s":6.0},{"e":-12.6,"north":11.3,"s":6.0},{"e":-12.9,"north":11.4,"s":9.0},{"e":-13.1,"north":11.5,"s":9.0},{"e":-12.8,"north":11.3,"s":8.0},{"e":-12.0,"north":10.5,"s":2.0},{"e":-9.2,"north":9.1,"s":0.0},{"e":-8.3,"north":8.5,"s":7.0},{"e":-7.8,"north":7.5,"s":6.0},{"e":-7.4,"north":6.4,"s":3.0},{"e":-7.1,"north":5.6,"s":6.0},{"e":-6.9,"north":5.2,"s":4.0},{"e":-6.6,"north":5.0,"s":4.0},{"e":-6.6,"north":5.1,"s":4.0},{"e":-6.6,"north":5.1,"s":10.0},{"e":-6.6,"north":5.1,"s":5.0},{"e":-6.6,"north":5.1,"s":5.0},{"e":-6.5,"north":5.2,"s":10.0},{"e":-6.5,"north":5.1,"s":2.0},{"e":-6.7,"north":5.1,"s":3.0},{"e":-6.7,"north":5.1,"s":6.0},{"e":-6.6,"north":5.0,"s":6.0},{"e":-6.6,"north":5.1,"s":3.0},{"e":-6.6,"north":5.2,"s":6.0},{"e":-6.6,"north":5.0,"s":8.0},{"e":-5.0,"north":4.0,"s":6.0},{"e":-3.6,"north":3.3,"s":3.0},{"e":-3.1,"north":4.3,"s":8.0},{"e":-3.5,"north":4.7,"s":6.0},{"e":-3.4,"north":5.8,"s":2.0},{"e":-2.9,"north":5.4,"s":2.0},{"e":-4.7,"north":3.6,"s":2.0},{"e":-5.1,"north":3.3,"s":0.0},{"e":-5.6,"north":2.5,"s":-1.0},{"e":-5.4,"north":3.7,"s":3.0},{"e":-4.6,"north":7.5,"s":3.0},{"e":-4.0,"north":9.6,"s":1.0},{"e":-4.9,"north":7.8,"s":6.0},{"e":-5.1,"north":7.3,"s":2.0},{"e":-5.0,"north":7.7,"s":2.0},{"e":-6.2,"north":8.9,"s":5.0},{"e":-7.9,"north":11.0,"s":8.0},{"e":-8.9,"north":12.3,"s":7.0},{"e":-8.8,"north":12.3,"s":7.0},{"e":-8.7,"north":12.4,"s":13.0}],"91c3d4d9-5c3a-4909-ad29-45357d40603f":[{"e":2.1,"north":9.7,"s":9.0},{"e":2.1,"north":9.8,"s":7.0},{"e":2.2,"north":9.9,"s":7.0},{"e":2.1,"north":10.0,"s":6.0},{"e":2.0,"north":10.0,"s":4.0},{"e":1.8,"north":9.9,"s":6.0},{"e":1.7,"north":9.9,"s":7.0},{"e":1.7,"north":9.8,"s":6.0},{"e":1.7,"north":9.7,"s":6.0},{"e":1.7,"north":9.6,"s":7.0},{"e":1.8,"north":9.6,"s":9.0},{"e":1.9,"north":9.7,"s":7.0},{"e":1.7,"north":9.7,"s":7.0},{"e":1.6,"north":9.7,"s":7.0},{"e":1.5,"north":9.6,"s":6.0},{"e":1.4,"north":9.4,"s":8.0},{"e":1.3,"north":9.4,"s":5.0},{"e":1.2,"north":9.5,"s":6.0},{"e":1.1,"north":9.4,"s":5.0},{"e":1.0,"north":9.4,"s":5.0},{"e":0.9,"north":9.4,"s":5.0},{"e":0.9,"north":9.3,"s":6.0},{"e":0.8,"north":9.3,"s":8.0},{"e":0.7,"north":9.3,"s":7.0},{"e":0.8,"north":9.4,"s":5.0},{"e":0.7,"north":9.5,"s":4.0},{"e":0.8,"north":9.5,"s":4.0},{"e":0.9,"north":9.4,"s":3.0},{"e":1.2,"north":9.4,"s":6.0},{"e":1.3,"north":9.4,"s":7.0},{"e":1.4,"north":9.5,"s":5.0},{"e":1.4,"north":9.5,"s":6.0},{"e":1.5,"north":9.5,"s":4.0},{"e":1.5,"north":9.5,"s":3.0},{"e":1.3,"north":9.4,"s":7.0},{"e":1.2,"north":9.4,"s":6.0},{"e":1.1,"north":9.3,"s":7.0},{"e":1.0,"north":9.3,"s":10.0},{"e":1.1,"north":9.2,"s":12.0},{"e":1.1,"north":9.1,"s":8.0},{"e":1.2,"north":9.1,"s":8.0},{"e":1.3,"north":9.0,"s":7.0},{"e":1.3,"north":9.0,"s":9.0},{"e":1.3,"north":9.0,"s":9.0}],"c75efc42-e9e7-4556-851c-014f303de88f":[{"e":-0.6,"north":14.6,"s":5.0},{"e":-0.5,"north":14.7,"s":3.0},{"e":-0.5,"north":14.6,"s":8.0},{"e":-0.6,"north":14.4,"s":6.0},{"e":-0.7,"north":14.5,"s":7.0},{"e":-0.8,"north":14.5,"s":6.0},{"e":-0.6,"north":14.6,"s":6.0},{"e":-0.6,"north":14.6,"s":6.0},{"e":-0.6,"north":14.6,"s":9.0},{"e":-0.7,"north":14.6,"s":5.0},{"e":-0.6,"north":14.6,"s":7.0},{"e":-0.5,"north":14.6,"s":7.0},{"e":-0.6,"north":14.5,"s":5.0},{"e":-0.6,"north":14.5,"s":10.0},{"e":-0.7,"north":14.4,"s":9.0},{"e":-0.8,"north":14.4,"s":9.0},{"e":-0.8,"north":14.3,"s":8.0},{"e":0.4,"north":8.4,"s":10.0},{"e":1.3,"north":-0.9,"s":13.0},{"e":3.0,"north":-5.6,"s":11.0},{"e":6.7,"north":-4.8,"s":10.0},{"e":8.6,"north":-5.3,"s":9.0},{"e":13.6,"north":-10.5,"s":11.0},{"e":12.7,"north":-17.4,"s":9.0},{"e":9.8,"north":-22.1,"s":9.0},{"e":8.9,"north":-23.9,"s":7.0},{"e":8.5,"north":-24.4,"s":9.0},{"e":8.6,"north":-24.6,"s":11.0},{"e":8.6,"north":-24.7,"s":10.0},{"e":8.7,"north":-24.7,"s":10.0},{"e":8.6,"north":-24.7,"s":9.0},{"e":8.6,"north":-24.7,"s":7.0},{"e":8.6,"north":-24.6,"s":7.0},{"e":8.6,"north":-24.6,"s":8.0},{"e":8.6,"north":-24.8,"s":8.0},{"e":8.6,"north":-24.7,"s":14.0},{"e":8.5,"north":-24.8,"s":16.0},{"e":8.4,"north":-24.8,"s":17.0},{"e":8.3,"north":-24.9,"s":18.0},{"e":8.0,"north":-24.9,"s":17.0},{"e":7.8,"north":-24.9,"s":18.0}]},"cells":[{"e":-5.0,"north":5.0,"p10":1.0,"min":-3.0,"samples":453,"trips":6},{"e":-5.0,"north":-5.0,"p10":3.0,"min":2.0,"samples":35,"trips":2},{"e":5.0,"north":-5.0,"p10":-0.8,"min":-4.0,"samples":123,"trips":7},{"e":5.0,"north":-15.0,"p10":2.6,"min":2.0,"samples":47,"trips":4},{"e":5.0,"north":-25.0,"p10":1.0,"min":-1.0,"samples":143,"trips":4},{"e":15.0,"north":-25.0,"p10":5.0,"min":3.0,"samples":66,"trips":6},{"e":25.0,"north":-25.0,"p10":6.0,"min":6.0,"samples":15,"trips":1},{"e":25.0,"north":-35.0,"p10":3.9,"min":2.0,"samples":40,"trips":1},{"e":25.0,"north":-15.0,"p10":6.0,"min":5.0,"samples":22,"trips":3},{"e":15.0,"north":-15.0,"p10":4.8,"min":3.0,"samples":17,"trips":6},{"e":15.0,"north":-5.0,"p10":-1.0,"min":-1.0,"samples":11,"trips":6},{"e":5.0,"north":5.0,"p10":4.0,"min":0.0,"samples":284,"trips":10},{"e":-5.0,"north":15.0,"p10":3.0,"min":0.0,"samples":330,"trips":9},{"e":-5.0,"north":-15.0,"p10":3.2,"min":2.0,"samples":4,"trips":2},{"e":-15.0,"north":-15.0,"p10":1.0,"min":-1.0,"samples":60,"trips":2},{"e":-25.0,"north":-15.0,"p10":12.0,"min":3.0,"samples":63,"trips":2},{"e":-15.0,"north":-5.0,"p10":4.0,"min":1.0,"samples":13,"trips":2},{"e":-15.0,"north":5.0,"p10":1.0,"min":0.0,"samples":22,"trips":3},{"e":5.0,"north":15.0,"p10":3.0,"min":0.0,"samples":180,"trips":5},{"e":15.0,"north":5.0,"p10":12.1,"min":12.0,"samples":2,"trips":1},{"e":25.0,"north":-5.0,"p10":13.0,"min":13.0,"samples":10,"trips":2},{"e":5.0,"north":-35.0,"p10":4.6,"min":3.0,"samples":9,"trips":2},{"e":-5.0,"north":-35.0,"p10":3.0,"min":3.0,"samples":1,"trips":1},{"e":-5.0,"north":-25.0,"p10":5.0,"min":4.0,"samples":6,"trips":2},{"e":-15.0,"north":-25.0,"p10":13.0,"min":12.0,"samples":3,"trips":1},{"e":-15.0,"north":15.0,"p10":6.0,"min":2.0,"samples":41,"trips":2},{"e":15.0,"north":-35.0,"p10":6.0,"min":6.0,"samples":9,"trips":1}],"weak":[{"e":-5.0,"north":5.0,"p10":1.0,"min":-3.0,"samples":453,"trips":6},{"e":-5.0,"north":-5.0,"p10":3.0,"min":2.0,"samples":35,"trips":2},{"e":5.0,"north":-5.0,"p10":-0.8,"min":-4.0,"samples":123,"trips":7},{"e":5.0,"north":-15.0,"p10":2.6,"min":2.0,"samples":47,"trips":4},{"e":5.0,"north":-25.0,"p10":1.0,"min":-1.0,"samples":143,"trips":4},{"e":15.0,"north":-15.0,"p10":4.8,"min":3.0,"samples":17,"trips":6},{"e":15.0,"north":-5.0,"p10":-1.0,"min":-1.0,"samples":11,"trips":6},{"e":5.0,"north":5.0,"p10":4.0,"min":0.0,"samples":284,"trips":10},{"e":-5.0,"north":15.0,"p10":3.0,"min":0.0,"samples":330,"trips":9},{"e":-5.0,"north":-15.0,"p10":3.2,"min":2.0,"samples":4,"trips":2},{"e":-15.0,"north":-15.0,"p10":1.0,"min":-1.0,"samples":60,"trips":2},{"e":-15.0,"north":-5.0,"p10":4.0,"min":1.0,"samples":13,"trips":2},{"e":-15.0,"north":5.0,"p10":1.0,"min":0.0,"samples":22,"trips":3},{"e":5.0,"north":15.0,"p10":3.0,"min":0.0,"samples":180,"trips":5},{"e":5.0,"north":-35.0,"p10":4.6,"min":3.0,"samples":9,"trips":2}],"chain":{"pts":[{"m":5.0,"a_sinr":4.48,"b_sinr":3.8285714285714287,"a_rsrp":-98.88,"b_rsrp":-99.24285714285715,"a_n":25,"b_n":70},{"m":15.0,"a_sinr":5.9375,"b_sinr":6.4520547945205475,"a_rsrp":-87.90625,"b_rsrp":-95.73630136986301,"a_n":32,"b_n":292},{"m":25.0,"a_sinr":13.0,"b_sinr":3.7333333333333334,"a_rsrp":-86.5,"b_rsrp":-95.66666666666667,"a_n":2,"b_n":15},{"m":35.0,"a_sinr":12.0,"b_sinr":1.3,"a_rsrp":-87.0,"b_rsrp":-90.7,"a_n":4,"b_n":10},{"m":45.0,"a_sinr":8.8,"b_sinr":8.285714285714286,"a_rsrp":-88.0,"b_rsrp":-88.74025974025975,"a_n":5,"b_n":77},{"m":55.0,"a_sinr":4.333333333333333,"b_sinr":null,"a_rsrp":-92.33333333333333,"b_rsrp":null,"a_n":3,"b_n":0},{"m":65.0,"a_sinr":14.5,"b_sinr":null,"a_rsrp":-87.14583333333333,"b_rsrp":null,"a_n":48,"b_n":0},{"m":75.0,"a_sinr":14.911111111111111,"b_sinr":null,"a_rsrp":-87.77777777777777,"b_rsrp":null,"a_n":45,"b_n":0},{"m":85.0,"a_sinr":14.6,"b_sinr":null,"a_rsrp":-91.8,"b_rsrp":null,"a_n":5,"b_n":0},{"m":95.0,"a_sinr":13.625,"b_sinr":null,"a_rsrp":-90.75,"b_rsrp":null,"a_n":8,"b_n":0},{"m":105.0,"a_sinr":3.3076923076923075,"b_sinr":null,"a_rsrp":-97.84615384615384,"b_rsrp":null,"a_n":13,"b_n":0},{"m":115.0,"a_sinr":3.5555555555555554,"b_sinr":null,"a_rsrp":-98.33333333333333,"b_rsrp":null,"a_n":9,"b_n":0},{"m":125.0,"a_sinr":5.0,"b_sinr":null,"a_rsrp":-99.33333333333333,"b_rsrp":null,"a_n":9,"b_n":0}],"summary":{"a_sinr":{"mean":10.10576923076923,"p50":12.0,"p5":0.0,"n":208},"b_sinr":{"mean":6.161637931034483,"p50":5.0,"p5":0.0,"n":464},"a_rsrp":{"mean":-90.82692307692308,"p50":-89.0,"p5":-101.0,"n":208},"b_rsrp":{"mean":-94.99353448275862,"p50":-98.0,"p5":-103.0,"n":464}},"total_m":122.60724514087576,"grid":10.0,"paired":5,"dropped":{"a":0,"b":0},"reference":"trip_a","delta":[{"e":-5.0,"north":5.0,"d":0.21,"a":3.1,"b":3.3},{"e":5.0,"north":5.0,"d":4.76,"a":9.0,"b":13.8},{"e":5.0,"north":-5.0,"d":-14.6,"a":15.0,"b":0.4},{"e":5.0,"north":-15.0,"d":-4.81,"a":10.1,"b":5.3}],"only":[{"e":25.0,"north":-15.0},{"e":-25.0,"north":-15.0},{"e":5.0,"north":-25.0},{"e":-5.0,"north":-5.0},{"e":-5.0,"north":-15.0},{"e":-15.0,"north":-5.0},{"e":25.0,"north":-25.0},{"e":-15.0,"north":-15.0},{"e":-5.0,"north":15.0},{"e":15.0,"north":-15.0},{"e":15.0,"north":-5.0},{"e":-15.0,"north":5.0},{"e":15.0,"north":-25.0},{"e":25.0,"north":-35.0}]},"gen":"2026-09-08T09:20:09+08:00"};</script>
+<script>
+(function(){
+"use strict";
+const P=window.PROTO, $=(s)=>document.querySelector(s);
+const el=(t,c,x)=>{const n=document.createElement(t); if(c)n.className=c; if(x!=null)n.textContent=x; return n;};
+
+const CLS=[{k:"good",l:"良好",c:"#0ca30c",min:13},{k:"fair",l:"尚可",c:"#fab219",min:5},
+           {k:"bad",l:"劣化",c:"#e05e0e",min:-2},{k:"crit",l:"瀕斷",c:"#a01818",min:-Infinity}];
+const cls=(v)=>CLS.find(c=>v>=c.min)||CLS[3];
+const f1=(v)=>v==null?"—":v.toFixed(1);
+
+/* ── 篩選狀態 ─────────────────────────────────── */
+const S={range:0, mission:"all", drone:"all", zones:true, sel:null, tab:"field"};
+
+const inRange=(s)=>{
+  if(!S.range) return true;
+  return (Date.now()-new Date(s.start).getTime())/86400000 <= S.range;
+};
+const visible=()=>P.sessions.filter(s=>inRange(s)
+  && (S.mission==="all" || (s.mission||"—")===S.mission)
+  && (S.drone==="all" || s.drone===S.drone));
+
+/* ── 3D 視角（同即時／回放頁：傾斜 55°、10 m 網格）───────── */
+const V=(()=>{
+  const PIT=55*Math.PI/180, BRG=28*Math.PI/180;
+  const cb=Math.cos(BRG), sb=Math.sin(BRG), cp=Math.cos(PIT), sp=Math.sin(PIT);
+  const proj=(e,n)=>{const X=e*cb+n*sb, Y=-e*sb+n*cb; return [X,-Y*cp];};
+  const pts=[];
+  Object.values(P.runs).forEach(r=>r.forEach(p=>pts.push(proj(p.e,p.north))));
+  P.cells.forEach(c=>pts.push(proj(c.e,c.north)));
+  const xs=pts.map(p=>p[0]), ys=pts.map(p=>p[1]);
+  const minX=Math.min(...xs),maxX=Math.max(...xs),minY=Math.min(...ys),maxY=Math.max(...ys);
+  const pad=70, k=Math.min((1200-pad*2)/(maxX-minX||1),(800-pad*2)/(maxY-minY||1));
+  const ox=(1200-(maxX-minX)*k)/2-minX*k, oy=(800-(maxY-minY)*k)/2-minY*k;
+  return {k, at:(e,n)=>{const [x,y]=proj(e,n); return [x*k+ox,y*k+oy];}};
+})();
+
+function drawField(){
+  const svg=$("#map"), ns="http://www.w3.org/2000/svg";
+  svg.textContent="";
+  const g=(tag,a)=>{const n=document.createElementNS(ns,tag); for(const k in a) n.setAttribute(k,a[k]); return n;};
+  const vis=visible(), ids=new Set(vis.map(s=>s.id));
+
+  // 地面網格（10 m，與比例尺同一個數字）
+  const grid=g("g",{stroke:"#232a2f","stroke-width":1});
+  const es=Object.values(P.runs).flat().map(p=>p.e), nsv=Object.values(P.runs).flat().map(p=>p.north);
+  const e0=Math.floor(Math.min(...es)/10)*10-20, e1=Math.ceil(Math.max(...es)/10)*10+20;
+  const n0=Math.floor(Math.min(...nsv)/10)*10-20, n1=Math.ceil(Math.max(...nsv)/10)*10+20;
+  const step=Math.max(10, Math.round((e1-e0)/40/10)*10);
+  for(let e=e0;e<=e1;e+=step){const a=V.at(e,n0),b=V.at(e,n1);
+    grid.appendChild(g("line",{x1:a[0],y1:a[1],x2:b[0],y2:b[1]}));}
+  for(let n=n0;n<=n1;n+=step){const a=V.at(e0,n),b=V.at(e1,n);
+    grid.appendChild(g("line",{x1:a[0],y1:a[1],x2:b[0],y2:b[1]}));}
+  svg.appendChild(grid);
+
+  // 軌跡：**單趟半透明**，多趟疊在同一處自然變濃（濃淡＝一致性）
+  for(const [sid,pts] of Object.entries(P.runs)){
+    if(!ids.has(sid)) continue;
+    const on = !S.sel || (S.sel.type==="run" && S.sel.id===sid);
+    for(let i=1;i<pts.length;i++){
+      const a=V.at(pts[i-1].e,pts[i-1].north), b=V.at(pts[i].e,pts[i].north);
+      const dist=Math.hypot(pts[i].e-pts[i-1].e, pts[i].north-pts[i-1].north);
+      if(dist>25) continue;                     // 斷開的兩點不連線（那是跳段）
+      const ln=g("line",{x1:a[0],y1:a[1],x2:b[0],y2:b[1],
+        stroke:cls(pts[i].s).c,"stroke-width":4,"stroke-linecap":"round",
+        "stroke-opacity": on?0.28:0.08});
+      ln.style.cursor="pointer";
+      ln.addEventListener("click",()=>{S.sel={type:"run",id:sid}; render();});
+      svg.appendChild(ln);
+    }
+  }
+
+  // 弱區輪廓：10 m 格、P10 落在劣化以下且 ≥2 趟——**只圈飛過的地方**
+  if(S.zones){
+    P.weak.forEach(c=>{
+      const h=P.cell/2;
+      const pts=[[c.e-h,c.north-h],[c.e+h,c.north-h],[c.e+h,c.north+h],[c.e-h,c.north+h]]
+        .map(([e,n])=>V.at(e,n).map(v=>v.toFixed(1)).join(",")).join(" ");
+      const poly=g("polygon",{points:pts,fill:"rgba(160,24,24,.10)",
+        stroke:"#f0eee6","stroke-width":1.2,"stroke-dasharray":"4 3","stroke-opacity":.8});
+      poly.style.cursor="pointer";
+      poly.addEventListener("click",()=>{S.sel={type:"zone",cell:c}; render();});
+      svg.appendChild(poly);
+      const [lx,ly]=V.at(c.e,c.north);
+      const t=g("text",{x:lx,y:ly+4,fill:"#f0eee6","font-size":11,"text-anchor":"middle"});
+      t.textContent=`▼${c.min.toFixed(0)}`;
+      svg.appendChild(t);
+    });
+  }
+
+  $("#tripcount").textContent=`${vis.length} 趟`;
+  $("#weakcount").textContent=S.zones?`${P.weak.length} 個弱區`:"";
+  // **誠實截斷**：略過與上限如實揭露，不靜靜少畫
+  $("#honesty").textContent =
+    `範圍內 ${P.sessions.length} 趟有樣本的架次（樣本數 <10 的測試架次已排除）`
+    + `；圖上畫的是 ${vis.length} 趟。`;
+  drawSel();
+}
+
+function drawSel(){
+  const box=$("#selcard");
+  if(!S.sel){ box.hidden=true; return; }
+  box.hidden=false; box.textContent="";
+  if(S.sel.type==="run"){
+    const s=P.sessions.find(x=>x.id===S.sel.id);
+    const head=el("div","row"); head.style.marginTop="0";
+    head.appendChild(el("span","name-lg", s.clock));
+    head.appendChild(el("span","chip", s.drone));
+    box.appendChild(head);
+    box.appendChild(el("div","hint",
+      `${s.mission ?? "無任務"}　樣本 ${s.n}${s.note?`　備註：${s.note}`:""}`));
+    const acts=el("div","row");
+    acts.appendChild(el("button","btn","開回放"));
+    const c=el("button","btn","關閉"); c.onclick=()=>{S.sel=null; render();};
+    acts.appendChild(c); box.appendChild(acts);
+  } else {
+    const c=S.sel.cell;
+    const head=el("div","row"); head.style.marginTop="0";
+    head.appendChild(el("span","name-lg","弱區"));
+    const chip=el("span","chip"); chip.style.color="var(--danger-ink)";
+    chip.textContent=`最差 ${c.min.toFixed(1)} dB`;
+    head.appendChild(chip);
+    box.appendChild(head);
+    box.appendChild(el("div","hint",
+      `P10 ${c.p10.toFixed(1)} dB　涵蓋 ${c.trips} 趟　樣本 ${c.samples} 筆`));
+    box.appendChild(el("div","hint",
+      "「涵蓋 N 趟」是這一格被幾趟飛過——**一趟飛過一次的格子不成立弱區**，"
+      .replace(/\*\*/g,"") + "所以門檻是 ≥2 趟。"));
+    const acts=el("div","row");
+    const cl=el("button","btn","關閉"); cl.onclick=()=>{S.sel=null; render();};
+    acts.appendChild(cl); box.appendChild(acts);
+  }
+}
+
+/* ── 前後比較 ─────────────────────────────────── */
+function drawAb(){
+  const box=$("#ab"); box.textContent="";
+  const C=P.chain, sum=C.summary;
+  const A="#3987e5", B="#d95926";
+
+  // 選擇列
+  const pick=el("div","card");
+  const row=el("div","picker");
+  const mk=(lab,color,val)=>{
+    const s=el("div","side");
+    const d=el("span","sidedot"); d.style.background=color; s.appendChild(d);
+    s.appendChild(el("span","lab",lab));
+    const sel=el("select");
+    P.sessions.forEach(x=>{const o=el("option",null,`${x.clock} · ${x.drone} · ${x.n} 筆`);
+      o.value=x.id; sel.appendChild(o);});
+    sel.value=val; s.appendChild(sel);
+    return s;
+  };
+  row.appendChild(mk("前", A, P.sessions[1]?.id ?? ""));
+  row.appendChild(el("span","lab","→"));
+  row.appendChild(mk("後", B, P.sessions[0]?.id ?? ""));
+  pick.appendChild(row);
+  pick.appendChild(el("div","hint",
+    `基準＝${C.reference==="trip_a"?"前一趟的軌跡":"計畫航線"}　里程 0–${Math.round(C.total_m)} m　`
+    + `分箱 ${C.grid} m　兩趟皆有樣本的區間 ${C.paired} 個`));
+  box.appendChild(pick);
+
+  // ① 沿路徑訊號
+  const c1=el("div","card");
+  const h1=el("h3",null,"沿路徑訊號");
+  h1.appendChild(el("span","h3-note",`X＝弧長里程，不是時間`));
+  h1.appendChild(el("span","spacer"));
+  const tip1=el("span","info","ⓘ"); tip1.tabIndex=0;
+  tip1.dataset.tip="X 軸是沿基準路徑的里程，不是時間——兩趟速度不同，用時間對齊會錯位。每格取該區間樣本的平均；只有兩趟都有樣本的區間才有對照意義。";
+  h1.appendChild(tip1);
+  c1.appendChild(h1);
+  c1.appendChild(chainChart(C.pts, A, B));
+  // 判讀句：**句尾必附依據**，讓人可以自己反駁
+  const dS=median(C.pts.filter(p=>p.a_sinr!=null&&p.b_sinr!=null).map(p=>p.b_sinr-p.a_sinr));
+  const dP50=sum.b_sinr.p50-sum.a_sinr.p50, dP5=sum.b_sinr.p5-sum.a_sinr.p5;
+  const verdict=Math.abs(dS)<2 ? "兩趟沿路徑的訊號大致持平"
+    : dS>0 ? "後那趟沿路徑整體較好" : "後那趟沿路徑整體較差";
+  const v=el("div","verdict");
+  v.appendChild(document.createTextNode("ⓘ "+verdict));
+  v.appendChild(el("div","why",
+    `（依據：SINR 逐段差值中位數 ${f1(dS)} dB、整體 P50 差 ${f1(dP50)} dB、`
+    + `Δp5 ${f1(dP5)} dB；持平門檻 ±2 dB）`));
+  // **兩個都對的數字看起來互相矛盾時，要說破**：逐段只比對兩趟都飛過的
+  // 區間，整體含各自獨飛的部分——不說的話，讀的人會以為其中一個是錯的
+  if(dS!=null && Math.abs(dP50-dS)>3){
+    v.appendChild(el("div","why",
+      `逐段（${f1(dS)}）與整體（${f1(dP50)}）差很多：逐段只比對兩趟都飛過的 `
+      + `${C.paired} 個里程區間，整體則含各自獨飛的部分。`));
+  }
+  c1.appendChild(v);
+  box.appendChild(c1);
+
+  // ② 摘要
+  const c2=el("div","card");
+  const h2=el("h3",null,"摘要");
+  h2.appendChild(el("span","h3-note","p5＝最差 5%（尾部才是斷鏈的來源）"));
+  c2.appendChild(h2);
+  const tb=el("table");
+  tb.innerHTML=`<thead><tr><th></th><th class="n">均值</th><th class="n">p50</th>
+    <th class="n">p5</th><th class="n">樣本數</th></tr></thead><tbody>
+    <tr><td><span class="chip"><span class="dot" style="background:${A}"></span>前</span></td>
+      <td class="n">${f1(sum.a_sinr.mean)}</td><td class="n">${f1(sum.a_sinr.p50)}</td>
+      <td class="n"><b>${f1(sum.a_sinr.p5)}</b></td><td class="n">${sum.a_sinr.n}</td></tr>
+    <tr><td><span class="chip"><span class="dot" style="background:${B}"></span>後</span></td>
+      <td class="n">${f1(sum.b_sinr.mean)}</td><td class="n">${f1(sum.b_sinr.p50)}</td>
+      <td class="n"><b>${f1(sum.b_sinr.p5)}</b></td><td class="n">${sum.b_sinr.n}</td></tr>
+    <tr><td>Δ</td>
+      <td class="n">${f1(sum.b_sinr.mean-sum.a_sinr.mean)}</td>
+      <td class="n">${f1(sum.b_sinr.p50-sum.a_sinr.p50)}</td>
+      <td class="n"><b>${f1(sum.b_sinr.p5-sum.a_sinr.p5)}</b></td>
+      <td class="n">—</td></tr></tbody>`;
+  c2.appendChild(tb);
+  // 不阻止比較，但不假裝對等
+  const ratio=Math.max(sum.a_sinr.n,sum.b_sinr.n)/Math.max(1,Math.min(sum.a_sinr.n,sum.b_sinr.n));
+  if(ratio>3) c2.appendChild(el("div","hint",
+    `樣本數差異大（${sum.a_sinr.n} vs ${sum.b_sinr.n}），比較僅供參考`));
+  if(C.paired<3) c2.appendChild(el("div","hint",
+    `兩趟只有 ${C.paired} 個里程區間有共同樣本——重疊太少，趨勢不足採信`));
+  if(C.dropped.a||C.dropped.b) c2.appendChild(el("div","hint",
+    `偏離基準路徑逾 ${60} m 而未納入：前 ${C.dropped.a}、後 ${C.dropped.b} 筆`));
+  box.appendChild(c2);
+
+  // ③ 差值熱區
+  const c3=el("div","card");
+  const h3=el("h3",null,"差值熱區");
+  h3.appendChild(el("span","h3-note","後−前 · 10 m 格"));
+  h3.appendChild(el("span","spacer"));
+  const tip3=el("span","info","ⓘ"); tip3.tabIndex=0;
+  tip3.dataset.tip="發散色盤：兩極用識別色、中點是灰——中點絕不用第三個色相，否則「沒變化」會看起來像另一種變化。只有兩趟都有樣本的格子才上色；只有一趟的畫虛框，那不是「沒變化」。";
+  h3.appendChild(tip3);
+  c3.appendChild(h3);
+  c3.appendChild(deltaMap(C.delta, C.only));
+  const lg=el("div","ablegend");
+  lg.innerHTML=`<span class="sw" style="background:rgb(${dv(-8).join(",")})"></span>惡化
+    <span class="sw" style="background:rgb(143,139,128)"></span>無變化
+    <span class="sw" style="background:rgb(${dv(8).join(",")})"></span>改善
+    <span class="sw sw-none"></span>無對照（只有一趟有樣本）`;
+  c3.appendChild(lg);
+  box.appendChild(c3);
+}
+
+function median(a){ if(!a.length) return null; const s=[...a].sort((x,y)=>x-y);
+  const i=Math.floor(s.length/2); return s.length%2?s[i]:(s[i-1]+s[i])/2; }
+function dv(d,max=8){
+  const t=Math.max(-1,Math.min(1,d/max)), grey=[143,139,128];
+  const end=t>=0?[57,135,229]:[217,89,38], k=Math.abs(t);
+  return [0,1,2].map(i=>Math.round(grey[i]+(end[i]-grey[i])*k));
+}
+
+function chainChart(pts, A, B){
+  const W=1000,H=170,L=44,R=12,T=12,Bm=24;
+  const xs=pts.map(p=>p.m);
+  const vals=pts.flatMap(p=>[p.a_sinr,p.b_sinr]).filter(v=>v!=null);
+  const x0=Math.min(...xs), x1=Math.max(...xs);
+  let y0=Math.min(...vals,-2), y1=Math.max(...vals,13);
+  const pad=(y1-y0)*0.12||1; y0-=pad; y1+=pad;
+  const X=v=>L+((v-x0)/((x1-x0)||1))*(W-L-R);
+  const Y=v=>T+(1-(v-y0)/(y1-y0))*(H-T-Bm);
+  const line=(key,color)=>{
+    const ps=pts.filter(p=>p[key]!=null);
+    if(ps.length<2) return "";
+    const d=ps.map((p,i)=>`${i?"L":"M"}${X(p.m).toFixed(1)} ${Y(p[key]).toFixed(1)}`).join(" ");
+    return `<path d="${d}" fill="none" stroke="${color}" stroke-width="2" vector-effect="non-scaling-stroke"/>`
+      + ps.map(p=>`<circle cx="${X(p.m).toFixed(1)}" cy="${Y(p[key]).toFixed(1)}" r="2.4" fill="${color}"/>`).join("");
+  };
+  let g="";
+  // 門檻帶：5／13 dB（與 backend 事件門檻同一出處）
+  [5,13].forEach(v=>{ if(v<y0||v>y1) return;
+    g+=`<line x1="${L}" x2="${W-R}" y1="${Y(v).toFixed(1)}" y2="${Y(v).toFixed(1)}"
+        stroke="var(--warn)" stroke-width="1" stroke-dasharray="4 4" stroke-opacity=".5"/>
+        <text x="${W-R-2}" y="${(Y(v)-4).toFixed(1)}" fill="var(--warn)" font-size="9" text-anchor="end">${v} dB</text>`;});
+  [y0+(y1-y0)*0.15,(y0+y1)/2,y1-(y1-y0)*0.15].forEach(v=>{
+    g+=`<line x1="${L}" x2="${W-R}" y1="${Y(v).toFixed(1)}" y2="${Y(v).toFixed(1)}" stroke="var(--hairline)"/>
+        <text x="${L-6}" y="${(Y(v)+3.5).toFixed(1)}" fill="var(--muted)" font-size="9" text-anchor="end">${v.toFixed(0)}</text>`;});
+  const box=el("div","abchart");
+  box.innerHTML=`<svg viewBox="0 0 ${W} ${H}" preserveAspectRatio="none">
+    ${g}${line("a_sinr",A)}${line("b_sinr",B)}
+    <text x="${L}" y="${H-6}" fill="var(--muted)" font-size="9">0 m</text>
+    <text x="${W-R}" y="${H-6}" fill="var(--muted)" font-size="9" text-anchor="end">${Math.round(x1)} m</text>
+    <text x="${L}" y="${T-2}" fill="var(--muted)" font-size="9">SINR dB</text></svg>`;
+  return box;
+}
+
+function deltaMap(cells, only){
+  const all=[...cells,...only];
+  if(!all.length){ const e=el("div","hint","這兩趟沒有共同的里程區間——不畫空圖假裝有比較。"); return e; }
+  const es=all.map(c=>c.e), nsv=all.map(c=>c.north);
+  const e0=Math.min(...es)-10,e1=Math.max(...es)+10,n0=Math.min(...nsv)-10,n1=Math.max(...nsv)+10;
+  const W=1000,H=260,pad=20;
+  const k=Math.min((W-pad*2)/((e1-e0)||1),(H-pad*2)/((n1-n0)||1));
+  const X=e=>pad+(e-e0)*k, Y=n=>H-pad-(n-n0)*k;
+  const h=5*k;
+  let s="";
+  only.forEach(c=>{ s+=`<rect x="${(X(c.e)-h).toFixed(1)}" y="${(Y(c.north)-h).toFixed(1)}"
+    width="${(h*2).toFixed(1)}" height="${(h*2).toFixed(1)}" fill="none"
+    stroke="var(--muted)" stroke-width="1" stroke-dasharray="3 3"/>`;});
+  cells.forEach(c=>{ const [r,g2,b]=dv(c.d);
+    s+=`<rect x="${(X(c.e)-h).toFixed(1)}" y="${(Y(c.north)-h).toFixed(1)}"
+      width="${(h*2).toFixed(1)}" height="${(h*2).toFixed(1)}" fill="rgb(${r},${g2},${b})" fill-opacity=".85">
+      <title>後−前 ${c.d>0?"+":""}${c.d.toFixed(1)} dB（前 ${c.a}／後 ${c.b}）</title></rect>`;});
+  const box=el("div","abmap");
+  box.innerHTML=`<svg viewBox="0 0 ${W} ${H}" preserveAspectRatio="xMidYMid meet">${s}</svg>`;
+  return box;
+}
+
+/* ── 篩選控制 ─────────────────────────────────── */
+function buildControls(){
+  const rr=$("#ranges"); rr.textContent="";
+  [[7,"7天"],[30,"30天"],[0,"全部"]].forEach(([k,l])=>{
+    const b=el("button","pill",l); b.setAttribute("aria-pressed", S.range===k?"true":"false");
+    b.onclick=()=>{S.range=k; render();}; rr.appendChild(b);
+  });
+  const ms=$("#fMission"); ms.textContent="";
+  const missions=[...new Set(P.sessions.map(s=>s.mission||"—"))];
+  [["all","航線：全部"],...missions.map(m=>[m,`航線：${m}`])].forEach(([v,l])=>{
+    const o=el("option",null,l); o.value=v; ms.appendChild(o);});
+  ms.value=S.mission; ms.onchange=()=>{S.mission=ms.value; render();};
+  const ds=$("#fDrone"); ds.textContent="";
+  const drones=[...new Set(P.sessions.map(s=>s.drone))];
+  [["all","機：全部"],...drones.map(m=>[m,`機：${m}`])].forEach(([v,l])=>{
+    const o=el("option",null,l); o.value=v; ds.appendChild(o);});
+  ds.value=S.drone; ds.onchange=()=>{S.drone=ds.value; render();};
+  const zb=$("#zonesBtn");
+  zb.setAttribute("aria-pressed", S.zones?"true":"false");
+  zb.onclick=()=>{S.zones=!S.zones; render();};
+}
+
+$("#tabField").onclick=()=>{S.tab="field"; render();};
+$("#tabAb").onclick=()=>{S.tab="ab"; render();};
+
+function render(){
+  $("#tabField").setAttribute("aria-selected", S.tab==="field"?"true":"false");
+  $("#tabAb").setAttribute("aria-selected", S.tab==="ab"?"true":"false");
+  $("#field").hidden = S.tab!=="field";
+  $("#ab").hidden = S.tab!=="ab";
+  if(S.tab==="field"){ buildControls(); drawField(); }
+  else drawAb();
+}
+render();
+})();
+</script>
