@@ -6,6 +6,8 @@
  * 誠實原則：聚合值必附樣本數；無樣本格不出現（不插值不腦補）。
  */
 
+import { isSaneSinr } from "./signal";
+
 export interface TrackRow {
   lat: number | null; lon: number | null;
   sinr?: number | null;
@@ -36,7 +38,10 @@ export function aggregateCells(
   const bins = new Map<string, { v: number[]; s: Set<string>; bad: string | null }>();
   for (const id of ids) {
     for (const r of tracks[id] ?? []) {
-      if (r.lat == null || r.lon == null || r.sinr == null) continue;
+      if (r.lat == null || r.lon == null) continue;
+      // 哨兵值（模組回報「沒有值」）不是很差的訊號，不進聚合——它會把整格的
+      // p10 與 min 一起拖走，而那正是弱區判定的依據
+      if (!isSaneSinr(r.sinr)) continue;
       const x = (r.lon - origin.lon) * k;
       const y = (r.lat - origin.lat) * M_LAT;
       const key = `${Math.floor(x / grid)}|${Math.floor(y / grid)}`;

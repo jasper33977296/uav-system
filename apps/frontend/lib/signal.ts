@@ -18,6 +18,20 @@ export const LINK_CLASSES: {
   { key: "critical", label: "瀕斷 (< -2dB)",       color: "#a01818", min: -Infinity },
 ];
 
+/** 量得出來的 SINR 範圍。**範圍外的不是很差的訊號，是「沒有值」。**
+ *
+ * 實測 `link_metrics` 有 4 筆 `sinr = -3276`＝ −32768/10，模組回報「無效」
+ * 的哨兵值。把它當量測值的下場：場域頁的弱區標籤寫著 −3276 dB，而那一格
+ * 的「最差」從此永遠是它。
+ *
+ * 判準與分級門檻放在一起，因為它們回答的是同一個問題：**這個數字算不算一個
+ * 訊號品質**。（根治在寫入端——哨兵值該存 NULL；那是另一件事。）
+ */
+export const SINR_SANE_MIN = -30;
+export const SINR_SANE_MAX = 40;
+export const isSaneSinr = (v: number | null | undefined): v is number =>
+  v != null && Number.isFinite(v) && v >= SINR_SANE_MIN && v <= SINR_SANE_MAX;
+
 export function classifySinr(sinr: number): (typeof LINK_CLASSES)[number] {
   return LINK_CLASSES.find((c) => sinr >= c.min) ?? LINK_CLASSES[3];
 }

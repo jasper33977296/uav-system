@@ -20,7 +20,8 @@ import CompareTabs from "@/components/CompareTabs";
 import { pathsLayer, sinrRuns, rgba, type RouteRun } from "@/lib/deckRoute";
 import { CANVAS, groundGrid } from "@/lib/geo";
 import { parseJsonb } from "@/lib/jsonb";
-import { API, CLIENT_HEADERS, LINK_CLASSES } from "@/lib/signal";
+import InfoTip from "@/components/InfoTip";
+import { API, CLIENT_HEADERS, LINK_CLASSES, isSaneSinr } from "@/lib/signal";
 import { firstFleetPos } from "@/lib/store";
 import { aggregateCells, weakZones, type TrackRow, type WeakZone } from "@/lib/signalMap";
 
@@ -59,6 +60,8 @@ export default function FieldMap() {
   const [ready, setReady] = useState(false);
   const fittedRef = useRef(false);
   const anchoredRef = useRef(false);
+  // 使用者自己拖過／縮放過地圖之後就不再自動對焦（他把畫面拉到哪是他的決定）
+  const userMovedRef = useRef(false);
 
   // 篩選（全部可選、無必選）
   const [range, setRange] = useState<7 | 30 | 0>(30);
@@ -194,13 +197,17 @@ export default function FieldMap() {
         map.getCanvas().style.cursor =
           overlay.pickObject({ x: e.point.x, y: e.point.y }) ? "pointer" : "";
       });
+      // `originalEvent` 有值＝這次移動是人操作的；fitBounds 造成的沒有
+      map.on("movestart", (e) => {
+        if ((e as { originalEvent?: unknown }).originalEvent) userMovedRef.current = true;
+      });
       setReady(true);
     });
     return () => map.remove();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
-  // 網格/起飛點錨定＋首次取景（有原點後一次）
+  // 網格/起飛點錨定（有原點後一次）
   useEffect(() => {
     const map = mapRef.current;
     if (!map || !ready || !origin || anchoredRef.current) return;
@@ -211,11 +218,36 @@ export default function FieldMap() {
       type: "Feature", properties: {},
       geometry: { type: "Point", coordinates: [origin.lon, origin.lat] },
     } as GeoJSON.Feature);
-    if (!fittedRef.current) {
-      fittedRef.current = true;
-      map.jumpTo({ center: [origin.lon, origin.lat], zoom: 15.5, pitch: 55 });
-    }
   }, [ready, origin]);
+
+  // **取景由資料決定**（ui-spec §6.6）。原本是 `jumpTo({ zoom: 15.5 })`——
+  // 一個寫死的縮放：實測 30 天內 24 趟疊起來只佔畫面寬度約 4%，而「開頁零
+  // 步驟回答哪裡訊號弱」正是這一頁存在的理由。篩選換了要重新對焦；但
+  // **使用者自己動過鏡頭之後不再搶鏡**——他把畫面拉到哪裡是他的決定。
+  useEffect(() => {
+    const map = mapRef.current;
+    if (!map || !ready || userMovedRef.current || !visLoaded.length) return;
+    const b = new maplibregl.LngLatBounds();
+    let n = 0;
+    for (const s of visLoaded) {
+      for (const r of tracks[s.id] ?? []) {
+        if (r.lat == null || r.lon == null || !isSaneSinr(r.sinr)) continue;
+        b.extend([r.lon as number, r.lat as number]);
+        n++;
+      }
+    }
+    if (!n) return;
+    fittedRef.current = true;
+    // **先用俯視算取景，再套俯角**：maplibre 的 fitBounds 帶 pitch 時算得很
+    // 保守（把傾斜後可能露出的範圍全算進去），結果是資料只佔畫面三分之一。
+    // 俯角只會把遠處往地平線壓、讓足跡看起來更小，所以俯視算出來的框套上
+    // 俯角之後仍然裝得下
+    const cam = map.cameraForBounds(b, {
+      padding: { top: 50, bottom: 80, left: 330, right: 50 }, maxZoom: 19 });
+    if (!cam) return;
+    map.jumpTo({ ...cam, pitch: 55 });
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [ready, visLoaded.length, tracks]);
 
   // deck 層：A 累積軌跡（25% 透明、選中趟提亮）＋B 輪廓＋標籤
   useEffect(() => {
@@ -226,7 +258,8 @@ export default function FieldMap() {
         .filter((r) => r.lat != null && r.lon != null)
         .filter((_, i) => i % 2 === 0)   // 繪製抽稀（聚合不受影響）
         .map((r) => ({ lat: r.lat as number, lon: r.lon as number,
-                       sinr: (r.sinr as number | null) ?? null,
+                       // 哨兵值不是「瀕斷」，畫成瀕斷色就是把沒有值說成很糟
+                       sinr: isSaneSinr(r.sinr) ? (r.sinr as number) : null,
                        alt: (r.alt_rel as number | null) ?? 0 }));
       const hot = sel?.type === "run" && sel.sid === s.id;
       runs.push(...sinrRuns(pts).map((r) => ({
@@ -249,12 +282,15 @@ export default function FieldMap() {
         id: "field-zone-labels",
         data: zones,
         getPosition: (z: WeakZone) => [z.labelLon, z.labelLat, 3],
-        getText: (z: WeakZone) => `▼${z.minVal.toFixed(0)}`,
-        getColor: [224, 94, 94, 255],
-        getSize: 15,
-        outlineWidth: 2,
+        // **用字不用符號**：deck 的字型畫不出 ▼（console 明說
+        // `Missing character: ▼`），而純數字「-4」看起來像編號不像 dB
+        getText: (z: WeakZone) => `最差 ${z.minVal.toFixed(0)} dB`,
+        getColor: [240, 165, 165, 255],
+        getSize: 13,
+        outlineWidth: 2.5,
         outlineColor: [27, 26, 23, 255],
         fontSettings: { sdf: true },
+        characterSet: "auto" as const,   // 不開的話 CJK 整段畫不出來
         pickable: true,
         onClick: (info) => {
           if (info.object) setSel({ type: "zone", zone: info.object as WeakZone });
@@ -296,6 +332,23 @@ export default function FieldMap() {
 
   const loading = loadedN < sessions.length;
 
+  // 摘要：這一頁的第一句話。舊版沒有——「幾個弱區、最差多少」要自己讀圖
+  const stats = useMemo(() => {
+    let kept = 0, dropped = 0;
+    for (const s of visLoaded) {
+      for (const r of tracks[s.id] ?? []) {
+        if (r.sinr == null) continue;
+        if (isSaneSinr(r.sinr)) kept++; else dropped++;
+      }
+    }
+    return { kept, dropped,
+      worst: zones.length ? Math.min(...zones.map((z) => z.minVal)) : null };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [visLoaded.length, tracks, zones]);
+  // 弱區清單按最差值排序——最該先看的排最前面
+  const zonesSorted = useMemo(() =>
+    [...zones].sort((a, b) => a.minVal - b.minVal), [zones]);
+
   return (
     <div className="map-wrap">
       <div ref={containerRef} style={{ position: "absolute", inset: 0 }} />
@@ -308,13 +361,34 @@ export default function FieldMap() {
         <div className="cmd-panel field-panel">
           <div className="cmd-head" onClick={() => setPanelOpen((o) => !o)}>
             <span className="name">場域訊號</span>
-            <span className="meta"
-              title={`樣本數 ≥${MIN_SAMPLES} 的架次`}>
-              {visLoaded.length} 趟</span>
-            {loading && <span className="meta">載入 {loadedN}/{sessions.length}…</span>}
+            {loading && (
+              <span className="meta">載入 {loadedN}/{sessions.length} 趟…</span>
+            )}
             <span className="spacer" />
+            <InfoTip tip={"把選定範圍內的每一趟疊在一起：單趟半透明，多趟一致的"
+              + "弱區越疊越濃——濃淡直接表達「每次都爛」與「偶爾爛」。"
+              + "弱區＝10 m 格的 P10 落在劣化以下、而且至少兩趟都飛過的格子"
+              + "（一趟飛過一次不成立弱區）；只圈飛過的地方，不插值、不腦補。"
+              + "取景由資料決定，不是寫死的縮放；自己拖過地圖之後就不再自動對焦。"
+              + "超出量測範圍的樣本（模組回報「沒有值」的哨兵值）不納入。"} />
             <span className="meta">{panelOpen ? "▾" : "▸"}</span>
           </div>
+          {/* 摘要：收合時也看得到——它是這一頁的答案 */}
+          <div className="field-stats">
+            <span className="fstat"><b>{visLoaded.length}</b><span>趟</span></span>
+            <span className="fstat"><b>{stats.kept.toLocaleString()}</b><span>樣本</span></span>
+            <span className="fstat"><b>{zones.length}</b><span>個弱區</span></span>
+            <span className="fstat">
+              <b>{stats.worst == null ? "—" : `${stats.worst.toFixed(1)} dB`}</b>
+              <span>最差</span>
+            </span>
+          </div>
+          {/* **排除了幾筆要說出來**：悄悄丟掉與當成真值一樣糟 */}
+          {stats.dropped > 0 && (
+            <div className="hint-line field-drop">
+              另有 {stats.dropped} 筆超出量測範圍（模組回報「沒有值」的哨兵值）未納入
+            </div>
+          )}
           {panelOpen && (
             <div className="cmd-body">
               <div className="cmd-row">
@@ -347,17 +421,38 @@ export default function FieldMap() {
                   onChange={(e) => setZonesOn(e.target.checked)} />
                 弱區輪廓
               </label>
-              {/* 誠實截斷（no silent caps）：總量與略過數如實揭露 */}
+              {/* 誠實截斷（no silent caps）：**只在真的少畫時才佔版面** */}
               {(listInfo.skipped > 0 || listInfo.truncated) && (
                 <div className="hint-line">
-                  範圍內 {listInfo.total} 筆架次
-                  {listInfo.skipped > 0 && `．已略過 ${listInfo.skipped} 個無樣本測試架次`}
+                  {listInfo.skipped > 0 && `略過 ${listInfo.skipped} 個無樣本測試架次`}
                   {listInfo.truncated && `．清單達 ${LIST_LIMIT} 筆上限（可能未涵蓋全部）`}
                 </div>
               )}
             </div>
           )}
         </div>
+
+        {/* 弱區清單：圖上找不如清單點。按最差值排序 */}
+        {zonesOn && zonesSorted.length > 0 && (
+          <div className="card field-zones">
+            <div className="drone-head">
+              <span className="name">弱區（{zonesSorted.length}）</span>
+              <span className="spacer" />
+              <InfoTip tip={"按最差值排序。點一列在圖上標出那一簇並開資訊卡。"
+                + "圖上的標籤寫的是「最差 N dB」，不用 ▼ 之類的符號——deck 的"
+                + "字型畫不出來，而且純數字看起來像編號不像 dB。"} />
+            </div>
+            {zonesSorted.map((z, i) => (
+              <button key={i} className={`zrow${sel?.type === "zone" && sel.zone === z ? " on" : ""}`}
+                onClick={() => setSel({ type: "zone", zone: z })}>
+                <span className="zbad">最差 {z.minVal.toFixed(1)} dB</span>
+                <span className="spacer" />
+                <span className="hint-line">涵蓋 {z.sessionIds.length} 趟</span>
+                <span className="hint-line">樣本 {z.n}</span>
+              </button>
+            ))}
+          </div>
+        )}
 
         {/* 資訊卡：點軌跡＝該趟；點輪廓＝弱區；點空白關 */}
         {selSess && (
@@ -406,23 +501,32 @@ export default function FieldMap() {
         )}
       </div>
 
-      {/* 圖例：四分級＋濃淡語意＋輪廓說明 */}
+      {/* 圖例：**一列色階**（與即時頁同形），其餘說明住 ⓘ——舊版是六列，
+          在 900px 高的視窗會直接撞到左欄的弱區卡 */}
       <div className="legend">
-        <h4>訊號品質</h4>
-        {LINK_CLASSES.map((c) => (
-          <div className="row" key={c.key}>
-            <span className="dot" style={{ background: c.color }} />
-            {c.label}
-          </div>
-        ))}
-        <div className="row"><span className="dot" style={{
-          background: "rgba(160,24,24,0.35)" }} />淡＝單趟．濃＝多趟一致</div>
-        <div className="row"><span className="dot" style={{
-          background: "transparent", border: "1.5px solid #f0eee6" }} />
-          弱區輪廓（▼最差值）</div>
+        <div className="legend-row">
+          <span className="legend-lab">訊號品質</span>
+          {LINK_CLASSES.map((c) => (
+            <span className="legend-seg" key={c.key}>
+              <i className="legend-sw" style={{ background: c.color }} />
+              {c.label.split(" ")[0]}
+            </span>
+          ))}
+          <InfoTip tip={`軌跡依實測 SINR 上色，門檻與 backend 的事件門檻同一出處：${
+            LINK_CLASSES.map((c) => c.label).join("、")}。`
+            + "線的濃淡＝有幾趟疊在同一處（淡＝單趟、濃＝多趟一致）。"
+            + "白色輪廓＝弱區，圈上寫的是那一簇量到的最差值。"
+            + "顏色永不單獨傳達語意。"} />
+        </div>
       </div>
 
-      {!origin && !loading && (
+      {/* **載入中不得說「沒有資料」**：24 趟各抓一次 track 要 20 秒以上，
+          而舊版在那整段時間裡都寫著「此範圍沒有飛行資料」——資料在，只是
+          還沒到。空態只在真的一趟都沒有時出現（§0.2e） */}
+      {loading && !visLoaded.length && (
+        <div className="field-empty empty">載入 {loadedN}/{sessions.length} 趟…</div>
+      )}
+      {!loading && !sessions.length && (
         <div className="field-empty empty">此範圍沒有飛行資料</div>
       )}
     </div>
