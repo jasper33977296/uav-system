@@ -1,0 +1,264 @@
+<!doctype html>
+<html lang="zh-Hant"><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>規劃頁版面：三個問題</title>
+<style>
+/* 同 apps/frontend/app/globals.css 的 token——原型與產品同一套顏色 */
+:root{
+  --page:#1b1a17; --surface:#262624; --surface-2:#30302c;
+  --ink:#f0eee6; --ink-2:#c2bfb3; --muted:#8f8b80; --hairline:#3a3833;
+  --border:rgba(240,238,230,.1);
+  --accent:#d97757; --accent-bg:rgba(217,119,87,.12);
+  --series-1:#3987e5; --ok:#0ca30c; --warn:#fab219; --danger:#e05e5e;
+}
+*{margin:0;padding:0;box-sizing:border-box}
+[hidden]{display:none!important}
+body{background:var(--page);color:var(--ink);
+  font:14px/1.55 system-ui,"Noto Sans TC",sans-serif;padding:20px 24px 60px}
+h1{font-size:20px;margin:0 0 4px}
+h2{font-size:14px;color:var(--accent);margin:34px 0 4px;letter-spacing:.03em}
+.note{color:var(--muted);font-size:12.5px;margin-bottom:12px;max-width:76ch}
+.note b{color:var(--ink-2);font-weight:600}
+.opt{border:1px solid var(--border);border-radius:10px;margin-bottom:14px;
+  overflow:hidden;background:var(--surface)}
+.opt > header{display:flex;align-items:baseline;gap:10px;padding:7px 12px;
+  border-bottom:1px solid var(--hairline);background:var(--surface-2)}
+.opt > header b{font-size:12.5px}
+.opt > header span{color:var(--muted);font-size:12px}
+.pane{padding:12px}
+.tag{font-size:11px;border:1px solid var(--border);border-radius:4px;
+  padding:1px 6px;color:var(--muted)}
+.tag.pick{color:var(--accent);border-color:var(--accent)}
+
+/* ── 產品既有的元件（照抄，才比得出差別）── */
+.chip{border:1px solid var(--border);border-radius:999px;padding:3px 10px;
+  font-size:12px;color:var(--ink-2);white-space:nowrap}
+.chip.bad{color:var(--danger);border-color:var(--danger)}
+.btn{background:transparent;border:1px solid var(--border);border-radius:7px;
+  padding:4px 10px;font-size:12.5px;color:var(--ink-2);cursor:pointer}
+.btn.accent{color:var(--accent);border-color:var(--accent);background:var(--accent-bg)}
+.k{font-size:11px;color:var(--muted);letter-spacing:.04em}
+.inp{background:var(--surface-2);border:1px solid var(--border);border-radius:6px;
+  padding:4px 8px;width:110px;color:var(--ink);font-variant-numeric:tabular-nums}
+.seg{display:flex;border:1px solid var(--border);border-radius:7px;overflow:hidden}
+.seg button{padding:4px 9px;font-size:12px;color:var(--muted);background:none;
+  border:0;cursor:pointer}
+.seg button[aria-pressed=true]{color:var(--accent);background:var(--accent-bg)}
+.f{display:flex;flex-direction:column;gap:3px}
+.bar{display:flex;gap:10px;align-items:flex-end;flex-wrap:wrap;
+  background:var(--surface-2);border:1px solid var(--border);border-radius:10px;
+  padding:9px 11px}
+
+/* 地圖假圖：用漸層假裝正射影像，重點是**尺寸與位置**不是內容 */
+.map{position:relative;border-radius:10px;overflow:hidden;height:250px;
+  background:
+    radial-gradient(60% 80% at 30% 40%,#3f4a35,#2c3327 70%),
+    linear-gradient(120deg,#39412f,#2a2f24);
+  border:1px solid var(--border)}
+.map svg{position:absolute;inset:0;width:100%;height:100%}
+.rail{background:var(--surface);border:1px solid var(--border);border-radius:10px;
+  padding:10px;display:flex;flex-direction:column;gap:9px;font-size:12.5px}
+.rail h3{font-size:11px;color:var(--muted);font-weight:500;letter-spacing:.05em}
+.row{display:flex;justify-content:space-between;align-items:baseline}
+</style></head><body>
+
+<h1>規劃頁版面：三個問題</h1>
+<p class="note">每一段給 2–3 個選項，<b>選項本身就是問題的答案在不同讀法下長什麼樣</b>。
+挑了我再落地。畫面用產品的同一組色票，比例照 1400 px 寬的實際截圖縮。</p>
+
+<!-- ══════════ 1. 頁首 ══════════ -->
+<h2>① 頁首太佔空間</h2>
+<p class="note">現況三列：<b>← 路徑管理</b> ／ <b>標題</b> ／ <b>五顆晶片</b>，
+吃掉 100 px 高，而地圖只有 456 px。<br>
+晶片本身都是事實、不能刪——問題是它們<b>一樣大聲</b>：
+「最低離地 2 m」是這一頁的結論，「取自機上（現在讀的）」是出處。</p>
+
+<div class="opt"><header><b>現況</b><span>3 列・約 100 px</span></header>
+<div class="pane">
+  <div style="display:flex;align-items:center;gap:12px;margin-bottom:10px">
+    <button class="btn">← 路徑管理</button>
+    <div style="font-size:24px;font-weight:700">0908-snake-v1</div>
+  </div>
+  <div style="display:flex;gap:8px;flex-wrap:wrap">
+    <span class="chip">高度＝離起飛點</span>
+    <span class="chip">起飛點 123 m（海拔）</span>
+    <span class="chip bad">未確認</span>
+    <span class="chip">返航最低離地 4.6 m</span>
+    <span class="chip">最低離地 2 m</span>
+    <span class="chip">機上 WP_SPD 2 m/s · 取自機上（現在讀的）</span>
+  </div>
+</div></div>
+
+<div class="opt"><header><b>A</b><span>標題與晶片同一列・約 44 px・省 56 px</span>
+  <span class="tag pick">我建議這個</span></header>
+<div class="pane">
+  <div style="display:flex;align-items:center;gap:10px;flex-wrap:wrap">
+    <button class="btn" style="padding:3px 7px">←</button>
+    <div style="font-size:17px;font-weight:700">0908-snake-v1</div>
+    <span style="color:var(--hairline)">│</span>
+    <span class="chip bad">最低離地 2 m</span>
+    <span class="chip">返航 4.6 m</span>
+    <span class="chip bad">未確認</span>
+    <span class="chip" style="color:var(--muted)">離起飛點・起飛點 123 m・WP_SPD 2 m/s ⓘ</span>
+  </div>
+  <p class="note" style="margin:9px 0 0">
+    <b>結論在前，出處收成一顆。</b> 前三顆是「這一頁在回答的事」（會變紅、會變）；
+    最後一顆把三個不會變的脈絡併起來，滑鼠移上去才展開「取自機上（現在讀的）」。
+    「← 路徑管理」縮成箭頭——那幾個字每一頁都一樣，佔的是標題的位置。</p>
+</div></div>
+
+<div class="opt"><header><b>B</b><span>標題列 ＋ 一列晶片・約 62 px・省 38 px</span></header>
+<div class="pane">
+  <div style="display:flex;align-items:center;gap:10px;margin-bottom:7px">
+    <button class="btn" style="padding:3px 7px">←</button>
+    <div style="font-size:19px;font-weight:700">0908-snake-v1</div>
+    <span style="flex:1"></span>
+    <span class="chip bad">未確認</span>
+  </div>
+  <div style="display:flex;gap:7px;flex-wrap:wrap">
+    <span class="chip bad">最低離地 2 m</span>
+    <span class="chip">返航最低離地 4.6 m</span>
+    <span class="chip">高度＝離起飛點</span>
+    <span class="chip">起飛點 123 m</span>
+    <span class="chip">WP_SPD 2 m/s ⓘ</span>
+  </div>
+  <p class="note" style="margin:9px 0 0">標題保留大字、晶片仍是一列。
+    <b>比 A 保守</b>：不合併脈絡，只砍字（「取自機上（現在讀的）」進 ⓘ、
+    「返航最低離地」→「返航」）。</p>
+</div></div>
+
+<!-- ══════════ 2. 降落設定 ══════════ -->
+<h2>② 降落在哪裡／降落方式不該常駐</h2>
+<p class="note">你說得對，而且理由比「佔空間」更根本：
+<b>沒有降落點的時候，「降落在哪裡」只有一個答案</b>（起飛點）——
+一個只有一個選項的選擇題不是選擇題。</p>
+
+<div class="opt"><header><b>現況</b><span>畫線工具列常駐四組</span></header>
+<div class="pane"><div class="bar">
+  <div class="f"><span class="k">高度基準</span><div class="seg">
+    <button aria-pressed="true">離地面</button><button>離起飛點</button><button>固定海拔</button></div></div>
+  <div class="f"><span class="k">離地面 m</span><input class="inp" value="3"></div>
+  <div class="f"><span class="k">速度 m/s</span><input class="inp" value="1"></div>
+  <div class="f"><span class="k">放點類型</span><div class="seg">
+    <button aria-pressed="true">航點</button><button>降落點</button></div></div>
+  <div class="f"><span class="k">降落在哪裡</span><div class="seg">
+    <button aria-pressed="true">起飛點</button><button>降落點位置</button></div></div>
+  <div class="f"><span class="k">降落方式</span><div class="seg">
+    <button aria-pressed="true">垂直</button><button>逐漸</button></div></div>
+</div></div></div>
+
+<div class="opt"><header><b>C</b><span>放了降落點才出現</span><span class="tag pick">我建議這個</span></header>
+<div class="pane">
+  <div style="color:var(--muted);font-size:12px;margin-bottom:6px">還沒放降落點：</div>
+  <div class="bar">
+    <div class="f"><span class="k">高度基準</span><div class="seg">
+      <button aria-pressed="true">離地面</button><button>離起飛點</button><button>固定海拔</button></div></div>
+    <div class="f"><span class="k">離地面 m</span><input class="inp" value="3"></div>
+    <div class="f"><span class="k">速度 m/s</span><input class="inp" value="1"></div>
+    <div class="f"><span class="k">放點類型</span><div class="seg">
+      <button aria-pressed="true">航點</button><button>降落點</button></div></div>
+    <span style="align-self:center;color:var(--muted);font-size:12px">
+      降落回起飛點・垂直降落 <span class="tag">系統決定</span></span>
+  </div>
+  <div style="color:var(--muted);font-size:12px;margin:12px 0 6px">放了一個降落點之後：</div>
+  <div class="bar">
+    <div class="f"><span class="k">高度基準</span><div class="seg">
+      <button aria-pressed="true">離地面</button><button>離起飛點</button><button>固定海拔</button></div></div>
+    <div class="f"><span class="k">離地面 m</span><input class="inp" value="3"></div>
+    <div class="f"><span class="k">速度 m/s</span><input class="inp" value="1"></div>
+    <div class="f"><span class="k">放點類型</span><div class="seg">
+      <button>航點</button><button aria-pressed="true">降落點</button></div></div>
+    <div class="f"><span class="k">降落在哪裡</span><div class="seg">
+      <button>起飛點</button><button aria-pressed="true">降落點位置</button></div></div>
+    <div class="f"><span class="k">降落方式</span><div class="seg">
+      <button aria-pressed="true">垂直</button><button>逐漸</button></div></div>
+  </div>
+  <p class="note" style="margin:9px 0 0">
+    <b>代價講明白</b>：沒有降落點時就選不到「逐漸降落」（回起飛點只能垂直下降）。
+    「系統決定」那個灰標是既有的<b>決策表</b>會列的同一件事，所以不會消失、只是不佔工具列。</p>
+</div></div>
+
+<div class="opt"><header><b>D</b><span>降落設定搬進右欄，選到降落點才顯示</span></header>
+<div class="pane" style="display:grid;grid-template-columns:1fr 240px;gap:12px">
+  <div class="bar" style="align-self:start">
+    <div class="f"><span class="k">高度基準</span><div class="seg">
+      <button aria-pressed="true">離地面</button><button>離起飛點</button><button>固定海拔</button></div></div>
+    <div class="f"><span class="k">離地面 m</span><input class="inp" value="3"></div>
+    <div class="f"><span class="k">速度 m/s</span><input class="inp" value="1"></div>
+    <div class="f"><span class="k">放點類型</span><div class="seg">
+      <button>航點</button><button aria-pressed="true">降落點</button></div></div>
+  </div>
+  <div class="rail">
+    <h3>選取的航點</h3>
+    <div class="row"><span>類型</span><b style="color:var(--accent)">降落點</b></div>
+    <div class="row"><span>降落在哪裡</span><span>這個位置</span></div>
+    <div class="f"><span class="k">降落方式</span><div class="seg">
+      <button aria-pressed="true">垂直</button><button>逐漸</button></div></div>
+    <button class="btn">刪除這個點</button>
+  </div>
+  <p class="note" style="grid-column:1/-1;margin:0">
+    <b>降落設定屬於那個點，就住在那個點旁邊。</b> 比 C 更徹底，但要多點一下
+    （先選中降落點）才改得到。</p>
+</div></div>
+
+<!-- ══════════ 3. 地圖置中 ══════════ -->
+<h2>③「整個地圖要置中」</h2>
+<p class="note">先講量到的：<b>航線在地圖裡是置中的</b>——外框中心與畫布中心差幾個像素。
+所以「不置中」指的應該是別的。兩種讀法：</p>
+
+<div class="opt"><header><b>現況</b><span>地圖 1120 ＋ 右欄 264，滿版</span></header>
+<div class="pane" style="display:grid;grid-template-columns:1fr 200px;gap:10px">
+  <div class="map"><svg viewBox="0 0 560 250">
+    <polyline points="230,120 275,95 285,140 245,165 258,105 300,88"
+      fill="none" stroke="var(--series-1)" stroke-width="3"/>
+    <line x1="280" y1="0" x2="280" y2="250" stroke="var(--accent)"
+      stroke-width="1" stroke-dasharray="4 4" opacity=".5"/>
+  </svg></div>
+  <div class="rail"><h3>選取的航點</h3><div class="row"><span>航點</span><b>seq 0</b></div></div>
+  <p class="note" style="grid-column:1/-1;margin:0">
+    航線在<b>地圖畫布</b>裡置中（橘虛線＝畫布中心），但畫布因為右欄而偏左，
+    所以整塊看起來偏左。</p>
+</div></div>
+
+<div class="opt"><header><b>E</b><span>頁面加最大寬度、整塊置中</span></header>
+<div class="pane">
+  <div style="max-width:620px;margin:0 auto;display:grid;
+    grid-template-columns:1fr 170px;gap:10px">
+    <div class="map" style="height:210px"><svg viewBox="0 0 440 210">
+      <polyline points="180,100 218,78 227,116 193,138 204,87 240,72"
+        fill="none" stroke="var(--series-1)" stroke-width="3"/></svg></div>
+    <div class="rail"><h3>選取的航點</h3><div class="row"><span>航點</span><b>seq 0</b></div></div>
+  </div>
+  <p class="note" style="margin:9px auto 0;max-width:620px">
+    <b>整塊（地圖＋右欄）置中</b>，兩側留白。寬螢幕上不會被拉成一條。
+    代價：地圖變窄。</p>
+</div></div>
+
+<div class="opt"><header><b>F</b><span>地圖滿版，右欄浮在地圖上</span>
+  <span class="tag pick">我建議這個</span></header>
+<div class="pane">
+  <div class="map" style="height:250px">
+    <svg viewBox="0 0 700 250">
+      <polyline points="300,118 348,92 358,140 315,164 328,100 372,84"
+        fill="none" stroke="var(--series-1)" stroke-width="3"/>
+      <line x1="350" y1="0" x2="350" y2="250" stroke="var(--accent)"
+        stroke-width="1" stroke-dasharray="4 4" opacity=".5"/>
+    </svg>
+    <div class="rail" style="position:absolute;top:10px;right:10px;width:190px;
+      background:rgba(38,38,36,.92);backdrop-filter:blur(3px)">
+      <h3>選取的航點</h3>
+      <div class="row"><span>航點</span><b>seq 0</b></div>
+      <div class="f"><span class="k">高度（離地面）</span><input class="inp" value="3"></div>
+    </div>
+  </div>
+  <p class="note" style="margin:9px 0 0">
+    <b>地圖拿回整個寬度，航線真的在畫面正中央。</b> 右欄浮在上面——它本來就只
+    在「選到一個航點」時才有內容，讓它蓋住一小塊地形比永久佔掉 264 px 划算。
+    代價：右欄底下的地形被遮住（可以做成可收合）。</p>
+</div></div>
+
+<h2>要你挑</h2>
+<p class="note">
+① <b>A</b> 或 <b>B</b>　②<b>C</b> 或 <b>D</b>　③<b>E</b> 或 <b>F</b>（或「維持現狀，我要的是別的」）。<br>
+挑完我一次做掉，做完再截圖給你看。</p>
+</body></html>

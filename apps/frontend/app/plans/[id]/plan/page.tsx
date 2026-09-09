@@ -311,6 +311,7 @@ export default function PlanPage() {
   const [applied, setApplied] = useState<{ note?: string } | null>(null);
   const [sign, setSign] = useState<Sign | null>(null);
   const [blds, setBlds] = useState<BuildingFeat[]>([]);
+  const [railOpen, setRailOpen] = useState(true);
   const onBlds = useCallback((b: BuildingFeat[]) => setBlds(b), []);
   const [ack, setAck] = useState<Set<string>>(new Set());
   const [started, setStarted] = useState(false);
@@ -607,55 +608,58 @@ export default function PlanPage() {
 
   return (
     <div className="page">
+      {/* **結論在前，出處收成一顆。**（使用者裁定 2026-09-09，選項 A）
+          原本是三列共 100 px，而地圖只有 456 px。晶片本身都是事實、不能刪
+          ——問題是它們**一樣大聲**：「最低離地 2 m」是這一頁在回答的事，
+          「取自機上（現在讀的）」是出處。前面幾顆會變紅、會變；
+          不會變的脈絡併成一顆灰的，想知道才去碰。
+          「← 路徑管理」縮成箭頭：那幾個字每一頁都一樣，佔的是標題的位置。 */}
       <div className="plan-head">
-        <Link href="/plans" className="btn-plain btn-sm">← 路徑管理</Link>
+        <Link href="/plans" className="btn-plain btn-sm" title="回路徑管理">←</Link>
         <h1 className="mtitle">{name || "…"}</h1>
-      </div>
-
-      {err && <div className="form-err">{err}</div>}
-
-      <div className="plan-facts">
-        <span className="chip" title={prof?.policy?.mode === "agl"
-          ? "寫進航線的是 frame 3 的數字，但每個航點的高度是用地面站的 DEM 逐點算出來的——飛控不必有地形圖庫。它只有 DEM 那麼準，取樣點之間可能錯"
-          : undefined}>
-          {prof?.policy
-            ? `高度＝${MODE_TEXT[prof.policy.mode]} ${prof.policy.height_m} m`
-            : prof ? frameLabel(prof.frames) : "…"}
-        </span>
-        {prof?.home_amsl_m != null && (
-          <span className="chip">起飛點 {prof.home_amsl_m} m（海拔）</span>
-        )}
-        {!isNew && sign && (
-          <span className={`chip${sign.signed && !sign.stale ? "" : " bad"}`}
-            title={sign.why ?? undefined}>
-            {sign.signed && !sign.stale
-              ? `已確認 · ${(sign.checked_at ?? "").slice(0, 16).replace("T", " ")}${
-                  sign.signed_by ? ` · ${sign.signed_by}` : ""}`
-              : sign.stale ? "簽核已失效（航點改過）" : "未確認"}
-          </span>
+        <span className="head-sep" />
+        {worst != null && (
+          <span className={`chip${worst < 0 ? " bad" : ""}`}>最低離地 {worst} m</span>
         )}
         {prof && (
           <span className={`chip${
             (chk?.terrain_rtl?.min_agl_m ?? 9) < 0 ? " bad" : ""}`}
             title={prof.rtl_alt_m == null
-              ? "RTL_ALT_M 是機上的參數，讀不到就不判返航——**讀不到不等於沒問題**"
+              ? "RTL_ALT_M 是機上的參數，讀不到就不判返航——讀不到不等於沒問題"
               : "返航會爬到 RTL_ALT_M（離起飛點，不是離地形）再直線飛回起飛點。這一欄是那條線上最低的離地"}>
             {prof.rtl_alt_m == null ? "返航沒有檢查"
               : chk?.terrain_rtl?.min_agl_m == null
-                ? `返航高度 ${prof.rtl_alt_m} m`
-                : `返航最低離地 ${chk.terrain_rtl.min_agl_m} m`}
+                ? `返航 ${prof.rtl_alt_m} m`
+                : `返航 ${chk.terrain_rtl.min_agl_m} m`}
           </span>
         )}
-        {worst != null && (
-          <span className={`chip${worst < 0 ? " bad" : ""}`}>最低離地 {worst} m</span>
+        {!isNew && sign && (
+          <span className={`chip${sign.signed && !sign.stale ? "" : " bad"}`}
+            title={sign.why ?? undefined}>
+            {sign.signed && !sign.stale
+              ? `已審查 ${(sign.checked_at ?? "").slice(11, 16)}`
+              : sign.stale ? "簽核已失效" : "未審查"}
+          </span>
         )}
-        <span className="chip" style={spd.wp == null ? { opacity: 0.6 } : undefined}
-          title={spd.wp == null
-            ? "航線裡的 DO_CHANGE_SPEED 只從它被執行到的那一項之後才生效；在那之前用的是機上的 WP_SPD。讀不到它，速度相關的判定就不做——讀不到不等於沒問題"
-            : "第一段永遠用這個值：航線裡的 DO_CHANGE_SPEED 管不到起飛之後那一段"}>
-          {spd.wp == null ? "機上速度未讀到" : `機上 WP_SPD ${spd.wp} m/s`} · {spd.src}
+        {/* 三個**不會變**的脈絡併成一顆：高度基準、起飛點海拔、機上速度 */}
+        <span className="chip ctx">
+          {prof?.policy
+            ? `${MODE_TEXT[prof.policy.mode]} ${prof.policy.height_m} m`
+            : prof ? frameLabel(prof.frames).replace("高度＝", "") : "…"}
+          {prof?.home_amsl_m != null && `・起飛點 ${prof.home_amsl_m} m`}
+          {`・WP_SPD ${spd.wp == null ? "未讀到" : `${spd.wp} m/s`}`}
+          <InfoTip tip={
+            (prof?.policy?.mode === "agl"
+              ? "高度基準是「離地面」：寫進航線的是 frame 3 的數字，但每個航點的高度是用地面站的 DEM 逐點算出來的——飛控不必有地形圖庫。它只有 DEM 那麼準，取樣點之間可能錯。"
+              : "高度基準是航線裡 frame 欄位的意思。")
+            + `起飛點海拔${prof?.home_amsl_m != null ? ` ${prof.home_amsl_m} m` : "未知"}，來自 DEM。`
+            + (spd.wp == null
+              ? "機上 WP_SPD 讀不到：航線裡的 DO_CHANGE_SPEED 只從它被執行到的那一項之後才生效，在那之前用的是機上的 WP_SPD——讀不到它，速度相關的判定一律不做。讀不到不等於沒問題。"
+              : `機上 WP_SPD ${spd.wp} m/s（${spd.src}）。第一段永遠用這個值：航線裡的 DO_CHANGE_SPEED 管不到起飛之後那一段。`)} />
         </span>
       </div>
+
+      {err && <div className="form-err">{err}</div>}
 
       {/* 3D 地形（issues/048 F1）。**地形是真的**：maplibre 吃我們自己從
           `.hgt` 產的圖磚。原型那張手繪線框到此為止 */}
@@ -697,18 +701,17 @@ export default function PlanPage() {
                   ))}
                 </div>
               </div>
-              <div className="f"><span>降落在哪裡</span>
-                <label className="opt"><input type="radio" checked={pol.land_at_home}
-                  onChange={() => setPol((q) => ({ ...q, land_at_home: true }))} />起飛點</label>
-                <label className="opt"><input type="radio" checked={!pol.land_at_home}
-                  onChange={() => setPol((q) => ({ ...q, land_at_home: false }))} />標成降落點的位置</label>
-              </div>
-              <div className="f"><span>降落方式</span>
-                <label className="opt"><input type="radio" checked={pol.land_mode === "vert"}
-                  onChange={() => setPol((q) => ({ ...q, land_mode: "vert" }))} />飛到定點再垂直降落</label>
-                <label className="opt"><input type="radio" checked={pol.land_mode === "glide"}
-                  onChange={() => setPol((q) => ({ ...q, land_mode: "glide" }))} />逐漸降落</label>
-              </div>
+              {/* **降落設定屬於那個點，就住在那個點旁邊**（使用者裁定
+                  2026-09-09，選項 D）：搬到右欄，選到降落點才顯示。
+                  沒有降落點時「降落在哪裡」只有一個答案（起飛點）——
+                  一個只有一個選項的選擇題不是選擇題。系統決定了什麼，
+                  決策表本來就會列。 */}
+              {!pts.some((q) => q.kind === "land") && (
+                <span className="hint-line" style={{ alignSelf: "center" }}>
+                  降落回起飛點・垂直降落
+                  <span className="tag-sys">系統決定</span>
+                </span>
+              )}
             </>
           )}
           {!started
@@ -745,8 +748,14 @@ export default function PlanPage() {
               setOv((o) => ({ ...o,
                 [w.seq]: { ...o[w.seq], lat: l.lat, lon: l.lng } }));
             }} />
-          <aside className="plan-rail">
-            <h2>選取的航點</h2>
+          {/* **地圖拿回整個寬度，右欄浮在上面**（使用者裁定 2026-09-09，
+              選項 F）。右欄本來就只在「選到一個航點」時才有內容——讓它蓋住
+              一小塊地形，比永久佔掉 264 px 划算。可以收起來看底下那塊。 */}
+          <aside className={`plan-rail${railOpen ? "" : " shut"}`}>
+            <h2>選取的航點
+              <button className="rail-toggle" title={railOpen ? "收起" : "展開"}
+                onClick={() => setRailOpen((v) => !v)}>{railOpen ? "▸" : "◂"}</button>
+            </h2>
             {(() => {
               const w = stageWps[selWp];
               if (!w) return <div className="hint-line">在 3D 上點一個航點</div>;
@@ -784,10 +793,41 @@ export default function PlanPage() {
                         {[["wp", "航點"], ["land", "降落點"]].map(([k, t]) => (
                           <button key={k}
                             aria-pressed={(pts[selWp - 1]?.kind ?? "wp") === k}
-                            onClick={() => setPts((p) => p.map((q, j) =>
-                              j === selWp - 1 ? { ...q, kind: k } : q))}>{t}</button>
+                            onClick={() => {
+                              setPts((p) => p.map((q, j) =>
+                                j === selWp - 1 ? { ...q, kind: k } : q));
+                              // 標成降落點就是為了降在那裡。改回航點時若已經
+                              // 沒有降落點了，就回到降落在起飛點
+                              if (k === "land") setPol((q) => ({ ...q, land_at_home: false }));
+                            }}>{t}</button>
                         ))}
                       </div>
+                      {pts[selWp - 1]?.kind === "land" && (
+                        <>
+                          <div className="rail-field">
+                            <span className="k">降落在哪裡</span>
+                            <div className="seg2">
+                              <button aria-pressed={pol.land_at_home}
+                                onClick={() => setPol((q) => ({ ...q, land_at_home: true }))}>
+                                起飛點</button>
+                              <button aria-pressed={!pol.land_at_home}
+                                onClick={() => setPol((q) => ({ ...q, land_at_home: false }))}>
+                                這個位置</button>
+                            </div>
+                          </div>
+                          <div className="rail-field">
+                            <span className="k">降落方式</span>
+                            <div className="seg2">
+                              <button aria-pressed={pol.land_mode === "vert"}
+                                onClick={() => setPol((q) => ({ ...q, land_mode: "vert" }))}>
+                                垂直</button>
+                              <button aria-pressed={pol.land_mode === "glide"}
+                                onClick={() => setPol((q) => ({ ...q, land_mode: "glide" }))}>
+                                逐漸</button>
+                            </div>
+                          </div>
+                        </>
+                      )}
                       <button className="btn-plain btn-sm"
                         onClick={() => { setPts((p) =>
                           p.filter((_, j) => j !== selWp - 1)); setSelWp(0); }}>

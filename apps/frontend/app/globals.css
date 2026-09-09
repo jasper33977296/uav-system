@@ -1824,8 +1824,17 @@ details.card summary { cursor: pointer; font-size: 14px; font-weight: 600; }
 /* ── 規劃子頁（issues/048）──────────────────────────────────────
    主角是剖面圖：地面一條、規劃一條，中間就是離地空間。**版面不搶戲**
    ——這一頁 2026-09-07 才因為「一段沒有人會讀的文字」被清空過一次。 */
-.plan-head { display: flex; align-items: center; gap: 12px; margin-bottom: 12px; }
-.plan-facts { display: flex; flex-wrap: wrap; gap: 8px; margin-bottom: 10px; }
+/* 一列裝完：返回、標題、結論晶片、脈絡晶片（使用者裁定 2026-09-09，選項 A） */
+.plan-head { display: flex; align-items: center; gap: 9px; margin-bottom: 10px;
+  flex-wrap: wrap; }
+.plan-head .mtitle { font-size: 17px; }
+.head-sep { width: 1px; align-self: stretch; background: var(--hairline); margin: 2px 3px; }
+/* 脈絡那一顆**刻意比較安靜**：它是出處，不是這一頁在回答的事 */
+.chip.ctx { color: var(--muted); display: inline-flex; align-items: center; gap: 4px; }
+/* 「系統決定」：不是選項，是告知 */
+.tag-sys { margin-left: 6px; font-size: 11px; color: var(--muted);
+  border: 1px solid var(--hairline); border-radius: 4px; padding: 1px 5px; }
+
 .profile {
   width: 100%; height: auto; background: var(--surface);
   border: 1px solid var(--border); border-radius: 8px; display: block;
@@ -1879,10 +1888,25 @@ details.card summary { cursor: pointer; font-size: 14px; font-weight: 600; }
 .stage-tip .k { color: var(--muted); margin-right: 6px; }
 .stage-tip .bad { color: var(--status-danger); }
 /* 規劃頁的工作面：3D ＋ 右欄（原型 §4.7.3）*/
-.plan-work { display: grid; grid-template-columns: minmax(0, 1fr) 264px; gap: 12px;
-  align-items: start; }
-.plan-rail { background: var(--surface); border: 1px solid var(--border);
-  border-radius: 10px; padding: 12px; display: flex; flex-direction: column; gap: 11px; }
+/* **地圖滿版，右欄浮在上面**（使用者裁定 2026-09-09，選項 F）。
+   原本是 grid（地圖 1fr ＋ 右欄 264），地圖的視覺中心因此永遠偏左 132 px。
+   右欄只在「選到一個航點」時才有內容，讓它蓋住一小塊地形，比永久佔掉
+   264 px 划算。**它會遮住底下的地形，所以要收得起來。** */
+.plan-work { position: relative; }
+.plan-rail { position: absolute; top: 10px; right: 10px; width: 252px; z-index: 3;
+  background: color-mix(in srgb, var(--surface) 92%, transparent);
+  backdrop-filter: blur(4px);
+  border: 1px solid var(--border);
+  border-radius: 10px; padding: 12px; display: flex; flex-direction: column; gap: 11px;
+  max-height: calc(100% - 20px); overflow-y: auto; }
+/* 收起來只剩標題列，看得到底下那塊地形 */
+.plan-rail.shut { width: auto; padding: 6px 8px; gap: 0; }
+.plan-rail.shut > *:not(h2) { display: none; }
+.plan-rail h2 { display: flex; align-items: center; justify-content: space-between;
+  gap: 8px; }
+.rail-toggle { background: none; border: 0; color: var(--muted); cursor: pointer;
+  font-size: 12px; padding: 0 2px; }
+.rail-toggle:hover { color: var(--ink-2); }
 .plan-rail h2 { font-size: 12px; color: var(--muted); font-weight: 500;
   letter-spacing: .05em; }
 .rail-row { display: flex; justify-content: space-between; align-items: baseline;
@@ -1897,7 +1921,12 @@ details.card summary { cursor: pointer; font-size: 14px; font-weight: 600; }
   border: 1px solid rgba(12, 163, 12, .35); }
 .verdict.bad { background: var(--status-danger-bg); color: var(--ink);
   border: 1px solid var(--status-danger-border); }
-@media (max-width: 900px) { .plan-work { grid-template-columns: 1fr; } }
+/* 窄螢幕：浮動的右欄會蓋掉半個地圖，改回排在下面 */
+@media (max-width: 900px) {
+  .plan-rail { position: static; width: auto; max-height: none; margin-top: 10px;
+    backdrop-filter: none; }
+  .plan-rail.shut > *:not(h2) { display: revert; }
+}
 .stage3d-wrap.placing .maplibregl-canvas { cursor: crosshair; }
 /* 從零產生的表單 */
 .newform { display: flex; gap: 10px; align-items: flex-end; flex-wrap: wrap;
