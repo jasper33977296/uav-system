@@ -183,6 +183,40 @@ ck("limits 帶著旋鈕的預設值（前端不抄第二份）",
    lp["limits"].get("assumed_default_m") == buildings.ASSUMED_DEFAULT_M,
    lp["limits"].get("assumed_default_m"))
 
+print("\n── 長寬（最小面積外接矩形）──")
+import math as _m
+sq2 = [(0.0, 0.0), (0.0, 0.001), (0.0005, 0.001), (0.0005, 0.0)]
+with tempfile.TemporaryDirectory() as d:
+    with open(os.path.join(d, "t.geojson"), "w", encoding="utf-8") as f:
+        json.dump({"type": "FeatureCollection", "features": [
+            poly(sq2, id="way/9", name="長方形", kind="yes",
+                 height_m=None, height_source="unknown")]}, f)
+    r = buildings.Store(d).items[0]
+    dm = buildings.dims(r)
+    # 0.001° 經度 ≈ 111.3 m、0.0005° 緯度 ≈ 55.3 m
+    ck("長取長邊", abs(dm["length_m"] - 111.3) < 1.5, dm)
+    ck("寬取短邊", abs(dm["width_m"] - 55.3) < 1.5, dm)
+    ck("面積算得出來", abs(dm["area_m2"] - 111.3 * 55.3) < 200, dm)
+
+b51 = next(x for x in store.items if x.name == "51館")
+d51 = buildings.dims(b51)
+ck("51館 長 > 寬", d51["length_m"] > d51["width_m"], d51)
+ck("斜的樓不會被軸向包圍盒撐大",
+   d51["length_m"] * d51["width_m"] < 6500, d51)
+
+print("\n── 範圍跟著航線走（緩衝 30 m）──")
+path = [(24.7734787, 121.045971), (24.7710, 121.0480), (24.7700, 121.0505)]
+near = store.near_path(path, 30.0)
+ck("挑出來的比全場少很多", 0 < len(near) < len(store.items), f"{len(near)}/{len(store.items)}")
+ck("全部都在 30 m 內", all(d <= 30.0 for _, d in near), [d for _, d in near])
+ck("由近而遠", [d for _, d in near] == sorted(d for _, d in near))
+wide = store.near_path(path, 200.0)
+ck("放大緩衝就會多", len(wide) > len(near), f"{len(wide)} vs {len(near)}")
+ck("換一條線就換一組",
+   {b.id for b, _ in store.near_path([(24.7760, 121.0400), (24.7770, 121.0420)], 30.0)}
+   != {b.id for b, _ in near})
+ck("空的航線回空的", store.near_path([], 30.0) == [])
+
 print()
 if fails:
     print(f"✗ {len(fails)} 項沒過：" + "、".join(fails))

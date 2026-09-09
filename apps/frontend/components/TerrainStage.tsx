@@ -38,7 +38,7 @@ export interface StageTip { title: string; rows: [string, string][]; bad?: boole
 
 export default function TerrainStage({ wps, sel, onSelect, tipFor, placing,
                                       onPlace, onMove, center, assumeM = null,
-                                      exaggeration = 1 }: {
+                                      onBuildings, exaggeration = 1 }: {
   wps: StageWp[]; sel: number; onSelect: (i: number) => void;
   tipFor?: (h: StageHit) => StageTip | null;
   /** 放點模式：點地形＝加一個航點（maplibre 自己有 3px 的 clickTolerance，
@@ -51,6 +51,9 @@ export default function TerrainStage({ wps, sel, onSelect, tipFor, placing,
   /** 未量測建物的假設高度。null ＝不假設，那時柱子畫成「一定包住航線」
    *  的高度——讀出來是「這裡有東西」，不是某個公尺數 */
   assumeM?: number | null;
+  /** 沿線的建物清單（含長寬高）。**規劃頁不自己再查一次**——那就會有
+   *  兩份可能不同步的資料（§9-F） */
+  onBuildings?: (bs: BuildingFeat[]) => void;
   exaggeration?: number;
 }) {
   const box = useRef<HTMLDivElement>(null);
@@ -74,12 +77,19 @@ export default function TerrainStage({ wps, sel, onSelect, tipFor, placing,
     placing?: boolean; onPlace?: (l: { lng: number; lat: number }) => void } } | null>(null);
   if (placeRefBox.current) placeRefBox.current.current = { placing, onPlace };
 
+  /** **每次改線就重建**：範圍跟著航線走，所以線一動要重問一次。
+   *  去抖——拖一個點會產生幾十次變動。 */
   useEffect(() => {
-    const m = mapRef.current;
-    if (!m || !m.getLayer("buildings-blind")) return;
-    m.setPaintProperty("buildings-blind", "fill-extrusion-height",
-                       blindHeight(wps, assumeM));
-  }, [assumeM, wps]);
+    const t = setTimeout(async () => {
+      const m = mapRef.current;
+      if (!m || !m.isStyleLoaded()) return;
+      const got = await fetchNear(wps);
+      if (!got || !mapRef.current) return;
+      paintBuildings(m, got.fc, blindHeight(wps, assumeM));
+      onBuildings?.(got.list);
+    }, 320);
+    return () => clearTimeout(t);
+  }, [wps, assumeM, onBuildings]);
 
   useEffect(() => {
     if (!box.current || mapRef.current) return;
@@ -135,7 +145,7 @@ export default function TerrainStage({ wps, sel, onSelect, tipFor, placing,
                  "hillshade-highlight-color": "#8a8474",
                  "hillshade-exaggeration": 0.35 },
       });
-      addBuildings(map, wps, assumeRef.current);
+
       map.addLayer(makeRouteLayer(map, dataRef, (p) => { projRef.current = p; }));
       fitRoute(map, dataRef.current.wps);
       // 先粗估一次鏡頭，再**量畫面上實際落在哪裡**去修（見 frameRoute）
@@ -355,54 +365,61 @@ interface StageData { wps: StageWp[]; sel: number; hover: StageHit | null; dirty
  * 是兩件事（doc/field-3d-model-design.md §9-A）。所以它是一根半透明的
  * 橘色柱子，**高度取「這條航線最高點再加一截」**：它一定包住航線，
  * 讀出來的是「這裡有東西、你飛不過去」，而不是某個公尺數。
+ *
+ * **範圍跟著航線走**（使用者裁定 2026-09-09）：只建離線 `BUFFER_M` 以內的，
+ * 而且**每次改線就重建**——固定方框會把根本不會飛過去的整排樓也建出來。
  */
 const BLIND_OVER_M = 25;
+const BUFFER_M = 30;
 
-/** 不假設的時候柱子要多高：**包住這條航線再加一截**。 */
 function blindHeight(wps: StageWp[], assume: number | null): number {
   if (assume != null) return assume;
   const pts = wps.filter((w) => w.lat && w.lon);
+  if (!pts.length) return BLIND_OVER_M;
   return Math.max(...pts.map(
     (w) => (w.ground == null ? 0 : w.amsl - w.ground)), 0) + BLIND_OVER_M;
 }
 
-function addBuildings(map: maplibregl.Map, wps: StageWp[],
-                      assume: number | null) {
-  const pts = wps.filter((w) => w.lat && w.lon);
-  if (!pts.length) return;
-  const lats = pts.map((w) => w.lat), lons = pts.map((w) => w.lon);
-  const blindH = blindHeight(wps, assume);
-  const pad = 0.006;
-  const q = new URLSearchParams({
-    min_lat: String(Math.min(...lats) - pad), min_lon: String(Math.min(...lons) - pad),
-    max_lat: String(Math.max(...lats) + pad), max_lon: String(Math.max(...lons) + pad),
+export interface BuildingFeat {
+  id: string; name: string | null; kind: string;
+  height_m: number | null; height_source: string; known: boolean;
+  dist_m: number; length_m: number | null; width_m: number | null;
+  area_m2: number | null; bearing_deg: number | null;
+}
+
+async function fetchNear(wps: StageWp[]): Promise<{ fc: unknown; list: BuildingFeat[] } | null> {
+  const pts = wps.filter((w) => w.lat && w.lon).map((w) => [w.lat, w.lon]);
+  if (pts.length < 1) return null;
+  const r = await fetch(`${API}/api/buildings/near`, {
+    method: "POST", headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ points: pts, buffer_m: BUFFER_M }),
   });
-  fetch(`${API}/api/buildings?${q}`).then((r) => r.ok ? r.json() : null).then((fc) => {
-    if (!fc || !fc.features?.length || !map.getStyle()) return;
-    // 航線是 three.js 自訂圖層，要畫在建物之上才看得出「穿過去」
-    const before = map.getLayer("route3d") ? "route3d" : undefined;
-    map.addSource("buildings", { type: "geojson", data: fc });
-    map.addLayer({
-      id: "buildings", type: "fill-extrusion", source: "buildings",
-      filter: ["==", ["get", "known"], true],
-      paint: {
-        "fill-extrusion-height": ["get", "height_m"],
-        "fill-extrusion-base": 0,
-        "fill-extrusion-color": "#8d8579",
-        "fill-extrusion-opacity": 0.85,
-      },
-    }, before);
-    map.addLayer({
-      id: "buildings-blind", type: "fill-extrusion", source: "buildings",
-      filter: ["==", ["get", "known"], false],
-      paint: {
-        "fill-extrusion-height": blindH,
-        "fill-extrusion-base": 0,
-        "fill-extrusion-color": "#c98a2b",
-        "fill-extrusion-opacity": 0.35,
-      },
-    }, before);
-  }).catch(() => { /* 沒有建物資料就不畫——不是錯誤 */ });
+  if (!r.ok) return null;
+  const fc = await r.json();
+  return { fc, list: (fc.features ?? []).map((f: { properties: BuildingFeat }) => f.properties) };
+}
+
+function paintBuildings(map: maplibregl.Map, fc: unknown, blindH: number) {
+  const before = map.getLayer("route3d") ? "route3d" : undefined;
+  const src = map.getSource("buildings") as maplibregl.GeoJSONSource | undefined;
+  if (src) { src.setData(fc as GeoJSON.FeatureCollection); return; }
+  map.addSource("buildings", { type: "geojson", data: fc as GeoJSON.FeatureCollection });
+  map.addLayer({
+    id: "buildings", type: "fill-extrusion", source: "buildings",
+    filter: ["==", ["get", "known"], true],
+    paint: {
+      "fill-extrusion-height": ["get", "height_m"], "fill-extrusion-base": 0,
+      "fill-extrusion-color": "#8d8579", "fill-extrusion-opacity": 0.85,
+    },
+  }, before);
+  map.addLayer({
+    id: "buildings-blind", type: "fill-extrusion", source: "buildings",
+    filter: ["==", ["get", "known"], false],
+    paint: {
+      "fill-extrusion-height": blindH, "fill-extrusion-base": 0,
+      "fill-extrusion-color": "#c98a2b", "fill-extrusion-opacity": 0.35,
+    },
+  }, before);
 }
 
 /** 畫面中心的地面高度：地形開著的時候，相機矩陣的原點就在這個高度上。 */

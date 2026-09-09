@@ -2455,6 +2455,46 @@ async def ortho_tile(z: int, x: int, y: int):
                     headers={"Cache-Control": "public, max-age=604800"})
 
 
+class NearIn(BaseModel):
+    """航線沿線的建物。**範圍跟著線走，不是一個固定方框。**"""
+    points: list[list[float]] = Field(default_factory=list, max_length=2000)
+    buffer_m: float = Field(default=30.0, ge=1.0, le=500.0)
+
+
+@router.post("/buildings/near")
+async def buildings_near(body: NearIn):
+    """離這條航線 `buffer_m` 以內的每一棟樓，**帶長寬高**。
+
+    長寬來自輪廓的最小面積外接矩形——輪廓是量出來的（OSM 足跡，公尺級）。
+    **高度不是同一種東西**：多半是樓層數推算或根本沒量過，所以
+    `height_source` 一定跟著出去，畫面不准只顯示一個數字
+    （doc/field-3d-model-design.md §9-A）。
+    """
+    path = [(float(p[0]), float(p[1])) for p in body.points if len(p) >= 2]
+    if not path:
+        return {"type": "FeatureCollection", "features": [], "meta": {"count": 0}}
+    store = buildings.shared()
+    feats = []
+    for b, d in store.near_path(path, body.buffer_m):
+        dm = buildings.dims(b)
+        feats.append({
+            "type": "Feature",
+            "properties": {
+                "id": b.id, "name": b.name, "kind": b.kind,
+                "height_m": b.height_m, "height_source": b.height_source,
+                "known": b.known, "dist_m": d, **dm,
+            },
+            "geometry": {"type": "Polygon", "coordinates": [
+                [[lo, la] for la, lo in b.ring] + [[b.ring[0][1], b.ring[0][0]]]]},
+        })
+    return {"type": "FeatureCollection", "features": feats,
+            "meta": {"count": len(feats), "buffer_m": body.buffer_m,
+                     "available": store.available,
+                     "known": sum(1 for f in feats if f["properties"]["known"]),
+                     "unknown": sum(1 for f in feats if not f["properties"]["known"]),
+                     "assumed_default_m": buildings.ASSUMED_DEFAULT_M}}
+
+
 @router.get("/buildings")
 async def buildings_in_bbox(min_lat: float, min_lon: float,
                             max_lat: float, max_lon: float):

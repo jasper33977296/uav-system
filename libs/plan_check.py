@@ -24,23 +24,14 @@ import math
 
 import autopilot as _autopilot
 import buildings
+import geo
 import terrain
 
 
-#: 一度緯度／赤道上一度經度的公尺數。**兩個不一樣**——111320 是後者，
-#: 拿它乘緯度會高估 0.67%（400 m 上約 2.7 m）。前端的 `lib/geo.ts` 用的是
-#: 同一組值（field-3d-model-design §9-G）。
-M_PER_DEG_LAT = 110574.0
-M_PER_DEG_LON_EQ = 111320.0
-
-
-def dist_m(lat1: float, lon1: float, lat2: float, lon2: float) -> float:
-    """兩點的水平距離（公尺）。**Python 這一側唯一的換算處。**"""
-    dy = (lat2 - lat1) * M_PER_DEG_LAT
-    dx = (lon2 - lon1) * M_PER_DEG_LON_EQ * math.cos(math.radians(lat1))
-    return math.hypot(dx, dy)
-
-
+#: 換算住在 `libs/geo.py`（唯一一處）。這裡只是既有呼叫端的名字。
+M_PER_DEG_LAT = geo.M_PER_DEG_LAT
+M_PER_DEG_LON_EQ = geo.M_PER_DEG_LON_EQ
+dist_m = geo.dist_m
 _dist_m = dist_m
 
 

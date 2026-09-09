@@ -10,9 +10,9 @@
  */
 import Link from "next/link";
 import { useParams } from "next/navigation";
-import { useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 
-import TerrainStage, { type StageHit, type StageTip, type StageWp }
+import TerrainStage, { type BuildingFeat, type StageHit, type StageTip, type StageWp }
   from "@/components/TerrainStage";
 import { emph } from "@/lib/emph";
 import { errText, getJson } from "@/lib/fetchJson";
@@ -269,6 +269,8 @@ export default function PlanPage() {
   const [decisions, setDecisions] = useState<Decision[]>([]);
   const [applied, setApplied] = useState<{ note?: string } | null>(null);
   const [sign, setSign] = useState<Sign | null>(null);
+  const [blds, setBlds] = useState<BuildingFeat[]>([]);
+  const onBlds = useCallback((b: BuildingFeat[]) => setBlds(b), []);
   const [ack, setAck] = useState<Set<string>>(new Set());
   const [started, setStarted] = useState(false);
   const [placeKind, setPlaceKind] = useState("wp");
@@ -654,7 +656,7 @@ export default function PlanPage() {
       {(stageWps.length > 1 || (isNew && started)) && (
         <div className="plan-work">
           <TerrainStage wps={stageWps} sel={selWp} onSelect={setSelWp}
-            assumeM={assume}
+            assumeM={assume} onBuildings={onBlds}
             tipFor={tipFor}
             placing={isNew && started}
             center={isNew ? [Number(home.lon), Number(home.lat)] : undefined}
@@ -924,6 +926,43 @@ export default function PlanPage() {
             {emph("**上傳前擋的就是這一步。** 有問題但你決定照飛的，逐條勾起來——會記下是誰、什麼時候、在什麼假設下決定的。航點改過之後這份簽核就失效。")}
           </span>
         </div>
+      )}
+
+      {blds.length > 0 && (
+        <details className="plan-decisions" open>
+          <summary>航線 30 m 內的建物 {blds.length} 棟</summary>
+          <table className="plan-legs">
+            <thead><tr>
+              <th>建物</th><th>離航線</th><th>長</th><th>寬</th><th>高</th>
+              <th>高度來源</th><th>佔地</th>
+            </tr></thead>
+            <tbody>
+              {blds.map((b) => (
+                <tr key={b.id}>
+                  <td>{b.name ?? b.id}<span className="muted"> · {b.kind}</span></td>
+                  <td>{b.dist_m} m</td>
+                  <td>{b.length_m} m</td>
+                  <td>{b.width_m} m</td>
+                  {/* **長寬跟高不是同一種東西。** 輪廓量得到，高度多半沒有
+                      ——所以高度那一欄要嘛是數字加來源，要嘛就寫「沒量過」 */}
+                  <td className={b.known ? "" : "bad"}>
+                    {b.height_m != null ? `${b.height_m} m`
+                      : assume != null ? `假設 ${assume} m` : "沒量過"}
+                  </td>
+                  <td className="muted">
+                    {b.height_source === "osm:height" ? "OSM 實填"
+                      : b.height_source === "osm:levels" ? "樓層數 × 3.5 m 推算"
+                      : assume != null ? "右欄的假設高度旋鈕" : "—"}
+                  </td>
+                  <td className="muted">{b.area_m2} m²</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+          <div className="hint-line">
+            {emph("長寬是**輪廓的最小面積外接矩形**（OSM 足跡，公尺級，量出來的）。高度那一欄不是——實測要等光達。範圍跟著航線走，改線就重算。")}
+          </div>
+        </details>
       )}
 
       {naming !== null && (
