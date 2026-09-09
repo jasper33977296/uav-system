@@ -908,54 +908,220 @@ def route_profile(wps: list[dict], home: dict | None = None, dem=None,
     return out
 
 
-def build_plan(points: list[dict], takeoff_alt: float, speed: float,
-               home: dict | None = None, land_at_home: bool = True,
-               land_mode: str = "vert") -> list[dict]:
-    """把「一串點 ＋ 高度 ＋ 速度」組成一份飛得起來的航線。
+#: 高度政策的三種基準（doc/route-planning-redesign.md §3）。
+#: **這是操作員選的，而且永遠看得見選了哪一個**——2026-09-07 摔機的根
+#: 就是他要 `agl` 而航線寫的是 `home`。
+POLICY_AGL = "agl"        # 離地面：逐點用 DEM 算，寫成 frame 3（§5）
+POLICY_HOME = "home"      # 離起飛點：MAVLink 的 frame 3 原意
+POLICY_AMSL = "amsl"      # 固定海拔：frame 0
 
-    起飛項、`frame`、改速度項、降落項由系統補——那些是飛控要求的結構，
-    不該要求操作員自己先知道（issues/048 F2）。
+DEFAULT_POLICY_MODE = POLICY_AGL
+#: 預設離地高度。使用者裁定 2026-09-09。
+#: **它剛好等於 `LOW_ALT_M`**：預設就站在低空帶速那條線上，任何讓它變低的
+#: 東西（地形起伏、建物、手動改）都會立刻說話。那是刻意的，不是餘裕。
+DEFAULT_POLICY_HEIGHT_M = 3.0
+DEFAULT_POLICY_SPEED_MS = 1.0
+
+#: 一個航點的高度打哪來。**與 `height_source`／`speed_src`／`assumed_m`
+#: 同一條紀律**：每個數字都要說得出出處。
+ALT_FROM_POLICY = "policy"
+ALT_FROM_MANUAL = "manual"
+
+
+def default_policy() -> dict:
+    return {"mode": DEFAULT_POLICY_MODE, "height_m": DEFAULT_POLICY_HEIGHT_M,
+            "speed_ms": DEFAULT_POLICY_SPEED_MS,
+            "takeoff_alt_m": MIN_TAKEOFF_ALT_M,
+            "land_at_home": True, "land_mode": "vert"}
+
+
+def solve_alt(lat: float, lon: float, mode: str, h: float,
+              home_amsl: float | None, dem=None) -> tuple[float, int, str]:
+    """把「政策的高度」翻成一個航點的 (alt, frame, 出處說明)。
+
+    `agl` 是這裡的主角：**用我們自己的 DEM 逐點算出 AMSL，再寫成 frame 3**
+    ——每個航點的 `alt` 各不相同，但飛出來是貼著地形的。這樣「離我下面的地
+    N 公尺」在**任何飛控上都成立**，不必賭它有沒有地形圖庫（§5）。
+
+    查不到地形時**退回離起飛點**，並在回傳的說明裡講出來——退回本身不危險，
+    默默退回才危險。
+    """
+    if mode == POLICY_AMSL:
+        return float(h), 0, "固定海拔"
+    if mode == POLICY_AGL:
+        s = terrain.surface(lat, lon, dem) if dem is not None else terrain.NO_DATA
+        g = s.ground
+        if g is not None and home_amsl is not None:
+            return round(g + float(h) - home_amsl, 2), 3, "離地面（逐點由 DEM 算）"
+        return float(h), 3, "**查不到地形，退回離起飛點**"
+    return float(h), 3, "離起飛點"
+
+
+#: 為了讓「整段」都貼著地形，最多能插幾個中繼航點。
+#: **有上限**：飛控的任務容量有限，而且一條被切成幾百段的航線人也讀不懂。
+MAX_FILL_PER_LEG = 8
+MAX_FILL_TOTAL = 60
+#: 低於政策多少才值得插一個點。小於這個就是 DEM 自己的雜訊。
+FILL_TOL_M = 0.3
+
+
+def _fill_terrain(track: list[dict], h: float, dem) -> tuple[list[dict], int]:
+    """在需要的地方插中繼航點，讓**整段**都離地 `h`，不只是航點上。
+
+    這是 §5 那個提案漏掉的一步。逐點解出來的高度，兩點之間是直線；
+    中間隔著土坡的話那條直線會低於政策——`check_terrain` 當初就是為了
+    抓這件事而寫的，結果預設政策自己會踩到。
+
+    做法是每次找出這一段虧最多的地方插一個點，再重來，直到夠了或到上限。
+    """
+    out = [track[0]]
+    total = 0
+    for nxt in track[1:]:
+        seg = [out[-1], nxt]
+        for _ in range(MAX_FILL_PER_LEG):
+            if total >= MAX_FILL_TOTAL:
+                break
+            worst, at = 0.0, None
+            for i in range(len(seg) - 1):
+                a, b = seg[i], seg[i + 1]
+                d = _dist_m(a["lat"], a["lon"], b["lat"], b["lon"])
+                if d < DEM_STEP_M:
+                    continue
+                ga = terrain.surface(a["lat"], a["lon"], dem).ground
+                gb = terrain.surface(b["lat"], b["lon"], dem).ground
+                if ga is None or gb is None:
+                    continue
+                ha_ = ga + (a.get("h") or h)
+                hb_ = gb + (b.get("h") or h)
+                n = int(d // DEM_STEP_M)
+                for k in range(1, n + 1):
+                    f = k * DEM_STEP_M / d
+                    la = a["lat"] + (b["lat"] - a["lat"]) * f
+                    lo = a["lon"] + (b["lon"] - a["lon"]) * f
+                    g = terrain.surface(la, lo, dem).ground
+                    if g is None:
+                        continue
+                    deficit = (g + h) - (ha_ + (hb_ - ha_) * f)
+                    if deficit > worst:
+                        worst, at = deficit, (i + 1, la, lo)
+            if worst <= FILL_TOL_M or at is None:
+                break
+            idx, la, lo = at
+            seg.insert(idx, {"lat": la, "lon": lo, "filled": True,
+                             "alt_source": ALT_FROM_POLICY})
+            total += 1
+        out.extend(seg[1:])
+    return out, total
+
+
+def build_plan(points: list[dict], policy: dict | None = None,
+               home: dict | None = None, dem=None,
+               home_amsl: float | None = None) -> dict:
+    """把「一串點 ＋ 一個政策」組成一份飛得起來的航線。
+
+    回 `{"waypoints": [...], "decisions": [...]}`。**`decisions` 不是裝飾**：
+    起飛項、`frame`、改速度項、降落項都是系統替操作員決定的，
+    而那些決定必須逐條看得見（doc/route-planning-redesign.md §3 動作 3）。
+
+    每個點可以帶 `h`（政策單位下的高度）與 `alt_source`。
+    **改政策不動 `manual` 的點**——特意壓低的那一段不會被偷偷抬起來（§4）。
 
     `DO_CHANGE_SPEED` 擺在第一個航點**之前**：它只從被執行到的那一項之後
     才生效，擺後面的話起飛到第一個航點會用機上的 `WP_SPD`。
-
-    `land_mode="glide"` 會在降落點上方先補一個低高度的航點，最後一段因此
-    是平均降下來的；`"vert"` 是飛控的原生行為（平飛到定點再直下）。
     """
+    pol = {**default_policy(), **(policy or {})}
+    mode = pol["mode"]
+    speed = float(pol["speed_ms"])
+    tk = float(pol["takeoff_alt_m"])
+    if home_amsl is None and home and home.get("lat") and dem is not None:
+        home_amsl = terrain.surface(home["lat"], home["lon"], dem).ground
+
     out: list[dict] = []
+    decisions: list[dict] = []
 
     def add(**kw):
         kw["seq"] = len(out)
         out.append(kw)
 
-    add(lat=0.0, lon=0.0, alt=float(takeoff_alt), action="takeoff",
-        command=_TAKEOFF, frame=3)
+    def decide(what, value, why, seq=None):
+        decisions.append({"what": what, "value": value, "why": why, "seq": seq})
+
+    add(lat=0.0, lon=0.0, alt=tk, action="takeoff", command=_TAKEOFF, frame=3)
+    decide("起飛高度", f"{tk:g} m（離起飛點）",
+           f"系統補的。低於 {MIN_TAKEOFF_ALT_M:g} m 起飛容易被地面效應推歪", 0)
     add(lat=0.0, lon=0.0, alt=0.0, action="do", command=_DO_CHANGE_SPEED,
-        frame=2, p1=1.0, p2=float(speed), p3=-1.0, p4=0.0)
+        frame=2, p1=1.0, p2=speed, p3=-1.0, p4=0.0)
+    decide("改速度項的位置", f"第一個航點**之前**（{speed:g} m/s）",
+           "它只從被執行到的那一項之後才生效；擺後面的話起飛那一段會用"
+           "機上的 `WP_SPD`", 1)
 
     marked = [p for p in points if p.get("kind") == "land"]
     lz = None
-    if land_at_home and home and home.get("lat"):
+    if pol["land_at_home"] and home and home.get("lat"):
         lz = {"lat": home["lat"], "lon": home["lon"]}
+        decide("降落地點", "起飛點", "政策：降落在起飛點")
     elif marked:
         lz = marked[-1]
+        decide("降落地點", "標成降落點的那一個", "航線上有標降落點")
     elif points:
         lz = points[-1]
+        decide("降落地點", "最後一個航點", "沒有標降落點，也沒有指定回起飛點")
 
-    for p in points:
-        if p is lz and not land_at_home:
-            continue                      # 它是降落點，等一下才加
-        add(lat=float(p["lat"]), lon=float(p["lon"]),
-            alt=float(p.get("alt") or takeoff_alt), action="waypoint",
-            command=16, frame=3)
+    track = [p for p in points if not (p is lz and not pol["land_at_home"])]
+    if lz and pol["land_at_home"]:
+        # 最後一段是飛到降落點才下降，所以它也要照政策貼地
+        track = track + [{"lat": lz["lat"], "lon": lz["lon"], "_lz": True}]
+    filled = 0
+    if mode == POLICY_AGL and dem is not None and home_amsl is not None:
+        track, filled = _fill_terrain(track, float(pol["height_m"]), dem)
+
+    fallback = False
+    for p in track:
+        if p.get("_lz"):
+            continue                      # 降落點等一下才加
+        src = p.get("alt_source") or ALT_FROM_POLICY
+        h = float(p["h"]) if p.get("h") is not None else float(pol["height_m"])
+        alt, fr, why = solve_alt(float(p["lat"]), float(p["lon"]), mode, h,
+                                 home_amsl, dem)
+        if "退回" in why:
+            fallback = True
+        add(lat=float(p["lat"]), lon=float(p["lon"]), alt=alt,
+            action="waypoint", command=16, frame=fr, h=h, alt_source=src,
+            **({"filled": True} if p.get("filled") else {}))
+        if src == ALT_FROM_MANUAL:
+            decide("這個航點是例外", f"{h:g} m（{_MODE_TEXT[mode]}）",
+                   "手動改過——**改政策不會動它**", len(out) - 1)
+    if filled:
+        decide("補了中繼航點", f"{filled} 個",
+               "**逐點貼地不等於整段貼地**：兩個航點之間隔著土坡，直線飛過去"
+               "就會低於政策。這些點是為了讓整段都離地那麼高才插進來的")
+
     if lz:
-        if land_mode == "glide":
-            add(lat=float(lz["lat"]), lon=float(lz["lon"]),
-                alt=float(MIN_TAKEOFF_ALT_M), action="waypoint",
-                command=16, frame=3)
+        if pol["land_mode"] == "glide":
+            alt, fr, _ = solve_alt(float(lz["lat"]), float(lz["lon"]), mode,
+                                   MIN_TAKEOFF_ALT_M, home_amsl, dem)
+            add(lat=float(lz["lat"]), lon=float(lz["lon"]), alt=alt,
+                action="waypoint", command=16, frame=fr,
+                h=MIN_TAKEOFF_ALT_M, alt_source=ALT_FROM_POLICY)
+            decide("降落方式", "逐漸降落", "在降落點上方補一個低高度航點，"
+                   "最後一段才是平均降下來的", len(out) - 1)
+        else:
+            decide("降落方式", "飛到定點再垂直降落", "飛控的原生行為")
         add(lat=float(lz["lat"]), lon=float(lz["lon"]), alt=0.0,
             action="land", command=_LAND, frame=3)
-    return out
+
+    decide("高度基準", _MODE_TEXT[mode] + f"（{pol['height_m']:g} m）",
+           "**離地面是逐點用地面站的 DEM 算出來的**，寫進航線的是 frame 3 的"
+           "數字——飛控不需要有地形圖庫。但它只有 DEM 那麼準，"
+           "取樣點之間可能錯；真的要貼地飛需要測距儀"
+           if mode == POLICY_AGL else "政策")
+    if fallback:
+        decide("**退回離起飛點**", "部分航點",
+               "那些點查不到地形高程，離地面算不出來")
+    return {"waypoints": out, "decisions": decisions}
+
+
+_MODE_TEXT = {POLICY_AGL: "離地面", POLICY_HOME: "離起飛點", POLICY_AMSL: "固定海拔"}
 
 
 def check_group(paths: list[dict], vsep_m: float, lsep_m: float) -> dict:

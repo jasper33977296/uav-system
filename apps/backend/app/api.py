@@ -1929,25 +1929,31 @@ async def _store_mission(name: str, source: str, wps: list[dict],
                          home: list[float] | None = None,
                          cruise: float | None = None,
                          hover: float | None = None,
-                         rally: list | None = None) -> str:
+                         rally: list | None = None,
+                         policy: dict | None = None) -> str:
     async with db.pool.acquire() as con:
         async with con.transaction():
             row = await con.fetchrow(
                 "INSERT INTO plans (name, created_by, kind, firmware_type, "
-                "vehicle_type, fence, home, cruise_speed, hover_speed, rally) "
-                "VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10) RETURNING id",
+                "vehicle_type, fence, home, cruise_speed, hover_speed, rally, "
+                "policy) "
+                "VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11) RETURNING id",
                 name, source, "from-vehicle" if source == "vehicle" else "imported",
                 firmware_type, vehicle_type,
                 jdumps(fence) if fence else None,
                 jdumps(home) if home else None, cruise, hover,
-                jdumps(rally) if rally else None)
+                jdumps(rally) if rally else None,
+                jdumps(policy) if policy else None)
             await con.executemany(
                 """INSERT INTO waypoints (plan_id, seq, lat, lon, alt, action, params)
                    VALUES ($1, $2, $3, $4, $5, $6, $7)""",
                 [(row["id"], w["seq"], w["lat"], w["lon"], w.get("alt"),
                   w.get("action", "waypoint"),
                   # MAVLink 保真度塞 params JSONB（閒置欄位正好承接）
-                  jdumps({k: w[k] for k in ("command", "frame", "p1", "p2", "p3", "p4")
+                  # `h`／`alt_source` 也要留住：**逐點的 alt 是政策解出來的結果，
+                  # 不是意圖**。沒有它們，重開這一頁就分不出哪個點是手動改過的
+                  jdumps({k: w[k] for k in ("command", "frame", "p1", "p2", "p3",
+                                            "p4", "h", "alt_source")
                               if w.get(k) is not None}) if w.get("command") is not None else None)
                  for w in wps])
     return str(row["id"])
@@ -2685,18 +2691,28 @@ async def preview_plan(plan_id: str, body: PreviewIn):
 class DraftPoint(BaseModel):
     lat: float
     lon: float
-    alt: float | None = None
+    #: 政策單位下的高度。**只有例外才給**——不給就跟著政策走
+    h: float | None = None
+    alt_source: str | None = None     # policy／manual
+    alt: float | None = None          # 舊欄位，仍收
     kind: str = "wp"          # wp／land
 
 
-class DraftIn(BaseModel):
-    """從零產生：一串點 ＋ 一個高度 ＋ 一個速度。"""
-    home: list[float] = Field(min_length=2, max_length=3)
-    points: list[DraftPoint] = Field(default_factory=list, max_length=500)
-    takeoff_alt: float = 1.5
-    speed: float = 1.0
+class PolicyIn(BaseModel):
+    """高度與速度的**政策**——操作員的意圖。逐點的 `alt` 是它解出來的結果。"""
+    mode: str = plan_check.DEFAULT_POLICY_MODE        # agl／home／amsl
+    height_m: float = plan_check.DEFAULT_POLICY_HEIGHT_M
+    speed_ms: float = plan_check.DEFAULT_POLICY_SPEED_MS
+    takeoff_alt_m: float = plan_check.MIN_TAKEOFF_ALT_M
     land_at_home: bool = True
     land_mode: str = "vert"   # vert（飛到定點再垂直降落）／glide（逐漸降落）
+
+
+class DraftIn(BaseModel):
+    """從零產生：一串點 ＋ 一個政策。**先畫線，數字後到**（§3 動作 1）。"""
+    home: list[float] = Field(min_length=2, max_length=3)
+    points: list[DraftPoint] = Field(default_factory=list, max_length=500)
+    policy: PolicyIn = Field(default_factory=PolicyIn)
     wp_spd: float | None = None
     wp_radius: float | None = None
     #: 未量測建物的假設高度（公尺）。**不給就不假設**
@@ -2716,14 +2732,15 @@ async def draft_plan(body: DraftIn):
     同一個規矩。
     """
     h = {"lat": body.home[0], "lon": body.home[1]}
-    wps = plan_check.build_plan(
-        [p.model_dump() for p in body.points], body.takeoff_alt, body.speed, h,
-        land_at_home=body.land_at_home, land_mode=body.land_mode)
+    built = plan_check.build_plan(
+        [p.model_dump() for p in body.points], body.policy.model_dump(), h,
+        dem=terrain.shared())
+    wps, decisions = built["waypoints"], built["decisions"]
     if len(body.points) < 1:
         # **一個點都沒有時不要假裝算得出什麼**：回一份空的，讓畫面說
         # 「還沒放點」，而不是回一份「通過」的報告
         return {"check": None, "profile": None, "saved_id": None,
-                "waypoints": wps}
+                "waypoints": wps, "decisions": decisions}
     check = plan_check.check_waypoints(
         wps, settings.geofence_radius_m, settings.geofence_alt_m,
         settings.geofence_margin, dem=terrain.shared(),
@@ -2734,9 +2751,10 @@ async def draft_plan(body: DraftIn):
     saved = None
     if body.save_as:
         saved = await _store_mission(body.save_as.strip() or "新航線", "drawn",
-                                     wps, home=body.home)
+                                     wps, home=body.home,
+                                     policy=body.policy.model_dump())
     return {"check": check, "profile": profile, "saved_id": saved,
-            "waypoints": wps}
+            "waypoints": wps, "decisions": decisions}
 
 
 @router.post("/plans/{plan_id}/activate")

@@ -93,6 +93,10 @@ async def migrate() -> None:
         "ALTER TABLE plans ADD COLUMN IF NOT EXISTS firmware_type INT")
     await pool.execute(
         "ALTER TABLE plans ADD COLUMN IF NOT EXISTS vehicle_type INT")
+    # 2026-09-09（doc/route-planning-redesign.md §8）：這份航線是用哪個
+    # **高度／速度政策**產生的。逐點的 alt 是它解出來的結果，政策才是意圖
+    # ——沒有它，改政策就只能整條重畫
+    await pool.execute("ALTER TABLE plans ADD COLUMN IF NOT EXISTS policy JSONB")
     # 038：飛控板的唯一 ID（AUTOPILOT_VERSION.uid2）。**目前唯一機器可驗證的
     # 身分**——sysid 只是機上可改的參數。NULL＝還沒問到（不是「沒有」）
     await pool.execute("ALTER TABLE drones ADD COLUMN IF NOT EXISTS board_uid TEXT")
