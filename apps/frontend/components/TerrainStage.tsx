@@ -331,7 +331,7 @@ export default function TerrainStage({ wps, sel, onSelect, tipFor, placing,
         <span><svg width="14" height="14" viewBox="0 0 14 14">
           <circle cx="7" cy="7" r="4.2" fill="#3987e5"/></svg>航點</span>
         <span><svg width="14" height="14" viewBox="0 0 14 14">
-          <path d="M7,12 L12,3 H2 Z" fill="#0ca30c"/></svg>降落點</span>
+          <path d="M7,2 L12,11 H2 Z" fill="#0ca30c"/></svg>降落點</span>
       </div>
       <div ref={box} className="stage3d" />
       {tip && (
@@ -663,12 +663,18 @@ function makeRouteLayer(map: maplibregl.Map, dataRef: { current: StageData },
           }
         }
       } else if (w.kind === "land") {
-        // 向下三角＝往這裡下來
+        // **圓錐站在地上**（使用者 2026-09-09）：three.js 的錐體軸是 +Y，
+        // 而這個場景的上方是 +Z——原本只翻了 180°，錐體其實是**橫躺**的。
+        // 轉 90° 讓軸站起來，再把底面壓到地面高度：降落點是地面上的一個
+        // 位置，那個圓面貼在哪裡就是飛機會落在哪裡
+        const ch = gr * 3.2;
         const cone = new THREE.Mesh(
-          new THREE.ConeGeometry(gr * 1.55, gr * 3.2, 18),
+          new THREE.ConeGeometry(gr * 1.55, ch, 18),
           new THREE.MeshBasicMaterial({ color: gcol }));
-        cone.rotation.x = Math.PI;          // 尖端朝下
-        cone.position.copy(at);
+        cone.rotation.x = Math.PI / 2;
+        const base = w.ground != null ? v(w.lon, w.lat, w.ground) : at.clone();
+        cone.position.copy(base);
+        cone.position.z += ch / 2;          // 幾何的原點在腰上，抬半個高度才貼地
         group.add(cone);
       } else {
         const sp = new THREE.Mesh(new THREE.SphereGeometry(r, 20, 14),
