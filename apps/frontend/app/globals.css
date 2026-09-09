@@ -1877,10 +1877,9 @@ details.card summary { cursor: pointer; font-size: 14px; font-weight: 600; }
 }
 .plan-legs td.muted { color: var(--muted); }
 /* 3D 地形舞台（issues/048 F1）*/
-/* **地圖要夠高才看得出地形**（使用者 2026-09-09 兩次說「太扁」）：
-   固定 460 px 在 1080p 上只佔畫面的四成，而這一頁就是在看那張圖。
-   跟著視窗走，但留住上下限——太矮讀不出起伏，太高會把剖面推出畫面 */
-.stage3d { height: clamp(420px, 64vh, 900px);
+/* **地圖佔滿一頁**（使用者 2026-09-09）：這一頁就是在看那張圖，
+   剩下的（決策表、剖面、航段）往下捲。扣掉的是導覽列與工具列那一列 */
+.stage3d { height: clamp(420px, calc(100vh - 138px), 1400px);
   border: 1px solid var(--border); border-radius: 10px;
   overflow: hidden; background: var(--page); }
 .stage3d-wrap { position: relative; }

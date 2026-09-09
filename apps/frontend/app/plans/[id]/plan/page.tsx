@@ -790,30 +790,16 @@ export default function PlanPage() {
                   ))}
                 </div>
               </div>
-              {/* **降落設定屬於那個點，就住在那個點旁邊**（使用者裁定
-                  2026-09-09，選項 D）：搬到右欄，選到降落點才顯示。
-                  沒有降落點時「降落在哪裡」只有一個答案（起飛點）——
-                  一個只有一個選項的選擇題不是選擇題。系統決定了什麼，
-                  決策表本來就會列。 */}
-              {!pts.some((q) => q.kind === "land") && (
-                <span className="hint-line" style={{ alignSelf: "center" }}>
-                  {pol.land_at_home ? "降落回起飛點" : "降落在最後一個航點"}
-                  ・{pol.land_mode === "vert" ? "垂直降落" : "逐漸降落"}
-                  <span className="tag-sys">系統決定</span>
-                </span>
-              )}
             </>
           )}
+          {/* **提示字拿掉**（使用者 2026-09-09）：「先點一下放起飛點」「降落
+              在最後一個航點」那幾句每一列都在，而它們說的事「放點類型」
+              那組按鈕與決策表都已經寫著。留下的只有真的要按的東西 */}
           {!started
             ? <button className="btn-accent btn-sm" onClick={() => setStarted(true)}>
                 開始畫線</button>
-            : <span className="hint-line">
-                {!hasHome
-                  ? "先在地圖上點一下放起飛點"
-                  : `點地形放下一個航點（${pts.length} 個）・拖曳轉視角`}
-                {pts.length > 0 && <>　<button className="btn-plain btn-sm"
-                  onClick={() => setPts((p) => p.slice(0, -1))}>移除上一個</button></>}
-              </span>}
+            : pts.length > 0 && <button className="btn-plain btn-sm"
+                onClick={() => setPts((p) => p.slice(0, -1))}>移除上一個</button>}
           </>
         )}
         {/* 圍欄（使用者裁定 2026-09-09：圓形＋多邊形，只做規劃端）。
