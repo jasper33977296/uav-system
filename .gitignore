@@ -23,3 +23,6 @@ data/ortho/
 
 # 建物輪廓：跟 .hgt 同級的離線資產，佈署前用 scripts/fetch-buildings.py 抓
 data/buildings/*.geojson
+
+# 場域資料包：manifest 指得出來的東西都在別處，這裡是產物
+data/bundles/

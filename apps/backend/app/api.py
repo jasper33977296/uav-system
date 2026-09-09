@@ -1,5 +1,7 @@
 import bisect
 import asyncio
+import io
+import tarfile
 
 import asyncpg
 import json
@@ -10,7 +12,7 @@ from datetime import datetime, timedelta, timezone
 from uuid import UUID
 
 from fastapi import APIRouter, HTTPException, Request, Response
-from fastapi.responses import FileResponse, JSONResponse
+from fastapi.responses import FileResponse, JSONResponse, StreamingResponse
 from pydantic import BaseModel, Field, field_validator
 
 import logging
@@ -2459,6 +2461,100 @@ class NearIn(BaseModel):
     """航線沿線的建物。**範圍跟著線走，不是一個固定方框。**"""
     points: list[list[float]] = Field(default_factory=list, max_length=2000)
     buffer_m: float = Field(default=30.0, ge=1.0, le=500.0)
+
+
+BUNDLE_DIR = os.environ.get("BUNDLE_DIR", "/data/bundles")
+
+
+def _bundle_path(name: str) -> str:
+    # **名字只能是一段檔名。** 這個端點會把它接進路徑，`../` 就是讀別人的檔
+    if not name or "/" in name or "\\" in name or name.startswith("."):
+        raise HTTPException(400, "資料包名稱不合法")
+    d = os.path.join(BUNDLE_DIR, name)
+    if not os.path.isdir(d):
+        raise HTTPException(404, f"沒有這一份資料包：{name}")
+    return d
+
+
+@router.get("/bundles")
+async def list_bundles():
+    """有哪幾份場域資料包。"""
+    out = []
+    if os.path.isdir(BUNDLE_DIR):
+        for n in sorted(os.listdir(BUNDLE_DIR)):
+            f = os.path.join(BUNDLE_DIR, n, "manifest.json")
+            if not os.path.exists(f):
+                continue
+            try:
+                with open(f, encoding="utf-8") as fh:
+                    m = json.load(fh)
+            except (OSError, ValueError):
+                continue
+            out.append({"name": n, "created_at": m.get("created_at"),
+                        "bbox": m.get("bbox"), "centre": m.get("centre"),
+                        "complete": all(m["layers"][k].get("complete", True)
+                                        for k in ("terrain", "ortho"))})
+    return {"bundles": out}
+
+
+@router.get("/bundles/{name}")
+async def get_bundle(name: str):
+    """一份資料包的 manifest——**這是給其他系統的介面**。
+
+    裡面除了「有什麼」，還有每一種來源的 `caveat`。那不是文件，是介面的
+    一部分：拿到一堆 PNG 的人不知道那是 terrarium 編碼、不知道地面線畫不出
+    任何一棟樓、不知道八成建物的高度是猜的。**資料自己要說得出這些**，
+    否則接收端會把一份 30 m 格子的表面當成地形圖用。
+    """
+    d = _bundle_path(name)
+    with open(os.path.join(d, "manifest.json"), encoding="utf-8") as f:
+        m = json.load(f)
+    m.pop("_files", None)          # 檔案清單是打包用的，介面不必看
+    return m
+
+
+@router.get("/bundles/{name}/buildings.geojson")
+async def bundle_buildings(name: str):
+    d = _bundle_path(name)
+    p = os.path.join(d, "buildings.geojson")
+    if not os.path.exists(p):
+        raise HTTPException(404, "這一份沒有建物資料")
+    return FileResponse(p, media_type="application/geo+json")
+
+
+@router.get("/bundles/{name}/archive.tar")
+async def bundle_archive(name: str):
+    """整包帶走：manifest ＋ 建物 ＋ 這個範圍用得到的圖磚。
+
+    圖磚**不在資料包目錄裡**，是打包這一刻從共用快取抓出來的——複製一份
+    到 `data/bundles/` 只會讓同一張圖磚在磁碟上有兩份，而且會過期。
+    """
+    d = _bundle_path(name)
+    with open(os.path.join(d, "manifest.json"), encoding="utf-8") as f:
+        man = json.load(f)
+    files = man.get("_files") or {}
+
+    def gen():
+        buf = io.BytesIO()
+        with tarfile.open(fileobj=buf, mode="w|") as tar:
+            for fn in ("manifest.json", "buildings.geojson"):
+                p = os.path.join(d, fn)
+                if os.path.exists(p):
+                    tar.add(p, arcname=f"{name}/{fn}")
+            for kind, cache, ext in (("terrain", TILE_CACHE, "png"),
+                                     ("ortho", ORTHO_CACHE, "jpg")):
+                for rel in files.get(kind) or []:
+                    p = os.path.join(cache, rel)
+                    if os.path.exists(p):
+                        tar.add(p, arcname=f"{name}/{kind}/{rel}")
+                    if buf.tell() > 1 << 20:
+                        yield buf.getvalue()
+                        buf.seek(0)
+                        buf.truncate()
+        yield buf.getvalue()
+
+    return StreamingResponse(gen(), media_type="application/x-tar", headers={
+        "Content-Disposition": f'attachment; filename="{name}.tar"'})
 
 
 @router.post("/buildings/near")

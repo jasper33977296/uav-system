@@ -67,6 +67,9 @@ services:
       # 產好的地形圖磚。**圖磚是純函數的產物**，砍掉只會再算一次
       - ./data/terrain-tiles:/data/terrain-tiles
       - ./data/ortho:/data/ortho
+      # 場域資料包（manifest ＋ 建物）。圖磚不在裡面——打包時從
+      # 共用快取抓，避免同一張圖磚在磁碟上有兩份
+      - ./data/bundles:/data/bundles
       # 地形圖磚（issues/047 §1-B）。**唯讀、而且不進映像**：一塊 1 弧秒
       # SRTM 是 25 MB，塞進映像會讓每次建置都拖著它跑，而它一年也不會變。
       # 目錄不存在或空的 → 預檢會說「離地高度沒有檢查」，不會假裝通過
