@@ -106,8 +106,14 @@ def parse_gtccinfo(text: str) -> dict[str, Any] | None:
 def enrich(sample: dict[str, Any]) -> list[str]:
     """就地補上 `pci`／`cell_id`／`band`。回補了哪幾欄（空 list＝沒補）。
 
-    **只補 null 的欄位。** 機上代理若自己填了，它才是第一手——我們不覆蓋它，
-    也不去比對誰對誰錯（那要另一份證據，不是這裡能決定的）。
+    **這是唯一一份解碼**（2026-09-09 起）。原本機上代理也解一份，而這裡
+    只補 null、不覆蓋它——理由寫的是「機上是第一手」。**那個理由是錯的**：
+    兩邊解的是同一個原始字串，沒有誰比較第一手，第一手的是 `raw` 本身。
+    結果就是機上把 PCI 的十六進位當十進位讀（`85` 讀成 85 而不是 133），
+    而正確的這一份因為「不覆蓋」永遠沒有機會生效。
+
+    仍然只補 null——但那現在是**保險**，不是讓步：代理已經不填這三欄了，
+    真的補到值就代表有人又在機上解了一次，該回頭把它拿掉。
     """
     raw = sample.get("raw")
     if not isinstance(raw, dict):
@@ -194,6 +200,12 @@ if __name__ == "__main__":       # 自我檢查：兩筆已知輸入，值都在
         print(f"{'✓' if good else '✗'} {label}: {got}" + ("" if good else f"（期望 {want}）"))
 
     chk("本場域 PCI（0x8D）", a["pci"], 141)
+    # 2026-09-09 實測：PCI 欄全是數字的時候，十進位解析**不會報錯只會錯**
+    # ——這一筆就是那個形狀（`85` 是十六進位的 133）。用真實觀測釘住它
+    c = parse_gtccinfo('+GTCCINFO: \r\nNR service cell: \r\n'
+                       '1,9,999,66,8D,214001,AFDA0,85,5079,100,105,91,91,64\r\n\r\nOK')
+    chk("PCI 欄全是數字時仍是十六進位（0x85）", c["pci"], 133)
+    chk("同一筆的 NCI", c["cell_id"], 2179073)
     chk("本場域 band", a["band"], "n79")
     chk("本場域 NCI（0x234001）", a["cell_id"], 2310145)
     chk("本場域 NR-ARFCN（0xAFDA0）", a["narfcn"], 720288)
