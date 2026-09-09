@@ -14,6 +14,7 @@ import { useCallback, useEffect, useRef, useState } from "react";
 
 import TerrainStage, { type BuildingFeat, type StageHit, type StageTip, type StageWp }
   from "@/components/TerrainStage";
+import InfoTip from "@/components/InfoTip";
 import { emph } from "@/lib/emph";
 import { errText, getJson } from "@/lib/fetchJson";
 import { API, COMMAND_API } from "@/lib/signal";
@@ -925,8 +926,18 @@ export default function PlanPage() {
       )}
 
       {prof && <Profile p={prof} />}
+      {/* **畫面上只留事實，解釋住 ⓘ**（使用者定案 2026-09-07、2026-09-09）。
+          原本這裡是一整段講三種畫法與返航帶子的字——每一句都對，但那是
+          設計備忘錄，讀第一次有用，讀第五十次只是把圖往下擠 */}
       <div className="hint-line">
-        {emph("地面線來自 SRTM（水平約 30 m）——**被格子抹平的表面**：樹冠與屋頂混在裡面，但沒有一棟樓是它畫得出來的。建物是另一份（OSM 輪廓），三種畫法對應三種出處：實心灰塊標「樓層數推算」是**樓層數 × 3.5 m 猜的**，不是量的；虛線橘塊標「假設 N m」用的是右欄那個旋鈕，**改它判定就會變**；沒有頂的橘色柱子代表現在不假設，那棟樓的高度沒有人量過。三種都不是實測——**實測要等光達**。輪廓只取外環，**中庭當成實心**（多禁不會少禁）。X 軸下面那條帶子是**返航**：從那個位置失聯，飛機會爬到返航高度直線飛回起飛點——紅色代表那條線會撞地，那不是你按的，是它自己會做的事。")}
+        地面線來源：SRTM　建築物來源：OSM
+        <InfoTip tip={"地面線是 SRTM（水平約 30 m）——被格子抹平的表面，樹冠與屋頂混在裡面，但畫不出任何一棟樓。"
+          + "建物是另一份（OSM 輪廓），三種畫法對應三種出處："
+          + "實心灰塊標「樓層數推算」＝樓層數 × 3.5 m 猜的；"
+          + "虛線橘塊標「假設 N m」＝用右欄那個旋鈕，改它判定就會變；"
+          + "沒有頂的橘色柱子＝現在不假設，那棟樓沒有人量過。三種都不是實測，實測要等光達。"
+          + "輪廓只取外環，中庭當成實心（多禁不會少禁）。"
+          + "X 軸下面那條帶子是返航：從那個位置失聯，飛機會爬到返航高度直線飛回起飛點，紅色代表那條線會撞地——那不是你按的，是它自己會做的事。"} />
       </div>
 
       {/* **發現變成選擇，不是報告。** 抬多少、降到多少都由後端算——
