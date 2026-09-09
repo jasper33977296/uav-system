@@ -18,6 +18,7 @@
 2026-08-26 發現它們早就漂移了：frame 檢查只存在於 backend 那份，於是
 匯入時擋下來的東西，上傳到機時反而不擋。同源副本靠人記得同步是行不通的。
 """
+import hashlib
 import json
 import math
 
@@ -1168,6 +1169,31 @@ def build_plan(points: list[dict], policy: dict | None = None,
 
 
 _MODE_TEXT = {POLICY_AGL: "離地面", POLICY_HOME: "離起飛點", POLICY_AMSL: "固定海拔"}
+
+
+def waypoints_hash(wps: list[dict]) -> str:
+    """一份航點的指紋。**簽核綁在它上面**——航點一改，簽核就失效。
+
+    沒有它，簽核只是「曾經有人在某個版本上按過 OK」，那不是一個可以拿來
+    放行的東西（doc/route-planning-redesign.md §7）。
+
+    **兩個服務要算出同一個值**，所以只取會影響飛行的欄位，而且順序固定。
+    """
+    h = hashlib.sha256()
+    for w in sorted(wps, key=lambda x: x.get("seq") or 0):
+        p = w.get("params") or {}
+        if isinstance(p, str):
+            try:
+                p = json.loads(p)
+            except ValueError:
+                p = {}
+        parts = [w.get("seq"), _cmd(w), w.get("frame") or p.get("frame"),
+                 w.get("action"), w.get("lat"), w.get("lon"), w.get("alt")]
+        parts += [w.get(k) if w.get(k) is not None else p.get(k)
+                  for k in ("p1", "p2", "p3", "p4")]
+        h.update("|".join("" if v is None else f"{v!r}" for v in parts).encode())
+        h.update(b"\n")
+    return h.hexdigest()[:32]
 
 
 # ── 發現 → 選擇（doc/route-planning-redesign.md §6）────────────────────

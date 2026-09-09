@@ -2531,6 +2531,92 @@ async def mission_profile(plan_id: str, assume_m: float | None = None):
     return prof
 
 
+class SignIn(BaseModel):
+    """「我看過了」。**逐條列出你決定照飛的是哪幾條**，不是一個總開關。"""
+    acknowledged: list[str] = Field(default_factory=list, max_length=200)
+    assume_m: float | None = None
+    wp_spd: float | None = None
+    wp_radius: float | None = None
+    signed_by: str | None = None
+
+
+async def _plan_wps(plan_id: str) -> list[dict]:
+    rows = await db.pool.fetch(
+        "SELECT seq, lat, lon, alt, action, params FROM waypoints "
+        "WHERE plan_id = $1 ORDER BY seq", plan_id)
+    out = []
+    for r in rows:
+        w = dict(r)
+        pm = w.get("params")
+        pm = json.loads(pm) if isinstance(pm, str) else (pm or {})
+        w["command"] = pm.get("command")
+        w["frame"] = pm.get("frame")
+        w["params"] = pm
+        out.append(w)
+    return out
+
+
+@router.get("/plans/{plan_id}/sign")
+async def get_sign(plan_id: str):
+    """這一份最近一次被誰、在什麼假設下看過，以及**那次的航點還是不是這一份**。"""
+    wps = await _plan_wps(plan_id)
+    if not wps:
+        raise HTTPException(404, "無此路徑或沒有航點")
+    now = plan_check.waypoints_hash(wps)
+    row = await db.pool.fetchrow(
+        "SELECT * FROM plan_checks WHERE plan_id = $1 "
+        "ORDER BY checked_at DESC LIMIT 1", plan_id)
+    if row is None:
+        return {"signed": False, "stale": False, "hash": now,
+                "why": "這一份還沒有人看過檢查結果"}
+    d = dict(row)
+    stale = d["waypoints_hash"] != now
+    for k in ("problems", "acknowledged", "limits"):
+        if isinstance(d.get(k), str):
+            d[k] = json.loads(d[k])
+    d["id"] = str(d["id"]); d["plan_id"] = str(d["plan_id"])
+    d["checked_at"] = d["checked_at"].isoformat()
+    return {"signed": True, "stale": stale, "hash": now, **d,
+            "why": "航點在簽核之後改過了，這份簽核不算數" if stale else None}
+
+
+@router.post("/plans/{plan_id}/sign")
+async def sign_plan(plan_id: str, body: SignIn):
+    """簽核：**檢查由伺服器自己重跑**，不收畫面送來的結論。
+
+    畫面能決定的只有「哪幾條我看過而且決定照飛」。
+    """
+    row = await db.pool.fetchrow(
+        "SELECT fence, home, firmware_type FROM plans WHERE id = $1", plan_id)
+    if row is None:
+        raise HTTPException(404, "無此路徑")
+    wps = await _plan_wps(plan_id)
+    if not wps:
+        raise HTTPException(404, "這一份沒有航點")
+    fence = row["fence"]
+    if isinstance(fence, str):
+        fence = json.loads(fence)
+    home = row["home"]
+    if isinstance(home, str):
+        home = json.loads(home)
+    chk = plan_check.check_waypoints(
+        wps, settings.geofence_radius_m, settings.geofence_alt_m,
+        settings.geofence_margin, fence=fence, autopilot=row["firmware_type"],
+        home=home, dem=terrain.shared(), wp_spd=body.wp_spd,
+        wp_radius=body.wp_radius, assume_m=body.assume_m)
+    ack = [p for p in body.acknowledged if p in chk["problems"]]
+    missed = [p for p in chk["problems"] if p not in ack]
+    h = plan_check.waypoints_hash(wps)
+    await db.pool.execute(
+        "INSERT INTO plan_checks (plan_id, waypoints_hash, ok, problems, "
+        "acknowledged, assumed_m, wp_spd, limits, signed_by) "
+        "VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)",
+        plan_id, h, chk["ok"], jdumps(chk["problems"]), jdumps(ack),
+        body.assume_m, body.wp_spd, jdumps(chk.get("limits")), body.signed_by)
+    return {"ok": chk["ok"], "hash": h, "acknowledged": ack,
+            "unacknowledged": missed, "check": chk}
+
+
 @router.get("/plans/{plan_id}/check")
 async def check_mission(plan_id: str, wp_spd: float | None = None,
                         wp_radius: float | None = None,

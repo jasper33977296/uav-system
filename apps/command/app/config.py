@@ -35,6 +35,13 @@ class Settings(BaseSettings):
     # 「地面比航線高」有可能是樹造成的假警報——被擋住的時候有兩條路：
     # 把高度拉高，或把這個開關關掉（關掉的那一次會進 command_log 留痕）。
     terrain_enforce: bool = True
+    # 簽核閘門（doc/route-planning-redesign.md §7，使用者裁定 2026-09-09）：
+    # **上傳那一刻分不出「沒人看過檢查結果」與「看過、按了照飛」**，所以
+    # 在有簽核以前，terrain_enforce 只能全擋或全不擋。簽核補的就是那一半。
+    #
+    # 擋的規則：沒簽核、或簽核之後航點改過（hash 對不上）、或還有沒被
+    # 逐條 ack 的 problem。**退路一樣留著**：關掉的那一次會留痕。
+    sign_enforce: bool = True
     # 外部觸發（POST /api/start / GET /api/plans）：repo 的 missions/ 掛進容器唯讀
     missions_dir: str = "/srv/missions"
 

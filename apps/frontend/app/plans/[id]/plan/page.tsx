@@ -47,6 +47,13 @@ interface Policy {
 }
 /** 系統替你決定了什麼（redesign §3 動作 3）。 */
 interface Decision { what: string; value: string; why: string; seq: number | null }
+/** 簽核：**這一份在什麼假設下被誰看過**。綁在 waypoints_hash 上——
+ *  航點一改就失效，不然它只是「曾經有人在某個版本上按過 OK」。 */
+interface Sign {
+  signed: boolean; stale: boolean; hash: string; ok?: boolean;
+  checked_at?: string; signed_by?: string | null; assumed_m?: number | null;
+  acknowledged?: string[]; problems?: string[]; why?: string | null;
+}
 
 const MODE_TEXT: Record<Policy["mode"], string> = {
   agl: "離地面", home: "離起飛點", amsl: "固定海拔",
@@ -261,6 +268,8 @@ export default function PlanPage() {
     { lat: number; lon: number; h?: number; alt_source?: string; kind: string }[]>([]);
   const [decisions, setDecisions] = useState<Decision[]>([]);
   const [applied, setApplied] = useState<{ note?: string } | null>(null);
+  const [sign, setSign] = useState<Sign | null>(null);
+  const [ack, setAck] = useState<Set<string>>(new Set());
   const [started, setStarted] = useState(false);
   const [placeKind, setPlaceKind] = useState("wp");
   const [naming, setNaming] = useState<string | null>(null);
@@ -340,6 +349,9 @@ export default function PlanPage() {
         ]);
         if (stop) return;
         setName((ms as any).find?.((m: any) => m.id === id)?.name ?? id);
+        getJson<Sign>(`${API}/api/plans/${id}/sign`)
+          .then((sg) => { if (!stop) { setSign(sg); setAck(new Set(sg.acknowledged ?? [])); } })
+          .catch(() => { /* 讀不到就當作沒簽核——**不是當作簽過** */ });
         setProf(pr); setChk(ck); setSpd({ wp, rad, src });
         spdRef.current = { wp, rad };
       } catch (e) {
@@ -554,6 +566,15 @@ export default function PlanPage() {
         </span>
         {prof?.home_amsl_m != null && (
           <span className="chip">起飛點 {prof.home_amsl_m} m（海拔）</span>
+        )}
+        {!isNew && sign && (
+          <span className={`chip${sign.signed && !sign.stale ? "" : " bad"}`}
+            title={sign.why ?? undefined}>
+            {sign.signed && !sign.stale
+              ? `已確認 · ${(sign.checked_at ?? "").slice(0, 16).replace("T", " ")}${
+                  sign.signed_by ? ` · ${sign.signed_by}` : ""}`
+              : sign.stale ? "簽核已失效（航點改過）" : "未確認"}
+          </span>
         )}
         {worst != null && (
           <span className={`chip${worst < 0 ? " bad" : ""}`}>最低離地 {worst} m</span>
@@ -859,10 +880,51 @@ export default function PlanPage() {
       {(chk?.problems?.length || chk?.warnings?.length) ? (
         <div className="plan-findings">
           {/* 後端文案用 `**` 當強調記號，而畫面不解析 Markdown（ui-spec §0.3c）*/}
-          {chk.problems.map((p, i) => <div key={i} className="form-err">✕ {emph(p)}</div>)}
+          {chk.problems.map((p, i) => (
+            <div key={i} className="form-err">
+              ✕ {emph(p)}
+              {!isNew && (
+                <label className="ackbox">
+                  <input type="checkbox" checked={ack.has(p)}
+                    onChange={(e) => setAck((prev) => {
+                      const n = new Set(prev);
+                      if (e.target.checked) n.add(p); else n.delete(p);
+                      return n;
+                    })} />
+                  我知道，照飛
+                </label>
+              )}
+            </div>
+          ))}
           {chk.warnings.map((w, i) => <div key={i} className="hint-line">⚠ {emph(w)}</div>)}
         </div>
       ) : chk ? <div className="hint-line">這份航線沒有發現。</div> : null}
+
+      {/* **上傳前要有人看過。** 沒有這一步，上傳那道門分不出「沒人看過」
+          與「看過、按了照飛」，所以它只能全擋或全不擋（§7） */}
+      {!isNew && chk && (
+        <div className="plan-fixes">
+          <button className="btn-accent btn-sm" disabled={busy}
+            onClick={async () => {
+              setBusy(true);
+              try {
+                const r = await fetch(`${API}/api/plans/${id}/sign`, {
+                  method: "POST", headers: { "Content-Type": "application/json" },
+                  body: JSON.stringify({
+                    acknowledged: [...ack], assume_m: assume,
+                    wp_spd: spdRef.current.wp, wp_radius: spdRef.current.rad }),
+                });
+                if (r.ok) setSign(await getJson<Sign>(`${API}/api/plans/${id}/sign`));
+              } finally { setBusy(false); }
+            }}>
+            確認我看過了{(chk.problems?.length ?? 0) > 0
+              ? `（${ack.size}/${chk.problems.length} 條照飛）` : ""}
+          </button>
+          <span className="hint-line">
+            {emph("**上傳前擋的就是這一步。** 有問題但你決定照飛的，逐條勾起來——會記下是誰、什麼時候、在什麼假設下決定的。航點改過之後這份簽核就失效。")}
+          </span>
+        </div>
+      )}
 
       {naming !== null && (
         <div className="mask" onClick={() => setNaming(null)}>

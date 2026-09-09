@@ -186,6 +186,18 @@ ck("每一種回覆都帶一句話", all(
    for a in ("raise_all", "raise_leg", "slow_all", "slow_leg", "assume",
              "ack", "nope")))
 
+print("\n── 簽核的指紋（§7）──")
+h1 = pc.waypoints_hash(b["waypoints"])
+ck("同一份算出同一個", h1 == pc.waypoints_hash(b["waypoints"]))
+moved = [dict(w) for w in b["waypoints"]]
+moved[2]["alt"] = (moved[2]["alt"] or 0) + 0.1
+ck("動一個高度就變", pc.waypoints_hash(moved) != h1)
+moved2 = [dict(w) for w in b["waypoints"]]
+moved2[2]["lat"] = moved2[2]["lat"] + 1e-5
+ck("動一個位置就變", pc.waypoints_hash(moved2) != h1)
+shuffled = list(reversed([dict(w) for w in b["waypoints"]]))
+ck("順序不影響（照 seq 排）", pc.waypoints_hash(shuffled) == h1)
+
 print()
 if fails:
     print(f"✗ {len(fails)} 項沒過：" + "、".join(fails))

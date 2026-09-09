@@ -1834,6 +1834,10 @@ details.card summary { cursor: pointer; font-size: 14px; font-weight: 600; }
   display: flex; align-items: center; flex-wrap: wrap; gap: 8px;
   margin: 12px 0 4px; font-size: 13px;
 }
+.ackbox {
+  margin-left: 10px; font-size: 12px; color: var(--muted); white-space: nowrap;
+  display: inline-flex; align-items: center; gap: 4px; cursor: pointer;
+}
 .plan-findings { display: flex; flex-direction: column; gap: 6px; margin: 12px 0; }
 .plan-legs { width: 100%; border-collapse: collapse; margin-top: 12px; font-size: 13px; }
 .plan-legs th {

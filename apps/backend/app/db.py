@@ -97,6 +97,27 @@ async def migrate() -> None:
     # **高度／速度政策**產生的。逐點的 alt 是它解出來的結果，政策才是意圖
     # ——沒有它，改政策就只能整條重畫
     await pool.execute("ALTER TABLE plans ADD COLUMN IF NOT EXISTS policy JSONB")
+    # 2026-09-09（redesign §7）：**這一份在什麼假設下被誰看過**。
+    # 上傳那一刻分不出「沒人看過」與「看過、按了照飛」，所以它只能全擋或
+    # 全不擋——簽核就是缺的那一半。`waypoints_hash` 是關鍵：航點一改簽核
+    # 就失效，不然它只是「曾經有人在某個版本上按過 OK」。
+    await pool.execute("""
+        CREATE TABLE IF NOT EXISTS plan_checks (
+          id             BIGSERIAL PRIMARY KEY,
+          plan_id        UUID REFERENCES plans(id) ON DELETE CASCADE,
+          checked_at     TIMESTAMPTZ NOT NULL DEFAULT now(),
+          waypoints_hash TEXT NOT NULL,
+          ok             BOOLEAN NOT NULL,
+          problems       JSONB,
+          acknowledged   JSONB,
+          assumed_m      REAL,
+          wp_spd         REAL,
+          limits         JSONB,
+          signed_by      TEXT
+        )""")
+    await pool.execute(
+        "CREATE INDEX IF NOT EXISTS plan_checks_plan_idx "
+        "ON plan_checks (plan_id, checked_at DESC)")
     # 038：飛控板的唯一 ID（AUTOPILOT_VERSION.uid2）。**目前唯一機器可驗證的
     # 身分**——sysid 只是機上可改的參數。NULL＝還沒問到（不是「沒有」）
     await pool.execute("ALTER TABLE drones ADD COLUMN IF NOT EXISTS board_uid TEXT")

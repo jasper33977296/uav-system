@@ -1289,6 +1289,40 @@ async def mission_upload(sysid: int, body: UploadIn):
                                   "how_to": ["切 hold 並確認進入",
                                              "上傳新航線",
                                              "切回 mission 並指定續飛航點"]})
+    # **簽核閘門**（redesign §7）：這一份在什麼假設下被誰看過。
+    # 放在地形那道門**之前**——地形那道門只會說「這條穿地」，而更根本的
+    # 問題是「這一份根本沒有人看過」，那兩句話該分開。
+    if settings.sign_enforce:
+        h = plan_check.waypoints_hash(wps)
+        sg = await pool.fetchrow(
+            "SELECT waypoints_hash, ok, problems, acknowledged, assumed_m, "
+            "signed_by, checked_at FROM plan_checks WHERE plan_id = $1 "
+            "ORDER BY checked_at DESC LIMIT 1", body.plan_id)
+        why = None
+        if sg is None:
+            why = "這一份還沒有人看過檢查結果"
+        elif sg["waypoints_hash"] != h:
+            why = "航點在簽核之後改過了，那份簽核不算數"
+        else:
+            probs = sg["problems"]
+            acks = sg["acknowledged"]
+            probs = json.loads(probs) if isinstance(probs, str) else (probs or [])
+            acks = json.loads(acks) if isinstance(acks, str) else (acks or [])
+            left = [p for p in probs if p not in acks]
+            if left:
+                why = f"還有 {len(left)} 條沒有人按過「我知道，照飛」"
+        if why:
+            await _audit(sysid, "mission_upload", {"plan_id": body.plan_id},
+                         "rejected_unsigned", why)
+            raise HTTPException(409, {
+                "msg": f"未上傳：{why}", **report,
+                "how_to": [
+                    "打開這份航線的規劃頁，看過檢查結果之後按「確認」",
+                    "有問題但你決定照飛的，逐條按「我知道，照飛」——"
+                    "**那一條會記下是誰、什麼時候、在什麼假設下決定的**",
+                    "要整個關掉這道門就把 SIGN_ENFORCE 設成 false"
+                    "（那一次會留痕）"]})
+
     # **地形是自己一道門**（issues/047 §1-B）：不掛在 GEOFENCE_ENFORCE 底下。
     # 圍欄擋下來多半是「系統預設值跟你的場地無關」，地形擋下來是「這條航線
     # 穿過地面」——後者是 2026-09-07 摔機的形狀，預設就該擋。
