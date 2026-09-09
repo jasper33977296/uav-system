@@ -970,31 +970,42 @@ export default function PlanPage() {
       ) : chk ? <div className="hint-line">這份航線沒有發現。</div> : null}
 
       {/* **上傳前要有人看過。** 沒有這一步，上傳那道門分不出「沒人看過」
-          與「看過、按了照飛」，所以它只能全擋或全不擋（§7） */}
-      {!isNew && chk && (
-        <div className="plan-fixes">
-          <button className="btn-accent btn-sm" disabled={busy}
-            onClick={async () => {
-              setBusy(true);
-              try {
-                const r = await fetch(`${API}/api/plans/${id}/sign`, {
-                  method: "POST", headers: { "Content-Type": "application/json" },
-                  body: JSON.stringify({
-                    acknowledged: [...ack], assume_m: assume,
-                    wp_spd: spdRef.current.wp, wp_radius: spdRef.current.rad,
-                    rtl_alt_m: spdRef.current.rtl }),
-                });
-                if (r.ok) setSign(await getJson<Sign>(`${API}/api/plans/${id}/sign`));
-              } finally { setBusy(false); }
-            }}>
-            確認我看過了{(chk.problems?.length ?? 0) > 0
-              ? `（${ack.size}/${chk.problems.length} 條照飛）` : ""}
-          </button>
-          <span className="hint-line">
-            {emph("**上傳前擋的就是這一步。** 有問題但你決定照飛的，逐條勾起來——會記下是誰、什麼時候、在什麼假設下決定的。航點改過之後這份簽核就失效。")}
-          </span>
-        </div>
-      )}
+          與「看過、按了照飛」，所以它只能全擋或全不擋（§7）。
+
+          回饋要**就在按鈕旁邊**：這顆鈕改的狀態原本只顯示在畫面最上方那顆
+          晶片上，離按鈕八百像素——使用者按了看不到任何反應，回報「按鈕無效」。
+          按了之後真正該回答的是「現在還擋不擋」，不是「存好了」 */}
+      {!isNew && chk && (() => {
+        const left = (chk.problems ?? []).filter((p) => !ack.has(p)).length;
+        const fresh = sign?.signed && !sign.stale;
+        return (
+          <div className="plan-fixes">
+            <button className="btn-accent btn-sm" disabled={busy}
+              onClick={async () => {
+                setBusy(true);
+                try {
+                  const r = await fetch(`${API}/api/plans/${id}/sign`, {
+                    method: "POST", headers: { "Content-Type": "application/json" },
+                    body: JSON.stringify({
+                      acknowledged: [...ack], assume_m: assume,
+                      wp_spd: spdRef.current.wp, wp_radius: spdRef.current.rad,
+                      rtl_alt_m: spdRef.current.rtl }),
+                  });
+                  if (r.ok) setSign(await getJson<Sign>(`${API}/api/plans/${id}/sign`));
+                } finally { setBusy(false); }
+              }}>
+              {fresh ? "重新審查" : "人工審查"}
+            </button>
+            <span className={left && fresh ? "tag-warn" : "hint-line"}>
+              {!fresh
+                ? (sign?.stale ? "航點改過，之前那次不算數" : "還沒審查——上傳會擋")
+                : left
+                  ? `已審查 ${(sign?.checked_at ?? "").slice(11, 16)}・還有 ${left} 條沒勾「照飛」，上傳仍會擋`
+                  : `已審查 ${(sign?.checked_at ?? "").slice(11, 16)}・可以上傳`}
+            </span>
+          </div>
+        );
+      })()}
 
       {blds.length > 0 && (
         <details className="plan-decisions" open>
