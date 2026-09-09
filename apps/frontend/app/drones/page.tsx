@@ -19,6 +19,8 @@ interface Drone {
   mav_sysid: number | null;
   board_uid?: string | null; flight_sw_version?: string | null;
   airframe_serial?: string | null; model?: string | null;
+  /** 槳徑（mm）。**不參與任何判定**——見下方「機體」那一段 */
+  prop_diameter_mm?: number | null;
   video_url: string | null;
   autopilot?: string | null;    // "px4"/"ardupilot"/"unknown"；null＝從未見 MAVLink 心跳
   agent?: AgentState | null;    // 意圖通道現況（/api/drones 帶，之後由 WS 更新）
@@ -360,10 +362,15 @@ export default function Drones() {
         <FieldEditor {...editing}
           onClose={() => setEditing(null)}
           onSave={async (v) => {
+            // 數字欄位要送數字：空字串在 `int | None` 上是 422，
+            // 而「留空＝清除」是這個編輯器對每一欄的承諾
+            const body = editing.field === "prop_diameter_mm"
+              ? { [editing.field]: v.trim() ? Number(v) : null }
+              : { [editing.field]: v };
             const res = await fetch(`${API}/api/drones/${editing.drone.id}`, {
               method: "PATCH",
               headers: { "Content-Type": "application/json" },
-              body: JSON.stringify({ [editing.field]: v }),
+              body: JSON.stringify(body),
             });
             if (!res.ok) setErr(errText((await res.json()).detail, `${editing.label}更新失敗`));
             setEditing(null); reload();
@@ -467,6 +474,41 @@ function DroneWork({ d, sessions, isLive, agent, onboardFiles, dupSysid,
           {kv("自駕儀", d.autopilot ? apChip(d.autopilot) : null, "未見 MAVLink 心跳")}
           {kv("機上代理", agent?.agent_version ?? null,
             agent ? "代理版本未知" : "無機上代理")}
+        </div>
+      </section>
+
+      {/* **機體：人填的事實。** 與「身分」那一段刻意分開——上面那些是機器
+          每次連線覆核的，這裡是只有人知道的。
+          槳徑放這裡而不是放在門檻旁邊，是因為 **它不參與任何判定**
+          （issues/048 第 4 項）：教科書的地效區是 1–2 倍槳徑，而 09-07
+          出事是在 1.5 m，兩者對不上。填它的用途是讓那個矛盾看得見。 */}
+      <section className="dw-sect">
+        <h3>機體
+          <InfoTip tip="人填的欄位，機器不會覆核。槳徑不參與任何判定：教科書說多旋翼的地效區大約是 1–2 倍槳徑，但 2026-09-07 這台在離地 1.5 m 就被地面擾動到失控——比教科書值高得多。所以低空門檻 3 m 是從那一次往外留的保守值，不是從槳徑算的。填槳徑是為了讓這個矛盾在畫面上看得見，日後真的要量（在不同高度各懸停 20 秒、看氣壓高度的抖動從哪裡開始收斂）時有個對照。" />
+        </h3>
+        <div className="dw-box">
+          {kv("型號", d.model ?? null, "未填", () => onEdit("model", "型號",
+            d.model ?? null, "人填的，機器不會覆核。"))}
+          {kv("機架序號", d.airframe_serial ?? null, "未填",
+            () => onEdit("airframe_serial", "機架序號", d.airframe_serial ?? null,
+              "機架的序號。**板子 UID 認的是飛控板**，換機架時那個不會變，這個會。"))}
+          {kv("槳徑", d.prop_diameter_mm
+            ? `${d.prop_diameter_mm} mm（約 ${(d.prop_diameter_mm / 25.4).toFixed(0)} 吋）`
+            : null, "未填",
+            () => onEdit("prop_diameter_mm", "槳徑（mm）",
+              d.prop_diameter_mm != null ? String(d.prop_diameter_mm) : null,
+              "**不參與任何判定。** 教科書的地效區是 1–2 倍槳徑，而這台 2026-09-07 在離地 1.5 m 就被擾動到失控——比教科書值高得多。低空門檻 3 m 是從那一次往外留的，不是算出來的。留空＝清除。"))}
+          {d.prop_diameter_mm ? (
+            <div className="dw-kv">
+              <span className="dw-k">地效區（教科書）</span>
+              <span className="dw-v dw-empty">
+                {(d.prop_diameter_mm / 1000).toFixed(2)}–
+                {(d.prop_diameter_mm * 2 / 1000).toFixed(2)} m
+                　·　實際出事在 1.5 m，門檻取 3 m
+              </span>
+              <span />
+            </div>
+          ) : null}
         </div>
       </section>
 

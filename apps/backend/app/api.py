@@ -102,6 +102,9 @@ class DronePatch(BaseModel):
     video_url: str | None = None      # 空字串＝清除
     airframe_serial: str | None = None   # 空字串＝清除
     model: str | None = None             # 空字串＝清除
+    #: 槳徑（mm）。**不參與任何判定**——見 issues/048 第 4 項與
+    #: `db.migrate` 那段註解。0／null＝沒填
+    prop_diameter_mm: int | None = None
 
 
 #: 入列狀態（issues/040 A2／`doc/drone-admission-protocol.md` §3）。
@@ -996,6 +999,11 @@ async def patch_drone(drone_id: str, body: DronePatch):
         if not name:
             raise HTTPException(422, "名稱不可為空")
         fields["name"] = name
+    if "prop_diameter_mm" in fields:
+        v = fields["prop_diameter_mm"]
+        # 0 或負數＝清除。**上限只是防手滑**：最大的多旋翼槳也不到 1 m
+        if v is not None and not (0 < int(v) <= 1000):
+            fields["prop_diameter_mm"] = None
     for k in ("video_url", "airframe_serial", "model"):
         if k in fields:
             # 空字串＝清除（存 NULL）。**不要存空字串**——那會讓「沒填」與

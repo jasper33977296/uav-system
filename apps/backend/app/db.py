@@ -276,6 +276,12 @@ async def migrate() -> None:
     # 改它的語意風險不對稱：那條路徑出錯會讓每次心跳都新增一筆機。
     await pool.execute(
         "ALTER TABLE drones ADD COLUMN IF NOT EXISTS airframe_serial TEXT")
+    # 2026-09-09（issues/048 第 4 項）：槳徑。**它不是拿來算門檻的**——
+    # 教科書的地效區是 1–2 倍槳徑，這台算出來 0.3–0.6 m，而 09-07 是在
+    # 1.5 m 出事的，兩者對不上。填它的用途是讓「門檻 3 m 是怎麼來的」
+    # 這件事在畫面上說得清楚：那是往外留的保守值，不是算出來的。
+    await pool.execute(
+        "ALTER TABLE drones ADD COLUMN IF NOT EXISTS prop_diameter_mm INT")
     # 韌體版本也要持久化：它與 board_uid 一樣是**板子的穩定屬性**，
     # 而 LiveState 是記憶體——backend 一重啟就失憶，而 command 服務的
     # 「已問過」旗標還在、不會再問一次，於是畫面上永遠是空的（038 的實作缺口）
