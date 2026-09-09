@@ -168,10 +168,24 @@ export default function TerrainStage({ wps, sel, onSelect, tipFor, placing,
     /* three.js 的自訂圖層沒有 maplibre 的 `queryRenderedFeatures`，
        所以自己把航點與航段投影回螢幕來比距離。**航點優先於航段**：
        兩者重疊時人要點的幾乎一定是航點。 */
+    /** 點到線段的距離（px）。 */
+    const segDist = (p: { x: number; y: number },
+                     a: { x: number; y: number },
+                     b: { x: number; y: number }) => {
+      const dx = b.x - a.x, dy = b.y - a.y;
+      const t = Math.max(0, Math.min(1,
+        ((p.x - a.x) * dx + (p.y - a.y) * dy) / (dx * dx + dy * dy || 1)));
+      return Math.hypot(p.x - (a.x + dx * t), p.y - (a.y + dy * t));
+    };
     /** 航點的命中半徑（px）。**比看起來的球大很多**：使用者 2026-09-09
      *  回報「選不到既有點位，一直在新增」。指的是同一件事在螢幕上要點得到，
-     *  而不是幾何上要碰到。 */
-    const PICK_WP_PX = 22;
+     *  而不是幾何上要碰到。
+     *
+     *  **30 px 是量出來的，不是猜的**：實測放點時「滑鼠點的位置」與
+     *  「標記畫出來的位置」差 20–25 px（掃過一格一格的 hover 命中區）。
+     *  那個差本身還沒查清楚成因，但命中要先能用——所以半徑涵蓋它，
+     *  而且**連垂線一起算**（見下），讓整根柱子都是可以點的。 */
+    const PICK_WP_PX = 30;
     const hitTest = (pt: { x: number; y: number }): StageHit | null => {
       const ws = dataRef.current.wps;
       const proj = projRef.current;
@@ -182,22 +196,23 @@ export default function TerrainStage({ wps, sel, onSelect, tipFor, placing,
       // 下一次重算就換一批
       let best: { i: number; d: number } | null = null;
       for (let i = 0; i < ws.length; i++) {
-        if (!ws[i].lat || !ws[i].lon || ws[i].auto) continue;
-        const p = at(ws[i]);
+        const w = ws[i];
+        if (!w.lat || !w.lon || w.auto) continue;
+        const p = at(w);
         if (!p) continue;
-        const d = Math.hypot(p.x - pt.x, p.y - pt.y);
+        // **連那根垂線一起算。** 標記畫在航點的高度上，而滑鼠點的是地面
+        // ——兩者在螢幕上差一個高度，越高差越多（實測 12 m 的點差 43 px，
+        // 而半徑才 22）。點在「那一根柱子」上任何一處都算點到它，
+        // 這也正好是人眼認定「那個點在哪裡」的方式
+        const g = w.ground == null ? null : proj(w.lon, w.lat, w.ground);
+        const d = g ? segDist(pt, p, g) : Math.hypot(p.x - pt.x, p.y - pt.y);
         // 重疊時取**最近的那一個**，不是第一個碰到的
         if (d < PICK_WP_PX && (best === null || d < best.d)) best = { i, d };
       }
       if (best) return { kind: "wp", i: best.i };
       for (let i = 1; i < ws.length; i++) {
         const a = at(ws[i - 1]), b = at(ws[i]);
-        if (!a || !b) continue;
-        const dx = b.x - a.x, dy = b.y - a.y;
-        const t = Math.max(0, Math.min(1,
-          ((pt.x - a.x) * dx + (pt.y - a.y) * dy) / (dx * dx + dy * dy || 1)));
-        if (Math.hypot(pt.x - (a.x + dx * t), pt.y - (a.y + dy * t)) < 9)
-          return { kind: "leg", i };
+        if (a && b && segDist(pt, a, b) < 9) return { kind: "leg", i };
       }
       return null;
     };
@@ -208,7 +223,27 @@ export default function TerrainStage({ wps, sel, onSelect, tipFor, placing,
       // 於是點在一個已經在那裡的點上只會在它旁邊再疊一個——那個點永遠選不到，
       // 也就刪不掉（使用者 2026-09-09）。航段不擋放點：它很長，擋了會很難放
       if (h?.kind === "wp") { onSelect(h.i); return; }
-      if (pl?.placing && pl.onPlace) { pl.onPlace(e.lngLat); return; }
+      if (pl?.placing && pl.onPlace) {
+        // **在座標空間比距離，不在螢幕空間。** 螢幕那條路要先把航點投影回
+        // 像素，而「滑鼠點的地方」與「標記畫出來的地方」之間量到 20–25 px
+        // 的差（成因還沒查清楚）——那個差會讓「點在既有點上」變成「再放一個」。
+        // 這裡拿 `e.lngLat` 直接跟航點的經緯度比，投影對不對都不影響。
+        const mpp = 156543.03392 * Math.cos(e.lngLat.lat * Math.PI / 180)
+          / Math.pow(2, map.getZoom());
+        const near = mpp * PICK_WP_PX;           // 像素容忍換算成公尺
+        let hit: number | null = null, bd = Infinity;
+        dataRef.current.wps.forEach((w, i) => {
+          if (!w.lat || !w.lon || w.auto) return;
+          const dy = (w.lat - e.lngLat.lat) * 110574;
+          const dx = (w.lon - e.lngLat.lng) * 111320
+            * Math.cos(e.lngLat.lat * Math.PI / 180);
+          const d = Math.hypot(dx, dy);
+          if (d < near && d < bd) { hit = i; bd = d; }
+        });
+        if (hit !== null) { onSelect(hit); return; }
+        pl.onPlace(e.lngLat);
+        return;
+      }
       if (h) onSelect(h.i);
     });
     map.on("mousedown", (e) => {

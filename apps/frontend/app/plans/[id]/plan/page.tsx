@@ -300,7 +300,12 @@ export default function PlanPage() {
   const id = String(useParams()?.id ?? "");
   /** **從零產生**（使用者 2026-09-08：兩個入口都要）。`/plans/new/plan`。 */
   const isNew = id === "new";
-  const [home, setHome] = useState({ lat: "24.773449", lon: "121.045864" });
+  /** 起飛點。**沒有預設**（使用者裁定 2026-09-09）——它是解鎖的地方，
+   *  由操作員在地圖上放。空字串＝還沒放。 */
+  const [home, setHome] = useState({ lat: "", lon: "" });
+  //: 地圖一開始看哪裡。**這只是視角，不是起飛點**——場域中心，讓人看得到
+  //: 地形才放得下第一個點
+  const VIEW = { lat: 24.773449, lon: 121.045864 };
   // **先畫線，數字後到**（使用者裁定 2026-09-09）：政策有預設值，
   // 所以放完點就已經是一條合法航線，沒有一個欄位需要先填
   const [pol, setPol] = useState<Policy>({
@@ -320,7 +325,8 @@ export default function PlanPage() {
   const onBlds = useCallback((b: BuildingFeat[]) => setBlds(b), []);
   const [ack, setAck] = useState<Set<string>>(new Set());
   const [started, setStarted] = useState(false);
-  const [placeKind, setPlaceKind] = useState("wp");
+  const hasHome = !!(home.lat && home.lon);
+  const [placeKind, setPlaceKind] = useState("home");
   const [naming, setNaming] = useState<string | null>(null);
   const [name, setName] = useState("");
   const [prof, setProf] = useState<Profile | null>(null);
@@ -423,7 +429,9 @@ export default function PlanPage() {
 
   // 從零模式：點一變就重算（同樣去抖、同樣不寫資料庫）
   useEffect(() => {
-    if (!isNew || !started) return;
+    // **沒有起飛點就沒有航線可算**：起飛點是解鎖的地方，少了它後端只會
+    // 拿到 (0, 0)。畫面在那之前說「先放起飛點」，不是回一份算好的東西
+    if (!isNew || !started || !(home.lat && home.lon)) return;
     const t = setTimeout(async () => {
       setBusy(true);
       try {
@@ -697,11 +705,13 @@ export default function PlanPage() {
           `.hgt` 產的圖磚。原型那張手繪線框到此為止 */}
       {isNew && (
         <div className="newform">
+          {/* 座標仍然可以直接打（有時候起飛點是別人給的一組數字），
+              但**主要的放法是在地圖上點**——那才看得到地形 */}
           <label className="f"><span>起飛點緯度</span>
-            <input value={home.lat} disabled={started}
+            <input value={home.lat} placeholder="在地圖上點"
               onChange={(e) => setHome((h) => ({ ...h, lat: e.target.value }))} /></label>
           <label className="f"><span>起飛點經度</span>
-            <input value={home.lon} disabled={started}
+            <input value={home.lon} placeholder="在地圖上點"
               onChange={(e) => setHome((h) => ({ ...h, lon: e.target.value }))} /></label>
           {/* **開始畫之前只問起飛點。** 高度與速度在看到地形之後才談——
               舊版要人在放第一個點以前就填那兩個數字，順序是反的 */}
@@ -727,7 +737,7 @@ export default function PlanPage() {
                     ({ ...q, speed_ms: Number(e.target.value) }))} /></label>
               <div className="f"><span>放點類型</span>
                 <div className="seg2">
-                  {[["wp", "航點"], ["land", "降落點"]].map(([k, t]) => (
+                  {[["home", "起飛點"], ["wp", "航點"], ["land", "降落點"]].map(([k, t]) => (
                     <button key={k} aria-pressed={placeKind === k}
                       onClick={() => setPlaceKind(k)}>{t}</button>
                   ))}
@@ -748,9 +758,11 @@ export default function PlanPage() {
           )}
           {!started
             ? <button className="btn-accent btn-sm" onClick={() => setStarted(true)}>
-                從這裡開始畫線</button>
+                開始畫線</button>
             : <span className="hint-line">
-                點地形放下一個航點（{pts.length} 個）・拖曳轉視角
+                {!hasHome
+                  ? "先在地圖上點一下放起飛點"
+                  : `點地形放下一個航點（${pts.length} 個）・拖曳轉視角`}
                 {pts.length > 0 && <>　<button className="btn-plain btn-sm"
                   onClick={() => setPts((p) => p.slice(0, -1))}>移除上一個</button></>}
               </span>}
@@ -762,11 +774,24 @@ export default function PlanPage() {
             assumeM={assume} onBuildings={onBlds}
             tipFor={tipFor}
             placing={isNew && started}
-            center={isNew ? [Number(home.lon), Number(home.lat)] : undefined}
-            onPlace={(l) => setPts((p) => {
-              setSelWp(p.length + 1);
-              return [...p, { lat: l.lat, lon: l.lng, kind: placeKind }];
-            })}
+            center={isNew
+              ? [hasHome ? Number(home.lon) : VIEW.lon,
+                 hasHome ? Number(home.lat) : VIEW.lat]
+              : undefined}
+            onPlace={(l) => {
+              // **起飛點是解鎖的地方，不是航線上的一個點**——它寫進 home，
+              // 不進 pts。放完自動切回航點，不然下一下又蓋掉起飛點
+              if (placeKind === "home") {
+                setHome({ lat: String(l.lat.toFixed(7)),
+                          lon: String(l.lng.toFixed(7)) });
+                setPlaceKind("wp");
+                return;
+              }
+              setPts((p) => {
+                setSelWp(p.length + 1);
+                return [...p, { lat: l.lat, lon: l.lng, kind: placeKind }];
+              });
+            }}
             onMove={(i, l) => {
               if (isNew) {
                 const k = i - 1;
@@ -797,7 +822,7 @@ export default function PlanPage() {
               const mine = isNew && selWp > 0 ? pts[selWp - 1] : null;
               const isEx = isNew && mine?.alt_source === "manual";
               const alt = isNew
-                ? (selWp === 0
+                ? (w.kind === "takeoff"
                     ? (pol.takeoff_alt_m ?? Math.max(1.5, pol.height_m))
                     : mine?.h ?? pol.height_m)
                 : cur.alt ?? Math.round((w.amsl - (prof?.home_amsl_m ?? 0)) * 10) / 10;
@@ -808,7 +833,8 @@ export default function PlanPage() {
                   if (k === "alt" && selWp > 0)
                     setPts((p) => p.map((q, j) =>
                       j === selWp - 1 ? { ...q, h: v, alt_source: "manual" } : q));
-                  if (k === "alt" && selWp === 0)
+                  // 起飛點的高度 → 政策的 takeoff_alt_m（**不是某個航點的 h**）
+                  if (k === "alt" && w.kind === "takeoff")
                     setPol((q) => ({ ...q, takeoff_alt_m: v }));
                   if (k === "speed") setPol((q) => ({ ...q, speed_ms: v }));
                   return;
@@ -878,14 +904,27 @@ export default function PlanPage() {
                         收回，跟著政策</button>
                     </div>
                   )}
+                  {/* **起飛點的高度不是航點的高度。** 它是「飛機會先爬到
+                      這裡才往第一個航點飛」，而且天生是離起飛點的
+                      （使用者 2026-09-09）。標錯的話它會被讀成又一個航點高度 */}
                   <label className="rail-field">
-                    <div className="rail-row"><span>{isNew
-                      ? `高度（${MODE_TEXT[pol.mode]}）${isEx ? "" : "・跟著政策"}`
-                      : "高度（離起飛點）"}</span>
+                    <div className="rail-row"><span>{
+                      w.kind === "takeoff" ? "起飛高度（離起飛點）"
+                        : isNew
+                          ? `高度（${MODE_TEXT[pol.mode]}）${isEx ? "" : "・跟著政策"}`
+                          : "高度（離起飛點）"}</span>
                       <input className="numin" type="number" step={0.1} value={alt}
                         onChange={(e) => set("alt", Number(e.target.value))} /></div>
                     <input type="range" min={0} max={30} step={0.1} value={alt}
                       onChange={(e) => set("alt", Number(e.target.value))} />
+                    {w.kind === "takeoff" && (
+                      <div className="hint-line">
+                        {emph("飛機會**先爬到這個高度**才往第一個航點飛。"
+                          + (isNew && pol.takeoff_alt_m == null
+                            ? "現在跟著政策算（用比政策低的高度起飛，第一段會在地面爬升處貼地）——改了它就變成你定的。"
+                            : ""))}
+                      </div>
+                    )}
                   </label>
                   {out && (
                     <label className="rail-field">
