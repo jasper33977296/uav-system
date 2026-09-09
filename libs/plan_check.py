@@ -115,7 +115,8 @@ def check_waypoints(wps: list[dict], fence_r: float, fence_alt: float,
                     dem=None, min_clear: float = MIN_CLEARANCE_M,
                     wp_spd: float | None = None,
                     wp_radius: float | None = None,
-                    assume_m: float | None = None) -> dict:
+                    assume_m: float | None = None,
+                    rtl_alt_m: float | None = None) -> dict:
     """wps：本系統 waypoints 模型 [{seq, lat, lon, alt, action, command?}]。
     DO_* 設定類不計距離；回傳 {ok, problems, warnings, max_dist_m, ...}。
 
@@ -217,7 +218,7 @@ def check_waypoints(wps: list[dict], fence_r: float, fence_alt: float,
     # 而且它的發現要跟圍欄/機種的發現混在同一組 problems/warnings 裡
     # ——前端已經會顯示那兩組，多開一個顯示點就多一個沒人接的欄位（issues/037）
     terr = check_terrain(nav, home, dem=dem, min_clear=min_clear,
-                         assume_m=assume_m)
+                         assume_m=assume_m, rtl_alt_m=rtl_alt_m)
     problems += terr["problems"]
     warnings += terr["warnings"]
 
@@ -232,6 +233,8 @@ def check_waypoints(wps: list[dict], fence_r: float, fence_alt: float,
     return {"ok": not problems, "problems": problems, "warnings": warnings,
             "max_dist_m": round(max_d, 1), "max_alt_m": round(max_alt, 1),
             "terrain": terr["terrain"],
+            # 失效處置的檢查結果（C7）。**沒讀到 RTL_ALT_M 就是沒判**
+            "terrain_rtl": terr.get("terrain_rtl"),
             # **假設高度是判定的一部分**，所以要跟著報告出來——畫面上
             # 那句「通過」旁邊必須看得到它是用哪個假設算的
             "assumed_m": assume_m,
@@ -254,7 +257,8 @@ def check_waypoints(wps: list[dict], fence_r: float, fence_alt: float,
 def check_terrain(nav: list[dict], home: dict, dem=None,
                   min_clear: float = MIN_CLEARANCE_M,
                   home_amsl: float | None = None,
-                  assume_m: float | None = None) -> dict:
+                  assume_m: float | None = None,
+                  rtl_alt_m: float | None = None) -> dict:
     """地形預檢（issues/047 §1-B）：沿著整條航線算 `預期離地`，不足的指名報出來。
 
         預期離地 = (起飛點 AMSL + 相對高度) − DEM 高程(該點)
@@ -363,6 +367,43 @@ def check_terrain(nav: list[dict], home: dict, dem=None,
             mid = None if (a is None or a2 is None) else a + (a2 - a) * f
             look(lat + (lat2 - lat) * f, lon + (lon2 - lon) * f, mid,
                  f"seq {seq}→{seq2} 之間（離 seq {seq} 約 {k * step:.0f} m）")
+
+    # ── 失效處置：從航線上任何一點返航，也要在同一片地形上檢查一次 ──
+    # **這條航線不是只有「照著飛」一種未來**（C7）。返航爬到 RTL_ALT_M
+    # （離起飛點）之後直線飛回去，起飛點與現在位置之間隆起的地形它會撞上去。
+    rtl_worst = None
+    if rtl_alt_m is not None:
+        for lat, lon, a, seq in pts:
+            if a is None:
+                continue
+            r = rtl_at(lat, lon, a, home, ha, rtl_alt_m, dem, assume_m)
+            if r["agl"] is None:
+                continue
+            if rtl_worst is None or r["agl"] < rtl_worst[0]:
+                rtl_worst = (r["agl"], seq, r["amsl"], r["at"])
+        if rtl_worst is not None:
+            c, seq, amsl, at = rtl_worst
+            if c < 0:
+                out["problems"].append(
+                    f"**從 seq {seq} 附近返航會撞地**：`RTL_ALT_M` 是 "
+                    f"{rtl_alt_m:g} m（**離起飛點**，不是離地形），返航會在 "
+                    f"{amsl:g} m 海拔直線飛回去，而那條線上最低只離地 "
+                    f"{c:.1f} m。**失效處置本身就是撞地。**"
+                    f"兩條路：把 `RTL_ALT_M` 調到高過那道地形"
+                    f"（至少 {rtl_alt_m - c + min_clear:.0f} m），"
+                    f"或把航線改成不要飛到那道地形的另一側。"
+                    f"**這一項改的是機上的參數，不是航線**——"
+                    f"改航線不會讓返航變安全。")
+            elif c < min_clear:
+                out["warnings"].append(
+                    f"從 seq {seq} 附近返航只離地 {c:.1f} m（`RTL_ALT_M` "
+                    f"{rtl_alt_m:g} m 是**離起飛點**的）——那是失聯或低電時"
+                    f"會自己發生的事，不是你按的")
+        out["terrain_rtl"] = {
+            "rtl_alt_m": rtl_alt_m,
+            "min_agl_m": None if rtl_worst is None else rtl_worst[0],
+            "at_seq": None if rtl_worst is None else rtl_worst[1],
+        }
 
     out["terrain"] = {
         "source": "srtm" if home_amsl is None else "srtm+fc",
@@ -834,9 +875,57 @@ def _profile_point(lat: float, lon: float, dem, plan: float | None,
     return pt
 
 
+# ── 失效處置：返航也在同一片地形上（C7 的通則化）──────────────────
+#
+# **一條航線不是只有「照著飛」一種未來。** 失聯、低電、地形資料沒了，各自
+# 觸發一個處置，而那個處置在同一片地形上發生。ArduCopter 的返航是
+# 「先爬到 `RTL_ALT_M`（**離起飛點**，不是離地形）→ 直線飛回起飛點 → 下降」。
+# 所以起飛點與現在位置之間隆起的地形，返航會**直接撞上去**——而規劃畫面
+# 從來沒有畫過那條線。
+
+#: 返航那條直線最多取樣幾點。長航線不該讓一次預檢跑上千次查表。
+RTL_MAX_SAMPLES = 40
+
+
+def rtl_at(lat: float, lon: float, plan_amsl: float | None, home: dict,
+           home_amsl: float, rtl_alt_m: float, dem=None,
+           assume_m: float | None = None) -> dict:
+    """從這一點觸發返航，那條回家的路離地最少多少。
+
+    回 `{amsl, agl, blind, at}`：
+
+    * `amsl`：返航巡航高度。**`RTL_ALT_M` 是離起飛點的**，而且飛機在它
+      上面的話會維持現在的高度（`RTL_ALT` 是下限不是目標）。
+    * `agl`：那條直線上最低的離地。**負的就是「返航會撞地」。**
+    * `blind`：路上有高度未知的建物——那不是「沒有障礙」。
+    """
+    cruise = max(home_amsl + float(rtl_alt_m),
+                 plan_amsl if plan_amsl is not None else -1e9)
+    d = _dist_m(lat, lon, home["lat"], home["lon"])
+    n = max(1, min(RTL_MAX_SAMPLES, int(d // DEM_STEP_M)))
+    worst, at, blind = None, None, False
+    for k in range(n + 1):
+        f = k / n
+        la = lat + (home["lat"] - lat) * f
+        lo = lon + (home["lon"] - lon) * f
+        sm = terrain.surface(la, lo, dem, assume_m=assume_m)
+        if sm.kind == "building" and sm.source in ("unknown", "assumed"):
+            blind = True
+        gz = sm.top
+        if gz is None:
+            continue
+        c = cruise - gz
+        if worst is None or c < worst:
+            worst, at = c, (round(la, 7), round(lo, 7))
+    return {"amsl": round(cruise, 1),
+            "agl": None if worst is None else round(worst, 1),
+            "blind": blind, "at": at}
+
+
 def route_profile(wps: list[dict], home: dict | None = None, dem=None,
                   home_amsl: float | None = None, step: float = DEM_STEP_M,
-                  assume_m: float | None = None) -> dict:
+                  assume_m: float | None = None,
+                  rtl_alt_m: float | None = None) -> dict:
     """剖面圖的資料：沿航線每 `step` 公尺，地面高程與規劃高度各一條。
 
     **這是那條綠線該有的樣子**（doc/route-planning-first-principles.md F1）。
@@ -848,7 +937,9 @@ def route_profile(wps: list[dict], home: dict | None = None, dem=None,
     `{d, ground, plan, agl, seq}`（`d` 是沿線里程，公尺）。
     `plan` 為 None ＝那一段的高度基準這裡判不了（`frame 10` 交給飛控）。
     """
-    out = {"points": [], "home_amsl_m": None, "frames": []}
+    out = {"points": [], "home_amsl_m": None, "frames": [],
+           # **返航沒讀到就是沒判**，不是「安全」（同 wp_spd 的規矩）
+           "rtl_alt_m": rtl_alt_m}
     if dem is None or not getattr(dem, "available", False):
         return out
     ha = home_amsl
@@ -905,6 +996,18 @@ def route_profile(wps: list[dict], home: dict | None = None, dem=None,
             pt["d"] = 0.0
             pt["seq"] = seq
             out["points"].append(pt)
+
+    # 返航那一層：**從每一個取樣點回家的那條直線**，各自量一次
+    if rtl_alt_m is not None and home and home.get("lat"):
+        for pt in out["points"]:
+            if pt.get("plan") is None:
+                continue
+            r = rtl_at(pt["lat"], pt["lon"], pt["plan"], home, ha,
+                       rtl_alt_m, dem, assume_m)
+            pt["rtl_amsl"] = r["amsl"]
+            pt["rtl_agl"] = r["agl"]
+            if r["blind"]:
+                pt["rtl_blind"] = True
     return out
 
 

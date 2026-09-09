@@ -26,11 +26,17 @@ interface Pt { d: number; lat?: number; lon?: number; ground: number | null;
   /** 這個高度的出處（`srtm`／`osm:height`／`osm:levels`／`unknown`）。
    *  **樓層數推算的與量到的不是同一件事**，畫面要說得出來 */
   src?: string;
-  plan: number | null; agl: number | null; seq: number | null }
+  plan: number | null; agl: number | null; seq: number | null;
+  /** **從這一點失聯返航會怎樣。** RTL 爬到 `RTL_ALT_M`（離起飛點）之後
+   *  直線飛回起飛點——那條線在同一片地形上，起伏會撞。`rtl_agl` 是那條
+   *  線上最低的離地；null ＝沒讀到 `RTL_ALT_M`，**沒判不是安全** */
+  rtl_amsl?: number | null; rtl_agl?: number | null; rtl_blind?: boolean }
 interface Profile { points: Pt[]; home_amsl_m: number | null; frames: number[];
   /** 這份航線是用哪個政策產生的。**有政策就以它為準**——離地面的
    *  航線寫進去也是 frame 3，只看 frame 會顯示「離起飛點」 */
-  policy?: Policy | null }
+  policy?: Policy | null;
+  /** 這份剖面是用哪個返航高度算的。null ＝沒讀到，返航那一層不畫 */
+  rtl_alt_m?: number | null }
 interface Leg {
   from: number; to: number; length_m: number; agl_m: number | null;
   speed_ms: number | null; speed_src: string; turn_deg?: number | null;
@@ -67,6 +73,8 @@ interface Check {
   limits?: Limits; terrain?: { home_amsl_m?: number };
   /** 這份判定是用哪個假設高度算的；null ＝沒有假設，未量測的樓直接擋下 */
   assumed_m?: number | null;
+  /** 失效處置（C7）：從航線上任何一點返航，那條線最低離地多少 */
+  terrain_rtl?: { rtl_alt_m: number; min_agl_m: number | null; at_seq: number | null } | null;
   terrain_blind?: { id: string; name: string }[];
 }
 
@@ -92,7 +100,8 @@ function Profile({ p }: { p: Profile }) {
   const W = 900, H = 260, PAD_L = 46, PAD_R = 12, PAD_T = 14, PAD_B = 26;
   const dMax = Math.max(...pts.map((x) => x.d), 1);
   const surf = (x: Pt) => x.top ?? x.ground!;
-  const vals = pts.flatMap((x) => [x.ground!, surf(x), x.plan ?? x.ground!]);
+  const vals = pts.flatMap((x) => [x.ground!, surf(x), x.plan ?? x.ground!,
+    ...(x.rtl_amsl != null ? [x.rtl_amsl] : [])]);
   let lo = Math.min(...vals), hi = Math.max(...vals);
   // **y 軸至少 6 公尺**：一條平坦航線若照資料自動縮放，2 m 的起伏會被拉滿
   // 整個圖高，看起來像懸崖——那是用版面製造出來的恐慌
@@ -155,6 +164,14 @@ function Profile({ p }: { p: Profile }) {
   const tight = planPts.reduce<Pt | null>(
     (m, x) => (x.agl == null ? m : m == null || x.agl < (m.agl ?? 9e9) ? x : m), null);
   const ticks = [lo, (lo + hi) / 2, hi];
+  // 返航：巡航高度一條線 ＋ X 軸下面一條「從這裡返航安不安全」的帶子。
+  // **餘裕不是這張圖的 Y**（返航飛的是另一個方向的地形），所以它只能
+  // 用顏色表示——硬畫成 Y 會讓人以為那是同一條剖面上的高度
+  const rtlPts = pts.filter((x) => x.rtl_amsl != null);
+  const rtlLine = rtlPts.map((x, i) =>
+    `${i ? "L" : "M"}${X(x.d).toFixed(1)},${Y(x.rtl_amsl!).toFixed(1)}`).join("");
+  const rtlBand = pts.filter((x) => x.rtl_agl != null);
+  const BAND_Y = H - PAD_B + 6, BAND_H = 5;
 
   return (
     <svg viewBox={`0 0 ${W} ${H}`} className="profile" role="img"
@@ -226,6 +243,29 @@ function Profile({ p }: { p: Profile }) {
           </text>
         </g>
       )}
+      {/* 返航巡航高度。**`RTL_ALT_M` 是離起飛點的**，所以它在圖上是一條
+          （幾乎）水平線，而地面不是——兩者交叉的地方就是返航會撞的地方 */}
+      {rtlLine && (
+        <>
+          <path d={rtlLine} stroke="var(--status-warn)" strokeWidth="1.5"
+            strokeDasharray="6 4" fill="none" opacity="0.9" />
+          <text x={PAD_L + 4} y={Y(rtlPts[0].rtl_amsl!) - 5}
+            fill="var(--status-warn)" fontSize="10">返航高度</text>
+        </>
+      )}
+      {rtlBand.length > 0 && (
+        <>
+          {rtlBand.map((x, i) => {
+            const nx = rtlBand[i + 1];
+            const w = Math.max(2, (nx ? X(nx.d) : X(x.d) + 4) - X(x.d));
+            const c = x.rtl_agl! < 0 ? "var(--status-danger)"
+              : x.rtl_agl! < 2 ? "var(--status-warn)" : "var(--hairline)";
+            return <rect key={i} x={X(x.d)} y={BAND_Y} width={w} height={BAND_H}
+              fill={c} />;
+          })}
+          <text x={4} y={BAND_Y + BAND_H} fill="var(--muted)" fontSize="9">返航</text>
+        </>
+      )}
       {under.map((x, i) => (
         <circle key={i} cx={X(x.d)} cy={Y(x.plan!)} r="3" fill="var(--status-danger)" />
       ))}
@@ -284,7 +324,8 @@ export default function PlanPage() {
   const assumeRef = useRef<number | null>(null);
   assumeRef.current = assume;
   const [chk, setChk] = useState<Check | null>(null);
-  const [spd, setSpd] = useState<{ wp: number | null; rad: number | null; src: string }>(
+  const [spd, setSpd] = useState<{ wp: number | null; rad: number | null;
+    rtl?: number | null; src: string }>(
     { wp: null, rad: null, src: "還沒讀過這台機" });
   const [err, setErr] = useState<string | null>(null);
   const [selWp, setSelWp] = useState(0);
@@ -294,7 +335,8 @@ export default function PlanPage() {
     { alt?: number; speed?: number; lat?: number; lon?: number }>>({});
   const [busy, setBusy] = useState(false);
   const [saved, setSaved] = useState<string | null>(null);
-  const spdRef = useRef<{ wp: number | null; rad: number | null }>({ wp: null, rad: null });
+  const spdRef = useRef<{ wp: number | null; rad: number | null;
+    rtl?: number | null }>({ wp: null, rad: null });
 
   useEffect(() => {
     if (isNew) {
@@ -308,7 +350,7 @@ export default function PlanPage() {
           const sid = Object.keys(h.drones ?? {})[0];
           if (!sid) return;
           const p = await getJson<{ values: Record<string, number> }>(
-            `${COMMAND_API}/api/command/${sid}/params?names=WP_SPD,WP_RADIUS_M`);
+            `${COMMAND_API}/api/command/${sid}/params?names=WP_SPD,WP_RADIUS_M,RTL_ALT_M`);
           spdRef.current = { wp: p.values.WP_SPD ?? null,
                              rad: p.values.WP_RADIUS_M ?? null };
           if (p.values.WP_SPD != null)
@@ -323,7 +365,8 @@ export default function PlanPage() {
       try {
         // **速度只有飛機說得準。** 連得到就讀，讀不到就讓後端把那幾段標成
         // 「沒有檢查」——不是當成通過（issues/048 C5）
-        let wp: number | null = null, rad: number | null = null, src = "還沒讀過這台機";
+        let wp: number | null = null, rad: number | null = null;
+        let rtl: number | null = null, src = "還沒讀過這台機";
         // **sysid 直接問指令服務**，不靠全域 store：那條 WS 在這一頁不一定
         // 已經連上，而「讀不到」與「還沒連上」在畫面上會長得一樣
         let sid: string | null = null;
@@ -335,18 +378,24 @@ export default function PlanPage() {
         if (sid) {
           try {
             const p = await getJson<{ values: Record<string, number> }>(
-              `${COMMAND_API}/api/command/${sid}/params?names=WP_SPD,WP_RADIUS_M`);
+              `${COMMAND_API}/api/command/${sid}/params?names=WP_SPD,WP_RADIUS_M,RTL_ALT_M`);
             wp = p.values.WP_SPD ?? null;
             rad = p.values.WP_RADIUS_M ?? null;
+            rtl = p.values.RTL_ALT_M ?? null;
             if (wp != null) src = "取自機上（現在讀的）";
           } catch { /* 讀不到就維持 null，下面會顯示「沒有檢查」 */ }
         }
-        const q = wp != null ? `?wp_spd=${wp}${rad != null ? `&wp_radius=${rad}` : ""}` : "";
+        const q = `?${[wp != null ? `wp_spd=${wp}` : "",
+                       rad != null ? `wp_radius=${rad}` : "",
+                       rtl != null ? `rtl_alt_m=${rtl}` : ""]
+                      .filter(Boolean).join("&")}`;
         // 開頁時**先不假設**：第一眼看到的是「這幾棟沒量過」，
         // 而不是一份用假設值算出來的「通過」
         const [ms, pr, ck] = await Promise.all([
           getJson<{ name: string }[]>(`${API}/api/plans`),
-          getJson<Profile>(`${API}/api/plans/${id}/profile`),
+          // **剖面與檢查要用同一組參數**，不然圖上畫的返航跟報告說的
+          // 不是同一件事——那種不一致比單一個算錯更難查
+          getJson<Profile>(`${API}/api/plans/${id}/profile${q}`),
           getJson<Check>(`${API}/api/plans/${id}/check${q}`),
         ]);
         if (stop) return;
@@ -354,8 +403,8 @@ export default function PlanPage() {
         getJson<Sign>(`${API}/api/plans/${id}/sign`)
           .then((sg) => { if (!stop) { setSign(sg); setAck(new Set(sg.acknowledged ?? [])); } })
           .catch(() => { /* 讀不到就當作沒簽核——**不是當作簽過** */ });
-        setProf(pr); setChk(ck); setSpd({ wp, rad, src });
-        spdRef.current = { wp, rad };
+        setProf(pr); setChk(ck); setSpd({ wp, rad, rtl, src });
+        spdRef.current = { wp, rad, rtl };
       } catch (e) {
         if (!stop) setErr(errText((e as Error).message, "讀不到這份航線"));
       }
@@ -375,6 +424,7 @@ export default function PlanPage() {
             home: [Number(home.lat), Number(home.lon)], points: pts,
             policy: pol,
             wp_spd: spdRef.current.wp, wp_radius: spdRef.current.rad,
+            rtl_alt_m: spdRef.current.rtl,
             assume_m: assumeRef.current }),
         });
         const d = await r.json();
@@ -408,8 +458,11 @@ export default function PlanPage() {
           if (r.ok) { setChk(d.check); setProf(d.profile); }
         } else {
           const [pr, ck] = await Promise.all([
-            getJson<Profile>(`${API}/api/plans/${id}/profile${
-              assume == null ? "" : `?assume_m=${assume}`}`),
+            getJson<Profile>(`${API}/api/plans/${id}/profile?${
+              [assume == null ? "" : `assume_m=${assume}`,
+               spdRef.current.rtl != null
+                 ? `rtl_alt_m=${spdRef.current.rtl}` : ""]
+                .filter(Boolean).join("&")}`),
             getJson<Check>(`${API}/api/plans/${id}/check${q}`),
           ]);
           setProf(pr); setChk(ck);
@@ -431,6 +484,7 @@ export default function PlanPage() {
           method: "POST", headers: { "Content-Type": "application/json" },
           body: JSON.stringify({ overrides: list, wp_spd: spdRef.current.wp,
                                  wp_radius: spdRef.current.rad,
+                                 rtl_alt_m: spdRef.current.rtl,
                                  assume_m: assumeRef.current }),
         });
         const d = await r.json();
@@ -482,6 +536,7 @@ export default function PlanPage() {
         body: JSON.stringify({
           home: [Number(home.lat), Number(home.lon)], points: pts, policy: pol,
           wp_spd: spdRef.current.wp, wp_radius: spdRef.current.rad,
+          rtl_alt_m: spdRef.current.rtl,
           assume_m: assume, action: { name, seq: seq < 0 ? null : seq } }),
       });
       const d = await r.json();
@@ -576,6 +631,18 @@ export default function PlanPage() {
               ? `已確認 · ${(sign.checked_at ?? "").slice(0, 16).replace("T", " ")}${
                   sign.signed_by ? ` · ${sign.signed_by}` : ""}`
               : sign.stale ? "簽核已失效（航點改過）" : "未確認"}
+          </span>
+        )}
+        {prof && (
+          <span className={`chip${
+            (chk?.terrain_rtl?.min_agl_m ?? 9) < 0 ? " bad" : ""}`}
+            title={prof.rtl_alt_m == null
+              ? "RTL_ALT_M 是機上的參數，讀不到就不判返航——**讀不到不等於沒問題**"
+              : "返航會爬到 RTL_ALT_M（離起飛點，不是離地形）再直線飛回起飛點。這一欄是那條線上最低的離地"}>
+            {prof.rtl_alt_m == null ? "返航沒有檢查"
+              : chk?.terrain_rtl?.min_agl_m == null
+                ? `返航高度 ${prof.rtl_alt_m} m`
+                : `返航最低離地 ${chk.terrain_rtl.min_agl_m} m`}
           </span>
         )}
         {worst != null && (
@@ -859,7 +926,7 @@ export default function PlanPage() {
 
       {prof && <Profile p={prof} />}
       <div className="hint-line">
-        {emph("地面線來自 SRTM（水平約 30 m）——**被格子抹平的表面**：樹冠與屋頂混在裡面，但沒有一棟樓是它畫得出來的。建物是另一份（OSM 輪廓），三種畫法對應三種出處：實心灰塊標「樓層數推算」是**樓層數 × 3.5 m 猜的**，不是量的；虛線橘塊標「假設 N m」用的是右欄那個旋鈕，**改它判定就會變**；沒有頂的橘色柱子代表現在不假設，那棟樓的高度沒有人量過。三種都不是實測——**實測要等光達**。輪廓只取外環，**中庭當成實心**（多禁不會少禁）。")}
+        {emph("地面線來自 SRTM（水平約 30 m）——**被格子抹平的表面**：樹冠與屋頂混在裡面，但沒有一棟樓是它畫得出來的。建物是另一份（OSM 輪廓），三種畫法對應三種出處：實心灰塊標「樓層數推算」是**樓層數 × 3.5 m 猜的**，不是量的；虛線橘塊標「假設 N m」用的是右欄那個旋鈕，**改它判定就會變**；沒有頂的橘色柱子代表現在不假設，那棟樓的高度沒有人量過。三種都不是實測——**實測要等光達**。輪廓只取外環，**中庭當成實心**（多禁不會少禁）。X 軸下面那條帶子是**返航**：從那個位置失聯，飛機會爬到返航高度直線飛回起飛點——紅色代表那條線會撞地，那不是你按的，是它自己會做的事。")}
       </div>
 
       {/* **發現變成選擇，不是報告。** 抬多少、降到多少都由後端算——
@@ -914,7 +981,8 @@ export default function PlanPage() {
                   method: "POST", headers: { "Content-Type": "application/json" },
                   body: JSON.stringify({
                     acknowledged: [...ack], assume_m: assume,
-                    wp_spd: spdRef.current.wp, wp_radius: spdRef.current.rad }),
+                    wp_spd: spdRef.current.wp, wp_radius: spdRef.current.rad,
+                    rtl_alt_m: spdRef.current.rtl }),
                 });
                 if (r.ok) setSign(await getJson<Sign>(`${API}/api/plans/${id}/sign`));
               } finally { setBusy(false); }
@@ -985,11 +1053,11 @@ export default function PlanPage() {
                       ? { home: [Number(home.lat), Number(home.lon)], points: pts,
                           policy: pol,
                           wp_spd: spdRef.current.wp, wp_radius: spdRef.current.rad,
-                          save_as: naming }
+                          rtl_alt_m: spdRef.current.rtl, save_as: naming }
                       : { overrides: Object.entries(ov).map(([seq, v]) =>
                             ({ seq: Number(seq), ...v })),
                           wp_spd: spdRef.current.wp, wp_radius: spdRef.current.rad,
-                          save_as: naming };
+                          rtl_alt_m: spdRef.current.rtl, save_as: naming };
                     const r = await fetch(url, { method: "POST",
                       headers: { "Content-Type": "application/json" },
                       body: JSON.stringify(body) });

@@ -2496,7 +2496,8 @@ async def buildings_near(body: NearIn):
 
 
 @router.get("/plans/{plan_id}/profile")
-async def mission_profile(plan_id: str, assume_m: float | None = None):
+async def mission_profile(plan_id: str, assume_m: float | None = None,
+                          rtl_alt_m: float | None = None):
     """剖面圖的資料（issues/048 F1）：沿航線的地面高程與規劃高度。
 
     **這是那條綠線該有的樣子。** 使用者的原始問題不是沒有警告，是
@@ -2526,7 +2527,7 @@ async def mission_profile(plan_id: str, assume_m: float | None = None):
          next(({"lat": w["lat"], "lon": w["lon"]} for w in wps
                if w.get("lat") and w.get("lon")), None))
     prof = plan_check.route_profile(wps, h, dem=terrain.shared(),
-                                    assume_m=assume_m)
+                                    assume_m=assume_m, rtl_alt_m=rtl_alt_m)
     # **晶片要說的是政策，不是 frame。** 離地面的航線寫進去也是 frame 3，
     # 只看 frame 會顯示「離起飛點」——那正是 09-07 那句誤導
     pol = row["policy"]
@@ -2540,6 +2541,7 @@ class SignIn(BaseModel):
     assume_m: float | None = None
     wp_spd: float | None = None
     wp_radius: float | None = None
+    rtl_alt_m: float | None = None
     signed_by: str | None = None
 
 
@@ -2606,7 +2608,8 @@ async def sign_plan(plan_id: str, body: SignIn):
         wps, settings.geofence_radius_m, settings.geofence_alt_m,
         settings.geofence_margin, fence=fence, autopilot=row["firmware_type"],
         home=home, dem=terrain.shared(), wp_spd=body.wp_spd,
-        wp_radius=body.wp_radius, assume_m=body.assume_m)
+        wp_radius=body.wp_radius, assume_m=body.assume_m,
+        rtl_alt_m=body.rtl_alt_m)
     ack = [p for p in body.acknowledged if p in chk["problems"]]
     missed = [p for p in chk["problems"] if p not in ack]
     h = plan_check.waypoints_hash(wps)
@@ -2623,7 +2626,8 @@ async def sign_plan(plan_id: str, body: SignIn):
 @router.get("/plans/{plan_id}/check")
 async def check_mission(plan_id: str, wp_spd: float | None = None,
                         wp_radius: float | None = None,
-                        assume_m: float | None = None):
+                        assume_m: float | None = None,
+                        rtl_alt_m: float | None = None):
     """任務庫裡某一份的幾何預檢。**檢查不該只在匯入的那一刻做一次。**
 
     匯入時看到的報告會隨畫面關掉就消失，而使用者是在**要飛之前**才需要它；
@@ -2661,7 +2665,9 @@ async def check_mission(plan_id: str, wp_spd: float | None = None,
         wp_spd=wp_spd, wp_radius=wp_radius,
         # 未量測建物的假設高度。**不給就不假設**——那時未知的樓是擋下，
         # 不是通過（`libs/buildings.py` 的 ASSUMED_DEFAULT_M 只是畫面的預設值）
-        assume_m=assume_m)
+        assume_m=assume_m,
+        # 失效處置也在同一片地形上（C7）。**沒讀到就是沒判**
+        rtl_alt_m=rtl_alt_m)
 
 
 class PlanOverride(BaseModel):
@@ -2680,6 +2686,8 @@ class PreviewIn(BaseModel):
     wp_radius: float | None = None
     #: 未量測建物的假設高度（公尺）。**不給就不假設**
     assume_m: float | None = None
+    #: 機上的返航高度。**沒讀到就不判返航**
+    rtl_alt_m: float | None = None
     #: 給了就**存成新的一份**；不給就只算不存
     save_as: str | None = None
 
@@ -2762,9 +2770,11 @@ async def preview_plan(plan_id: str, body: PreviewIn):
         wps, settings.geofence_radius_m, settings.geofence_alt_m,
         settings.geofence_margin, fence=fence, autopilot=row["firmware_type"],
         home=home, dem=terrain.shared(),
-        wp_spd=body.wp_spd, wp_radius=body.wp_radius, assume_m=body.assume_m)
+        wp_spd=body.wp_spd, wp_radius=body.wp_radius, assume_m=body.assume_m,
+        rtl_alt_m=body.rtl_alt_m)
     profile = plan_check.route_profile(wps, h, dem=terrain.shared(),
-                                       assume_m=body.assume_m)
+                                       assume_m=body.assume_m,
+                                       rtl_alt_m=body.rtl_alt_m)
     out: dict = {"check": check, "profile": profile, "saved_id": None}
     if body.save_as:
         stored = [{"seq": i, "lat": w.get("lat"), "lon": w.get("lon"),
@@ -2822,6 +2832,8 @@ class DraftIn(BaseModel):
     wp_radius: float | None = None
     #: 未量測建物的假設高度（公尺）。**不給就不假設**
     assume_m: float | None = None
+    #: 機上的返航高度。**沒讀到就不判返航**
+    rtl_alt_m: float | None = None
     save_as: str | None = None
 
 
@@ -2848,7 +2860,8 @@ async def draft_plan(body: DraftIn):
             built["waypoints"], settings.geofence_radius_m,
             settings.geofence_alt_m, settings.geofence_margin,
             dem=terrain.shared(), home=body.home, wp_spd=body.wp_spd,
-            wp_radius=body.wp_radius, assume_m=assume)
+            wp_radius=body.wp_radius, assume_m=assume,
+            rtl_alt_m=body.rtl_alt_m)
         res = plan_check.resolve(body.action.name, pre, body.action.seq)
         applied = res
         if res["kind"] == "assume":
@@ -2867,9 +2880,10 @@ async def draft_plan(body: DraftIn):
         wps, settings.geofence_radius_m, settings.geofence_alt_m,
         settings.geofence_margin, dem=terrain.shared(),
         home=body.home, wp_spd=body.wp_spd, wp_radius=body.wp_radius,
-        assume_m=assume)
+        assume_m=assume, rtl_alt_m=body.rtl_alt_m)
     profile = plan_check.route_profile(wps, h, dem=terrain.shared(),
-                                       assume_m=assume)
+                                       assume_m=assume,
+                                       rtl_alt_m=body.rtl_alt_m)
     saved = None
     if body.save_as:
         saved = await _store_mission(body.save_as.strip() or "新航線", "drawn",

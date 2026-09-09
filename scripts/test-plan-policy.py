@@ -198,6 +198,52 @@ ck("動一個位置就變", pc.waypoints_hash(moved2) != h1)
 shuffled = list(reversed([dict(w) for w in b["waypoints"]]))
 ck("順序不影響（照 seq 排）", pc.waypoints_hash(shuffled) == h1)
 
+print("\n── 失效處置：返航也在同一片地形上（C7）──")
+# 起飛點 123 m、航點 111 m，中間一道 167 m 的稜線
+H2 = {"lat": 24.7734787, "lon": 121.045971}
+P2 = [{"lat": 24.7684787, "lon": 121.037971}]
+b11 = pc.build_plan(P2, None, H2, dem=dem)
+
+c_no = pc.check_waypoints(b11["waypoints"], 5000, 300,
+                          home=[H2["lat"], H2["lon"]], dem=dem, wp_spd=2.0)
+ck("沒讀到 RTL_ALT_M 就不判（**不是當成安全**）",
+   c_no.get("terrain_rtl") is None
+   and not any("返航" in x for x in c_no["problems"]), c_no.get("terrain_rtl"))
+
+c5 = pc.check_waypoints(b11["waypoints"], 5000, 300,
+                        home=[H2["lat"], H2["lon"]], dem=dem, wp_spd=2.0,
+                        rtl_alt_m=5.0)
+ck("RTL 5 m 飛越 44 m 稜線 → 判定會撞",
+   c5["terrain_rtl"]["min_agl_m"] < 0, c5["terrain_rtl"])
+ck("而且說得出是哪一段、以及那是機上參數不是航線",
+   any("返航會撞地" in x and "RTL_ALT_M" in x and "改航線不會讓返航變安全" in x
+       for x in c5["problems"]),
+   [x[:60] for x in c5["problems"]])
+
+need = 5.0 - c5["terrain_rtl"]["min_agl_m"] + pc.MIN_CLEARANCE_M
+c_hi = pc.check_waypoints(b11["waypoints"], 5000, 300,
+                          home=[H2["lat"], H2["lon"]], dem=dem, wp_spd=2.0,
+                          rtl_alt_m=need)
+ck(f"照訊息說的調到 {need:.0f} m 就過得去",
+   c_hi["terrain_rtl"]["min_agl_m"] >= pc.MIN_CLEARANCE_M - 0.05,
+   c_hi["terrain_rtl"])
+
+pr11 = pc.route_profile(P2 and b11["waypoints"], H2, dem=dem, rtl_alt_m=5.0)
+rp = [x for x in pr11["points"] if x.get("rtl_agl") is not None]
+ck("剖面每個點都帶返航的離地", len(rp) > 5, len(rp))
+ck("有一段是紅的（返航會撞）", any(x["rtl_agl"] < 0 for x in rp))
+# RTL_ALT 是**下限**不是目標：飛機比它高的時候維持現高
+flat = pr11["home_amsl_m"] + 5
+ck("谷地裡的返航高度就是 home ＋ RTL_ALT",
+   abs(min(x["rtl_amsl"] for x in rp) - flat) < 0.6,
+   (min(x["rtl_amsl"] for x in rp), flat))
+ck("稜線上的返航高度跟著航線（RTL_ALT 是下限不是目標）",
+   max(x["rtl_amsl"] for x in rp) > flat + 20,
+   (max(x["rtl_amsl"] for x in rp), flat))
+pr_no = pc.route_profile(b11["waypoints"], H2, dem=dem)
+ck("沒給返航高度就不畫那一層",
+   all("rtl_agl" not in x for x in pr_no["points"]))
+
 print()
 if fails:
     print(f"✗ {len(fails)} 項沒過：" + "、".join(fails))
