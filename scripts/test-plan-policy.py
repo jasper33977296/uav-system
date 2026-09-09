@@ -29,6 +29,8 @@ PTS = [{"lat": 24.7734787, "lon": 121.045971},
 print("── 預設政策 ──")
 d = pc.default_policy()
 ck("預設是離地面", d["mode"] == pc.POLICY_AGL, d["mode"])
+# 使用者裁定 2026-09-09：畫線時多一條飛回原點的線，看起來像自己畫錯了
+ck("預設不回起飛點", d["land_at_home"] is False, d["land_at_home"])
 ck("預設高度 3 m", d["height_m"] == 3.0, d["height_m"])
 ck("預設高度剛好等於 LOW_ALT_M（刻意，見 §11）",
    pc.DEFAULT_POLICY_HEIGHT_M == pc.LOW_ALT_M)
@@ -37,10 +39,17 @@ print("\n── agl：逐點的 alt 應該各不相同 ──")
 b = pc.build_plan(PTS, None, HOME, dem=dem)
 wps = [w for w in b["waypoints"] if w["action"] == "waypoint"]
 mine = [w for w in wps if not w.get("filled") and not w.get("approach")]
-ck("我放的三個點都在（其餘是系統補的中繼點）", len(mine) == 3,
+# 最後一個點成了降落點（沒有標降落點、也不回起飛點），所以它是 LAND 而
+# 不是 waypoint——三個點都還在，只是最後那個換了身分
+ck("我放的三個點都在（其餘是系統補的中繼點）",
+   len(mine) == 2 and b["waypoints"][-1]["action"] == "land",
    f"{len(mine)} 個我放的／{len(wps)} 個總共")
-ck("有補中繼點——逐點貼地不等於整段貼地",
-   len(wps) > len(mine), f"{len(wps)} vs {len(mine)}")
+ck("每個我放的點都認得出自己是第幾個（src_i）",
+   [w.get("src_i") for w in mine] == [0, 1], [w.get("src_i") for w in mine])
+ck("降落點也認得出來", b["waypoints"][-1].get("src_i") == 2,
+   b["waypoints"][-1].get("src_i"))
+ck("進場點是系統補的，不是我放的", any(w.get("approach") for w in wps),
+   [w.get("approach") for w in wps])
 ck("全部 frame 3（飛控不必有地形圖庫）", all(w["frame"] == 3 for w in wps),
    [w["frame"] for w in wps])
 alts = [w["alt"] for w in mine]
@@ -95,9 +104,10 @@ print("\n── 沒有 DEM：退回離起飛點，而且要說出來 ──")
 b6 = pc.build_plan(PTS, None, HOME, dem=None)
 ck("退回時 alt 就是政策的數字",
    all(w["alt"] == 3.0 for w in b6["waypoints"] if w["action"] == "waypoint"))
-ck("decisions 裡有「補了中繼航點」",
-   any("中繼" in d["what"] for d in b["decisions"]),
-   [d["what"] for d in b["decisions"]])
+bh = pc.build_plan(PTS, {"land_at_home": True}, HOME, dem=dem)
+ck("要飛回起飛點時會補中繼點（回程那一段起伏最大）",
+   any("中繼" in d["what"] for d in bh["decisions"]),
+   [d["what"] for d in bh["decisions"]])
 ck("decisions 裡有「退回」這件事",
    any("退回" in d["what"] or "退回" in d["value"] for d in b6["decisions"]),
    [d["what"] for d in b6["decisions"]])

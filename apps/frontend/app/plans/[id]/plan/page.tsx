@@ -30,6 +30,8 @@ interface Pt { d: number; lat?: number; lon?: number; ground: number | null;
   plan: number | null; agl: number | null; seq: number | null;
   /** 這一點是什麼（後端給）；`auto`＝系統補的中繼／進場點 */
   kind?: "takeoff" | "wp" | "land"; auto?: boolean;
+  /** 操作員的第幾個點（後端 `src_i`）。系統補的沒有 */
+  src_i?: number | null;
   /** **從這一點失聯返航會怎樣。** RTL 爬到 `RTL_ALT_M`（離起飛點）之後
    *  直線飛回起飛點——那條線在同一片地形上，起伏會撞。`rtl_agl` 是那條
    *  線上最低的離地；null ＝沒讀到 `RTL_ALT_M`，**沒判不是安全** */
@@ -355,7 +357,7 @@ export default function PlanPage() {
   // 所以放完點就已經是一條合法航線，沒有一個欄位需要先填
   const [pol, setPol] = useState<Policy>({
     mode: "agl", height_m: 3, speed_ms: 1, takeoff_alt_m: null,
-    land_at_home: true, land_mode: "vert",
+    land_at_home: false, land_mode: "vert",
   });
   const [pts, setPts] = useState<
     { lat: number; lon: number; h?: number; alt_source?: string; kind: string }[]>([]);
@@ -684,8 +686,15 @@ export default function PlanPage() {
     .map((p) => ({ seq: p.seq as number, lat: p.lat ?? 0, lon: p.lon ?? 0,
       amsl: p.plan as number, ground: p.ground,
       bad: badSeq.has(p.seq as number), fixed: p.seq === 0,
-      kind: p.kind, auto: p.auto }))
+      kind: p.kind, auto: p.auto, srcI: p.src_i ?? null }))
     .map((w) => {
+      // **位置直接讀操作員那份，不等後端。** 剖面要跑一趟後端才回來，
+      // 中間那幾百毫秒點不動，拖起來像卡住（使用者 2026-09-09）。
+      // 系統補的中繼點沒有 `srcI`，它們本來就要重算才知道在哪
+      if (isNew) {
+        const m = w.srcI != null ? pts[w.srcI] : null;
+        return m ? { ...w, lat: m.lat, lon: m.lon } : w;
+      }
       const o = ov[w.seq];
       return o?.lat != null ? { ...w, lat: o.lat, lon: o.lon as number } : w;
     });
@@ -844,7 +853,8 @@ export default function PlanPage() {
                   決策表本來就會列。 */}
               {!pts.some((q) => q.kind === "land") && (
                 <span className="hint-line" style={{ alignSelf: "center" }}>
-                  降落回起飛點・垂直降落
+                  {pol.land_at_home ? "降落回起飛點" : "降落在最後一個航點"}
+                  ・{pol.land_mode === "vert" ? "垂直降落" : "逐漸降落"}
                   <span className="tag-sys">系統決定</span>
                 </span>
               )}
@@ -947,7 +957,7 @@ export default function PlanPage() {
             }}
             onMove={(i, l) => {
               if (isNew) {
-                const k = i - 1;
+                const k = stageWps[i]?.srcI ?? -1;
                 if (k < 0 || k >= pts.length) return;
                 setPts((p) => p.map((q, j) =>
                   j === k ? { ...q, lat: l.lat, lon: l.lng } : q));
@@ -971,8 +981,11 @@ export default function PlanPage() {
               if (!w) return <div className="hint-line">在 3D 上點一個航點</div>;
               const out = legs.find((l) => l.from === w.seq);   // 從它出發的那一段
               const cur = ov[w.seq] ?? {};
-              // 從零模式下編輯的是**政策單位下的高度**，不是 frame 3 的數字
-              const mine = isNew && selWp > 0 ? pts[selWp - 1] : null;
+              // 從零模式下編輯的是**政策單位下的高度**，不是 frame 3 的數字。
+              // **認 `srcI`，不用畫面上的位置去數**：系統補的中繼點也在
+              // 序列裡，數下去會改到別的點
+              const mi = isNew ? (w.srcI ?? -1) : -1;
+              const mine = mi >= 0 ? pts[mi] : null;
               const isEx = isNew && mine?.alt_source === "manual";
               const alt = isNew
                 ? (w.kind === "takeoff"
@@ -983,9 +996,9 @@ export default function PlanPage() {
               const set = (k: "alt" | "speed", v: number) => {
                 if (isNew) {
                   // **改一個點的高度＝把它變成例外。** 之後改政策不會動它
-                  if (k === "alt" && selWp > 0)
+                  if (k === "alt" && mi >= 0)
                     setPts((p) => p.map((q, j) =>
-                      j === selWp - 1 ? { ...q, h: v, alt_source: "manual" } : q));
+                      j === mi ? { ...q, h: v, alt_source: "manual" } : q));
                   // 起飛點的高度 → 政策的 takeoff_alt_m（**不是某個航點的 h**）
                   if (k === "alt" && w.kind === "takeoff")
                     setPol((q) => ({ ...q, takeoff_alt_m: v }));
@@ -998,22 +1011,22 @@ export default function PlanPage() {
                 <>
                   <div className="rail-row"><span>航點</span>
                     <b className="num">seq {w.seq}</b></div>
-                  {isNew && selWp > 0 && (
+                  {mi >= 0 && (
                     <>
                       <div className="seg2">
                         {[["wp", "航點"], ["land", "降落點"]].map(([k, t]) => (
                           <button key={k}
-                            aria-pressed={(pts[selWp - 1]?.kind ?? "wp") === k}
+                            aria-pressed={(mine?.kind ?? "wp") === k}
                             onClick={() => {
                               setPts((p) => p.map((q, j) =>
-                                j === selWp - 1 ? { ...q, kind: k } : q));
+                                j === mi ? { ...q, kind: k } : q));
                               // 標成降落點就是為了降在那裡。改回航點時若已經
                               // 沒有降落點了，就回到降落在起飛點
                               if (k === "land") setPol((q) => ({ ...q, land_at_home: false }));
                             }}>{t}</button>
                         ))}
                       </div>
-                      {pts[selWp - 1]?.kind === "land" && (
+                      {mine?.kind === "land" && (
                         <>
                           <div className="rail-field">
                             <span className="k">降落在哪裡</span>
@@ -1041,7 +1054,7 @@ export default function PlanPage() {
                       )}
                       <button className="btn-plain btn-sm"
                         onClick={() => { setPts((p) =>
-                          p.filter((_, j) => j !== selWp - 1)); setSelWp(0); }}>
+                          p.filter((_, j) => j !== mi)); setSelWp(-1); }}>
                         刪除這個點</button>
                       <div className="hint-line">3D 上拖曳航點只移動位置；
                         高度用下面的滑桿或數字。</div>
@@ -1052,7 +1065,7 @@ export default function PlanPage() {
                       <span className="tag-warn">這個點是例外</span>
                       <button className="btn-plain btn-sm"
                         onClick={() => setPts((p) => p.map((q, j) =>
-                          j === selWp - 1
+                          j === mi
                             ? { lat: q.lat, lon: q.lon, kind: q.kind } : q))}>
                         收回，跟著政策</button>
                     </div>

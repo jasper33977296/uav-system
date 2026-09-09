@@ -3001,7 +3001,8 @@ class PolicyIn(BaseModel):
     speed_ms: float = plan_check.DEFAULT_POLICY_SPEED_MS
     #: 不給＝跟著政策算（離地 3 m 的航線就從 3 m 起飛）
     takeoff_alt_m: float | None = None
-    land_at_home: bool = True
+    #: **不預設回起飛點**：那條線是系統加的，畫線時看起來像自己畫錯了
+    land_at_home: bool = False
     land_mode: str = "vert"   # vert（飛到定點再垂直降落）／glide（逐漸降落）
 
 

@@ -967,11 +967,12 @@ def route_profile(wps: list[dict], home: dict | None = None, dem=None,
         kind = ("takeoff" if c == _TAKEOFF else
                 "land" if c in (_LAND, _RTL) else "wp")
         auto = bool(w.get("filled") or w.get("approach"))
-        pts.append((lat, lon, float(w["alt"]), fr, w.get("seq"), c, kind, auto))
+        pts.append((lat, lon, float(w["alt"]), fr, w.get("seq"), c, kind, auto,
+                    w.get("src_i")))
     out["frames"] = sorted({p[3] for p in pts})
 
     d0 = 0.0
-    for i, (lat, lon, alt, fr, seq, c, kind, auto) in enumerate(pts):
+    for i, (lat, lon, alt, fr, seq, c, kind, auto, src_i) in enumerate(pts):
         # 降落項的高度是 0，但飛機是**平飛過去再下降**——照 0 畫會讓剖面圖
         # 在最後憑空多一條斜線下去，那不是它會飛的路徑（同 check_terrain）
         if c in (_LAND, _RTL) and i:
@@ -997,6 +998,8 @@ def route_profile(wps: list[dict], home: dict | None = None, dem=None,
                     pt["kind"] = kind
                     if auto:
                         pt["auto"] = True
+                    if src_i is not None:
+                        pt["src_i"] = src_i
                 out["points"].append(pt)
             d0 += leg
         else:
@@ -1008,6 +1011,8 @@ def route_profile(wps: list[dict], home: dict | None = None, dem=None,
             pt["kind"] = kind
             if auto:
                 pt["auto"] = True
+            if src_i is not None:
+                pt["src_i"] = src_i
             out["points"].append(pt)
 
     # 返航那一層：**從每一個取樣點回家的那條直線**，各自量一次
@@ -1049,7 +1054,10 @@ def default_policy() -> dict:
             "speed_ms": DEFAULT_POLICY_SPEED_MS,
             #: None ＝跟著政策算（見 build_plan）。給了數字就是操作員自己定的
             "takeoff_alt_m": None,
-            "land_at_home": True, "land_mode": "vert"}
+            # **不預設回起飛點**（使用者裁定 2026-09-09）：畫線的時候多出
+            # 一條飛回原點的線，看起來像自己畫錯了，而那條線是系統加的。
+            # 沒有標降落點時就降在最後一個航點——要回起飛點是**選出來的**
+            "land_at_home": False, "land_mode": "vert"}
 
 
 def solve_alt(lat: float, lon: float, mode: str, h: float,
@@ -1196,7 +1204,14 @@ def build_plan(points: list[dict], policy: dict | None = None,
         lz = points[-1]
         decide("降落地點", "最後一個航點", "沒有標降落點，也沒有指定回起飛點")
 
-    track = [p for p in points if not (p is lz and not pol["land_at_home"])]
+    # **每個航點要記得自己是操作員的第幾個點。** 畫面上拖一個點回來要改的
+    # 是那一個——而系統補的中繼點也在航點序列裡，用位置去數會數錯（拖 A
+    # 改到 B，而且中繼點越多錯得越遠）
+    # 同樣的座標可以放兩次，所以用**身分**找，不用相等
+    lz_i = (next((i for i, p in enumerate(points) if p is lz), None)
+            if not pol["land_at_home"] else None)
+    track = [dict(p, _src=i) for i, p in enumerate(points)
+             if not (p is lz and not pol["land_at_home"])]
     # **起飛爬升那一段也要在軌跡裡。** 起飛項在起飛點、只有 `tk` 這麼高，
     # 而第一個航點可能在高出好幾公尺的地面上——那一段沒補點的話會貼地，
     # 而 2026-09-07 出事的正是這一段
@@ -1234,6 +1249,7 @@ def build_plan(points: list[dict], policy: dict | None = None,
                    "手動改過——**改政策不會動它**", len(out) - 1)
         add(lat=float(p["lat"]), lon=float(p["lon"]), alt=alt,
             action="waypoint", command=16, frame=fr, h=h, alt_source=src,
+            **({"src_i": p["_src"]} if p.get("_src") is not None else {}),
             **({"filled": True} if p.get("filled") else {}),
             **({"approach": True} if p.get("_lz") else {}))
         if p.get("_lz"):
@@ -1262,7 +1278,8 @@ def build_plan(points: list[dict], policy: dict | None = None,
             decide("降落方式", "飛到定點再垂直降落",
                    "先飛到降落點正上方、還在政策高度上，才開始下降")
         add(lat=float(lz["lat"]), lon=float(lz["lon"]), alt=0.0,
-            action="land", command=_LAND, frame=3)
+            action="land", command=_LAND, frame=3,
+            **({"src_i": lz_i} if lz_i is not None else {}))
 
     # 高度基準**不列進決策表**：頁首那顆晶片已經寫著「離地面 3 m」，
     # 而同一段解釋也已經在它的 ⓘ 裡。決策表是「系統替你決定了什麼」，

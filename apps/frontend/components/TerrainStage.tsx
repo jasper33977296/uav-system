@@ -30,6 +30,9 @@ export interface StageWp {
   kind?: "takeoff" | "wp" | "land";
   /** 系統補的（中繼點、進場點），不是操作員放的 */
   auto?: boolean;
+  /** 這一點是操作員的第幾個點（後端給的 `src_i`）。null＝系統補的，
+   *  或起飛點。**拖曳與逐點編輯都認它**——用畫面上的位置去數會數錯 */
+  srcI?: number | null;
 }
 
 const BLUE = 0x3987e5, RED = 0xe05e5e, PICK = 0xd97757, HOT = 0xf0eee6;
