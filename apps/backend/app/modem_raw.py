@@ -95,8 +95,17 @@ def parse_gtccinfo(text: str) -> dict[str, Any] | None:
     ss_sinr, rxlev, ss_rsrp, ss_rsrq = idx(10), idx(11), idx(12), idx(13)
     out["gtcc_idx"] = {"ss_sinr": ss_sinr, "rxlev": rxlev,
                        "ss_rsrp": ss_rsrp, "ss_rsrq": ss_rsrq}
+    # **GTCCINFO 的刻度與 CESQ 差一格，而且只差在 RSRP／RSRQ。**
+    # 2026-09-09 同一顆模組連取 10 對樣本：ss_rsrp／ss_rsrq 的索引每一筆都
+    # 剛好比 CESQ 低 1（10/10），ss_sinr 則完全相同（差值隨機 ±2，是取樣噪聲）。
+    # CESQ 那邊有 `AT+CESQ=?` 自報的值域可以把公式釘死（idx-157／idx/2-43.5／
+    # idx/2-23.5），這裡沒有，所以**用那個實測的一格差把它對回同一條刻度**：
+    #   ss_rsrp: (idx+1)-157 = idx-156      ss_rsrq: (idx+1)/2-43.5 = idx/2-43
+    #   ss_sinr: 同刻度，直接用 idx/2-23.5
+    # 這樣兩條路才會給出同一個 dB——不然畫面上的 rsrp 與 _derived 裡的
+    # ss_rsrp 會永遠差 1，而沒有人說得出為什麼。
     out["gtcc_db"] = {
-        "ss_sinr": None if ss_sinr is None else ss_sinr / 2 - 23,
+        "ss_sinr": None if ss_sinr is None else ss_sinr / 2 - 23.5,
         "ss_rsrp": None if ss_rsrp is None else ss_rsrp - 156,
         "ss_rsrq": None if ss_rsrq is None else ss_rsrq / 2 - 43,
     }
@@ -151,9 +160,12 @@ def enrich(sample: dict[str, Any]) -> list[str]:
 # 上下界取物理上量得出來的範圍，不取「合理」範圍：目的是擋哨兵值，
 # 不是替使用者判斷訊號好不好。範圍內的爛值是真的爛值，要照樣存。
 SANE_RANGE: dict[str, tuple[float, float]] = {
-    "sinr": (-30.0, 40.0),      # 3GPP SS-SINR 的量測範圍約 -23…40
-    "rsrp": (-156.0, -20.0),
-    "rsrq": (-45.0, 10.0),
+    # 上界對齊刻度本身能表示的最大值（2026-09-09 由 `AT+CESQ=?` 的值域定案），
+    # 不是「常見值」：SS-RSRQ 實務上不會超過 -3，但刻度到 +19.5——
+    # 拿 +10 當上界會把刻度上端的合法值當成哨兵丟掉
+    "sinr": (-30.0, 40.0),      # SS-SINR 刻度 -23…+40
+    "rsrp": (-156.0, -20.0),    # SS-RSRP 刻度 -156…-31
+    "rsrq": (-45.0, 20.0),      # SS-RSRQ 刻度 -43…+19.5
     "cqi": (0, 31),
 }
 
