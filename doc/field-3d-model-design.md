@@ -277,7 +277,7 @@ Sample(None, None, "none", ...)   ← **不是 0，也不是「通過」**
 | 輪廓 ＋ 三層高度 ＋ 點在多邊形內 | `libs/buildings.py` |
 | 併進單一入口 | `libs/terrain.py:surface()`——有屋頂就換 `top`，**高度未知時 `top=None`、`kind="building"`** |
 | 檢查 | `libs/plan_check.py`：`check_terrain` 的 `terrain_blind`、`leg_profile` 的 `blind`、`route_profile` 的 `top`／`obst` |
-| 給 3D 的輪廓 | `GET /api/buildings?min_lat=&min_lon=&max_lat=&max_lon=` |
+| 給 3D 的輪廓 | `POST /api/buildings/near`（航線 ＋ 緩衝半徑，帶長寬高；見 §8.2.2） |
 | 畫面 | 剖面圖第三條線（實體灰塊／開口向上的橘柱）、3D `fill-extrusion` 兩層 |
 | 假設高度旋鈕 | `assume_m`：`surface()` → `check_terrain`／`leg_profile`／`route_profile` → API（query／body）→ 右欄的數字＋滑桿（見 §8.2.1） |
 | 回歸 | `scripts/test-buildings.py`（42 項） |
@@ -318,6 +318,24 @@ Sample(None, None, "none", ...)   ← **不是 0，也不是「通過」**
   出去**，前端不抄第二份。
 
 **這不是量測值，而且畫面上到處都這樣寫。** 真正的答案等光達。
+
+### 8.2.2 長寬高，範圍跟著航線走（2026-09-09 使用者裁定）
+
+使用者：「我要看到每棟建築物的長寬高，然後建物 3D 建模要以無人機飛行路徑
+為基準往外擴 30 m，在每次繪圖時同步建模。」
+
+* **長寬來自輪廓的最小面積外接矩形**（凸包 ＋ 旋轉卡尺），不是南北向的
+  包圍盒——一棟斜的樓照軸向去量會兩邊都偏大。51館 是 111.4 × 46.9 m，
+  軸向盒會算成 ~95 × ~85。
+* **長寬與高不是同一種東西。** 輪廓是量出來的（OSM 足跡，公尺級）；
+  高度多半是樓層數推算或根本沒量過。所以表格上高度那一欄要嘛是數字加
+  來源，要嘛就寫「沒量過」——不准只顯示一個數字。
+* **範圍跟著航線走**（`near_path`，預設 30 m），**改線就重建**（去抖 320 ms）。
+  固定方框會把根本不會飛過去的整排樓也建出來，而要看的是「我這條線
+  旁邊有什麼」。
+* 清單由 `TerrainStage` 交給規劃頁，**頁面不自己再查一次**（§9-F）。
+
+順手收斂了 §9-G 標了很久的那件事：公尺換算搬進 `libs/geo.py`（唯一一處）。
 
 `to_terrain_frame()` 順手改對了一個地方：它換算 `frame 10` 的基準，
 用的必須是**地面**不是屋頂——飛控那份地形庫沒有建物，照屋頂換算會讓
