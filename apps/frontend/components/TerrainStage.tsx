@@ -107,6 +107,10 @@ export default function TerrainStage({ wps, sel, onSelect, tipFor, placing,
       container: box.current,
       center: center ?? (first ? [first.lon, first.lat] : [121.0459, 24.7734]),
       zoom: 17, pitch: FIT_PITCH, maxPitch: 78, bearing: -28,
+      // **反鋸齒。** maplibre 預設 false，而 three.js 的自訂圖層畫在
+      // 它建的那張 canvas 上——所以航線與標記的邊緣一直是階梯狀的。
+      // 這是「標示太粗糙」最大的一項（使用者 2026-09-09）
+      antialias: true,
       // 滾輪縮放要按住 Ctrl：這一頁下面還有剖面與表格，捲頁比縮放常用
       cooperativeGestures: true,
       locale: {
@@ -498,7 +502,8 @@ function makeRouteLayer(map: maplibregl.Map, dataRef: { current: StageData },
     for (let i = 1; i < pts.length; i++) {
       const a = pts[i - 1], b = pts[i];
       const curve = new THREE.LineCurve3(v(a.lon, a.lat, a.amsl), v(b.lon, b.lat, b.amsl));
-      const geo = new THREE.TubeGeometry(curve, 1, 0.9 * mScale, 6, false);
+      // 細一點、圓一點：0.9 m ／ 6 段的管子在 1× 下是一條有稜有角的粗帶
+      const geo = new THREE.TubeGeometry(curve, 1, 0.55 * mScale, 12, false);
       const hot = hover?.kind === "leg" && hover.i === i;
       group.add(new THREE.Mesh(geo, new THREE.MeshBasicMaterial({
         color: hot ? HOT : b.bad ? RED : BLUE })));
@@ -508,7 +513,7 @@ function makeRouteLayer(map: maplibregl.Map, dataRef: { current: StageData },
       if (w.ground == null) return;
       const curve = new THREE.LineCurve3(v(w.lon, w.lat, w.amsl), v(w.lon, w.lat, w.ground));
       group.add(new THREE.Mesh(
-        new THREE.TubeGeometry(curve, 1, 0.35 * mScale, 5, false),
+        new THREE.TubeGeometry(curve, 1, 0.2 * mScale, 8, false),
         new THREE.MeshBasicMaterial({ color: w.bad ? RED : BLUE,
           transparent: true, opacity: 0.55 })));
       const hot = hover?.kind === "wp" && hover.i === i;
@@ -526,7 +531,7 @@ function makeRouteLayer(map: maplibregl.Map, dataRef: { current: StageData },
       if (w.kind === "takeoff") {
         // 空心環 ＋ 地面十字。**環是空的**：那個形狀順便說它拖不動
         const ring = new THREE.Mesh(
-          new THREE.TorusGeometry(gr * 1.6, gr * 0.5, 6, 20),
+          new THREE.TorusGeometry(gr * 1.6, gr * 0.34, 10, 40),
           new THREE.MeshBasicMaterial({ color: gcol }));
         ring.position.copy(at);
         group.add(ring);
@@ -538,20 +543,20 @@ function makeRouteLayer(map: maplibregl.Map, dataRef: { current: StageData },
             a.x -= arm * dx; a.y -= arm * dy;
             b2.x += arm * dx; b2.y += arm * dy;
             group.add(new THREE.Mesh(
-              new THREE.TubeGeometry(new THREE.LineCurve3(a, b2), 1, gr * 0.34, 4, false),
+              new THREE.TubeGeometry(new THREE.LineCurve3(a, b2), 1, gr * 0.22, 8, false),
               new THREE.MeshBasicMaterial({ color: gcol })));
           }
         }
       } else if (w.kind === "land") {
         // 向下三角＝往這裡下來
         const cone = new THREE.Mesh(
-          new THREE.ConeGeometry(gr * 1.7, gr * 3.4, 4),
+          new THREE.ConeGeometry(gr * 1.55, gr * 3.2, 18),
           new THREE.MeshBasicMaterial({ color: gcol }));
         cone.rotation.x = Math.PI;          // 尖端朝下
         cone.position.copy(at);
         group.add(cone);
       } else {
-        const sp = new THREE.Mesh(new THREE.SphereGeometry(r, 12, 8),
+        const sp = new THREE.Mesh(new THREE.SphereGeometry(r, 20, 14),
           new THREE.MeshBasicMaterial({ color: col }));
         sp.position.copy(at);
         group.add(sp);
