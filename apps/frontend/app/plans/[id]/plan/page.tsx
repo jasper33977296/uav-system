@@ -28,6 +28,8 @@ interface Pt { d: number; lat?: number; lon?: number; ground: number | null;
    *  **樓層數推算的與量到的不是同一件事**，畫面要說得出來 */
   src?: string;
   plan: number | null; agl: number | null; seq: number | null;
+  /** 這一點是什麼（後端給）；`auto`＝系統補的中繼／進場點 */
+  kind?: "takeoff" | "wp" | "land"; auto?: boolean;
   /** **從這一點失聯返航會怎樣。** RTL 爬到 `RTL_ALT_M`（離起飛點）之後
    *  直線飛回起飛點——那條線在同一片地形上，起伏會撞。`rtl_agl` 是那條
    *  線上最低的離地；null ＝沒讀到 `RTL_ALT_M`，**沒判不是安全** */
@@ -312,6 +314,9 @@ export default function PlanPage() {
   const [sign, setSign] = useState<Sign | null>(null);
   const [blds, setBlds] = useState<BuildingFeat[]>([]);
   const [railOpen, setRailOpen] = useState(true);
+  /** 標題雙擊改名（使用者 2026-09-09）。null＝沒在改 */
+  const [renaming, setRenaming] = useState<string | null>(null);
+  const [overwrite, setOverwrite] = useState(false);
   const onBlds = useCallback((b: BuildingFeat[]) => setBlds(b), []);
   const [ack, setAck] = useState<Set<string>>(new Set());
   const [started, setStarted] = useState(false);
@@ -598,7 +603,8 @@ export default function PlanPage() {
     .filter((p) => p.seq != null && p.plan != null)
     .map((p) => ({ seq: p.seq as number, lat: p.lat ?? 0, lon: p.lon ?? 0,
       amsl: p.plan as number, ground: p.ground,
-      bad: badSeq.has(p.seq as number), fixed: p.seq === 0 }))
+      bad: badSeq.has(p.seq as number), fixed: p.seq === 0,
+      kind: p.kind, auto: p.auto }))
     .map((w) => {
       const o = ov[w.seq];
       return o?.lat != null ? { ...w, lat: o.lat, lon: o.lon as number } : w;
@@ -616,7 +622,31 @@ export default function PlanPage() {
           「← 路徑管理」縮成箭頭：那幾個字每一頁都一樣，佔的是標題的位置。 */}
       <div className="plan-head">
         <Link href="/plans" className="btn-plain btn-sm" title="回路徑管理">←</Link>
-        <h1 className="mtitle">{name || "…"}</h1>
+        {renaming == null ? (
+          <h1 className="mtitle" title={isNew ? undefined : "雙擊改名"}
+            onDoubleClick={() => { if (!isNew) setRenaming(name); }}>
+            {name || "…"}</h1>
+        ) : (
+          <input className="mtitle title-edit" autoFocus value={renaming}
+            onChange={(e) => setRenaming(e.target.value)}
+            onBlur={() => setRenaming(null)}
+            onKeyDown={async (e) => {
+              if (e.key === "Escape") { setRenaming(null); return; }
+              if (e.key !== "Enter") return;
+              const v = renaming.trim();
+              if (!v) { setRenaming(null); return; }
+              const r = await fetch(`${API}/api/plans/${id}`, {
+                method: "PATCH", headers: { "Content-Type": "application/json" },
+                body: JSON.stringify({ name: v }),
+              });
+              if (r.ok) setName(v);
+              else setErr(errText((await r.json()).detail, "改名失敗"));
+              setRenaming(null);
+            }} />
+        )}
+        {renaming != null && (
+          <span className="hint-line">Enter 存・Esc 取消</span>
+        )}
         <span className="head-sep" />
         {worst != null && (
           <span className={`chip${worst < 0 ? " bad" : ""}`}>最低離地 {worst} m</span>
@@ -921,7 +951,10 @@ export default function PlanPage() {
               </div>
             )}
 
-            {/* **改動不會動到原本那份**（使用者裁定）：按了才另存 */}
+            {/* **另存新檔仍然是主要動作**（橘色那顆）：飛過的那一份是紀錄，
+                改它等於改歷史。2026-09-09 使用者要加回「儲存到這一份」，
+                所以把後果做成明的——按下去會先問一次，訊息寫清楚它會蓋掉
+                航點並讓那一份的人工審查失效（簽核綁在 waypoints_hash 上）。 */}
             <div className="rail-save">
               <div className="hint-line">
                 {isNew
@@ -930,12 +963,20 @@ export default function PlanPage() {
                     ? `已改 ${Object.keys(ov).length} 個航點——${busy ? "試算中…" : "只在畫面上，還沒存"}`
                     : "拖滑桿試算；原本這份不會被動到"}
               </div>
+              {!isNew && Object.keys(ov).length > 0 && (
+                <>
+                  <button className="btn-plain btn-sm" disabled={busy}
+                    onClick={() => { setOv({}); }}>捨棄改動</button>
+                  <button className="btn-plain btn-sm" disabled={busy}
+                    onClick={() => setOverwrite(true)}>儲存到這一份</button>
+                </>
+              )}
               <button className="btn-accent btn-sm"
                 disabled={busy || (isNew ? pts.length < 1 : !Object.keys(ov).length)}
                 onClick={() => setNaming(isNew
                   ? `新航線 ${new Date().toISOString().slice(5, 16).replace("T", " ")}`
                   : `${name}（調整）`)}>另存新檔</button>
-              {saved && (
+              {saved && saved !== id && (
                 <div className="hint-line">
                   已另存 · <a href={`/plans/${saved}/plan`}>打開新的那一份</a>
                 </div>
@@ -1093,6 +1134,44 @@ export default function PlanPage() {
             {emph("長寬是**輪廓的最小面積外接矩形**（OSM 足跡，公尺級，量出來的）。高度那一欄不是——實測要等光達。範圍跟著航線走，改線就重算。")}
           </div>
         </details>
+      )}
+
+      {overwrite && (
+        <div className="mask" onClick={() => setOverwrite(false)}>
+          <div className="modal" onClick={(e) => e.stopPropagation()}>
+            <h3>儲存到「{name}」？</h3>
+            <div className="hint-line">
+              {emph("**這會蓋掉原本的航點**，而且讓這一份的人工審查失效——簽核是綁在航點上的，航點一換它就不算數，上傳會被擋下，要重新審查一次。\n飛過的那一份是紀錄；如果你想留著它，用「另存新檔」。")}
+            </div>
+            <div className="modal-row">
+              <button className="btn-plain btn-sm"
+                onClick={() => setOverwrite(false)}>取消</button>
+              <button className="btn-accent btn-sm" disabled={busy}
+                onClick={async () => {
+                  setBusy(true);
+                  try {
+                    const r = await fetch(`${API}/api/plans/${id}/preview`, {
+                      method: "POST", headers: { "Content-Type": "application/json" },
+                      body: JSON.stringify({
+                        overrides: Object.entries(ov).map(([seq, v]) =>
+                          ({ seq: Number(seq), ...v })),
+                        wp_spd: spdRef.current.wp, wp_radius: spdRef.current.rad,
+                        rtl_alt_m: spdRef.current.rtl, assume_m: assume,
+                        save: true }),
+                    });
+                    const d = await r.json();
+                    if (r.ok) {
+                      setOv({}); setChk(d.check); setProf(d.profile);
+                      setSign(await getJson<Sign>(`${API}/api/plans/${id}/sign`)
+                        .catch(() => null as unknown as Sign));
+                    } else {
+                      setErr(errText(d.detail, "存檔失敗"));
+                    }
+                  } finally { setBusy(false); setOverwrite(false); }
+                }}>蓋掉並儲存</button>
+            </div>
+          </div>
+        </div>
       )}
 
       {naming !== null && (

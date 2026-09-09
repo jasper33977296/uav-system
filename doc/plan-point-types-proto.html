@@ -1,0 +1,160 @@
+<!doctype html>
+<html lang="zh-Hant"><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>點位類型與存檔</title>
+<style>
+:root{
+  --page:#1b1a17; --surface:#262624; --surface-2:#30302c;
+  --ink:#f0eee6; --ink-2:#c2bfb3; --muted:#8f8b80; --hairline:#3a3833;
+  --border:rgba(240,238,230,.1);
+  --accent:#d97757; --accent-bg:rgba(217,119,87,.12);
+  --series-1:#3987e5; --ok:#0ca30c; --warn:#fab219; --danger:#e05e5e;
+}
+*{margin:0;padding:0;box-sizing:border-box}
+body{background:var(--page);color:var(--ink);
+  font:14px/1.55 system-ui,"Noto Sans TC",sans-serif;padding:20px 24px 60px}
+h1{font-size:20px;margin:0 0 4px}
+h2{font-size:14px;color:var(--accent);margin:32px 0 4px}
+.note{color:var(--muted);font-size:12.5px;margin-bottom:12px;max-width:78ch}
+.note b{color:var(--ink-2);font-weight:600}
+.opt{border:1px solid var(--border);border-radius:10px;margin-bottom:14px;
+  background:var(--surface);overflow:hidden}
+.opt > header{display:flex;gap:10px;align-items:baseline;padding:7px 12px;
+  border-bottom:1px solid var(--hairline);background:var(--surface-2)}
+.opt > header b{font-size:12.5px}.opt > header span{color:var(--muted);font-size:12px}
+.pane{padding:12px}
+.tag{font-size:11px;border:1px solid var(--border);border-radius:4px;padding:1px 6px;
+  color:var(--muted)}
+.tag.pick{color:var(--accent);border-color:var(--accent)}
+.map{border:1px solid var(--border);border-radius:9px;overflow:hidden;
+  background:radial-gradient(60% 80% at 40% 45%,#3f4a35,#2b3226 70%)}
+.legend{display:flex;gap:16px;flex-wrap:wrap;margin-top:9px;font-size:12px;
+  color:var(--ink-2)}
+.legend i{display:inline-block;width:12px;height:12px;margin-right:5px;
+  vertical-align:-1px;border-radius:50%}
+.btn{background:transparent;border:1px solid var(--border);border-radius:7px;
+  padding:4px 10px;font-size:12.5px;color:var(--ink-2);cursor:pointer}
+.btn.accent{color:var(--accent);border-color:var(--accent);background:var(--accent-bg)}
+.chip{border:1px solid var(--border);border-radius:999px;padding:3px 10px;
+  font-size:12px;color:var(--ink-2)}
+.head{display:flex;align-items:center;gap:9px;flex-wrap:wrap}
+.title{font-size:17px;font-weight:700}
+.tin{font-size:17px;font-weight:700;background:var(--surface-2);color:var(--ink);
+  border:1px solid var(--accent);border-radius:6px;padding:1px 7px;width:220px}
+</style></head><body>
+
+<h1>點位類型與存檔</h1>
+<p class="note">三件事，前兩件是同一個原因。</p>
+
+<h2>①②「看不出哪個是起飛點」＝「一個點就有線」</h2>
+<p class="note">
+放一個點時畫面上其實有<b>三個</b>點：起飛點（在你填的經緯度上）、你放的那個、
+以及回起飛點降落。線是 <b>起飛點 → 你的點 → 回起飛點</b>，所以線沒有錯——
+<b>錯的是三種點長得一樣</b>，於是看起來像「一個點卻有線」。</p>
+
+<div class="opt"><header><b>現況</b><span>全部都是藍球，分不出來</span></header>
+<div class="pane"><div class="map"><svg viewBox="0 0 640 190" style="display:block">
+  <polyline points="120,140 380,72 120,140" fill="none" stroke="#3987e5" stroke-width="3"/>
+  <circle cx="120" cy="140" r="7" fill="#3987e5"/>
+  <circle cx="380" cy="72" r="7" fill="#3987e5"/>
+  <text x="132" y="163" fill="#8f8b80" font-size="12">起飛／降落（看不出來）</text>
+  <text x="352" y="56" fill="#8f8b80" font-size="12">我放的點</text>
+</svg></div></div></div>
+
+<div class="opt"><header><b>G</b><span>接地點一種顏色，靠形狀分起降</span>
+  <span class="tag pick">我建議這個</span></header>
+<div class="pane"><div class="map"><svg viewBox="0 0 640 190" style="display:block">
+  <polyline points="120,140 380,72 120,140" fill="none" stroke="#3987e5" stroke-width="3"/>
+  <!-- 起飛點：空心環＋地面十字（位置是解鎖的地方，不由規劃決定） -->
+  <line x1="106" y1="140" x2="134" y2="140" stroke="#0ca30c" stroke-width="2"/>
+  <line x1="120" y1="126" x2="120" y2="154" stroke="#0ca30c" stroke-width="2"/>
+  <circle cx="120" cy="140" r="9" fill="none" stroke="#0ca30c" stroke-width="3"/>
+  <circle cx="380" cy="72" r="7" fill="#3987e5"/>
+  <text x="140" y="163" fill="#0ca30c" font-size="12">起飛點（環＋十字・拖不動）</text>
+  <text x="352" y="56" fill="#3987e5" font-size="12">航點</text>
+  <!-- 另一條線示範降落點 -->
+  <polyline points="470,150 560,105" fill="none" stroke="#3987e5" stroke-width="3"
+    stroke-dasharray="6 4"/>
+  <path d="M560,96 l9,-14 h-18 z" fill="#0ca30c"/>
+  <circle cx="470" cy="150" r="7" fill="#3987e5"/>
+  <text x="500" y="90" fill="#0ca30c" font-size="12">降落點（向下三角）</text>
+</svg></div>
+<div class="legend">
+  <span><i style="background:#0ca30c;border-radius:0"></i>起飛點：空心環＋地面十字</span>
+  <span><i style="background:#3987e5"></i>航點：實心球</span>
+  <span><i style="background:#0ca30c;border-radius:0;clip-path:polygon(50% 100%,0 0,100% 0)"></i>降落點：向下三角</span>
+</div>
+<p class="note" style="margin:9px 0 0">
+  <b>綠色＝會接地的點</b>（起飛與降落是同一類事），形狀分是哪一種：
+  起飛是「從這裡上去」用環＋十字（那也標出它<b>拖不動</b>——位置是解鎖的地方，
+  不由規劃決定）；降落是「往這裡下來」用向下三角。藍色球維持現況＝飛過去的點。
+  <br>顏色只用三個，而且<b>不動橘色</b>——橘在這套系統裡是互動 chrome
+  與「假設值」的顏色，拿來當點位類型會撞。</p>
+</div></div>
+
+<div class="opt"><header><b>H</b><span>三種顏色，形狀都一樣</span></header>
+<div class="pane"><div class="map"><svg viewBox="0 0 640 190" style="display:block">
+  <polyline points="120,140 380,72 120,140" fill="none" stroke="#3987e5" stroke-width="3"/>
+  <circle cx="120" cy="140" r="8" fill="#0ca30c"/>
+  <circle cx="380" cy="72" r="7" fill="#3987e5"/>
+  <circle cx="560" cy="105" r="8" fill="#c9a227"/>
+  <text x="136" y="163" fill="#0ca30c" font-size="12">起飛（綠）</text>
+  <text x="352" y="56" fill="#3987e5" font-size="12">航點（藍）</text>
+  <text x="524" y="132" fill="#c9a227" font-size="12">降落（黃）</text>
+</svg></div>
+<p class="note" style="margin:9px 0 0">
+  最省事，但**斜角俯視 ＋ 小球**時顏色比形狀難分，而且黃色會跟
+  「假設高度的建物」「返航高度」撞。</p>
+</div></div>
+
+<h2>③ 既有航線：儲存／另存新檔，標題雙擊改名</h2>
+<p class="note">現況只有「另存新檔」（原本的裁定是「改動不會動到原本那份」）。
+你要加回「儲存」，那等於<b>改掉那條裁定</b>——所以要講清楚它的後果。</p>
+
+<div class="opt"><header><b>I</b><span>兩顆鈕 ＋ 雙擊標題改名</span>
+  <span class="tag pick">我建議這個</span></header>
+<div class="pane">
+  <div style="color:var(--muted);font-size:12px;margin-bottom:6px">平常（雙擊標題可改名）：</div>
+  <div class="head" style="margin-bottom:12px">
+    <button class="btn" style="padding:3px 7px">←</button>
+    <span class="title" title="雙擊改名">0908-snake-v1</span>
+    <span style="color:var(--hairline)">│</span>
+    <span class="chip">最低離地 2 m</span><span class="chip">返航 4.6 m</span>
+  </div>
+  <div style="color:var(--muted);font-size:12px;margin-bottom:6px">雙擊之後：</div>
+  <div class="head" style="margin-bottom:12px">
+    <button class="btn" style="padding:3px 7px">←</button>
+    <input class="tin" value="0908-snake-v1">
+    <span style="color:var(--muted);font-size:12px">Enter 存・Esc 取消</span>
+  </div>
+  <div style="color:var(--muted);font-size:12px;margin-bottom:6px">改過航點之後（底下那一列）：</div>
+  <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap;
+    background:var(--surface-2);border:1px solid var(--border);border-radius:9px;
+    padding:9px 11px">
+    <span style="font-size:12.5px;color:var(--ink-2)">已改 3 個航點——只在畫面上</span>
+    <span style="flex:1"></span>
+    <button class="btn">捨棄改動</button>
+    <button class="btn">儲存到這一份</button>
+    <button class="btn accent">另存新檔</button>
+  </div>
+  <p class="note" style="margin:9px 0 0">
+    <b>「儲存到這一份」會蓋掉原本的航點，而且讓那一份的人工審查失效</b>
+    （簽核綁在 waypoints_hash 上）——按下去要跳一次確認，訊息就寫這句。
+    <br><b>另存新檔仍然是主要動作</b>（橘色那顆）：原本那條裁定的理由還在
+    ——飛過的那一份是紀錄，改它等於改歷史。</p>
+</div></div>
+
+<div class="opt"><header><b>J</b><span>只加「儲存」，改名還是走另一個地方</span></header>
+<div class="pane">
+  <div style="display:flex;gap:8px;align-items:center">
+    <span style="font-size:12.5px;color:var(--ink-2)">已改 3 個航點</span>
+    <span style="flex:1"></span>
+    <button class="btn">儲存</button><button class="btn accent">另存新檔</button>
+  </div>
+  <p class="note" style="margin:9px 0 0">標題不能點；改名回路徑管理頁做。改動最小，但你要的雙擊就沒有了。</p>
+</div></div>
+
+<h2>要你挑</h2>
+<p class="note">①② <b>G</b> 或 <b>H</b>　③ <b>I</b> 或 <b>J</b>。<br>
+③ 如果選 I，我會把「儲存會讓人工審查失效」做成按下去的確認訊息，不是事後才發現。</p>
+</body></html>

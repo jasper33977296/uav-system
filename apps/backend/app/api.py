@@ -2794,6 +2794,9 @@ class PreviewIn(BaseModel):
     rtl_alt_m: float | None = None
     #: 給了就**存成新的一份**；不給就只算不存
     save_as: str | None = None
+    #: 存回**這一份**（覆蓋航點）。與 `save_as` 互斥。
+    #: **會讓那一份的人工審查失效**——簽核綁在 waypoints_hash 上
+    save: bool = False
 
 
 def _apply_overrides(wps: list[dict], ov: list[PlanOverride]) -> list[dict]:
@@ -2880,20 +2883,63 @@ async def preview_plan(plan_id: str, body: PreviewIn):
                                        assume_m=body.assume_m,
                                        rtl_alt_m=body.rtl_alt_m)
     out: dict = {"check": check, "profile": profile, "saved_id": None}
-    if body.save_as:
+    if body.save and body.save_as:
+        raise HTTPException(422, "save 與 save_as 只能給一個")
+    if body.save or body.save_as:
         stored = [{"seq": i, "lat": w.get("lat"), "lon": w.get("lon"),
                    "alt": w.get("alt"), "action": w.get("action") or "waypoint",
                    "command": w.get("command"), "frame": w.get("frame"),
                    **{k: w.get(k) for k in ("p1", "p2", "p3", "p4")}}
                   for i, w in enumerate(wps)]
-        rally = row["rally"]
-        if isinstance(rally, str):
-            rally = json.loads(rally)
-        out["saved_id"] = await _store_mission(
-            body.save_as.strip() or f"{row['name']}（調整）", "edited", stored,
-            row["firmware_type"], row["vehicle_type"], fence, home,
-            row["cruise_speed"], row["hover_speed"], rally)
+        if body.save:
+            # **存回原檔＝蓋掉航點。** 原本的裁定是「改動不會動到原本那份」
+            # （飛過的那一份是紀錄，改它等於改歷史）；2026-09-09 使用者要
+            # 加回這條路，所以把後果做成明的：航點一換 `waypoints_hash` 就變，
+            # 那一份的人工審查自動失效（`GET /plans/{id}/sign` 會回 stale），
+            # 上傳閘門因此會擋下——**不是靜默地放行一份沒人看過的新航點**。
+            async with db.pool.acquire() as con:
+                async with con.transaction():
+                    await con.execute(
+                        "DELETE FROM waypoints WHERE plan_id = $1", plan_id)
+                    await con.executemany(
+                        "INSERT INTO waypoints (plan_id, seq, lat, lon, alt, "
+                        "action, params) VALUES ($1, $2, $3, $4, $5, $6, $7)",
+                        [(plan_id, w["seq"], w["lat"], w["lon"], w.get("alt"),
+                          w.get("action") or "waypoint",
+                          jdumps({k: w[k] for k in
+                                  ("command", "frame", "p1", "p2", "p3", "p4",
+                                   "h", "alt_source")
+                                  if w.get(k) is not None})
+                          if w.get("command") is not None else None)
+                         for w in stored])
+            out["saved_id"] = plan_id
+            out["overwrote"] = True
+        else:
+            rally = row["rally"]
+            if isinstance(rally, str):
+                rally = json.loads(rally)
+            out["saved_id"] = await _store_mission(
+                body.save_as.strip() or f"{row['name']}（調整）", "edited", stored,
+                row["firmware_type"], row["vehicle_type"], fence, home,
+                row["cruise_speed"], row["hover_speed"], rally)
     return out
+
+
+class PlanPatch(BaseModel):
+    name: str
+
+
+@router.patch("/plans/{plan_id}")
+async def patch_plan(plan_id: str, body: PlanPatch):
+    """改名。**只有名字**——航點要改走 preview 那條路（它會重跑檢查）。"""
+    name = (body.name or "").strip()
+    if not name:
+        raise HTTPException(422, "名稱不可為空")
+    r = await db.pool.execute(
+        "UPDATE plans SET name = $1 WHERE id = $2", name, plan_id)
+    if r.split()[-1] == "0":
+        raise HTTPException(404, "無此路徑")
+    return {"ok": True, "name": name}
 
 
 class ResolveIn(BaseModel):

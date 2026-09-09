@@ -244,6 +244,20 @@ pr_no = pc.route_profile(b11["waypoints"], H2, dem=dem)
 ck("沒給返航高度就不畫那一層",
    all("rtl_agl" not in x for x in pr_no["points"]))
 
+print("\n── 剖面點要說得出「這是什麼」（使用者 2026-09-09）──")
+pr0 = pc.route_profile(b["waypoints"], HOME, dem=dem)
+named = [x for x in pr0["points"] if x.get("seq") is not None]
+ck("每個航點都有 kind", all(x.get("kind") for x in named),
+   [x.get("kind") for x in named])
+ck("第一個是 takeoff", named[0]["kind"] == "takeoff", named[0].get("kind"))
+ck("最後一個是 land", named[-1]["kind"] == "land", named[-1].get("kind"))
+ck("中間是 wp", all(x["kind"] == "wp" for x in named[1:-1]),
+   [x["kind"] for x in named[1:-1]])
+ck("系統補的點標成 auto（中繼點、進場點）",
+   any(x.get("auto") for x in named), [x.get("auto") for x in named])
+ck("操作員放的點不是 auto",
+   not any(x.get("auto") for x in named if x["kind"] == "takeoff"))
+
 print()
 if fails:
     print(f"✗ {len(fails)} 項沒過：" + "、".join(fails))

@@ -961,11 +961,18 @@ def route_profile(wps: list[dict], home: dict | None = None, dem=None,
             continue
         fr = w.get("frame")
         fr = 3 if fr is None else int(fr)
-        pts.append((lat, lon, float(w["alt"]), fr, w.get("seq"), c))
+        # **這一點是什麼，要跟著資料走**：畫面上分不出起飛點與航點時，
+        # 「放一個點卻有線」看起來像 bug，其實那條線是起飛點連過去的
+        # （使用者 2026-09-09）。`auto` ＝系統補的（中繼點、進場點），
+        # 不是操作員放的——它們也是真的航點，但不該跟人放的一樣顯眼
+        kind = ("takeoff" if c == _TAKEOFF else
+                "land" if c in (_LAND, _RTL) else "wp")
+        auto = bool(w.get("filled") or w.get("approach"))
+        pts.append((lat, lon, float(w["alt"]), fr, w.get("seq"), c, kind, auto))
     out["frames"] = sorted({p[3] for p in pts})
 
     d0 = 0.0
-    for i, (lat, lon, alt, fr, seq, c) in enumerate(pts):
+    for i, (lat, lon, alt, fr, seq, c, kind, auto) in enumerate(pts):
         # 降落項的高度是 0，但飛機是**平飛過去再下降**——照 0 畫會讓剖面圖
         # 在最後憑空多一條斜線下去，那不是它會飛的路徑（同 check_terrain）
         if c in (_LAND, _RTL) and i:
@@ -987,6 +994,10 @@ def route_profile(wps: list[dict], home: dict | None = None, dem=None,
                 pt = _profile_point(la, lo, dem, plan, assume_m)
                 pt["d"] = round(d0 + leg * f, 1)
                 pt["seq"] = seq if k == n else None
+                if k == n:
+                    pt["kind"] = kind
+                    if auto:
+                        pt["auto"] = True
                 out["points"].append(pt)
             d0 += leg
         else:
@@ -995,6 +1006,9 @@ def route_profile(wps: list[dict], home: dict | None = None, dem=None,
             pt = _profile_point(lat, lon, dem, plan, assume_m)
             pt["d"] = 0.0
             pt["seq"] = seq
+            pt["kind"] = kind
+            if auto:
+                pt["auto"] = True
             out["points"].append(pt)
 
     # 返航那一層：**從每一個取樣點回家的那條直線**，各自量一次

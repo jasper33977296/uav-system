@@ -1828,6 +1828,11 @@ details.card summary { cursor: pointer; font-size: 14px; font-weight: 600; }
 .plan-head { display: flex; align-items: center; gap: 9px; margin-bottom: 10px;
   flex-wrap: wrap; }
 .plan-head .mtitle { font-size: 17px; }
+/* 雙擊標題就地改名——**改名不影響已經記下的架次**，所以不必進 modal */
+.plan-head .mtitle[title] { cursor: text; }
+.title-edit { background: var(--surface-2); color: var(--ink);
+  border: 1px solid var(--accent); border-radius: 6px; padding: 1px 7px;
+  width: 240px; font-weight: 700; }
 .head-sep { width: 1px; align-self: stretch; background: var(--hairline); margin: 2px 3px; }
 /* 脈絡那一顆**刻意比較安靜**：它是出處，不是這一頁在回答的事 */
 .chip.ctx { color: var(--muted); display: inline-flex; align-items: center; gap: 4px; }

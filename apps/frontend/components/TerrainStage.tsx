@@ -26,9 +26,16 @@ export interface StageWp {
   bad: boolean;
   /** 起飛點：位置是解鎖的地方，不由規劃決定，所以拖不動 */
   fixed?: boolean;
+  /** 這一點是什麼。**由後端給**（`route_profile` 的 `kind`），不要在這裡猜 */
+  kind?: "takeoff" | "wp" | "land";
+  /** 系統補的（中繼點、進場點），不是操作員放的 */
+  auto?: boolean;
 }
 
 const BLUE = 0x3987e5, RED = 0xe05e5e, PICK = 0xd97757, HOT = 0xf0eee6;
+/** **綠色＝會接地的點**（起飛與降落是同一類事），形狀分是哪一種。
+ *  不用橘色：橘在這套系統裡是互動 chrome 與「假設高度」的顏色，會撞。 */
+const GROUND_PT = 0x0ca30c;
 
 /** 滑鼠指到的東西。`kind:"leg"` 的 `i` 是「第 i 段」＝ wps[i-1] → wps[i]。 */
 export interface StageHit { kind: "wp" | "leg"; i: number }
@@ -476,12 +483,47 @@ function makeRouteLayer(map: maplibregl.Map, dataRef: { current: StageData },
         new THREE.MeshBasicMaterial({ color: w.bad ? RED : BLUE,
           transparent: true, opacity: 0.55 })));
       const hot = hover?.kind === "wp" && hover.i === i;
-      const s = new THREE.Mesh(
-        new THREE.SphereGeometry((i === sel || hot ? 1.7 : 1.1) * mScale, 12, 8),
-        new THREE.MeshBasicMaterial({
-          color: i === sel ? PICK : hot ? HOT : w.bad ? RED : BLUE }));
-      s.position.copy(v(w.lon, w.lat, w.amsl));
-      group.add(s);
+      const at = v(w.lon, w.lat, w.amsl);
+      // **三種點要一眼分得出來**（使用者 2026-09-09）：分不出來時
+      // 「放一個點卻有線」看起來像 bug，其實那條線是起飛點連過去的。
+      // `auto` 的（中繼點、進場點）畫小一點：它們是真的航點，但不是人放的
+      const big = i === sel || hot;
+      const col = i === sel ? PICK : hot ? HOT : w.bad ? RED : BLUE;
+      const gcol = i === sel ? PICK : hot ? HOT : GROUND_PT;
+      const r = (big ? 1.7 : w.auto ? 0.7 : 1.1) * mScale;
+      if (w.kind === "takeoff") {
+        // 空心環 ＋ 地面十字。**環是空的**：那個形狀順便說它拖不動
+        const ring = new THREE.Mesh(
+          new THREE.TorusGeometry(r * 1.5, r * 0.42, 6, 20),
+          new THREE.MeshBasicMaterial({ color: gcol }));
+        ring.position.copy(at);
+        group.add(ring);
+        if (w.ground != null) {
+          const g0 = v(w.lon, w.lat, w.ground);
+          const arm = r * 2.6;
+          for (const [dx, dy] of [[1, 0], [0, 1]] as const) {
+            const a = g0.clone(), b2 = g0.clone();
+            a.x -= arm * dx; a.y -= arm * dy;
+            b2.x += arm * dx; b2.y += arm * dy;
+            group.add(new THREE.Mesh(
+              new THREE.TubeGeometry(new THREE.LineCurve3(a, b2), 1, r * 0.3, 4, false),
+              new THREE.MeshBasicMaterial({ color: gcol })));
+          }
+        }
+      } else if (w.kind === "land") {
+        // 向下三角＝往這裡下來
+        const cone = new THREE.Mesh(
+          new THREE.ConeGeometry(r * 1.5, r * 3, 4),
+          new THREE.MeshBasicMaterial({ color: gcol }));
+        cone.rotation.x = Math.PI;          // 尖端朝下
+        cone.position.copy(at);
+        group.add(cone);
+      } else {
+        const sp = new THREE.Mesh(new THREE.SphereGeometry(r, 12, 8),
+          new THREE.MeshBasicMaterial({ color: col }));
+        sp.position.copy(at);
+        group.add(sp);
+      }
     });
   };
 
