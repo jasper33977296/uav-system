@@ -713,9 +713,6 @@ export default function PlanPage() {
       : fence.shape === "polygon" && fence.points.length
         ? { shape: "polygon", points: fence.points }
         : null;
-  const worst = legs.reduce<number | null>(
-    (m, l) => (l.agl_m == null ? m : m == null || l.agl_m < m ? l.agl_m : m), null);
-
   return (
     <div className="page">
       {/* **結論在前，出處收成一顆。**（使用者裁定 2026-09-09，選項 A）
@@ -724,7 +721,9 @@ export default function PlanPage() {
           「取自機上（現在讀的）」是出處。前面幾顆會變紅、會變；
           不會變的脈絡併成一顆灰的，想知道才去碰。
           「← 路徑管理」縮成箭頭：那幾個字每一頁都一樣，佔的是標題的位置。 */}
-      <div className="plan-head">
+      {/* **名稱與按鈕選項同一列**（使用者 2026-09-09）：原本表頭一列、
+          工具列一列，兩列加起來 100 px，而地圖只剩一小條 */}
+      <div className="plan-head newform">
         <Link href="/plans" className="btn-plain btn-sm" title="回路徑管理">←</Link>
         {renaming == null ? (
           <h1 className="mtitle" title={isNew ? undefined : "雙擊改名"}
@@ -751,63 +750,8 @@ export default function PlanPage() {
         {renaming != null && (
           <span className="hint-line">Enter 存・Esc 取消</span>
         )}
-        <span className="head-sep" />
-        {worst != null && (
-          <span className={`chip${worst < 0 ? " bad" : ""}`}>最低離地 {worst} m</span>
-        )}
-        {prof && (
-          <span className={`chip${
-            (chk?.terrain_rtl?.min_agl_m ?? 9) < 0 ? " bad" : ""}`}
-            title={prof.rtl_alt_m == null
-              ? "RTL_ALT_M 是機上的參數，讀不到就不判返航——讀不到不等於沒問題"
-              : "返航會爬到 RTL_ALT_M（離起飛點，不是離地形）再直線飛回起飛點。這一欄是那條線上最低的離地"}>
-            {prof.rtl_alt_m == null ? "返航沒有檢查"
-              : chk?.terrain_rtl?.min_agl_m == null
-                ? `返航 ${prof.rtl_alt_m} m`
-                : `返航 ${chk.terrain_rtl.min_agl_m} m`}
-          </span>
-        )}
-        {fenceShape && (
+        {isNew && (
           <>
-            <span className="chip">圍欄 {fence.shape === "circle"
-              ? `圓形 ${fence.radius_m} m` : `多邊形 ${fence.points.length} 點`}
-              {fence.alt_max_m != null && `・上限 ${fence.alt_max_m} m`}</span>
-            {/* **這一顆不能省。** 畫了一個圈很容易被讀成「飛機不會飛出去」 */}
-            <span className="chip bad">飛控不擋</span>
-          </>
-        )}
-        {!isNew && sign && (
-          <span className={`chip${sign.signed && !sign.stale ? "" : " bad"}`}
-            title={sign.why ?? undefined}>
-            {sign.signed && !sign.stale
-              ? `已審查 ${(sign.checked_at ?? "").slice(11, 16)}`
-              : sign.stale ? "簽核已失效" : "未審查"}
-          </span>
-        )}
-        {/* 三個**不會變**的脈絡併成一顆：高度基準、起飛點海拔、機上速度 */}
-        <span className="chip ctx">
-          {prof?.policy
-            ? `${MODE_TEXT[prof.policy.mode]} ${prof.policy.height_m} m`
-            : prof ? frameLabel(prof.frames).replace("高度＝", "") : "…"}
-          {prof?.home_amsl_m != null && `・起飛點 ${prof.home_amsl_m} m`}
-          {`・WP_SPD ${spd.wp == null ? "未讀到" : `${spd.wp} m/s`}`}
-          <InfoTip tip={
-            (prof?.policy?.mode === "agl"
-              ? "高度基準是「離地面」：寫進航線的是 frame 3 的數字，但每個航點的高度是用地面站的 DEM 逐點算出來的——飛控不必有地形圖庫。它只有 DEM 那麼準，取樣點之間可能錯。"
-              : "高度基準是航線裡 frame 欄位的意思。")
-            + `起飛點海拔${prof?.home_amsl_m != null ? ` ${prof.home_amsl_m} m` : "未知"}，來自 DEM。`
-            + (spd.wp == null
-              ? "機上 WP_SPD 讀不到：航線裡的 DO_CHANGE_SPEED 只從它被執行到的那一項之後才生效，在那之前用的是機上的 WP_SPD——讀不到它，速度相關的判定一律不做。讀不到不等於沒問題。"
-              : `機上 WP_SPD ${spd.wp} m/s（${spd.src}）。第一段永遠用這個值：航線裡的 DO_CHANGE_SPEED 管不到起飛之後那一段。`)} />
-        </span>
-      </div>
-
-      {err && <div className="form-err">{err}</div>}
-
-      {/* 3D 地形（issues/048 F1）。**地形是真的**：maplibre 吃我們自己從
-          `.hgt` 產的圖磚。原型那張手繪線框到此為止 */}
-      {isNew && (
-        <div className="newform">
           {/* 座標仍然可以直接打（有時候起飛點是別人給的一組數字），
               但**主要的放法是在地圖上點**——那才看得到地形 */}
           <label className="f"><span>起飛點緯度</span>
@@ -870,12 +814,14 @@ export default function PlanPage() {
                 {pts.length > 0 && <>　<button className="btn-plain btn-sm"
                   onClick={() => setPts((p) => p.slice(0, -1))}>移除上一個</button></>}
               </span>}
-        </div>
-      )}
-      {/* 圍欄（使用者裁定 2026-09-09：圓形＋多邊形，只做規劃端）。
-          **飛控不照這個擋**——那句話跟著晶片走，見表頭 */}
-      {(stageWps.length > 0 || (isNew && started)) && (
-        <div className="newform fence-bar">
+          </>
+        )}
+        {/* 圍欄（使用者裁定 2026-09-09：圓形＋多邊形，只做規劃端）。
+            **飛控不照這個擋**——那句話跟著晶片走，見這一列尾巴的晶片。
+            它跟其他選項同一列：自己佔一列的話地圖又矮 60 px */}
+        {(stageWps.length > 0 || (isNew && started)) && (
+          <>
+            <span className="head-sep" />
           <div className="f"><span>圍欄</span>
             <div className="seg2">
               {([["circle", "圓形"], ["polygon", "多邊形"],
@@ -912,12 +858,40 @@ export default function PlanPage() {
                   alt_max_m: e.target.value === "" ? null : Number(e.target.value) })} />
             </label>
           )}
-          <span className="hint-line">
+          {fence.shape !== "none" && <span className="hint-line">
             離起飛點算
             <InfoTip tip={"這個圍欄是**規劃端的檢查**：航點超出去，這一頁會擋下。\n但**飛控不會照它擋**——飛控看的是它自己的 FENCE_ENABLE／FENCE_RADIUS／FENCE_ALT_MAX，這一頁還沒有寫那幾個參數。所以圈畫出來不代表飛機飛不出去。\n高度上限比的是**離起飛點**的高度；地形跟隨（frame 10）的航點高度不是離起飛點的，比不了，會照實說。"} />
+          </span>}
+          </>
+        )}
+        <span className="head-sep" />
+        {/* **最低離地／返航／脈絡那三顆晶片砍了**（使用者 2026-09-09）：
+            它們佔掉一整列，而地圖被擠扁。同樣的數字剖面圖上都畫得出來
+            ——最窄那一段有標、返航是圖上那條虛線、高度基準與起飛點海拔
+            在剖面的 Y 軸上。這一列只留**看圖看不出來的**：圍欄與審查狀態 */}
+        {fenceShape && (
+          <>
+            <span className="chip">圍欄 {fence.shape === "circle"
+              ? `圓形 ${fence.radius_m} m` : `多邊形 ${fence.points.length} 點`}
+              {fence.alt_max_m != null && `・上限 ${fence.alt_max_m} m`}</span>
+            {/* **這一顆不能省。** 畫了一個圈很容易被讀成「飛機不會飛出去」 */}
+            <span className="chip bad">飛控不擋</span>
+          </>
+        )}
+        {!isNew && sign && (
+          <span className={`chip${sign.signed && !sign.stale ? "" : " bad"}`}
+            title={sign.why ?? undefined}>
+            {sign.signed && !sign.stale
+              ? `已審查 ${(sign.checked_at ?? "").slice(11, 16)}`
+              : sign.stale ? "簽核已失效" : "未審查"}
           </span>
-        </div>
-      )}
+        )}
+      </div>
+
+      {err && <div className="form-err">{err}</div>}
+
+      {/* 3D 地形（issues/048 F1）。**地形是真的**：maplibre 吃我們自己從
+          `.hgt` 產的圖磚。原型那張手繪線框到此為止 */}
       {/* 只有起飛點時也要畫得出來——`stageWps.length` 會是 1 */}
       {(stageWps.length > 0 || (isNew && started)) && (
         <div className="plan-work">
@@ -1220,6 +1194,9 @@ export default function PlanPage() {
           設計備忘錄，讀第一次有用，讀第五十次只是把圖往下擠 */}
       <div className="hint-line">
         地面線來源：SRTM　建築物來源：OSM
+        {/* **「沒檢查」要說得出口。** 表頭那顆晶片砍掉之後，讀不到
+            `RTL_ALT_M` 就完全沒有痕跡了——而圖上少一條線讀起來像沒事 */}
+        {prof?.rtl_alt_m == null && <>　<span className="tag-warn">返航沒有檢查</span></>}
         <InfoTip tip={"地面線是 SRTM（水平約 30 m）——被格子抹平的表面，樹冠與屋頂混在裡面，但畫不出任何一棟樓。"
           + "建物是另一份（OSM 輪廓），三種畫法對應三種出處："
           + "實心灰塊標「樓層數推算」＝樓層數 × 3.5 m 猜的；"

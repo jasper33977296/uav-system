@@ -1877,7 +1877,11 @@ details.card summary { cursor: pointer; font-size: 14px; font-weight: 600; }
 }
 .plan-legs td.muted { color: var(--muted); }
 /* 3D 地形舞台（issues/048 F1）*/
-.stage3d { height: 460px; border: 1px solid var(--border); border-radius: 10px;
+/* **地圖要夠高才看得出地形**（使用者 2026-09-09 兩次說「太扁」）：
+   固定 460 px 在 1080p 上只佔畫面的四成，而這一頁就是在看那張圖。
+   跟著視窗走，但留住上下限——太矮讀不出起伏，太高會把剖面推出畫面 */
+.stage3d { height: clamp(420px, 64vh, 900px);
+  border: 1px solid var(--border); border-radius: 10px;
   overflow: hidden; background: var(--page); }
 .stage3d-wrap { position: relative; }
 /* 圖例：**直接回答「哪個是起飛點」**。形狀本身有分，但那要先知道規則。
@@ -1976,8 +1980,7 @@ details.card summary { cursor: pointer; font-size: 14px; font-weight: 600; }
 .newform .f:has(.seg2) { min-width: 148px; }
 .newform .seg2 button { white-space: nowrap; }
 
-/* 圍欄那一條：**顏色與地圖上的圈同一個**（琥珀），讓「這條在講那個圈」
+/* 圍欄的按鈕**用地圖上那個圈的顏色**（琥珀），讓「這幾顆在講那個圈」
    不必用文字說 */
-.fence-bar { border-left: 3px solid var(--status-warn); margin-top: 8px; }
-.fence-bar .btn-plain[aria-pressed="true"] {
+.plan-head .btn-plain[aria-pressed="true"] {
   color: var(--status-warn); border-color: var(--status-warn); }

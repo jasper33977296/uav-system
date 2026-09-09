@@ -312,10 +312,29 @@ export default function TerrainStage({ wps, sel, onSelect, tipFor, placing,
   useEffect(() => {
     const m = mapRef.current;
     if (!m) return;
-    const paint = () => m.isStyleLoaded() && paintFence(m, fence);
-    paint();
-    m.on("load", paint);
-    return () => { m.off("load", paint); };
+    // **不能只等 `load`。** 樣式改過（加圖磚來源、開地形）之後
+    // `isStyleLoaded()` 會有一小段時間是 false，而那時 `load` 早就發過了
+    // ——只掛 `load` 的話，開頁時就帶著圍欄的航線永遠畫不出那個圈。
+    // `styledata` 每次樣式變動都會發，拿它重試到畫成功為止
+    // **要等 `route3d` 在了才畫。** 樣式一開始只有底色，那時 `isStyleLoaded()`
+    // 就是 true——先畫上去的話，隨後補上的正射影像會蓋在圍欄上面
+    // （`addLayer` 沒給 before 就是疊在最上層），圈就這樣安靜地不見了
+    const paint = () => {
+      if (!m.isStyleLoaded() || !m.getLayer("route3d")) return false;
+      paintFence(m, fence);
+      return true;
+    };
+    if (paint()) return;
+    // `styledata` 不夠：它發的時候樣式常常還在改，`isStyleLoaded()` 是 false，
+    // 而之後就沒有事件了。`idle` 是「畫完而且沒有待辦」——那一刻一定畫得成
+    const retry = () => {
+      if (!paint()) return;
+      m.off("styledata", retry);
+      m.off("idle", retry);
+    };
+    m.on("styledata", retry);
+    m.on("idle", retry);
+    return () => { m.off("styledata", retry); m.off("idle", retry); };
   }, [fence]);
 
   return (
