@@ -3022,10 +3022,22 @@ async def draft_plan(body: DraftIn):
             built = plan_check.build_plan(pts, pol, h, dem=terrain.shared())
     wps, decisions = built["waypoints"], built["decisions"]
     if len(body.points) < 1:
-        # **一個點都沒有時不要假裝算得出什麼**：回一份空的，讓畫面說
-        # 「還沒放點」，而不是回一份「通過」的報告
-        return {"check": None, "profile": None, "saved_id": None,
-                "waypoints": wps, "decisions": decisions}
+        # **一個點都沒有時不要假裝算得出什麼**：`check` 是 None，讓畫面說
+        # 「還沒放點」，而不是回一份「通過」的報告。
+        #
+        # **但起飛點本身要畫得出來**（使用者 2026-09-09）：放完起飛點就該
+        # 看得到它、也該能設它的高度。所以剖面照給——只是那份剖面裡只有
+        # 起飛點，沒有降落（還沒有航線，就沒有「飛完回來」這件事）。
+        solo = plan_check.build_plan(
+            [], {**pol, "land_at_home": False}, h, dem=terrain.shared())
+        prof = plan_check.route_profile(solo["waypoints"], h,
+                                        dem=terrain.shared(),
+                                        assume_m=assume,
+                                        rtl_alt_m=body.rtl_alt_m)
+        prof["policy"] = pol
+        return {"check": None, "profile": prof, "saved_id": None,
+                "waypoints": solo["waypoints"], "decisions": solo["decisions"],
+                "policy": pol, "points": pts, "assume_m": assume}
     check = plan_check.check_waypoints(
         wps, settings.geofence_radius_m, settings.geofence_alt_m,
         settings.geofence_margin, dem=terrain.shared(),

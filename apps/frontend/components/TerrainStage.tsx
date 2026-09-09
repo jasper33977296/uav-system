@@ -563,8 +563,12 @@ function makeRouteLayer(map: maplibregl.Map, dataRef: { current: StageData },
       // 「放一個點卻有線」看起來像 bug，其實那條線是起飛點連過去的。
       // `auto` 的（中繼點、進場點）畫小一點：它們是真的航點，但不是人放的
       const big = i === sel || hot;
-      const col = i === sel ? PICK : hot ? HOT : w.bad ? RED : BLUE;
-      const gcol = i === sel ? PICK : hot ? HOT : GROUND_PT;
+      // **選取不搶顏色。** 原本選中就整顆變成 PICK（橘），於是「這是起飛點」
+      // 那個綠色被蓋掉——而起飛點預設就會被選中，等於永遠看不到它的類別
+      // （使用者 2026-09-09 連續問了兩次「哪個是起飛點」）。改成：
+      // **顏色永遠是類別，選取加一圈光暈**。
+      const col = w.bad ? RED : BLUE;
+      const gcol = GROUND_PT;
       const r = (big ? 1.7 : w.auto ? 0.7 : 1.1) * mScale;
       // **接地點畫得比航點大**：它們是這條航線的兩端，而且航段的管子很粗
       // （0.9 m），跟航點一樣大的話在 1× 下讀不出形狀
@@ -601,6 +605,16 @@ function makeRouteLayer(map: maplibregl.Map, dataRef: { current: StageData },
           new THREE.MeshBasicMaterial({ color: col }));
         sp.position.copy(at);
         group.add(sp);
+      }
+      if (i === sel || hot) {
+        // 光暈：選取用實色、滑過用半透明。**它不遮住底下的顏色**
+        const halo = new THREE.Mesh(
+          new THREE.TorusGeometry(r * 2.3, r * 0.22, 8, 32),
+          new THREE.MeshBasicMaterial({
+            color: i === sel ? PICK : HOT,
+            transparent: i !== sel, opacity: 0.6 }));
+        halo.position.copy(at);
+        group.add(halo);
       }
     });
   };

@@ -768,7 +768,8 @@ export default function PlanPage() {
               </span>}
         </div>
       )}
-      {(stageWps.length > 1 || (isNew && started)) && (
+      {/* 只有起飛點時也要畫得出來——`stageWps.length` 會是 1 */}
+      {(stageWps.length > 0 || (isNew && started)) && (
         <div className="plan-work">
           <TerrainStage wps={stageWps} sel={selWp} onSelect={setSelWp}
             assumeM={assume} onBuildings={onBlds}
@@ -785,6 +786,10 @@ export default function PlanPage() {
                 setHome({ lat: String(l.lat.toFixed(7)),
                           lon: String(l.lng.toFixed(7)) });
                 setPlaceKind("wp");
+                // **放完就選中它**：右欄因此立刻可以設起飛高度，
+                // 不必再回頭點一次（使用者 2026-09-09）。剖面回來之後
+                // stageWps[0] 就是起飛點
+                setSelWp(0);
                 return;
               }
               setPts((p) => {
