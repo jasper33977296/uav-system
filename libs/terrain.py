@@ -65,6 +65,41 @@ def tile_name(lat: float, lon: float) -> str:
             f"{'E' if lo >= 0 else 'W'}{abs(lo):03d}.hgt")
 
 
+def tiles_for_bbox(bbox: tuple[float, float, float, float]) -> list[str]:
+    """(南,西,北,東) 這個範圍蓋到哪幾塊圖磚。
+
+    **一塊圖磚是 1°×1°**，所以一個幾百公尺的場域多半只要一塊——但**跨在
+    邊界上的場域要兩塊或四塊**，而缺的那一半在畫面上只是「有些地方沒地形」，
+    看起來像資料稀疏，不像少了一個檔案。
+    """
+    s, w, n, e = bbox
+    out = []
+    for la in range(math.floor(s), math.floor(n) + 1):
+        for lo in range(math.floor(w), math.floor(e) + 1):
+            out.append(tile_name(la + 0.5, lo + 0.5))
+    return sorted(set(out))
+
+
+def coverage(bbox, path: str | None = None) -> dict:
+    """這個範圍的 `.hgt` 有幾塊、缺幾塊。**出發前問的那一問。**
+
+    現況只有在現場開規劃頁、真的查到那一格時才會說「缺圖磚」——而那時
+    人已經在現場而且離線了。這個函式讓同一件事在**還有網路的時候**問得到。
+    """
+    d = path or DEFAULT_DIR
+    need = tiles_for_bbox(bbox)
+    have, missing, size = [], [], 0
+    for t in need:
+        p = os.path.join(d, t)
+        if os.path.exists(p):
+            have.append(t)
+            size += os.path.getsize(p)
+        else:
+            missing.append(t)
+    return {"dir": d, "need": need, "have": have, "missing": missing,
+            "bytes": size, "complete": not missing}
+
+
 class Dem:
     """一個圖磚目錄。查得到就回高程（公尺，AMSL），查不到回 `None`。
 

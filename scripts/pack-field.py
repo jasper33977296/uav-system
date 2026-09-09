@@ -103,7 +103,9 @@ def main() -> int:
                        os.path.join(os.path.dirname(__file__), "..",
                                     "data", "ortho"),
                        [f["properties"] for f in feats],
-                       tuple(a.terrain_z), tuple(a.ortho_z))
+                       tuple(a.terrain_z), tuple(a.ortho_z),
+                       dem_dir=os.path.join(os.path.dirname(__file__), "..",
+                                            "data", "dem"))
     man["created_at"] = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
     man["centre"] = {"lat": a.lat, "lon": a.lon, "radius_m": a.radius_m}
     with open(os.path.join(d, "buildings.geojson"), "w", encoding="utf-8") as f:
@@ -114,16 +116,27 @@ def main() -> int:
 
     L = man["layers"]
     print(f"\n寫出 {os.path.normpath(d)}")
+    dm = L["dem"]
+    print(f"  dem      {dm['have']}/{len(dm['need'])} 塊 .hgt"
+          f" / {dm['bytes'] / 1e6:.0f} MB"
+          + ("" if dm["complete"] else f"　缺 {'、'.join(dm['missing'])}  ← 不完整"))
     for k in ("terrain", "ortho"):
         x = L[k]
         print(f"  {k:<8} {x['tiles']} 張 / {x['bytes'] / 1e6:.1f} MB"
               f"　缺 {x['missing']}" + ("" if x["complete"] else "  ← 不完整"))
     b = L["buildings"]
-    print(f"  buildings {b['count']} 棟，其中 **{b['unmeasured']} 棟沒量過高度**"
-          f"（{b['unmeasured_pct']}%）")
+    if not b["fetched"]:
+        print("  buildings **這一區沒有抓過**——0 棟不代表那裡沒有樓")
+    elif b["count"] == 0:
+        print("  buildings 抓過了，這個範圍內沒有建物")
+    else:
+        print(f"  buildings {b['count']} 棟，其中 **{b['unmeasured']} 棟"
+              f"沒量過高度**（{b['unmeasured_pct']}%）")
     if not bundle.complete(man):
         print("\n**這一份不完整。** 缺的那些格子在現場會是空白——"
-              "上游本來就沒有（海上／範圍外）就沒關係，其餘要回頭再抓一次。")
+              "上游本來就沒有（海上／範圍外）就沒關係，其餘要回頭再抓一次：")
+        for h in bundle.fix_hint(man):
+            print(f"  · {h}")
     return 0
 
 

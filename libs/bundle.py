@@ -79,6 +79,10 @@ TERRAIN_CAVEAT = ("SRTM 1 弧秒（水平約 30 m），terrarium 編碼"
                   "樹冠與屋頂混在裡面，但畫不出任何一棟樓。缺的圖磚是 404，"
                   "**不是一張全 0 的海平面**——後者看起來像個答案。")
 ORTHO_CAVEAT = ("內政部國土測繪中心 PHOTO2 正射影像。只有影像，沒有高度。")
+DEM_CAVEAT = ("SRTM 1 弧秒的 `.hgt` 原始檔（一塊 1°×1°、約 25 MB）。"
+              "**地形圖磚是從它換算出來的**，所以缺一塊 `.hgt`，"
+              "那一整片的地形圖磚就是 404、規劃頁的預檢會說「沒有檢查」"
+              "——不會說「通過」，但也就等於沒有那道防線。")
 BUILDINGS_CAVEAT = ("OSM 建物輪廓。**輪廓是量的（公尺級），高度多半不是**："
                     "`height_source` 為 `osm:height` 才是有人填的公尺數，"
                     "`osm:levels` 是樓層數 × 3.5 m 推算，`unknown` 是"
@@ -100,7 +104,8 @@ def scan(cache_dir: str, tiles: list[tuple[int, int, int]], ext: str) -> tuple[l
 
 
 def build(name: str, bbox, terrain_dir: str, ortho_dir: str,
-          buildings, terrain_z=(10, 15), ortho_z=(14, 18)) -> dict:
+          buildings, terrain_z=(10, 15), ortho_z=(14, 18),
+          dem_dir: str | None = None, fetched: bool | None = None) -> dict:
     """組出 manifest。**只數現況，不抓東西**——抓是 `scripts/pack-field.py` 的事。
 
     分開的理由：這個函式要能在**現場**跑（沒有網路），用來回答
@@ -115,18 +120,34 @@ def build(name: str, bbox, terrain_dir: str, ortho_dir: str,
     orth = Layer("ortho", "/api/ortho/{z}/{x}/{y}.jpg", ortho_z,
                  ORTHO_CAVEAT, on, len(ot) - on, ob, of)
 
+    # `.hgt` 的涵蓋率**要在這裡問**，不是等到現場開規劃頁才發現缺一塊。
+    # 地形圖磚是從它換算出來的，所以它才是根；上面那個 `terrain` 層數的是
+    # 換算後的產物，缺了只會說「這一格沒有」，說不出「因為少了一個檔案」
+    import terrain as _terrain
+    dem = _terrain.coverage(bbox, dem_dir)
+    if fetched is None:
+        import buildings as _b
+        fetched = _b.shared().covers(bbox)
+
     known = [b for b in buildings if b.get("known")]
     unknown = [b for b in buildings if not b.get("known")]
     return {
         "name": name,
         "bbox": [bbox[1], bbox[0], bbox[3], bbox[2]],   # GeoJSON 慣例：西南東北
         "bbox_latlon": list(bbox),
-        "layers": {"terrain": terr.to_json(), "ortho": orth.to_json(),
+        "layers": {"dem": {"kind": "srtm-hgt", "caveat": DEM_CAVEAT,
+                           "need": dem["need"], "have": len(dem["have"]),
+                           "missing": dem["missing"], "bytes": dem["bytes"],
+                           "complete": dem["complete"]},
+                   "terrain": terr.to_json(), "ortho": orth.to_json(),
                    "buildings": {
                        "kind": "buildings", "provider": "OSM",
                        "url": f"/api/bundles/{name}/buildings.geojson",
                        "caveat": BUILDINGS_CAVEAT,
                        "count": len(buildings),
+                       # **抓過沒有**，與「有幾棟」是兩個問題：0 棟可能是
+                       # 那裡真的沒有樓，也可能是我們從來沒抓過那一區
+                       "fetched": fetched,
                        "measured": len(known), "unmeasured": len(unknown),
                        # **這一欄是給接收端看的**：八成沒量過的資料集，
                        # 拿去做「即時呈現」時該畫成什麼樣子由它決定
@@ -137,4 +158,31 @@ def build(name: str, bbox, terrain_dir: str, ortho_dir: str,
 
 
 def complete(man: dict) -> bool:
-    return all(man["layers"][k].get("complete", True) for k in ("terrain", "ortho"))
+    return all(man["layers"][k].get("complete", True)
+               for k in ("dem", "terrain", "ortho") if k in man["layers"])
+
+
+def fix_hint(man: dict) -> list[str]:
+    """缺東西時**把補救的指令直接寫出來**。
+
+    「不完整」不是一個結論，是一件待辦——而待辦要說得出下一步是什麼。
+    """
+    out = []
+    dem = man["layers"].get("dem") or {}
+    if dem.get("missing"):
+        s, w, n, e = man["bbox_latlon"]
+        out.append(f"缺 {len(dem['missing'])} 塊 .hgt（{'、'.join(dem['missing'])}）："
+                   f"python3 scripts/fetch-dem.py {s:.4f} {w:.4f} {n:.4f} {e:.4f}")
+    b = man["layers"].get("buildings") or {}
+    if not b.get("fetched"):
+        s2, w2, n2, e2 = man["bbox_latlon"]
+        out.append("**這一區的建物沒有抓過**（不是「那裡沒有樓」）："
+                   f"python3 scripts/fetch-buildings.py "
+                   f"{(s2 + n2) / 2:.4f} {(w2 + e2) / 2:.4f} --radius-m 1000")
+    for k, label in (("terrain", "地形圖磚"), ("ortho", "正射影像")):
+        L = man["layers"].get(k) or {}
+        if L.get("missing"):
+            out.append(f"缺 {L['missing']} 張{label}："
+                       f"python3 scripts/pack-field.py --name {man['name']}"
+                       f"（再跑一次；上游本來就沒有的那些會一直缺）")
+    return out

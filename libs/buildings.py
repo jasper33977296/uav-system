@@ -197,6 +197,9 @@ class Store:
         self.dir = path or DATA_DIR
         self.items: list[Building] = []
         self.files: list[str] = []
+        #: 每個檔案宣告的涵蓋範圍（西,南,東,北）。**「那裡沒有建物」與
+        #: 「我們沒抓過那一區」是兩件事**——沒有這個就分不出來
+        self.areas: list[tuple[float, float, float, float]] = []
         self._load()
 
     def _load(self) -> None:
@@ -211,6 +214,9 @@ class Store:
             except (OSError, ValueError):
                 continue
             self.files.append(fn)
+            bb = fc.get("bbox")
+            if isinstance(bb, list) and len(bb) == 4:
+                self.areas.append(tuple(float(v) for v in bb))
             for ft in fc.get("features", []):
                 b = _from_feature(ft)
                 if b is not None:
@@ -219,6 +225,19 @@ class Store:
     @property
     def available(self) -> bool:
         return bool(self.items)
+
+    def covers(self, bbox) -> bool:
+        """有沒有**抓過**這個範圍（不是「這裡有沒有建物」）。
+
+        bbox ＝ (南,西,北,東)。只要有一個檔案宣告的範圍與它相交就算。
+        """
+        want_s, want_w, want_n, want_e = bbox
+        # 檔案裡存的是 GeoJSON 慣例的 [西, 南, 東, 北]
+        for west, south, east, north in self.areas:
+            if not (east < want_w or west > want_e
+                    or north < want_s or south > want_n):
+                return True
+        return False
 
     def near_path(self, path: list[tuple[float, float]],
                   buffer_m: float = 30.0) -> list[tuple["Building", float]]:

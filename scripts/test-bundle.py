@@ -77,6 +77,42 @@ with tempfile.TemporaryDirectory() as d:
     ck("_files 列得出實際存在的那幾個",
        len(m["_files"]["terrain"]) == 3, m["_files"]["terrain"])
 
+print("\n── .hgt 涵蓋率：出發前那一問（issues/047 §2）──")
+import terrain  # noqa: E402
+ck("一個小場域只要一塊", terrain.tiles_for_bbox(bb) == ["N24E121.hgt"],
+   terrain.tiles_for_bbox(bb))
+ck("跨經度邊界要兩塊",
+   terrain.tiles_for_bbox((24.9, 120.98, 24.95, 121.02))
+   == ["N24E120.hgt", "N24E121.hgt"])
+ck("跨四塊就是四塊",
+   len(terrain.tiles_for_bbox((23.98, 120.98, 24.02, 121.02))) == 4)
+ck("南半球／西半球用 floor 不是 int",
+   terrain.tiles_for_bbox((-0.5, -0.5, -0.4, -0.4)) == ["S01W001.hgt"],
+   terrain.tiles_for_bbox((-0.5, -0.5, -0.4, -0.4)))
+with tempfile.TemporaryDirectory() as d:
+    c = terrain.coverage(bb, d)
+    ck("空目錄＝全缺", not c["complete"] and c["missing"] == ["N24E121.hgt"], c)
+    open(os.path.join(d, "N24E121.hgt"), "wb").write(b"x" * 10)
+    c2 = terrain.coverage(bb, d)
+    ck("放進去就算有", c2["complete"] and c2["have"] == ["N24E121.hgt"])
+    ck("大小也數了", c2["bytes"] == 10, c2["bytes"])
+
+print("\n── 不完整時要說得出下一步 ──")
+m3 = bundle.build("t", bb, "/nope", "/nope", [], (14, 14), (14, 14),
+                  dem_dir="/nope", fetched=False)
+ck("complete() 把 dem 也算進去", not bundle.complete(m3))
+hints = bundle.fix_hint(m3)
+ck("缺 .hgt 要給 fetch-dem 的指令",
+   any("fetch-dem.py" in h for h in hints), hints)
+ck("沒抓過建物要說「不是那裡沒有樓」",
+   any("不是「那裡沒有樓」" in h for h in hints), hints)
+ck("每一條都是可以直接貼上去跑的",
+   all("python3 scripts/" in h for h in hints), hints)
+m4 = bundle.build("t", bb, "/nope", "/nope", [], (14, 14), (14, 14),
+                  dem_dir="/nope", fetched=True)
+ck("抓過但 0 棟就不再叫人去抓",
+   not any("沒有抓過" in h for h in bundle.fix_hint(m4)))
+
 print("\n── 上限 ──")
 big = bundle.bbox_around(24.77, 121.04, 20000)
 ck("大範圍高 zoom 會超過上限（腳本據此擋下）",
