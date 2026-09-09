@@ -1,0 +1,160 @@
+<!doctype html>
+<html lang="zh-Hant"><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>圍欄：在這裡畫得出來</title>
+<style>
+:root{--page:#1b1a17;--surface:#262624;--surface-2:#30302c;--ink:#f0eee6;
+ --ink-2:#c2bfb3;--muted:#8f8b80;--hairline:#3a3833;--border:rgba(240,238,230,.1);
+ --accent:#d97757;--accent-bg:rgba(217,119,87,.12);--series-1:#3987e5;
+ --ok:#0ca30c;--warn:#fab219;--danger:#e05e5e}
+*{margin:0;padding:0;box-sizing:border-box}
+body{background:var(--page);color:var(--ink);
+ font:14px/1.55 system-ui,"Noto Sans TC",sans-serif;padding:20px 24px 60px}
+h1{font-size:20px;margin:0 0 4px}
+h2{font-size:14px;color:var(--accent);margin:30px 0 4px}
+.note{color:var(--muted);font-size:12.5px;margin-bottom:12px;max-width:80ch}
+.note b{color:var(--ink-2);font-weight:600}
+.opt{border:1px solid var(--border);border-radius:10px;margin-bottom:14px;
+ background:var(--surface);overflow:hidden}
+.opt>header{display:flex;gap:10px;align-items:baseline;padding:7px 12px;
+ border-bottom:1px solid var(--hairline);background:var(--surface-2)}
+.opt>header b{font-size:12.5px}.opt>header span{color:var(--muted);font-size:12px}
+.pane{padding:12px}
+.tag{font-size:11px;border:1px solid var(--border);border-radius:4px;padding:1px 6px;color:var(--muted)}
+.tag.pick{color:var(--accent);border-color:var(--accent)}
+.map{border:1px solid var(--border);border-radius:9px;overflow:hidden;
+ background:radial-gradient(60% 80% at 45% 50%,#3f4a35,#2b3226 72%)}
+.btn{background:transparent;border:1px solid var(--border);border-radius:7px;
+ padding:4px 10px;font-size:12.5px;color:var(--ink-2);cursor:pointer}
+.btn.accent{color:var(--accent);border-color:var(--accent);background:var(--accent-bg)}
+.chip{border:1px solid var(--border);border-radius:999px;padding:3px 10px;font-size:12px;color:var(--ink-2)}
+.chip.bad{color:var(--danger);border-color:var(--danger)}
+.chip.ok{color:var(--ok);border-color:var(--ok)}
+.bar{display:flex;gap:10px;align-items:flex-end;flex-wrap:wrap;background:var(--surface-2);
+ border:1px solid var(--border);border-radius:10px;padding:9px 11px}
+.f{display:flex;flex-direction:column;gap:3px}
+.k{font-size:11px;color:var(--muted);letter-spacing:.04em}
+.inp{background:var(--surface-2);border:1px solid var(--border);border-radius:6px;
+ padding:4px 8px;width:96px;color:var(--ink);font-variant-numeric:tabular-nums}
+.seg{display:flex;border:1px solid var(--border);border-radius:7px;overflow:hidden}
+.seg button{padding:4px 9px;font-size:12px;color:var(--muted);background:none;border:0;cursor:pointer}
+.seg button[aria-pressed=true]{color:var(--accent);background:var(--accent-bg)}
+table{width:100%;border-collapse:collapse;font-size:12.5px;margin-top:8px}
+th{text-align:left;color:var(--muted);font-weight:500;padding:5px 9px;
+ border-bottom:1px solid var(--hairline)}
+td{padding:5px 9px;border-bottom:1px solid var(--hairline)}
+</style></head><body>
+
+<h1>圍欄：在這裡畫得出來</h1>
+<p class="note">那句「去 QGC 的 Plan 頁畫一個 GeoFence」已經刪掉了。
+補上功能之前，有一件事要先講清楚，因為它決定整個設計。</p>
+
+<h2>先分清楚：圍欄有兩種，作用完全不同</h2>
+<div class="opt"><div class="pane">
+<table>
+ <thead><tr><th>　</th><th>畫在這裡的圍欄</th><th>飛控裡的圍欄</th></tr></thead>
+ <tbody>
+  <tr><td>住在哪</td><td><code>plans.fence</code>（我們的資料庫）</td>
+      <td>飛控的 FENCE 參數 ＋ 圍欄任務</td></tr>
+  <tr><td>什麼時候作用</td><td><b>規劃時</b>——上傳前檢查、超出就報</td>
+      <td><b>飛行中</b>——真的越界時會動作</td></tr>
+  <tr><td>越界會怎樣</td><td>畫面上報一條發現，可以擋上傳</td>
+      <td><code>FENCE_ACTION</code>：返航／降落／煞停</td></tr>
+  <tr><td>沒有它會怎樣</td><td>少一道規劃檢查</td>
+      <td><b>飛出去就飛出去了</b></td></tr>
+ </tbody>
+</table>
+<p class="note" style="margin-top:10px">
+<b>只畫在這裡，飛機不會擋。</b> 這跟建物那件事同一條紀律——
+「規劃端的約束」不等於「飛行中的保護」，而畫面必須說得出自己是哪一種。<br>
+所以問題不只是「怎麼畫」，還有<b>要不要一路做到飛控</b>。</p>
+</div></div>
+
+<h2>① 怎麼畫</h2>
+<div class="opt"><header><b>K</b><span>以起飛點為心的圓 ＋ 高度上限</span>
+ <span class="tag pick">我建議先做這個</span></header>
+<div class="pane" style="display:grid;grid-template-columns:1fr 230px;gap:12px">
+ <div class="map"><svg viewBox="0 0 560 230" style="display:block">
+   <circle cx="250" cy="120" r="96" fill="rgba(250,178,25,.07)"
+     stroke="#fab219" stroke-width="2" stroke-dasharray="7 5"/>
+   <polyline points="250,120 300,86 330,130 285,150" fill="none"
+     stroke="#3987e5" stroke-width="3"/>
+   <circle cx="250" cy="120" r="9" fill="none" stroke="#0ca30c" stroke-width="3"/>
+   <line x1="238" y1="120" x2="262" y2="120" stroke="#0ca30c" stroke-width="2"/>
+   <line x1="250" y1="108" x2="250" y2="132" stroke="#0ca30c" stroke-width="2"/>
+   <text x="352" y="46" fill="#fab219" font-size="12">半徑 120 m</text>
+ </svg></div>
+ <div>
+   <div class="bar" style="flex-direction:column;align-items:stretch">
+     <div class="f"><span class="k">圍欄</span><div class="seg">
+       <button aria-pressed="true">圓形</button><button>多邊形</button><button>不設</button></div></div>
+     <div class="f"><span class="k">半徑（以起飛點為心）</span><input class="inp" value="120"></div>
+     <div class="f"><span class="k">高度上限</span><input class="inp" value="30"></div>
+   </div>
+   <p class="note" style="margin-top:8px">半徑用拖的也行——圓周上一個把手。</p>
+ </div>
+ <p class="note" style="grid-column:1/-1;margin:0">
+  <b>為什麼先做圓</b>：這個場地的實際需求是「不要飛出這片草地」，而圓用
+  <b>一個數字</b>就講完了，也正好對上飛控的 <code>FENCE_RADIUS</code>
+  ——它是唯一能一路推到飛控、不需要上傳圍欄任務的形狀。<br>
+  多邊形留著但先不做：它要上傳圍欄任務才有意義，而那是 ② 的題目。</p>
+</div></div>
+
+<div class="opt"><header><b>L</b><span>直接畫多邊形</span></header>
+<div class="pane" style="display:grid;grid-template-columns:1fr 230px;gap:12px">
+ <div class="map"><svg viewBox="0 0 560 230" style="display:block">
+   <polygon points="150,60 380,50 420,160 200,190" fill="rgba(250,178,25,.07)"
+     stroke="#fab219" stroke-width="2" stroke-dasharray="7 5"/>
+   <polyline points="250,120 300,86 330,130 285,150" fill="none" stroke="#3987e5" stroke-width="3"/>
+   <circle cx="250" cy="120" r="9" fill="none" stroke="#0ca30c" stroke-width="3"/>
+   <circle cx="150" cy="60" r="4" fill="#fab219"/><circle cx="380" cy="50" r="4" fill="#fab219"/>
+   <circle cx="420" cy="160" r="4" fill="#fab219"/><circle cx="200" cy="190" r="4" fill="#fab219"/>
+ </svg></div>
+ <div><div class="bar" style="flex-direction:column;align-items:stretch">
+   <div class="f"><span class="k">圍欄</span><div class="seg">
+     <button>圓形</button><button aria-pressed="true">多邊形</button><button>不設</button></div></div>
+   <div class="f"><span class="k">高度上限</span><input class="inp" value="30"></div>
+   <button class="btn">點地圖加頂點</button><button class="btn">清掉重畫</button>
+ </div></div>
+ <p class="note" style="grid-column:1/-1;margin:0">
+  貼合真實場地（草地不是圓的），但**每個頂點都要點**，而且要飛機真的擋
+  就得上傳圍欄任務。</p>
+</div></div>
+
+<h2>② 要不要一路做到飛控</h2>
+<div class="opt"><header><b>M</b><span>只做規劃端（先）</span>
+ <span class="tag pick">我建議這個</span></header>
+<div class="pane">
+ <div style="display:flex;gap:8px;flex-wrap:wrap;align-items:center">
+   <span class="chip ok">圍欄 圓形 120 m・上限 30 m</span>
+   <span class="chip">規劃端檢查</span>
+   <span class="chip bad">飛控不擋</span>
+ </div>
+ <p class="note" style="margin:9px 0 0">
+  圍欄存進 <code>plans.fence</code>，<code>check_fence</code>（已經在了）
+  照它判，超出就是一條發現、可以擋上傳。<br>
+  <b>畫面必須寫「飛控不擋」</b>——不然畫了一個圈會被讀成「飛機不會飛出去」。
+  那正是這個專案一路在防的那件事。</p>
+</div></div>
+
+<div class="opt"><header><b>N</b><span>連飛控一起設</span></header>
+<div class="pane">
+ <div style="display:flex;gap:8px;flex-wrap:wrap;align-items:center">
+   <span class="chip ok">圍欄 圓形 120 m・上限 30 m</span>
+   <span class="chip ok">飛控 FENCE_ENABLE=1</span>
+   <span class="chip">越界動作：返航</span>
+ </div>
+ <p class="note" style="margin:9px 0 0">
+  上傳航線時順便把 <code>FENCE_ENABLE / FENCE_TYPE / FENCE_RADIUS /
+  FENCE_ALT_MAX / FENCE_ACTION</code> 寫進飛控（那幾個參數<b>本來就在可寫清單裡</b>）。
+  圓形不需要上傳圍欄任務，改參數就成立。<br>
+  <b>代價</b>：這是**寫飛控參數**，跟航線上傳不同性質——要另外一次確認，
+  而且要在上傳報告裡留痕。越界動作選「返航」的話，
+  還要先確認 <code>RTL_ALT_M</code> 高過沿途地形（我們已經會算了）。</p>
+</div></div>
+
+<h2>要你挑</h2>
+<p class="note">① <b>K</b>（圓）或 <b>L</b>（多邊形）　② <b>M</b>（只做規劃端）或 <b>N</b>（連飛控一起）<br>
+我建議 <b>K ＋ M</b> 先落地，<b>N</b> 排下一步——因為 N 會動到飛控參數，
+那件事值得單獨看一次。</p>
+</body></html>

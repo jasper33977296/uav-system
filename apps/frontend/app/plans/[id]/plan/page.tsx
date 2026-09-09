@@ -12,8 +12,8 @@ import Link from "next/link";
 import { useParams } from "next/navigation";
 import { useCallback, useEffect, useRef, useState } from "react";
 
-import TerrainStage, { type BuildingFeat, type StageHit, type StageTip, type StageWp }
-  from "@/components/TerrainStage";
+import TerrainStage, { type BuildingFeat, type FenceShape, type StageHit,
+  type StageTip, type StageWp } from "@/components/TerrainStage";
 import InfoTip from "@/components/InfoTip";
 import { emph } from "@/lib/emph";
 import { errText, getJson } from "@/lib/fetchJson";
@@ -39,7 +39,17 @@ interface Profile { points: Pt[]; home_amsl_m: number | null; frames: number[];
    *  航線寫進去也是 frame 3，只看 frame 會顯示「離起飛點」 */
   policy?: Policy | null;
   /** 這份剖面是用哪個返航高度算的。null ＝沒讀到，返航那一層不畫 */
-  rtl_alt_m?: number | null }
+  rtl_alt_m?: number | null;
+  /** 這份航線宣告的圍欄（`plans.fence`）。null ＝沒宣告 */
+  fence?: StoredFence | null }
+/** 存進 `plans.fence` 的形狀（QGC `.plan` 的 geoFence 也是這個形狀）。 */
+interface StoredFence {
+  inclusion_circles?: { lat: number; lon: number; radius: number }[];
+  inclusion_polygons?: [number, number][][];
+  exclusion_circles?: unknown[];
+  exclusion_polygons?: unknown[];
+  alt_max?: number | null;
+}
 interface Leg {
   from: number; to: number; length_m: number; agl_m: number | null;
   speed_ms: number | null; speed_src: string; turn_deg?: number | null;
@@ -94,7 +104,10 @@ function frameLabel(frames: number[]): string {
 }
 
 /** 剖面圖：地面一條、屋頂一條、規劃一條，中間就是離地空間。 */
-function Profile({ p }: { p: Profile }) {
+function Profile({ p, ceilM }: { p: Profile;
+  /** 圍欄的高度上限，**離起飛點**。畫成一條水平線——它與地面線之間的
+   *  距離會沿路變，那正是「上限比看起來緊」的地方 */
+  ceilM?: number | null }) {
   const pts = p.points.filter((x) => x.ground != null);
   if (pts.length < 2) {
     return <div className="empty">{emph(
@@ -103,8 +116,11 @@ function Profile({ p }: { p: Profile }) {
   const W = 900, H = 260, PAD_L = 46, PAD_R = 12, PAD_T = 14, PAD_B = 26;
   const dMax = Math.max(...pts.map((x) => x.d), 1);
   const surf = (x: Pt) => x.top ?? x.ground!;
+  const ceilAmsl = ceilM != null && p.home_amsl_m != null
+    ? p.home_amsl_m + ceilM : null;
   const vals = pts.flatMap((x) => [x.ground!, surf(x), x.plan ?? x.ground!,
     ...(x.rtl_amsl != null ? [x.rtl_amsl] : [])]);
+  if (ceilAmsl != null) vals.push(ceilAmsl);
   let lo = Math.min(...vals), hi = Math.max(...vals);
   // **y 軸至少 6 公尺**：一條平坦航線若照資料自動縮放，2 m 的起伏會被拉滿
   // 整個圖高，看起來像懸崖——那是用版面製造出來的恐慌
@@ -256,6 +272,14 @@ function Profile({ p }: { p: Profile }) {
             fill="var(--status-warn)" fontSize="10">返航高度</text>
         </>
       )}
+      {ceilAmsl != null && (
+        <>
+          <line x1={PAD_L} x2={W - PAD_R} y1={Y(ceilAmsl)} y2={Y(ceilAmsl)}
+            stroke="var(--status-warn)" strokeWidth="1" strokeDasharray="2 3" />
+          <text x={W - PAD_R - 4} y={Y(ceilAmsl) - 4} textAnchor="end"
+            fill="var(--status-warn)" fontSize="10">圍欄上限（飛控不擋）</text>
+        </>
+      )}
       {rtlBand.length > 0 && (
         <>
           {rtlBand.map((x, i) => {
@@ -293,6 +317,27 @@ function Profile({ p }: { p: Profile }) {
       })()}
     </svg>
   );
+}
+
+interface Fence {
+  shape: "none" | "circle" | "polygon";
+  radius_m: number | null;
+  points: [number, number][];
+  alt_max_m: number | null;
+}
+
+/** 資料庫裡那份圍欄能不能給這一頁的編輯器編。**排除區與多個形狀不行**
+ *  ——那是 QGC 畫的，這裡畫不出來，回 null 讓畫面別去碰它。 */
+function editable(f: StoredFence | null | undefined): Fence | null {
+  if (!f) return null;
+  const ic = f.inclusion_circles ?? [], ip = f.inclusion_polygons ?? [];
+  if ((f.exclusion_circles?.length ?? 0) || (f.exclusion_polygons?.length ?? 0)) return null;
+  if (ic.length + ip.length !== 1) return null;
+  const alt = f.alt_max ?? null;
+  if (ic.length) return { shape: "circle", radius_m: ic[0].radius, points: [], alt_max_m: alt };
+  return { shape: "polygon", radius_m: null,
+           points: ip[0].map((p) => [p[0], p[1]] as [number, number]),
+           alt_max_m: alt };
 }
 
 export default function PlanPage() {
@@ -336,6 +381,24 @@ export default function PlanPage() {
   const [assume, setAssume] = useState<number | null>(null);
   const assumeRef = useRef<number | null>(null);
   assumeRef.current = assume;
+  // 圍欄。**畫在這裡的圍欄不會讓飛機停下來**——飛控照的是它自己的
+  // `FENCE_*`（使用者裁定 2026-09-09 選 M：先只做規劃端）。所以畫面上
+  // 永遠跟著一顆「飛控不擋」的晶片，不然畫了一個圈會被讀成飛不出去
+  const [fence, setFence] = useState<Fence>(
+    { shape: "none", radius_m: 120, points: [], alt_max_m: null });
+  /** 多邊形的頂點靠點地圖加。開著時地圖的點擊給圍欄，不給航點 */
+  const [fenceDraw, setFenceDraw] = useState(false);
+  const fenceRef = useRef<Fence>(fence);
+  fenceRef.current = fence;
+  /** 這一頁的編輯器**能不能代表**這份航線的圍欄。QGC 匯進來的可以有排除區、
+   *  多個形狀——那些畫面畫不出來，就不要送 `fence` 過去覆蓋掉它們 */
+  const [fenceOwn, setFenceOwn] = useState(isNew);
+  const fenceOwnRef = useRef(fenceOwn);
+  fenceOwnRef.current = fenceOwn;
+  const editFence = useCallback((f: Fence) => {
+    setFence(f); setFenceOwn(true);
+  }, []);
+  const fenceBody = () => (fenceOwnRef.current ? fenceRef.current : undefined);
   const [chk, setChk] = useState<Check | null>(null);
   const [spd, setSpd] = useState<{ wp: number | null; rad: number | null;
     rtl?: number | null; src: string }>(
@@ -419,6 +482,8 @@ export default function PlanPage() {
           .then((sg) => { if (!stop) { setSign(sg); setAck(new Set(sg.acknowledged ?? [])); } })
           .catch(() => { /* 讀不到就當作沒簽核——**不是當作簽過** */ });
         setProf(pr); setChk(ck); setSpd({ wp, rad, rtl, src });
+        const ef = editable(pr.fence);
+        if (ef) { setFence(ef); setFenceOwn(true); }
         spdRef.current = { wp, rad, rtl };
       } catch (e) {
         if (!stop) setErr(errText((e as Error).message, "讀不到這份航線"));
@@ -442,14 +507,14 @@ export default function PlanPage() {
             policy: pol,
             wp_spd: spdRef.current.wp, wp_radius: spdRef.current.rad,
             rtl_alt_m: spdRef.current.rtl,
-            assume_m: assumeRef.current }),
+            assume_m: assumeRef.current, fence: fenceBody() }),
         });
         const d = await r.json();
         if (r.ok) { setChk(d.check); setProf(d.profile); setDecisions(d.decisions ?? []); }
       } finally { setBusy(false); }
     }, 220);
     return () => clearTimeout(t);
-  }, [isNew, started, pts, pol, home.lat, home.lon, assume]);
+  }, [isNew, started, pts, pol, home.lat, home.lon, assume, fence]);
 
   /** 改假設高度 → 重算。**既有航線也要能改**，不然這個旋鈕只有從零模式
    *  用得到，而使用者最常做的事是拿既有航線來看。 */
@@ -465,11 +530,15 @@ export default function PlanPage() {
         const sp = spdRef.current.wp;
         const q = `?wp_spd=${sp ?? ""}${spdRef.current.rad != null
           ? `&wp_radius=${spdRef.current.rad}` : ""}${a}`;
-        if (list.length) {
+        // 畫面接手圍欄之後就一律走 preview——GET 那條讀的是資料庫裡的
+        // 圍欄，畫面上剛畫的那個它看不到
+        if (list.length || fenceOwnRef.current) {
           const r = await fetch(`${API}/api/plans/${id}/preview`, {
             method: "POST", headers: { "Content-Type": "application/json" },
             body: JSON.stringify({ overrides: list, wp_spd: sp,
-                                   wp_radius: spdRef.current.rad, assume_m: assume }),
+                                   wp_radius: spdRef.current.rad, assume_m: assume,
+                                   rtl_alt_m: spdRef.current.rtl,
+                                   fence: fenceBody() }),
           });
           const d = await r.json();
           if (r.ok) { setChk(d.check); setProf(d.profile); }
@@ -487,7 +556,7 @@ export default function PlanPage() {
       } catch { /* 讀不到就維持上一份，畫面不要空掉 */ } finally { setBusy(false); }
     }, 260);
     return () => clearTimeout(t);
-  }, [assume, id, isNew, ov]);
+  }, [assume, id, isNew, ov, fence]);
 
   // 改動 → 試算。**去抖**：拖滑桿一秒會產生幾十次變動，而每一次都要
   // 沿線取樣 DEM——沒有去抖等於用滑桿打後端
@@ -502,7 +571,8 @@ export default function PlanPage() {
           body: JSON.stringify({ overrides: list, wp_spd: spdRef.current.wp,
                                  wp_radius: spdRef.current.rad,
                                  rtl_alt_m: spdRef.current.rtl,
-                                 assume_m: assumeRef.current }),
+                                 assume_m: assumeRef.current,
+                                 fence: fenceBody() }),
         });
         const d = await r.json();
         if (r.ok) { setChk(d.check); setProf(d.profile); }
@@ -619,6 +689,21 @@ export default function PlanPage() {
       const o = ov[w.seq];
       return o?.lat != null ? { ...w, lat: o.lat, lon: o.lon as number } : w;
     });
+  /** 圍欄圓心永遠是起飛點——它是唯一飛機一定經過的地方，也對得上飛控的
+   *  `FENCE_RADIUS`（那顆也是以 home 為心） */
+  const fenceHome: [number, number] | null = isNew
+    ? (hasHome ? [Number(home.lat), Number(home.lon)] : null)
+    : (() => {
+        const t = stageWps.find((w) => w.kind === "takeoff") ?? stageWps[0];
+        return t ? [t.lat, t.lon] : null;
+      })();
+  const fenceShape: FenceShape | null =
+    fence.shape === "circle"
+      ? (fenceHome && fence.radius_m
+          ? { shape: "circle", center: fenceHome, radius_m: fence.radius_m } : null)
+      : fence.shape === "polygon" && fence.points.length
+        ? { shape: "polygon", points: fence.points }
+        : null;
   const worst = legs.reduce<number | null>(
     (m, l) => (l.agl_m == null ? m : m == null || l.agl_m < m ? l.agl_m : m), null);
 
@@ -672,6 +757,15 @@ export default function PlanPage() {
                 ? `返航 ${prof.rtl_alt_m} m`
                 : `返航 ${chk.terrain_rtl.min_agl_m} m`}
           </span>
+        )}
+        {fenceShape && (
+          <>
+            <span className="chip">圍欄 {fence.shape === "circle"
+              ? `圓形 ${fence.radius_m} m` : `多邊形 ${fence.points.length} 點`}
+              {fence.alt_max_m != null && `・上限 ${fence.alt_max_m} m`}</span>
+            {/* **這一顆不能省。** 畫了一個圈很容易被讀成「飛機不會飛出去」 */}
+            <span className="chip bad">飛控不擋</span>
+          </>
         )}
         {!isNew && sign && (
           <span className={`chip${sign.signed && !sign.stale ? "" : " bad"}`}
@@ -768,18 +862,72 @@ export default function PlanPage() {
               </span>}
         </div>
       )}
+      {/* 圍欄（使用者裁定 2026-09-09：圓形＋多邊形，只做規劃端）。
+          **飛控不照這個擋**——那句話跟著晶片走，見表頭 */}
+      {(stageWps.length > 0 || (isNew && started)) && (
+        <div className="newform fence-bar">
+          <div className="f"><span>圍欄</span>
+            <div className="seg2">
+              {([["circle", "圓形"], ["polygon", "多邊形"],
+                 ["none", "不設"]] as const).map(([k, t]) => (
+                <button key={k} aria-pressed={fence.shape === k}
+                  onClick={() => { editFence({ ...fence, shape: k });
+                                   setFenceDraw(k === "polygon"); }}>{t}</button>
+              ))}
+            </div>
+          </div>
+          {fence.shape === "circle" && (
+            <label className="f"><span>半徑 m（以起飛點為心）</span>
+              <input type="number" step="10" value={fence.radius_m ?? ""}
+                onChange={(e) => editFence({ ...fence,
+                  radius_m: e.target.value === "" ? null : Number(e.target.value) })} />
+            </label>
+          )}
+          {fence.shape === "polygon" && (
+            <>
+              <button className="btn-plain btn-sm" aria-pressed={fenceDraw}
+                onClick={() => setFenceDraw((v) => !v)}>
+                {fenceDraw ? "點地圖加頂點（進行中）" : "點地圖加頂點"}</button>
+              <button className="btn-plain btn-sm"
+                disabled={!fence.points.length}
+                onClick={() => editFence({ ...fence, points: [] })}>
+                清掉重畫（{fence.points.length} 點）</button>
+            </>
+          )}
+          {fence.shape !== "none" && (
+            <label className="f"><span>高度上限 m</span>
+              <input type="number" step="5" placeholder="不設"
+                value={fence.alt_max_m ?? ""}
+                onChange={(e) => editFence({ ...fence,
+                  alt_max_m: e.target.value === "" ? null : Number(e.target.value) })} />
+            </label>
+          )}
+          <span className="hint-line">
+            離起飛點算
+            <InfoTip tip={"這個圍欄是**規劃端的檢查**：航點超出去，這一頁會擋下。\n但**飛控不會照它擋**——飛控看的是它自己的 FENCE_ENABLE／FENCE_RADIUS／FENCE_ALT_MAX，這一頁還沒有寫那幾個參數。所以圈畫出來不代表飛機飛不出去。\n高度上限比的是**離起飛點**的高度；地形跟隨（frame 10）的航點高度不是離起飛點的，比不了，會照實說。"} />
+          </span>
+        </div>
+      )}
       {/* 只有起飛點時也要畫得出來——`stageWps.length` 會是 1 */}
       {(stageWps.length > 0 || (isNew && started)) && (
         <div className="plan-work">
           <TerrainStage wps={stageWps} sel={selWp} onSelect={setSelWp}
             assumeM={assume} onBuildings={onBlds}
             tipFor={tipFor}
-            placing={isNew && started}
+            fence={fenceShape}
+            placing={(isNew && started) || fenceDraw}
             center={isNew
               ? [hasHome ? Number(home.lon) : VIEW.lon,
                  hasHome ? Number(home.lat) : VIEW.lat]
               : undefined}
             onPlace={(l) => {
+              // 畫圍欄的時候地圖的點擊是頂點，不是航點——**一次只能在畫
+              // 一種東西**，不然使用者分不出下一下會加到哪裡
+              if (fenceDraw && fence.shape === "polygon") {
+                editFence({ ...fence,
+                  points: [...fence.points, [l.lat, l.lng]] });
+                return;
+              }
               // **起飛點是解鎖的地方，不是航線上的一個點**——它寫進 home，
               // 不進 pts。放完自動切回航點，不然下一下又蓋掉起飛點
               if (placeKind === "home") {
@@ -1052,7 +1200,8 @@ export default function PlanPage() {
         </details>
       )}
 
-      {prof && <Profile p={prof} />}
+      {prof && <Profile p={prof}
+        ceilM={fence.shape === "none" ? null : fence.alt_max_m} />}
       {/* **畫面上只留事實，解釋住 ⓘ**（使用者定案 2026-09-07、2026-09-09）。
           原本這裡是一整段講三種畫法與返航帶子的字——每一句都對，但那是
           設計備忘錄，讀第一次有用，讀第五十次只是把圖往下擠 */}
@@ -1203,7 +1352,7 @@ export default function PlanPage() {
                           ({ seq: Number(seq), ...v })),
                         wp_spd: spdRef.current.wp, wp_radius: spdRef.current.rad,
                         rtl_alt_m: spdRef.current.rtl, assume_m: assume,
-                        save: true }),
+                        fence: fenceBody(), save: true }),
                     });
                     const d = await r.json();
                     if (r.ok) {
@@ -1240,11 +1389,13 @@ export default function PlanPage() {
                       ? { home: [Number(home.lat), Number(home.lon)], points: pts,
                           policy: pol,
                           wp_spd: spdRef.current.wp, wp_radius: spdRef.current.rad,
-                          rtl_alt_m: spdRef.current.rtl, save_as: naming }
+                          rtl_alt_m: spdRef.current.rtl, fence: fenceBody(),
+                          save_as: naming }
                       : { overrides: Object.entries(ov).map(([seq, v]) =>
                             ({ seq: Number(seq), ...v })),
                           wp_spd: spdRef.current.wp, wp_radius: spdRef.current.rad,
-                          rtl_alt_m: spdRef.current.rtl, save_as: naming };
+                          rtl_alt_m: spdRef.current.rtl, fence: fenceBody(),
+                          save_as: naming };
                     const r = await fetch(url, { method: "POST",
                       headers: { "Content-Type": "application/json" },
                       body: JSON.stringify(body) });

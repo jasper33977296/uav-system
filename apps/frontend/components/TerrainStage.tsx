@@ -37,6 +37,16 @@ const BLUE = 0x3987e5, RED = 0xe05e5e, PICK = 0xd97757, HOT = 0xf0eee6;
  *  不用橘色：橘在這套系統裡是互動 chrome 與「假設高度」的顏色，會撞。 */
 const GROUND_PT = 0x0ca30c;
 
+/** 畫面上畫的圍欄。**規劃端的約束**——飛控不照它擋，那句話由呼叫端說。 */
+export interface FenceShape {
+  shape: "circle" | "polygon";
+  /** circle：圓心（起飛點）與半徑 */
+  center?: [number, number];      // [lat, lon]
+  radius_m?: number;
+  /** polygon：[[lat, lon], …] */
+  points?: [number, number][];
+}
+
 /** 滑鼠指到的東西。`kind:"leg"` 的 `i` 是「第 i 段」＝ wps[i-1] → wps[i]。 */
 export interface StageHit { kind: "wp" | "leg"; i: number }
 /** 這一格要顯示什麼由**呼叫端**決定：航段的長度、速度、來源、判定都住在
@@ -45,7 +55,8 @@ export interface StageTip { title: string; rows: [string, string][]; bad?: boole
 
 export default function TerrainStage({ wps, sel, onSelect, tipFor, placing,
                                       onPlace, onMove, center, assumeM = null,
-                                      onBuildings, exaggeration = 1 }: {
+                                      onBuildings, fence = null,
+                                      exaggeration = 1 }: {
   wps: StageWp[]; sel: number; onSelect: (i: number) => void;
   tipFor?: (h: StageHit) => StageTip | null;
   /** 放點模式：點地形＝加一個航點（maplibre 自己有 3px 的 clickTolerance，
@@ -61,6 +72,7 @@ export default function TerrainStage({ wps, sel, onSelect, tipFor, placing,
   /** 沿線的建物清單（含長寬高）。**規劃頁不自己再查一次**——那就會有
    *  兩份可能不同步的資料（§9-F） */
   onBuildings?: (bs: BuildingFeat[]) => void;
+  fence?: FenceShape | null;
   exaggeration?: number;
 }) {
   const box = useRef<HTMLDivElement>(null);
@@ -294,6 +306,15 @@ export default function TerrainStage({ wps, sel, onSelect, tipFor, placing,
   useEffect(() => { dataRef.current.dirty = true; mapRef.current?.triggerRepaint(); },
     [wps, sel]);
 
+  useEffect(() => {
+    const m = mapRef.current;
+    if (!m) return;
+    const paint = () => m.isStyleLoaded() && paintFence(m, fence);
+    paint();
+    m.on("load", paint);
+    return () => { m.off("load", paint); };
+  }, [fence]);
+
   return (
     <div className={`stage3d-wrap${placing ? " placing" : ""}`}>
       {/* **圖例直接回答「哪個是起飛點」。** 形狀本身有分，但那要先知道
@@ -501,6 +522,52 @@ function paintBuildings(map: maplibregl.Map, fc: unknown, blindH: number) {
       "fill-extrusion-color": "#c98a2b", "fill-extrusion-opacity": 0.35,
     },
   }, before);
+}
+
+/** 圍欄畫成地面上的一圈虛線——**它是平面範圍**，高度上限由剖面圖那條線講。
+ *  圓形用 64 邊形近似：地圖上看不出差別，而且與多邊形共用同一組圖層。 */
+function fenceGeo(f: FenceShape | null): GeoJSON.FeatureCollection {
+  let ring: [number, number][] = [];
+  if (f?.shape === "circle" && f.center && f.radius_m) {
+    const [lat, lon] = f.center, r = f.radius_m;
+    const dLat = r / 110574, dLon = r / (111320 * Math.cos(lat * Math.PI / 180));
+    for (let i = 0; i <= 64; i++) {
+      const a = (i / 64) * Math.PI * 2;
+      ring.push([lon + dLon * Math.cos(a), lat + dLat * Math.sin(a)]);
+    }
+  } else if (f?.shape === "polygon" && (f.points?.length ?? 0) >= 3) {
+    ring = f.points!.map(([la, lo]) => [lo, la] as [number, number]);
+    ring.push(ring[0]);
+  }
+  const feats: GeoJSON.Feature[] = ring.length
+    ? [{ type: "Feature", properties: {},
+         geometry: { type: "Polygon", coordinates: [ring] } }] : [];
+  // 頂點單獨畫出來——**還沒滿三點時多邊形不成立**，但使用者要看得到
+  // 自己點了哪幾下，不然前兩下像沒有反應
+  if (f?.shape === "polygon") {
+    for (const [la, lo] of f.points ?? [])
+      feats.push({ type: "Feature", properties: {},
+                   geometry: { type: "Point", coordinates: [lo, la] } });
+  }
+  return { type: "FeatureCollection", features: feats };
+}
+
+function paintFence(map: maplibregl.Map, f: FenceShape | null) {
+  const data = fenceGeo(f);
+  const src = map.getSource("fence") as maplibregl.GeoJSONSource | undefined;
+  if (src) { src.setData(data); return; }
+  const before = map.getLayer("route3d") ? "route3d" : undefined;
+  map.addSource("fence", { type: "geojson", data });
+  map.addLayer({ id: "fence-fill", type: "fill", source: "fence",
+    paint: { "fill-color": "#fab219", "fill-opacity": 0.06 } }, before);
+  map.addLayer({ id: "fence-line", type: "line", source: "fence",
+    paint: { "line-color": "#fab219", "line-width": 2,
+             "line-dasharray": [3, 2] } }, before);
+  map.addLayer({ id: "fence-pt", type: "circle", source: "fence",
+    filter: ["==", ["geometry-type"], "Point"],
+    paint: { "circle-radius": 4, "circle-color": "#fab219",
+             "circle-stroke-width": 1, "circle-stroke-color": "#1b1a17" } },
+    before);
 }
 
 /** 畫面中心的地面高度：地形開著的時候，相機矩陣的原點就在這個高度上。 */

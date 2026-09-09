@@ -104,8 +104,11 @@ ck("decisions 裡有「退回」這件事",
 
 print("\n── decisions：系統替你決定了什麼（§3 動作 3）──")
 ws = {d["what"] for d in b["decisions"]}
-for need in ("起飛高度", "改速度項的位置", "降落地點", "降落方式", "高度基準"):
+for need in ("起飛高度", "改速度項的位置", "降落地點", "降落方式"):
     ck(f"有「{need}」", need in ws, sorted(ws))
+# 「高度基準」那一條刪掉了（使用者 2026-09-09）：它是操作員在畫面上選的，
+# 不是系統替他決定的——列在決策表裡等於把他自己的選擇當成系統的判斷
+ck("「高度基準」不在決策表裡", "高度基準" not in ws, sorted(ws))
 ck("每一條都說得出為什麼", all(d["why"] for d in b["decisions"]))
 sp = next(d for d in b["decisions"] if d["what"] == "改速度項的位置")
 ck("改速度項在第一個航點之前", "之前" in sp["value"], sp["value"])
@@ -257,6 +260,38 @@ ck("系統補的點標成 auto（中繼點、進場點）",
    any(x.get("auto") for x in named), [x.get("auto") for x in named])
 ck("操作員放的點不是 auto",
    not any(x.get("auto") for x in named if x["kind"] == "takeoff"))
+
+print("\n── 圍欄（使用者裁定 2026-09-09：圓形＋多邊形，只做規劃端）──")
+fc = pc.fence_circle(HOME, 80, 30)
+far = [{"seq": 0, "lat": HOME["lat"], "lon": HOME["lon"], "alt": 5,
+        "frame": 3, "command": 16, "action": "takeoff"},
+       {"seq": 1, "lat": HOME["lat"] + 0.002, "lon": HOME["lon"], "alt": 5,
+        "frame": 3, "command": 16, "action": "waypoint"},
+       {"seq": 2, "lat": HOME["lat"], "lon": HOME["lon"], "alt": 45,
+        "frame": 3, "command": 16, "action": "waypoint"}]
+fp, fw = pc.check_fence(far, fc)
+ck("飛出圓形圍欄要報", any("圍欄之外" in x for x in fp), fp)
+ck("超過高度上限要報", any("高度上限" in x for x in fp), fp)
+ck("在圈內又不超高的不報",
+   not pc.check_fence(far[:1], fc)[0], pc.check_fence(far[:1], fc)[0])
+
+# frame 10 的高度是離**地面**的，不是離起飛點——比不了就說比不了，不猜
+terr = [{"seq": 0, "lat": HOME["lat"], "lon": HOME["lon"], "alt": 5,
+         "frame": 10, "command": 16, "action": "waypoint"}]
+ck("地形跟隨的高度比不了上限，要說出來",
+   any("比不了" in x for x in pc.check_fence(terr, fc)[1]),
+   pc.check_fence(terr, fc))
+
+poly = pc.fence_polygon([(HOME["lat"] - 0.001, HOME["lon"] - 0.001),
+                         (HOME["lat"] - 0.001, HOME["lon"] + 0.001),
+                         (HOME["lat"] + 0.001, HOME["lon"])], 30)
+ck("多邊形圍欄擋得住外面的點",
+   any("圍欄之外" in x for x in pc.check_fence(far, poly)[0]),
+   pc.check_fence(far, poly)[0])
+ck("少於三點就不是多邊形", pc.fence_polygon([(1, 2), (3, 4)]) == {})
+ck("沒有高度上限就不判高度",
+   not pc.check_fence(far, pc.fence_circle(HOME, 500))[0],
+   pc.check_fence(far, pc.fence_circle(HOME, 500))[0])
 
 print()
 if fails:

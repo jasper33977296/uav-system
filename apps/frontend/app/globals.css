@@ -1975,3 +1975,9 @@ details.card summary { cursor: pointer; font-size: 14px; font-weight: 600; }
 .newform .f:has(.opt) { min-width: 190px; gap: 4px; }
 .newform .f:has(.seg2) { min-width: 148px; }
 .newform .seg2 button { white-space: nowrap; }
+
+/* 圍欄那一條：**顏色與地圖上的圈同一個**（琥珀），讓「這條在講那個圈」
+   不必用文字說 */
+.fence-bar { border-left: 3px solid var(--status-warn); margin-top: 8px; }
+.fence-bar .btn-plain[aria-pressed="true"] {
+  color: var(--status-warn); border-color: var(--status-warn); }

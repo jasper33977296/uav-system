@@ -2609,7 +2609,7 @@ async def mission_profile(plan_id: str, assume_m: float | None = None,
     線穿到地下、或兩條線貼在一起，看一眼就知道。
     """
     row = await db.pool.fetchrow(
-        "SELECT home, policy FROM plans WHERE id = $1", plan_id)
+        "SELECT home, policy, fence FROM plans WHERE id = $1", plan_id)
     if row is None:
         raise HTTPException(404, "無此路徑")
     rows = await db.pool.fetch(
@@ -2636,6 +2636,8 @@ async def mission_profile(plan_id: str, assume_m: float | None = None,
     # 只看 frame 會顯示「離起飛點」——那正是 09-07 那句誤導
     pol = row["policy"]
     prof["policy"] = json.loads(pol) if isinstance(pol, str) else pol
+    fc = row["fence"]
+    prof["fence"] = json.loads(fc) if isinstance(fc, str) else fc
     return prof
 
 
@@ -2784,6 +2786,30 @@ class PlanOverride(BaseModel):
     lon: float | None = None
 
 
+class FenceIn(BaseModel):
+    """畫面上畫的圍欄。**規劃端的約束，飛控不會照它擋**（見 `check_fence`）。"""
+    shape: str = "none"       # none／circle／polygon
+    #: circle：半徑（公尺），圓心固定是起飛點
+    radius_m: float | None = None
+    #: polygon：[[lat, lon], …]，少於三點視為沒畫
+    points: list[list[float]] = Field(default_factory=list, max_length=200)
+    alt_max_m: float | None = None
+
+
+def _fence_of(f: "FenceIn | None", home: list[float] | None) -> dict | None:
+    if f is None or f.shape == "none":
+        return None
+    if f.shape == "circle":
+        if not f.radius_m or not home or len(home) < 2:
+            return None
+        return plan_check.fence_circle({"lat": home[0], "lon": home[1]},
+                                       f.radius_m, f.alt_max_m)
+    if f.shape == "polygon":
+        return plan_check.fence_polygon([(p[0], p[1]) for p in f.points
+                                         if len(p) >= 2], f.alt_max_m) or None
+    return None
+
+
 class PreviewIn(BaseModel):
     overrides: list[PlanOverride] = Field(default_factory=list, max_length=500)
     wp_spd: float | None = None
@@ -2797,6 +2823,8 @@ class PreviewIn(BaseModel):
     #: 存回**這一份**（覆蓋航點）。與 `save_as` 互斥。
     #: **會讓那一份的人工審查失效**——簽核綁在 waypoints_hash 上
     save: bool = False
+    #: 給了就用畫面上這一份圍欄（也會跟著存）；不給就用航線原本宣告的
+    fence: FenceIn | None = None
 
 
 def _apply_overrides(wps: list[dict], ov: list[PlanOverride]) -> list[dict]:
@@ -2869,6 +2897,8 @@ async def preview_plan(plan_id: str, body: PreviewIn):
     home = row["home"]
     if isinstance(home, str):
         home = json.loads(home)
+    if body.fence is not None:
+        fence = _fence_of(body.fence, home)
     h = ({"lat": home[0], "lon": home[1]}
          if home and len(home) >= 2 and (home[0] or home[1]) else
          next(({"lat": w["lat"], "lon": w["lon"]} for w in wps
@@ -2912,6 +2942,10 @@ async def preview_plan(plan_id: str, body: PreviewIn):
                                   if w.get(k) is not None})
                           if w.get("command") is not None else None)
                          for w in stored])
+                    if body.fence is not None:
+                        await con.execute(
+                            "UPDATE plans SET fence = $2 WHERE id = $1",
+                            plan_id, jdumps(fence) if fence else None)
             out["saved_id"] = plan_id
             out["overwrote"] = True
         else:
@@ -2984,6 +3018,8 @@ class DraftIn(BaseModel):
     assume_m: float | None = None
     #: 機上的返航高度。**沒讀到就不判返航**
     rtl_alt_m: float | None = None
+    #: 畫面上畫的圍欄
+    fence: FenceIn | None = None
     save_as: str | None = None
 
 
@@ -3001,6 +3037,7 @@ async def draft_plan(body: DraftIn):
     h = {"lat": body.home[0], "lon": body.home[1]}
     pol = body.policy.model_dump()
     pts = [p.model_dump() for p in body.points]
+    fence = _fence_of(body.fence, body.home)
     assume = body.assume_m
     built = plan_check.build_plan(pts, pol, h, dem=terrain.shared())
     applied = None
@@ -3011,7 +3048,7 @@ async def draft_plan(body: DraftIn):
             settings.geofence_alt_m, settings.geofence_margin,
             dem=terrain.shared(), home=body.home, wp_spd=body.wp_spd,
             wp_radius=body.wp_radius, assume_m=assume,
-            rtl_alt_m=body.rtl_alt_m)
+            rtl_alt_m=body.rtl_alt_m, fence=fence)
         res = plan_check.resolve(body.action.name, pre, body.action.seq)
         applied = res
         if res["kind"] == "assume":
@@ -3042,14 +3079,15 @@ async def draft_plan(body: DraftIn):
         wps, settings.geofence_radius_m, settings.geofence_alt_m,
         settings.geofence_margin, dem=terrain.shared(),
         home=body.home, wp_spd=body.wp_spd, wp_radius=body.wp_radius,
-        assume_m=assume, rtl_alt_m=body.rtl_alt_m)
+        assume_m=assume, rtl_alt_m=body.rtl_alt_m, fence=fence)
     profile = plan_check.route_profile(wps, h, dem=terrain.shared(),
                                        assume_m=assume,
                                        rtl_alt_m=body.rtl_alt_m)
     saved = None
     if body.save_as:
         saved = await _store_mission(body.save_as.strip() or "新航線", "drawn",
-                                     wps, home=body.home, policy=pol)
+                                     wps, home=body.home, policy=pol,
+                                     fence=fence)
     if profile is not None:
         profile["policy"] = pol
     return {"check": check, "profile": profile, "saved_id": saved,

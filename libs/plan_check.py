@@ -188,7 +188,9 @@ def check_waypoints(wps: list[dict], fence_r: float, fence_alt: float,
     # 我拿系統預設在量」，後者多半代表**預設值該改，不是航線該改**
     fence_src = "plan" if fence else "none"   # none＝這份沒宣告，系統也不替它設
     if fence:
-        fp, fw = check_fence(nav, fence)
+        ha_f = (terrain.surface(origin["lat"], origin["lon"], dem).ground
+                if origin and dem is not None else None)
+        fp, fw = check_fence(nav, fence, ha_f)
         problems += fp
         warnings += fw
 
@@ -208,12 +210,9 @@ def check_waypoints(wps: list[dict], fence_r: float, fence_alt: float,
         if alt is not None:
             max_alt = max(max_alt, float(alt))
 
-    if not fence:
-        warnings.append(
-            f"這份航線沒有宣告圍欄（.plan 的 geoFence 是空的）——"
-            f"最遠航點離起飛點 {max_d:.0f} m、最高 {max_alt:.0f} m，"
-            "**系統不替你設一個範圍**，這條航線適不適合這個場地要你自己判斷。"
-            "要讓系統幫你擋，在 QGC 的 Plan 頁畫一個 GeoFence 再存檔")
+    # 2026-09-09：拿掉「沒有宣告圍欄」那句警告。它的結尾是「去 QGC 畫一個」
+    # ——而圍欄現在**在這裡就畫得出來**（規劃頁）。一句叫人去別的軟體做事的
+    # 警告，在功能補上之後就只剩噪音。
     # 地形預檢（issues/047 §1-B）。擺在最後：它需要上面解出來的起飛點，
     # 而且它的發現要跟圍欄/機種的發現混在同一組 problems/warnings 裡
     # ——前端已經會顯示那兩組，多開一個顯示點就多一個沒人接的欄位（issues/037）
@@ -1265,11 +1264,9 @@ def build_plan(points: list[dict], policy: dict | None = None,
         add(lat=float(lz["lat"]), lon=float(lz["lon"]), alt=0.0,
             action="land", command=_LAND, frame=3)
 
-    decide("高度基準", _MODE_TEXT[mode] + f"（{pol['height_m']:g} m）",
-           "**離地面是逐點用地面站的 DEM 算出來的**，寫進航線的是 frame 3 的"
-           "數字——飛控不需要有地形圖庫。但它只有 DEM 那麼準，"
-           "取樣點之間可能錯；真的要貼地飛需要測距儀"
-           if mode == POLICY_AGL else "政策")
+    # 高度基準**不列進決策表**：頁首那顆晶片已經寫著「離地面 3 m」，
+    # 而同一段解釋也已經在它的 ⓘ 裡。決策表是「系統替你決定了什麼」，
+    # 高度基準是**你自己選的**——它本來就不該在這張表上。
     if fallback:
         decide("**退回離起飛點**", "部分航點",
                "那些點查不到地形高程，離地面算不出來")
@@ -1518,9 +1515,65 @@ def _in_polygon(lat: float, lon: float, poly) -> bool:
     return inside
 
 
-def check_fence(wps: list[dict], fence: dict) -> tuple[list[str], list[str]]:
-    """航點對 .plan 自帶圍欄的檢查。回傳 (problems, warnings)。"""
+def fence_circle(home: dict, radius_m: float,
+                 alt_max: float | None = None) -> dict:
+    """以起飛點為心的圓形圍欄。**建圍欄只有這一處**，畫面不要自己拼字典。"""
+    return {"inclusion_circles": [{"lat": float(home["lat"]),
+                                   "lon": float(home["lon"]),
+                                   "radius": float(radius_m)}],
+            "exclusion_circles": [], "inclusion_polygons": [],
+            "exclusion_polygons": [],
+            "alt_max": None if alt_max is None else float(alt_max),
+            "source": "drawn"}
+
+
+def fence_polygon(points, alt_max: float | None = None) -> dict:
+    """多邊形圍欄。`points` ＝ [(lat, lon), ...]，少於三點就是沒有圍欄。"""
+    pts = [(float(a), float(b)) for a, b in points]
+    if len(pts) < 3:
+        return {}
+    return {"inclusion_circles": [], "exclusion_circles": [],
+            "inclusion_polygons": [pts], "exclusion_polygons": [],
+            "alt_max": None if alt_max is None else float(alt_max),
+            "source": "drawn"}
+
+
+def check_fence(wps: list[dict], fence: dict,
+                home_amsl: float | None = None) -> tuple[list[str], list[str]]:
+    """航點對這份航線自帶圍欄的檢查。回傳 (problems, warnings)。
+
+    **這是規劃端的約束，不是飛行中的保護。** 圍欄畫在這裡，飛機不會因此
+    停下來——那要飛控自己的 `FENCE_*`（2026-09-09 裁定先只做規劃端）。
+    畫面必須說得出這件事，否則畫了一個圈會被讀成「飛機不會飛出去」。
+    """
     problems, warnings = [], []
+    # 高度上限：與 `FENCE_ALT_MAX` 同義，**離起飛點**。
+    # frame 10（地形跟隨）的高度不是離起飛點的，比不了——說出來，不猜
+    amax = fence.get("alt_max")
+    if amax is not None:
+        skipped_frames = set()
+        for w in wps:
+            if w.get("alt") is None or not _is_nav(w):
+                continue
+            fr = w.get("frame")
+            fr = 3 if fr is None else int(fr)
+            if fr in _REL_FRAMES:
+                rel = float(w["alt"])
+            elif fr in _AMSL_FRAMES and home_amsl is not None:
+                rel = float(w["alt"]) - home_amsl
+            else:
+                skipped_frames.add(fr)
+                continue
+            if rel > amax:
+                problems.append(
+                    f"seq {w.get('seq')} 高 {rel:.1f} m，超過圍欄的高度上限 "
+                    f"{amax:g} m（離起飛點）")
+        if skipped_frames:
+            warnings.append(
+                f"有 {len(skipped_frames)} 種高度基準（frame "
+                f"{'、'.join(str(f) for f in sorted(skipped_frames))}）"
+                f"比不了圍欄的高度上限——**那是離起飛點的**，"
+                f"而那些航點的高度不是")
     inc_c = fence.get("inclusion_circles") or []
     inc_p = fence.get("inclusion_polygons") or []
     exc_c = fence.get("exclusion_circles") or []
