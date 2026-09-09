@@ -1842,6 +1842,17 @@ details.card summary { cursor: pointer; font-size: 14px; font-weight: 600; }
   font-variant-numeric: tabular-nums;
 }
 .plan-legs td.bad { color: var(--status-danger); }
+/* 系統替你決定了什麼：**跟發現分開**——它們不是問題，是「我幫你補了這些」 */
+.plan-decisions { margin: 12px 0; }
+.plan-decisions > summary {
+  cursor: pointer; color: var(--muted); font-size: 13px; padding: 4px 0;
+}
+.plan-decisions td.why { font-variant-numeric: normal; color: var(--muted); }
+/* 例外＝手動改過的點。改政策不會動它，所以要看得出來 */
+.tag-warn {
+  color: var(--status-warn); border: 1px solid var(--status-warn);
+  border-radius: 4px; padding: 1px 6px; font-size: 12px;
+}
 .plan-legs td.muted { color: var(--muted); }
 /* 3D 地形舞台（issues/048 F1）*/
 .stage3d { height: 460px; border: 1px solid var(--border); border-radius: 10px;

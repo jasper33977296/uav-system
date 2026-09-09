@@ -36,7 +36,7 @@ ck("預設高度剛好等於 LOW_ALT_M（刻意，見 §11）",
 print("\n── agl：逐點的 alt 應該各不相同 ──")
 b = pc.build_plan(PTS, None, HOME, dem=dem)
 wps = [w for w in b["waypoints"] if w["action"] == "waypoint"]
-mine = [w for w in wps if not w.get("filled")]
+mine = [w for w in wps if not w.get("filled") and not w.get("approach")]
 ck("我放的三個點都在（其餘是系統補的中繼點）", len(mine) == 3,
    f"{len(mine)} 個我放的／{len(wps)} 個總共")
 ck("有補中繼點——逐點貼地不等於整段貼地",
@@ -75,7 +75,7 @@ def at(built, lat):
     """按座標找我放的那個點——中繼點會讓索引跑掉。"""
     return next(w for w in built["waypoints"]
                 if w["action"] == "waypoint" and not w.get("filled")
-                and abs(w["lat"] - lat) < 1e-6)
+                and not w.get("approach") and abs(w["lat"] - lat) < 1e-6)
 
 e4, e5 = at(b4, PTS[1]["lat"]), at(b5, PTS[1]["lat"])
 p4, p5 = at(b4, PTS[0]["lat"]), at(b5, PTS[0]["lat"])
@@ -109,6 +109,25 @@ for need in ("起飛高度", "改速度項的位置", "降落地點", "降落方
 ck("每一條都說得出為什麼", all(d["why"] for d in b["decisions"]))
 sp = next(d for d in b["decisions"] if d["what"] == "改速度項的位置")
 ck("改速度項在第一個航點之前", "之前" in sp["value"], sp["value"])
+
+print("\n── 起飛高度跟著政策 ──")
+tk = b["waypoints"][0]
+ck("離地 3 m 的航線從 3 m 起飛（不是 1.5）", tk["alt"] == 3.0, tk["alt"])
+b7 = pc.build_plan(PTS, {"height_m": 0.8}, HOME, dem=dem)
+ck("政策比最低起飛高度還低時，用最低那個",
+   b7["waypoints"][0]["alt"] == pc.MIN_TAKEOFF_ALT_M, b7["waypoints"][0]["alt"])
+b8 = pc.build_plan(PTS, {"takeoff_alt_m": 10.0}, HOME, dem=dem)
+ck("操作員自己給了就用他的", b8["waypoints"][0]["alt"] == 10.0,
+   b8["waypoints"][0]["alt"])
+mn = min(l["agl_m"] for l in pc.check_waypoints(
+    b["waypoints"], 1000, 120, home=[HOME["lat"], HOME["lon"]], dem=dem,
+    wp_spd=1.0)["legs"] if l.get("agl_m") is not None)
+ck("整條最低離地不再被起飛那一段拖下去", mn > 2.0, mn)
+ck("整條每一段都貼著政策（含爬升與進場）", abs(mn - 3.0) < 0.05, mn)
+ap = [w for w in b["waypoints"] if w.get("approach")]
+ck("有降落前的進場點", len(ap) == 1, len(ap))
+ck("decisions 說得出進場點是系統補的",
+   any("進場" in d["what"] for d in b["decisions"]), [d["what"] for d in b["decisions"]])
 
 print("\n── 產出仍然是一份飛得起來的航線 ──")
 ck("第一項是起飛", b["waypoints"][0]["action"] == "takeoff")

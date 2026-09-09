@@ -27,7 +27,10 @@ interface Pt { d: number; lat?: number; lon?: number; ground: number | null;
    *  **樓層數推算的與量到的不是同一件事**，畫面要說得出來 */
   src?: string;
   plan: number | null; agl: number | null; seq: number | null }
-interface Profile { points: Pt[]; home_amsl_m: number | null; frames: number[] }
+interface Profile { points: Pt[]; home_amsl_m: number | null; frames: number[];
+  /** 這份航線是用哪個政策產生的。**有政策就以它為準**——離地面的
+   *  航線寫進去也是 frame 3，只看 frame 會顯示「離起飛點」 */
+  policy?: Policy | null }
 interface Leg {
   from: number; to: number; length_m: number; agl_m: number | null;
   speed_ms: number | null; speed_src: string; turn_deg?: number | null;
@@ -35,6 +38,20 @@ interface Leg {
    *  一次——改了後端的常數，畫面不會跟著變，而且看起來完全正常 */
   low_fast?: boolean;
 }
+/** 高度與速度的**政策**：操作員的意圖。逐點的 alt 是它解出來的結果。 */
+interface Policy {
+  mode: "agl" | "home" | "amsl"; height_m: number; speed_ms: number;
+  /** null ＝跟著政策算。**離地 3 m 的航線就從 3 m 起飛**——用 1.5 m 起飛
+   *  再飛向 3 m 離地的航點，中間那一段會在地面爬升處貼地 */
+  takeoff_alt_m: number | null; land_at_home: boolean; land_mode: "vert" | "glide";
+}
+/** 系統替你決定了什麼（redesign §3 動作 3）。 */
+interface Decision { what: string; value: string; why: string; seq: number | null }
+
+const MODE_TEXT: Record<Policy["mode"], string> = {
+  agl: "離地面", home: "離起飛點", amsl: "固定海拔",
+};
+
 interface Limits { low_alt_m: number; low_speed_ms: number; min_takeoff_alt_m: number;
   /** 未量測建物假設高度的**預設值**（後端給，前端不要自己抄一份） */
   assumed_default_m?: number }
@@ -234,14 +251,17 @@ export default function PlanPage() {
   /** **從零產生**（使用者 2026-09-08：兩個入口都要）。`/plans/new/plan`。 */
   const isNew = id === "new";
   const [home, setHome] = useState({ lat: "24.773449", lon: "121.045864" });
-  const [tkAlt, setTkAlt] = useState(1.5);
-  const [drawSpd, setDrawSpd] = useState(1.0);
+  // **先畫線，數字後到**（使用者裁定 2026-09-09）：政策有預設值，
+  // 所以放完點就已經是一條合法航線，沒有一個欄位需要先填
+  const [pol, setPol] = useState<Policy>({
+    mode: "agl", height_m: 3, speed_ms: 1, takeoff_alt_m: null,
+    land_at_home: true, land_mode: "vert",
+  });
   const [pts, setPts] = useState<
-    { lat: number; lon: number; alt: number; kind: string }[]>([]);
+    { lat: number; lon: number; h?: number; alt_source?: string; kind: string }[]>([]);
+  const [decisions, setDecisions] = useState<Decision[]>([]);
   const [started, setStarted] = useState(false);
   const [placeKind, setPlaceKind] = useState("wp");
-  const [landHome, setLandHome] = useState(true);
-  const [landMode, setLandMode] = useState("vert");
   const [naming, setNaming] = useState<string | null>(null);
   const [name, setName] = useState("");
   const [prof, setProf] = useState<Profile | null>(null);
@@ -338,18 +358,16 @@ export default function PlanPage() {
           method: "POST", headers: { "Content-Type": "application/json" },
           body: JSON.stringify({
             home: [Number(home.lat), Number(home.lon)], points: pts,
-            takeoff_alt: tkAlt, speed: drawSpd, land_at_home: landHome,
-            land_mode: landMode,
+            policy: pol,
             wp_spd: spdRef.current.wp, wp_radius: spdRef.current.rad,
             assume_m: assumeRef.current }),
         });
         const d = await r.json();
-        if (r.ok) { setChk(d.check); setProf(d.profile); }
+        if (r.ok) { setChk(d.check); setProf(d.profile); setDecisions(d.decisions ?? []); }
       } finally { setBusy(false); }
     }, 220);
     return () => clearTimeout(t);
-  }, [isNew, started, pts, tkAlt, drawSpd, home.lat, home.lon, landHome, landMode,
-      assume]);
+  }, [isNew, started, pts, pol, home.lat, home.lon, assume]);
 
   /** 改假設高度 → 重算。**既有航線也要能改**，不然這個旋鈕只有從零模式
    *  用得到，而使用者最常做的事是拿既有航線來看。 */
@@ -473,7 +491,13 @@ export default function PlanPage() {
       {err && <div className="form-err">{err}</div>}
 
       <div className="plan-facts">
-        <span className="chip">{prof ? frameLabel(prof.frames) : "…"}</span>
+        <span className="chip" title={prof?.policy?.mode === "agl"
+          ? "寫進航線的是 frame 3 的數字，但每個航點的高度是用地面站的 DEM 逐點算出來的——飛控不必有地形圖庫。它只有 DEM 那麼準，取樣點之間可能錯"
+          : undefined}>
+          {prof?.policy
+            ? `高度＝${MODE_TEXT[prof.policy.mode]} ${prof.policy.height_m} m`
+            : prof ? frameLabel(prof.frames) : "…"}
+        </span>
         {prof?.home_amsl_m != null && (
           <span className="chip">起飛點 {prof.home_amsl_m} m（海拔）</span>
         )}
@@ -498,14 +522,28 @@ export default function PlanPage() {
           <label className="f"><span>起飛點經度</span>
             <input value={home.lon} disabled={started}
               onChange={(e) => setHome((h) => ({ ...h, lon: e.target.value }))} /></label>
-          <label className="f"><span>起飛高度</span>
-            <input type="number" step="0.5" value={tkAlt} disabled={started}
-              onChange={(e) => setTkAlt(Number(e.target.value))} /></label>
-          <label className="f"><span>速度 m/s</span>
-            <input type="number" step="0.1" value={drawSpd} disabled={started}
-              onChange={(e) => setDrawSpd(Number(e.target.value))} /></label>
+          {/* **開始畫之前只問起飛點。** 高度與速度在看到地形之後才談——
+              舊版要人在放第一個點以前就填那兩個數字，順序是反的 */}
           {started && (
             <>
+              <div className="f"><span>高度基準</span>
+                <div className="seg2">
+                  {(["agl", "home", "amsl"] as const).map((k) => (
+                    <button key={k} aria-pressed={pol.mode === k}
+                      onClick={() => setPol((q) => ({ ...q, mode: k }))}>
+                      {MODE_TEXT[k]}</button>
+                  ))}
+                </div>
+              </div>
+              <label className="f">
+                <span>{MODE_TEXT[pol.mode]} m</span>
+                <input type="number" step="0.5" value={pol.height_m}
+                  onChange={(e) => setPol((q) =>
+                    ({ ...q, height_m: Number(e.target.value) }))} /></label>
+              <label className="f"><span>速度 m/s</span>
+                <input type="number" step="0.1" value={pol.speed_ms}
+                  onChange={(e) => setPol((q) =>
+                    ({ ...q, speed_ms: Number(e.target.value) }))} /></label>
               <div className="f"><span>放點類型</span>
                 <div className="seg2">
                   {[["wp", "航點"], ["land", "降落點"]].map(([k, t]) => (
@@ -515,22 +553,22 @@ export default function PlanPage() {
                 </div>
               </div>
               <div className="f"><span>降落在哪裡</span>
-                <label className="opt"><input type="radio" checked={landHome}
-                  onChange={() => setLandHome(true)} />起飛點</label>
-                <label className="opt"><input type="radio" checked={!landHome}
-                  onChange={() => setLandHome(false)} />標成降落點的位置</label>
+                <label className="opt"><input type="radio" checked={pol.land_at_home}
+                  onChange={() => setPol((q) => ({ ...q, land_at_home: true }))} />起飛點</label>
+                <label className="opt"><input type="radio" checked={!pol.land_at_home}
+                  onChange={() => setPol((q) => ({ ...q, land_at_home: false }))} />標成降落點的位置</label>
               </div>
               <div className="f"><span>降落方式</span>
-                <label className="opt"><input type="radio" checked={landMode === "vert"}
-                  onChange={() => setLandMode("vert")} />飛到定點再垂直降落</label>
-                <label className="opt"><input type="radio" checked={landMode === "glide"}
-                  onChange={() => setLandMode("glide")} />逐漸降落</label>
+                <label className="opt"><input type="radio" checked={pol.land_mode === "vert"}
+                  onChange={() => setPol((q) => ({ ...q, land_mode: "vert" }))} />飛到定點再垂直降落</label>
+                <label className="opt"><input type="radio" checked={pol.land_mode === "glide"}
+                  onChange={() => setPol((q) => ({ ...q, land_mode: "glide" }))} />逐漸降落</label>
               </div>
             </>
           )}
           {!started
             ? <button className="btn-accent btn-sm" onClick={() => setStarted(true)}>
-                從這裡開始放點</button>
+                從這裡開始畫線</button>
             : <span className="hint-line">
                 點地形放下一個航點（{pts.length} 個）・拖曳轉視角
                 {pts.length > 0 && <>　<button className="btn-plain btn-sm"
@@ -547,7 +585,7 @@ export default function PlanPage() {
             center={isNew ? [Number(home.lon), Number(home.lat)] : undefined}
             onPlace={(l) => setPts((p) => {
               setSelWp(p.length + 1);
-              return [...p, { lat: l.lat, lon: l.lng, alt: tkAlt, kind: placeKind }];
+              return [...p, { lat: l.lat, lon: l.lng, kind: placeKind }];
             })}
             onMove={(i, l) => {
               if (isNew) {
@@ -569,14 +607,24 @@ export default function PlanPage() {
               if (!w) return <div className="hint-line">在 3D 上點一個航點</div>;
               const out = legs.find((l) => l.from === w.seq);   // 從它出發的那一段
               const cur = ov[w.seq] ?? {};
-              const alt = cur.alt ?? Math.round((w.amsl - (prof?.home_amsl_m ?? 0)) * 10) / 10;
+              // 從零模式下編輯的是**政策單位下的高度**，不是 frame 3 的數字
+              const mine = isNew && selWp > 0 ? pts[selWp - 1] : null;
+              const isEx = isNew && mine?.alt_source === "manual";
+              const alt = isNew
+                ? (selWp === 0
+                    ? (pol.takeoff_alt_m ?? Math.max(1.5, pol.height_m))
+                    : mine?.h ?? pol.height_m)
+                : cur.alt ?? Math.round((w.amsl - (prof?.home_amsl_m ?? 0)) * 10) / 10;
               const spdNow = cur.speed ?? out?.speed_ms ?? null;
               const set = (k: "alt" | "speed", v: number) => {
                 if (isNew) {
+                  // **改一個點的高度＝把它變成例外。** 之後改政策不會動它
                   if (k === "alt" && selWp > 0)
-                    setPts((p) => p.map((q, j) => j === selWp - 1 ? { ...q, alt: v } : q));
-                  if (k === "alt" && selWp === 0) setTkAlt(v);
-                  if (k === "speed") setDrawSpd(v);
+                    setPts((p) => p.map((q, j) =>
+                      j === selWp - 1 ? { ...q, h: v, alt_source: "manual" } : q));
+                  if (k === "alt" && selWp === 0)
+                    setPol((q) => ({ ...q, takeoff_alt_m: v }));
+                  if (k === "speed") setPol((q) => ({ ...q, speed_ms: v }));
                   return;
                 }
                 setOv((o) => ({ ...o, [w.seq]: { ...o[w.seq], [k]: v } }));
@@ -603,8 +651,20 @@ export default function PlanPage() {
                         高度用下面的滑桿或數字。</div>
                     </>
                   )}
+                  {isEx && (
+                    <div className="rail-row">
+                      <span className="tag-warn">這個點是例外</span>
+                      <button className="btn-plain btn-sm"
+                        onClick={() => setPts((p) => p.map((q, j) =>
+                          j === selWp - 1
+                            ? { lat: q.lat, lon: q.lon, kind: q.kind } : q))}>
+                        收回，跟著政策</button>
+                    </div>
+                  )}
                   <label className="rail-field">
-                    <div className="rail-row"><span>高度（離起飛點）</span>
+                    <div className="rail-row"><span>{isNew
+                      ? `高度（${MODE_TEXT[pol.mode]}）${isEx ? "" : "・跟著政策"}`
+                      : "高度（離起飛點）"}</span>
                       <input className="numin" type="number" step={0.1} value={alt}
                         onChange={(e) => set("alt", Number(e.target.value))} /></div>
                     <input type="range" min={0} max={30} step={0.1} value={alt}
@@ -699,6 +759,27 @@ export default function PlanPage() {
           </aside>
         </div>
       )}
+      {/* **系統替你決定了什麼。** 起飛項、frame、改速度項的位置、降落方式
+          都是系統補的——那些正是 QGC 要求操作員自己先知道的東西。
+          補了卻不說，等於換一個地方要求先備知識（redesign §3 動作 3） */}
+      {decisions.length > 0 && (
+        <details className="plan-decisions" open>
+          <summary>系統替你決定了 {decisions.length} 件事</summary>
+          <table className="plan-legs">
+            <thead><tr><th>項目</th><th>值</th><th>為什麼</th></tr></thead>
+            <tbody>
+              {decisions.map((d, i) => (
+                <tr key={i}>
+                  <td>{emph(d.what)}{d.seq != null && <span className="muted"> · seq {d.seq}</span>}</td>
+                  <td>{emph(d.value)}</td>
+                  <td className="why">{emph(d.why)}</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </details>
+      )}
+
       {prof && <Profile p={prof} />}
       <div className="hint-line">
         {emph("地面線來自 SRTM（水平約 30 m）——**被格子抹平的表面**：樹冠與屋頂混在裡面，但沒有一棟樓是它畫得出來的。建物是另一份（OSM 輪廓），三種畫法對應三種出處：實心灰塊標「樓層數推算」是**樓層數 × 3.5 m 猜的**，不是量的；虛線橘塊標「假設 N m」用的是右欄那個旋鈕，**改它判定就會變**；沒有頂的橘色柱子代表現在不假設，那棟樓的高度沒有人量過。三種都不是實測——**實測要等光達**。輪廓只取外環，**中庭當成實心**（多禁不會少禁）。")}
@@ -730,8 +811,7 @@ export default function PlanPage() {
                       : `${API}/api/plans/${id}/preview`;
                     const body = isNew
                       ? { home: [Number(home.lat), Number(home.lon)], points: pts,
-                          takeoff_alt: tkAlt, speed: drawSpd,
-                          land_at_home: landHome, land_mode: landMode,
+                          policy: pol,
                           wp_spd: spdRef.current.wp, wp_radius: spdRef.current.rad,
                           save_as: naming }
                       : { overrides: Object.entries(ov).map(([seq, v]) =>

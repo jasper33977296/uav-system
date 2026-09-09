@@ -2501,7 +2501,7 @@ async def mission_profile(plan_id: str, assume_m: float | None = None):
     線穿到地下、或兩條線貼在一起，看一眼就知道。
     """
     row = await db.pool.fetchrow(
-        "SELECT home FROM plans WHERE id = $1", plan_id)
+        "SELECT home, policy FROM plans WHERE id = $1", plan_id)
     if row is None:
         raise HTTPException(404, "無此路徑")
     rows = await db.pool.fetch(
@@ -2522,8 +2522,13 @@ async def mission_profile(plan_id: str, assume_m: float | None = None):
          if home and len(home) >= 2 and (home[0] or home[1]) else
          next(({"lat": w["lat"], "lon": w["lon"]} for w in wps
                if w.get("lat") and w.get("lon")), None))
-    return plan_check.route_profile(wps, h, dem=terrain.shared(),
+    prof = plan_check.route_profile(wps, h, dem=terrain.shared(),
                                     assume_m=assume_m)
+    # **晶片要說的是政策，不是 frame。** 離地面的航線寫進去也是 frame 3，
+    # 只看 frame 會顯示「離起飛點」——那正是 09-07 那句誤導
+    pol = row["policy"]
+    prof["policy"] = json.loads(pol) if isinstance(pol, str) else pol
+    return prof
 
 
 @router.get("/plans/{plan_id}/check")
@@ -2703,7 +2708,8 @@ class PolicyIn(BaseModel):
     mode: str = plan_check.DEFAULT_POLICY_MODE        # agl／home／amsl
     height_m: float = plan_check.DEFAULT_POLICY_HEIGHT_M
     speed_ms: float = plan_check.DEFAULT_POLICY_SPEED_MS
-    takeoff_alt_m: float = plan_check.MIN_TAKEOFF_ALT_M
+    #: 不給＝跟著政策算（離地 3 m 的航線就從 3 m 起飛）
+    takeoff_alt_m: float | None = None
     land_at_home: bool = True
     land_mode: str = "vert"   # vert（飛到定點再垂直降落）／glide（逐漸降落）
 
@@ -2753,6 +2759,8 @@ async def draft_plan(body: DraftIn):
         saved = await _store_mission(body.save_as.strip() or "新航線", "drawn",
                                      wps, home=body.home,
                                      policy=body.policy.model_dump())
+    if profile is not None:
+        profile["policy"] = body.policy.model_dump()
     return {"check": check, "profile": profile, "saved_id": saved,
             "waypoints": wps, "decisions": decisions}
 

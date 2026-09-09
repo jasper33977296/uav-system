@@ -931,7 +931,8 @@ ALT_FROM_MANUAL = "manual"
 def default_policy() -> dict:
     return {"mode": DEFAULT_POLICY_MODE, "height_m": DEFAULT_POLICY_HEIGHT_M,
             "speed_ms": DEFAULT_POLICY_SPEED_MS,
-            "takeoff_alt_m": MIN_TAKEOFF_ALT_M,
+            #: None ＝跟著政策算（見 build_plan）。給了數字就是操作員自己定的
+            "takeoff_alt_m": None,
             "land_at_home": True, "land_mode": "vert"}
 
 
@@ -1032,9 +1033,19 @@ def build_plan(points: list[dict], policy: dict | None = None,
     pol = {**default_policy(), **(policy or {})}
     mode = pol["mode"]
     speed = float(pol["speed_ms"])
-    tk = float(pol["takeoff_alt_m"])
     if home_amsl is None and home and home.get("lat") and dem is not None:
         home_amsl = terrain.surface(home["lat"], home["lon"], dem).ground
+    # **起飛高度跟著政策走。** 用 1.5 m 起飛再飛向一個 3 m 離地的航點，
+    # 中間那一段會在地面爬升處貼到 0.3 m——那個貼地不是操作員畫出來的，
+    # 是起飛高度與政策對不上生出來的
+    tk = pol.get("takeoff_alt_m")
+    tk_auto = tk is None
+    if tk_auto:
+        want = float(pol["height_m"])
+        if mode == POLICY_AMSL:
+            want = want - home_amsl if home_amsl is not None else MIN_TAKEOFF_ALT_M
+        tk = max(MIN_TAKEOFF_ALT_M, want)
+    tk = float(tk)
 
     out: list[dict] = []
     decisions: list[dict] = []
@@ -1048,7 +1059,9 @@ def build_plan(points: list[dict], policy: dict | None = None,
 
     add(lat=0.0, lon=0.0, alt=tk, action="takeoff", command=_TAKEOFF, frame=3)
     decide("起飛高度", f"{tk:g} m（離起飛點）",
-           f"系統補的。低於 {MIN_TAKEOFF_ALT_M:g} m 起飛容易被地面效應推歪", 0)
+           ("跟著政策——用比政策低的高度起飛，第一段會在地面爬升處貼地"
+            if tk_auto and tk > MIN_TAKEOFF_ALT_M else
+            f"系統補的。低於 {MIN_TAKEOFF_ALT_M:g} m 起飛容易被地面效應推歪"), 0)
     add(lat=0.0, lon=0.0, alt=0.0, action="do", command=_DO_CHANGE_SPEED,
         frame=2, p1=1.0, p2=speed, p3=-1.0, p4=0.0)
     decide("改速度項的位置", f"第一個航點**之前**（{speed:g} m/s）",
@@ -1068,8 +1081,16 @@ def build_plan(points: list[dict], policy: dict | None = None,
         decide("降落地點", "最後一個航點", "沒有標降落點，也沒有指定回起飛點")
 
     track = [p for p in points if not (p is lz and not pol["land_at_home"])]
-    if lz and pol["land_at_home"]:
-        # 最後一段是飛到降落點才下降，所以它也要照政策貼地
+    # **起飛爬升那一段也要在軌跡裡。** 起飛項在起飛點、只有 `tk` 這麼高，
+    # 而第一個航點可能在高出好幾公尺的地面上——那一段沒補點的話會貼地，
+    # 而 2026-09-07 出事的正是這一段
+    if home and home.get("lat"):
+        track = [{"lat": home["lat"], "lon": home["lon"], "h": tk,
+                  "_tk": True}] + track
+    if lz:
+        # **最後要飛到降落點正上方、還在政策高度上，才開始下降。**
+        # 沒有這一點的話，最後一段的高度是前一個點的，降落點在低窪處
+        # 就會一路貼著地飛過去
         track = track + [{"lat": lz["lat"], "lon": lz["lon"], "_lz": True}]
     filled = 0
     if mode == POLICY_AGL and dem is not None and home_amsl is not None:
@@ -1077,8 +1098,10 @@ def build_plan(points: list[dict], policy: dict | None = None,
 
     fallback = False
     for p in track:
-        if p.get("_lz"):
-            continue                      # 降落點等一下才加
+        if p.get("_tk"):
+            continue                      # 起飛項已經加過了
+        if p.get("_lz") and pol["land_mode"] == "glide":
+            continue                      # glide 自己會補一個低高度的點
         src = p.get("alt_source") or ALT_FROM_POLICY
         h = float(p["h"]) if p.get("h") is not None else float(pol["height_m"])
         alt, fr, why = solve_alt(float(p["lat"]), float(p["lon"]), mode, h,
@@ -1087,7 +1110,13 @@ def build_plan(points: list[dict], policy: dict | None = None,
             fallback = True
         add(lat=float(p["lat"]), lon=float(p["lon"]), alt=alt,
             action="waypoint", command=16, frame=fr, h=h, alt_source=src,
-            **({"filled": True} if p.get("filled") else {}))
+            **({"filled": True} if p.get("filled") else {}),
+            **({"approach": True} if p.get("_lz") else {}))
+        if p.get("_lz"):
+            decide("降落前的進場點", f"{h:g} m（{_MODE_TEXT[mode]}）",
+                   "先飛到降落點正上方、還在政策高度上才下降。沒有這一點，"
+                   "最後一段會用前一個航點的高度飛過去——降落點在低窪處就會貼地",
+                   len(out) - 1)
         if src == ALT_FROM_MANUAL:
             decide("這個航點是例外", f"{h:g} m（{_MODE_TEXT[mode]}）",
                    "手動改過——**改政策不會動它**", len(out) - 1)
@@ -1106,7 +1135,8 @@ def build_plan(points: list[dict], policy: dict | None = None,
             decide("降落方式", "逐漸降落", "在降落點上方補一個低高度航點，"
                    "最後一段才是平均降下來的", len(out) - 1)
         else:
-            decide("降落方式", "飛到定點再垂直降落", "飛控的原生行為")
+            decide("降落方式", "飛到定點再垂直降落",
+                   "先飛到降落點正上方、還在政策高度上，才開始下降")
         add(lat=float(lz["lat"]), lon=float(lz["lon"]), alt=0.0,
             action="land", command=_LAND, frame=3)
 
