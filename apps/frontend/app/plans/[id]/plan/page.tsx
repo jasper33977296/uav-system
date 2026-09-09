@@ -1035,7 +1035,10 @@ export default function PlanPage() {
                       （使用者 2026-09-09）。標錯的話它會被讀成又一個航點高度 */}
                   <label className="rail-field">
                     <div className="rail-row"><span>{
-                      w.kind === "takeoff" ? "起飛高度（離起飛點）"
+                      w.kind === "takeoff" ? <>起飛高度（離起飛點）<InfoTip
+                        tip={"飛機會**先爬到這個高度**才往第一個航點飛。"
+                          + "不填就跟著政策算——用比政策低的高度起飛，"
+                          + "第一段會在地面爬升處貼地；填了就是你定的，改政策不會動它。"} /></>
                         : isNew
                           ? `高度（${MODE_TEXT[pol.mode]}）${isEx ? "" : "・跟著政策"}`
                           : "高度（離起飛點）"}</span>
@@ -1043,14 +1046,6 @@ export default function PlanPage() {
                         onChange={(e) => set("alt", Number(e.target.value))} /></div>
                     <input type="range" min={0} max={30} step={0.1} value={alt}
                       onChange={(e) => set("alt", Number(e.target.value))} />
-                    {w.kind === "takeoff" && (
-                      <div className="hint-line">
-                        {emph("飛機會**先爬到這個高度**才往第一個航點飛。"
-                          + (isNew && pol.takeoff_alt_m == null
-                            ? "現在跟著政策算（用比政策低的高度起飛，第一段會在地面爬升處貼地）——改了它就變成你定的。"
-                            : ""))}
-                      </div>
-                    )}
                   </label>
                   {out && (
                     <label className="rail-field">

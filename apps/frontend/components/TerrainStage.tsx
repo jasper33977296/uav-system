@@ -101,17 +101,24 @@ export default function TerrainStage({ wps, sel, onSelect, tipFor, placing,
 
   /** **每次改線就重建**：範圍跟著航線走，所以線一動要重問一次。
    *  去抖——拖一個點會產生幾十次變動。 */
+  const bldOff = useRef<() => void>(() => {});
   useEffect(() => {
     const t = setTimeout(async () => {
       const m = mapRef.current;
-      if (!m || !m.isStyleLoaded()) return;
+      if (!m) return;
       const got = await fetchNear(wps);
       if (!got || !mapRef.current) return;
-      paintBuildings(m, got.fc, blindHeight(wps, assumeM));
       onBuildings?.(got.list);
+      // **問到了就一定要畫上去。** 原本這裡是「樣式還沒好就算了」，而既有
+      // 航線開頁時只算這一次——地形與影像那時還在載，`isStyleLoaded()`
+      // 是 false，於是那一頁的建物**永遠不會出現**（使用者 2026-09-09）
+      bldOff.current();
+      bldOff.current = whenReady(m, () =>
+        paintBuildings(m, got.fc, blindHeight(wps, assumeM)));
     }, 320);
     return () => clearTimeout(t);
   }, [wps, assumeM, onBuildings]);
+  useEffect(() => () => bldOff.current(), []);
 
   useEffect(() => {
     if (!box.current || mapRef.current) return;
@@ -312,29 +319,7 @@ export default function TerrainStage({ wps, sel, onSelect, tipFor, placing,
   useEffect(() => {
     const m = mapRef.current;
     if (!m) return;
-    // **不能只等 `load`。** 樣式改過（加圖磚來源、開地形）之後
-    // `isStyleLoaded()` 會有一小段時間是 false，而那時 `load` 早就發過了
-    // ——只掛 `load` 的話，開頁時就帶著圍欄的航線永遠畫不出那個圈。
-    // `styledata` 每次樣式變動都會發，拿它重試到畫成功為止
-    // **要等 `route3d` 在了才畫。** 樣式一開始只有底色，那時 `isStyleLoaded()`
-    // 就是 true——先畫上去的話，隨後補上的正射影像會蓋在圍欄上面
-    // （`addLayer` 沒給 before 就是疊在最上層），圈就這樣安靜地不見了
-    const paint = () => {
-      if (!m.isStyleLoaded() || !m.getLayer("route3d")) return false;
-      paintFence(m, fence);
-      return true;
-    };
-    if (paint()) return;
-    // `styledata` 不夠：它發的時候樣式常常還在改，`isStyleLoaded()` 是 false，
-    // 而之後就沒有事件了。`idle` 是「畫完而且沒有待辦」——那一刻一定畫得成
-    const retry = () => {
-      if (!paint()) return;
-      m.off("styledata", retry);
-      m.off("idle", retry);
-    };
-    m.on("styledata", retry);
-    m.on("idle", retry);
-    return () => { m.off("styledata", retry); m.off("idle", retry); };
+    return whenReady(m, () => paintFence(m, fence));
   }, [fence]);
 
   return (
@@ -544,6 +529,24 @@ function paintBuildings(map: maplibregl.Map, fc: unknown, blindH: number) {
       "fill-extrusion-color": "#c98a2b", "fill-extrusion-opacity": 0.35,
     },
   }, before);
+}
+
+/** **地圖真的畫得動了才做這件事**，回一個取消訂閱。
+ *
+ *  只等 `load` 不夠：樣式改過（加圖磚來源、開地形）之後 `isStyleLoaded()`
+ *  會有一段時間是 false，而那時 `load` 早就發過了——開頁時只畫一次的東西
+ *  （既有航線的建物、航線自帶的圍欄）就這樣安靜地不見。
+ *  也要等 `route3d`：樣式一開始只有底色，那時 `isStyleLoaded()` 就是 true，
+ *  先畫上去的話隨後補的正射影像會蓋在它上面（`addLayer` 沒給 before 就是
+ *  最上層）。`idle` ＝畫完而且沒有待辦，那一刻一定成。 */
+function whenReady(m: maplibregl.Map, fn: () => void): () => void {
+  const ok = () => m.isStyleLoaded() && !!m.getLayer("route3d");
+  if (ok()) { fn(); return () => {}; }
+  const off = () => { m.off("idle", retry); m.off("styledata", retry); };
+  const retry = () => { if (!ok()) return; off(); fn(); };
+  m.on("idle", retry);
+  m.on("styledata", retry);
+  return off;
 }
 
 /** 圍欄畫成地面上的一圈虛線——**它是平面範圍**，高度上限由剖面圖那條線講。
