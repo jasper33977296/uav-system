@@ -260,6 +260,7 @@ export default function PlanPage() {
   const [pts, setPts] = useState<
     { lat: number; lon: number; h?: number; alt_source?: string; kind: string }[]>([]);
   const [decisions, setDecisions] = useState<Decision[]>([]);
+  const [applied, setApplied] = useState<{ note?: string } | null>(null);
   const [started, setStarted] = useState(false);
   const [placeKind, setPlaceKind] = useState("wp");
   const [naming, setNaming] = useState<string | null>(null);
@@ -426,6 +427,59 @@ export default function PlanPage() {
   }, [ov, id, isNew]);
 
   const defAssume = chk?.limits?.assumed_default_m ?? 9;
+  /** 從**結構化的發現**推出可以按的按鈕。文字訊息不解析——那會跟著文案漂 */
+  const fixes = (() => {
+    if (!chk) return [] as { name: string; seq: number; label: string; hint: string }[];
+    const out: { name: string; seq: number; label: string; hint: string }[] = [];
+    const ls = chk.legs ?? [];
+    const worst = ls.reduce<Leg | null>(
+      (m, l) => (l.agl_m == null ? m : m == null || l.agl_m < m.agl_m! ? l : m), null);
+    const lim = chk.limits;
+    if (worst?.agl_m != null && lim && worst.agl_m < 2) {
+      out.push({ name: "raise_all", seq: -1, label: "整條抬高",
+        hint: `最低那一段現在 ${worst.agl_m} m` });
+      out.push({ name: "raise_leg", seq: worst.from,
+        label: `只抬 seq ${worst.from}→${worst.to}`,
+        hint: "那兩個點會變成例外，之後改政策不會動它們" });
+    }
+    const fast = ls.find((l) => l.low_fast);
+    if (fast && lim) {
+      out.push({ name: "slow_all", seq: -1,
+        label: `整條降到 ${lim.low_speed_ms} m/s`, hint: "低空帶速的門檻" });
+      out.push({ name: "slow_leg", seq: fast.from,
+        label: `只降 seq ${fast.from}→${fast.to}`,
+        hint: "會在那個航點之前多插一個改速度項" });
+      out.push({ name: "raise_leg_low", seq: fast.from,
+        label: `把 seq ${fast.from}→${fast.to} 抬到 ${lim.low_alt_m} m 以上`,
+        hint: "另一條路：不降速，改成飛高一點" });
+    }
+    if ((chk.terrain_blind?.length ?? 0) > 0 && assume == null) {
+      out.push({ name: "assume", seq: -1, label: `套用假設高度 ${defAssume} m`,
+        hint: "未量測的建物都當成這個高度算。**那是旋鈕不是量測值**" });
+    }
+    return out;
+  })();
+
+  const act = async (name: string, seq: number) => {
+    setBusy(true);
+    try {
+      const r = await fetch(`${API}/api/plans/draft`, {
+        method: "POST", headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          home: [Number(home.lat), Number(home.lon)], points: pts, policy: pol,
+          wp_spd: spdRef.current.wp, wp_radius: spdRef.current.rad,
+          assume_m: assume, action: { name, seq: seq < 0 ? null : seq } }),
+      });
+      const d = await r.json();
+      if (!r.ok) return;
+      // **後端算完之後把新的狀態拿回來**：政策、點、假設值都可能被改
+      setChk(d.check); setProf(d.profile); setDecisions(d.decisions ?? []);
+      setApplied(d.applied ?? null);
+      if (d.policy) setPol(d.policy);
+      if (d.points) setPts(d.points);
+      if (d.assume_m != null) setAssume(d.assume_m);
+    } finally { setBusy(false); }
+  };
   const legs = chk?.legs ?? [];
   // 3D 要的是「航點」，而剖面回的是沿線取樣——帶 seq 的那幾筆就是航點。
   // **高度換算在這裡做一次**（profile 的 `plan` 已經是 AMSL），
@@ -784,6 +838,23 @@ export default function PlanPage() {
       <div className="hint-line">
         {emph("地面線來自 SRTM（水平約 30 m）——**被格子抹平的表面**：樹冠與屋頂混在裡面，但沒有一棟樓是它畫得出來的。建物是另一份（OSM 輪廓），三種畫法對應三種出處：實心灰塊標「樓層數推算」是**樓層數 × 3.5 m 猜的**，不是量的；虛線橘塊標「假設 N m」用的是右欄那個旋鈕，**改它判定就會變**；沒有頂的橘色柱子代表現在不假設，那棟樓的高度沒有人量過。三種都不是實測——**實測要等光達**。輪廓只取外環，**中庭當成實心**（多禁不會少禁）。")}
       </div>
+
+      {/* **發現變成選擇，不是報告。** 抬多少、降到多少都由後端算——
+          寫在這裡就會有兩份規則，改了門檻按鈕做的事不會跟著變（§6）。
+          「繞開」還沒做（要 §7-6 的規劃器），沒做的就不要放一個按鈕 */}
+      {isNew && chk && (fixes.length > 0) && (
+        <div className="plan-fixes">
+          <span className="muted">要我改嗎：</span>
+          {fixes.map((f) => (
+            <button key={f.name + f.seq} className="btn-plain btn-sm"
+              disabled={busy} title={f.hint}
+              onClick={() => act(f.name, f.seq)}>{f.label}</button>
+          ))}
+          {applied?.note && (
+            <span className="hint-line">剛才：{emph(applied.note)}</span>
+          )}
+        </div>
+      )}
 
       {(chk?.problems?.length || chk?.warnings?.length) ? (
         <div className="plan-findings">

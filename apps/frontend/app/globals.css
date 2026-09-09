@@ -1830,6 +1830,10 @@ details.card summary { cursor: pointer; font-size: 14px; font-weight: 600; }
   width: 100%; height: auto; background: var(--surface);
   border: 1px solid var(--border); border-radius: 8px; display: block;
 }
+.plan-fixes {
+  display: flex; align-items: center; flex-wrap: wrap; gap: 8px;
+  margin: 12px 0 4px; font-size: 13px;
+}
 .plan-findings { display: flex; flex-direction: column; gap: 6px; margin: 12px 0; }
 .plan-legs { width: 100%; border-collapse: collapse; margin-top: 12px; font-size: 13px; }
 .plan-legs th {

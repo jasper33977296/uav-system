@@ -780,7 +780,15 @@ def leg_profile(wps: list[dict], home: dict | None = None, dem=None,
             f"要嘛把速度降到 {low_speed:g} m/s 以下")
 
     if wp_radius:
-        short = [l for l in out["legs"] if l["length_m"] < wp_radius]
+        # **進場點與降落項本來就在同一個位置**（先飛到降落點正上方、還在
+        # 政策高度上才下降）。那不是「會被跳過的航點」，是刻意的結構——
+        # 報成問題只會讓真正被跳過的那種淹沒在雜訊裡
+        approach = {p["seq"] for i, p in enumerate(pts[:-1])
+                    if pts[i + 1]["cmd"] in (_LAND, _RTL)
+                    and _dist_m(p["lat"], p["lon"],
+                                pts[i + 1]["lat"], pts[i + 1]["lon"]) < 1.0}
+        short = [l for l in out["legs"]
+                 if l["length_m"] < wp_radius and l["from"] not in approach]
         if short:
             l = short[0]
             out["problems"].append(
@@ -1097,6 +1105,7 @@ def build_plan(points: list[dict], policy: dict | None = None,
         track, filled = _fill_terrain(track, float(pol["height_m"]), dem)
 
     fallback = False
+    cur_speed = speed
     for p in track:
         if p.get("_tk"):
             continue                      # 起飛項已經加過了
@@ -1108,6 +1117,13 @@ def build_plan(points: list[dict], policy: dict | None = None,
                                  home_amsl, dem)
         if "退回" in why:
             fallback = True
+        # 速度例外：**改速度項要擺在那個航點之前**，不然這一段還是用舊速度
+        if p.get("speed_ms") is not None and float(p["speed_ms"]) != cur_speed:
+            cur_speed = float(p["speed_ms"])
+            add(lat=0.0, lon=0.0, alt=0.0, action="do", command=_DO_CHANGE_SPEED,
+                frame=2, p1=1.0, p2=cur_speed, p3=-1.0, p4=0.0)
+            decide("這一段的速度是例外", f"{cur_speed:g} m/s",
+                   "手動改過——**改政策不會動它**", len(out) - 1)
         add(lat=float(p["lat"]), lon=float(p["lon"]), alt=alt,
             action="waypoint", command=16, frame=fr, h=h, alt_source=src,
             **({"filled": True} if p.get("filled") else {}),
@@ -1152,6 +1168,140 @@ def build_plan(points: list[dict], policy: dict | None = None,
 
 
 _MODE_TEXT = {POLICY_AGL: "離地面", POLICY_HOME: "離起飛點", POLICY_AMSL: "固定海拔"}
+
+
+# ── 發現 → 選擇（doc/route-planning-redesign.md §6）────────────────────
+#
+# **規則只有這一份。** 「抬高這一段」抬到多高、「降速」降到多少，寫在前端
+# 就會有兩份；改了後端的門檻，按鈕做的事不會跟著變——那是 `low_fast` 那次
+# 「同源副本早就漂移了」的同一種錯。
+
+#: 抬高之後要留多少餘裕。**剛好抬到門檻上等於沒抬**：DEM 有誤差，
+#: 而下一次重算時它可能又掉到門檻下面。
+RESOLVE_MARGIN_M = 0.5
+
+
+def resolve(action: str, chk: dict, seq: int | None = None,
+            min_clear: float = MIN_CLEARANCE_M) -> dict:
+    """把一條發現變成一個**具體的改動意圖**。
+
+    回 `{kind, ...}`，呼叫端照自己的詞彙去套用：
+    有政策的航線改政策或加例外，匯入的 `.plan` 改逐點覆寫。
+
+    * `kind="policy"`：整條——`delta_m`（抬高）或 `speed_ms`（降速）
+    * `kind="leg"`：某幾個航點——`seqs` ＋ `delta_m`／`speed_ms`
+    * `kind="assume"`：套用未量測建物的假設高度
+    * `kind="ack"`：不改航線，記下「我知道，照飛」
+
+    改不動的時候回 `kind="none"` 並說為什麼——**回一個做不到的建議
+    比不回更糟**。
+    """
+    legs = chk.get("legs") or []
+    lim = chk.get("limits") or {}
+    low_alt = float(lim.get("low_alt_m", LOW_ALT_M))
+    low_speed = float(lim.get("low_speed_ms", LOW_SPEED_MS))
+
+    def leg_of(n):
+        return next((l for l in legs if l.get("from") == n), None)
+
+    if action == "ack":
+        return {"kind": "ack", "note": "不改航線，記下這一條是看過之後決定照飛的"}
+
+    if action == "assume":
+        v = lim.get("assumed_default_m")
+        if v is None:
+            return {"kind": "none", "note": "沒有預設的假設高度可以套用"}
+        return {"kind": "assume", "assume_m": float(v),
+                "note": f"未量測的建物都當成 {v:g} m 算。**那是旋鈕不是量測值**"}
+
+    if action == "raise_all":
+        vals = [l["agl_m"] for l in legs if l.get("agl_m") is not None]
+        if not vals:
+            return {"kind": "none", "note": "沒有算得出離地的段落，抬多少無從算起"}
+        d = round(min_clear + RESOLVE_MARGIN_M - min(vals), 1)
+        if d <= 0:
+            return {"kind": "none", "note": "整條都已經有足夠餘裕"}
+        return {"kind": "policy", "delta_m": d,
+                "note": f"整條抬高 {d:g} m——最低那一段從 {min(vals):g} m 變成 "
+                        f"{min_clear + RESOLVE_MARGIN_M:g} m"}
+
+    if action == "slow_all":
+        return {"kind": "policy", "speed_ms": low_speed,
+                "note": f"整條降到 {low_speed:g} m/s——低空帶速的門檻是"
+                        f"「離地 < {low_alt:g} m 且速度 > {low_speed:g} m/s」"}
+
+    if action in ("raise_leg", "raise_leg_low", "slow_leg"):
+        if seq is None:
+            return {"kind": "none", "note": "沒有指定是哪一段"}
+        lg = leg_of(seq)
+        if lg is None:
+            return {"kind": "none", "note": f"找不到從 seq {seq} 出發的那一段"}
+        if action == "slow_leg":
+            return {"kind": "leg", "seqs": [lg["from"]], "speed_ms": low_speed,
+                    "note": f"seq {lg['from']}→{lg['to']} 降到 {low_speed:g} m/s"}
+        if lg.get("agl_m") is None:
+            return {"kind": "none",
+                    "note": f"seq {lg['from']}→{lg['to']} 算不出離地，抬多少無從算起"}
+        target = (low_alt if action == "raise_leg_low" else min_clear) + RESOLVE_MARGIN_M
+        d = round(target - lg["agl_m"], 1)
+        if d <= 0:
+            return {"kind": "none", "note": "這一段已經夠高了"}
+        return {"kind": "leg", "seqs": [lg["from"], lg["to"]], "delta_m": d,
+                "note": f"seq {lg['from']}→{lg['to']} 抬高 {d:g} m"
+                        f"（離地 {lg['agl_m']:g} → {target:g} m）"}
+
+    return {"kind": "none", "note": f"不認得的動作 `{action}`"}
+
+
+def apply_resolution(res: dict, policy: dict, points: list[dict],
+                     wps: list[dict]) -> tuple[dict, list[dict]]:
+    """把 `resolve()` 的意圖套到「政策 ＋ 一串點」上。
+
+    抬高某一段時，**那幾個點會變成例外**——這是應該的：它們從此不跟著
+    政策走，而畫面上看得出來（§4）。
+    """
+    pol = dict(policy)
+    pts = [dict(p) for p in points]
+    if res.get("kind") == "policy":
+        if res.get("delta_m"):
+            pol["height_m"] = round(float(pol["height_m"]) + res["delta_m"], 1)
+        if res.get("speed_ms") is not None:
+            pol["speed_ms"] = float(res["speed_ms"])
+        return pol, pts
+    if res.get("kind") != "leg":
+        return pol, pts
+    # 航點的 seq 對不上「操作員放的第幾個點」——中間插了起飛項、改速度項
+    # 與**中繼點**。中繼點是每次重算出來的，改它沒有意義，所以例外一律
+    # 落在**操作員畫的那一段**上：把目標 seq 夾在中間的那兩個點。
+    ops: list[tuple[int, int]] = []      # (waypoint seq, points 的索引)
+    for w in wps:
+        if (w.get("action") != "waypoint" or w.get("filled")
+                or w.get("approach")):
+            continue
+        for i, p in enumerate(pts):
+            if (abs(w["lat"] - float(p["lat"])) < 1e-7
+                    and abs(w["lon"] - float(p["lon"])) < 1e-7):
+                ops.append((w["seq"], i))
+                break
+
+    def enclosing(sq: int) -> list[int]:
+        before = [i for s2, i in ops if s2 <= sq]
+        after = [i for s2, i in ops if s2 >= sq]
+        got = ([before[-1]] if before else []) + ([after[0]] if after else [])
+        return sorted(set(got))
+
+    targets: list[int] = []
+    for sq in res.get("seqs") or []:
+        targets.extend(enclosing(sq))
+    for i in sorted(set(targets)):
+        if res.get("delta_m"):
+            base = pts[i].get("h")
+            base = float(pol["height_m"]) if base is None else float(base)
+            pts[i]["h"] = round(base + res["delta_m"], 1)
+            pts[i]["alt_source"] = ALT_FROM_MANUAL
+        if res.get("speed_ms") is not None:
+            pts[i]["speed_ms"] = float(res["speed_ms"])
+    return pol, pts
 
 
 def check_group(paths: list[dict], vsep_m: float, lsep_m: float) -> dict:

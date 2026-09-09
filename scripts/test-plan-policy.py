@@ -139,6 +139,53 @@ ck("預設政策產生的航線不會穿地",
    not any("撞地" in p for p in chk["problems"]),
    [p[:80] for p in chk["problems"]])
 
+print("\n── 發現變成選擇（§6）──")
+# 刻意做一條會撞的：政策壓到 0.5 m
+bad = pc.build_plan(PTS, {"height_m": 0.5}, HOME, dem=dem)
+cb = pc.check_waypoints(bad["waypoints"], 1000, 120,
+                        home=[HOME["lat"], HOME["lon"]], dem=dem, wp_spd=3.0)
+worst = min(l["agl_m"] for l in cb["legs"] if l["agl_m"] is not None)
+ck("先做出一條餘裕不足的", worst < pc.MIN_CLEARANCE_M, worst)
+
+r = pc.resolve("raise_all", cb)
+ck("raise_all 回政策改動", r["kind"] == "policy" and r["delta_m"] > 0, r)
+pol2, _ = pc.apply_resolution(r, {"height_m": 0.5}, PTS, bad["waypoints"])
+b9 = pc.build_plan(PTS, {"height_m": pol2["height_m"]}, HOME, dem=dem)
+c9 = pc.check_waypoints(b9["waypoints"], 1000, 120,
+                        home=[HOME["lat"], HOME["lon"]], dem=dem, wp_spd=3.0)
+w9 = min(l["agl_m"] for l in c9["legs"] if l["agl_m"] is not None)
+ck("套用之後真的夠了（而且有留餘裕）",
+   w9 >= pc.MIN_CLEARANCE_M + pc.RESOLVE_MARGIN_M - 0.05, w9)
+
+lg = min((l for l in cb["legs"] if l["agl_m"] is not None), key=lambda l: l["agl_m"])
+r2 = pc.resolve("raise_leg", cb, lg["from"])
+ck("raise_leg 回那一段的兩個航點",
+   r2["kind"] == "leg" and set(r2["seqs"]) == {lg["from"], lg["to"]}, r2)
+pol3, pts3 = pc.apply_resolution(r2, {"height_m": 0.5}, PTS, bad["waypoints"])
+ck("政策沒被動到", pol3["height_m"] == 0.5, pol3)
+ck("被抬高的點變成例外",
+   any(q.get("alt_source") == pc.ALT_FROM_MANUAL for q in pts3), pts3)
+
+r3 = pc.resolve("slow_all", cb)
+ck("slow_all 降到門檻的速度", r3.get("speed_ms") == pc.LOW_SPEED_MS, r3)
+r4 = pc.resolve("slow_leg", cb, lg["from"])
+# 政策 3 m/s，把其中一段降到 1——這才是「例外」
+pol4 = {**pc.default_policy(), "speed_ms": 3.0}
+_, pts4 = pc.apply_resolution(r4, pol4, PTS, bad["waypoints"])
+b10 = pc.build_plan(pts4, pol4, HOME, dem=dem)
+dcs = [w for w in b10["waypoints"] if w.get("command") == 178]
+ck("速度例外會多插一個改速度項（擺在那個航點之前）", len(dcs) >= 2, len(dcs))
+
+ck("已經夠高時不給沒用的建議",
+   pc.resolve("raise_all", pc.check_waypoints(
+       b["waypoints"], 1000, 120, home=[HOME["lat"], HOME["lon"]],
+       dem=dem, wp_spd=1.0))["kind"] == "none")
+ck("不認得的動作要說出來", pc.resolve("nope", cb)["kind"] == "none")
+ck("每一種回覆都帶一句話", all(
+   pc.resolve(a, cb, lg["from"]).get("note")
+   for a in ("raise_all", "raise_leg", "slow_all", "slow_leg", "assume",
+             "ack", "nope")))
+
 print()
 if fails:
     print(f"✗ {len(fails)} 項沒過：" + "、".join(fails))

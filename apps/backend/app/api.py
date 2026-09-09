@@ -2693,11 +2693,19 @@ async def preview_plan(plan_id: str, body: PreviewIn):
     return out
 
 
+class ResolveIn(BaseModel):
+    """把一條發現變成一個具體的改動（redesign §6）。**規則在後端**。"""
+    name: str                        # raise_all／raise_leg／slow_all／…
+    seq: int | None = None
+
+
 class DraftPoint(BaseModel):
     lat: float
     lon: float
     #: 政策單位下的高度。**只有例外才給**——不給就跟著政策走
     h: float | None = None
+    #: 這個點之後的速度。同樣只有例外才給
+    speed_ms: float | None = None
     alt_source: str | None = None     # policy／manual
     alt: float | None = None          # 舊欄位，仍收
     kind: str = "wp"          # wp／land
@@ -2719,6 +2727,8 @@ class DraftIn(BaseModel):
     home: list[float] = Field(min_length=2, max_length=3)
     points: list[DraftPoint] = Field(default_factory=list, max_length=500)
     policy: PolicyIn = Field(default_factory=PolicyIn)
+    #: 給了就先套用這個動作，再算一次。回傳會帶 `applied`
+    action: ResolveIn | None = None
     wp_spd: float | None = None
     wp_radius: float | None = None
     #: 未量測建物的假設高度（公尺）。**不給就不假設**
@@ -2738,9 +2748,26 @@ async def draft_plan(body: DraftIn):
     同一個規矩。
     """
     h = {"lat": body.home[0], "lon": body.home[1]}
-    built = plan_check.build_plan(
-        [p.model_dump() for p in body.points], body.policy.model_dump(), h,
-        dem=terrain.shared())
+    pol = body.policy.model_dump()
+    pts = [p.model_dump() for p in body.points]
+    assume = body.assume_m
+    built = plan_check.build_plan(pts, pol, h, dem=terrain.shared())
+    applied = None
+    if body.action and body.points:
+        # **先算一次才知道要改什麼**：抬多少、降到多少都是從發現算出來的
+        pre = plan_check.check_waypoints(
+            built["waypoints"], settings.geofence_radius_m,
+            settings.geofence_alt_m, settings.geofence_margin,
+            dem=terrain.shared(), home=body.home, wp_spd=body.wp_spd,
+            wp_radius=body.wp_radius, assume_m=assume)
+        res = plan_check.resolve(body.action.name, pre, body.action.seq)
+        applied = res
+        if res["kind"] == "assume":
+            assume = res["assume_m"]
+        elif res["kind"] in ("policy", "leg"):
+            pol, pts = plan_check.apply_resolution(res, pol, pts,
+                                                   built["waypoints"])
+            built = plan_check.build_plan(pts, pol, h, dem=terrain.shared())
     wps, decisions = built["waypoints"], built["decisions"]
     if len(body.points) < 1:
         # **一個點都沒有時不要假裝算得出什麼**：回一份空的，讓畫面說
@@ -2751,18 +2778,20 @@ async def draft_plan(body: DraftIn):
         wps, settings.geofence_radius_m, settings.geofence_alt_m,
         settings.geofence_margin, dem=terrain.shared(),
         home=body.home, wp_spd=body.wp_spd, wp_radius=body.wp_radius,
-        assume_m=body.assume_m)
+        assume_m=assume)
     profile = plan_check.route_profile(wps, h, dem=terrain.shared(),
-                                       assume_m=body.assume_m)
+                                       assume_m=assume)
     saved = None
     if body.save_as:
         saved = await _store_mission(body.save_as.strip() or "新航線", "drawn",
-                                     wps, home=body.home,
-                                     policy=body.policy.model_dump())
+                                     wps, home=body.home, policy=pol)
     if profile is not None:
-        profile["policy"] = body.policy.model_dump()
+        profile["policy"] = pol
     return {"check": check, "profile": profile, "saved_id": saved,
-            "waypoints": wps, "decisions": decisions}
+            "waypoints": wps, "decisions": decisions,
+            # 套用了什麼、以及套用之後的政策與點——畫面要拿它更新自己的狀態
+            "applied": applied, "policy": pol, "points": pts,
+            "assume_m": assume}
 
 
 @router.post("/plans/{plan_id}/activate")
