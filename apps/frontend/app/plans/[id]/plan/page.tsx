@@ -335,7 +335,9 @@ export default function PlanPage() {
     rtl?: number | null; src: string }>(
     { wp: null, rad: null, src: "還沒讀過這台機" });
   const [err, setErr] = useState<string | null>(null);
-  const [selWp, setSelWp] = useState(0);
+  // **預設不選任何一個。** 原本預設選 seq 0（起飛點），於是它一直是選取色
+  // ——那顆綠色的環從來沒出現過，使用者也就一直看不出哪個是起飛點
+  const [selWp, setSelWp] = useState(-1);
   /** **改動只存在畫面上**（使用者裁定 2026-09-08：先只算不存）。
    *  每次變動送去後端試算——規則只有一份，前端不自己再算一次。 */
   const [ov, setOv] = useState<Record<number,

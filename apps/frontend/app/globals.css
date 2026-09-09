@@ -1880,6 +1880,15 @@ details.card summary { cursor: pointer; font-size: 14px; font-weight: 600; }
 .stage3d { height: 460px; border: 1px solid var(--border); border-radius: 10px;
   overflow: hidden; background: var(--page); }
 .stage3d-wrap { position: relative; }
+/* 圖例：**直接回答「哪個是起飛點」**。形狀本身有分，但那要先知道規則。
+   放左下角——右上角是浮動的右欄 */
+.stage-legend { position: absolute; left: 10px; bottom: 10px; z-index: 3;
+  display: flex; gap: 12px; align-items: center; font-size: 12px;
+  color: var(--ink-2); pointer-events: none;
+  background: color-mix(in srgb, var(--surface) 88%, transparent);
+  backdrop-filter: blur(3px);
+  border: 1px solid var(--border); border-radius: 8px; padding: 4px 9px; }
+.stage-legend span { display: inline-flex; align-items: center; gap: 4px; }
 /* 滑鼠指到航點或航段時的細節。**跟著游標**，不固定在角落——固定的話
    人要在圖與角落之間來回看，而這張圖的重點就是「指哪裡看哪裡」 */
 .stage-tip {

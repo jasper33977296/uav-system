@@ -164,16 +164,28 @@ export default function TerrainStage({ wps, sel, onSelect, tipFor, placing,
     /* three.js 的自訂圖層沒有 maplibre 的 `queryRenderedFeatures`，
        所以自己把航點與航段投影回螢幕來比距離。**航點優先於航段**：
        兩者重疊時人要點的幾乎一定是航點。 */
+    /** 航點的命中半徑（px）。**比看起來的球大很多**：使用者 2026-09-09
+     *  回報「選不到既有點位，一直在新增」。指的是同一件事在螢幕上要點得到，
+     *  而不是幾何上要碰到。 */
+    const PICK_WP_PX = 22;
     const hitTest = (pt: { x: number; y: number }): StageHit | null => {
       const ws = dataRef.current.wps;
       const proj = projRef.current;
       if (!proj) return null;
       const at = (w: StageWp) => proj(w.lon, w.lat, w.amsl);
+      // **系統補的點（中繼、進場）不參與命中**：它們沿線每 30 m 一個，
+      // 用這個半徑會把整條線都變成「點不到地面」——而且選中它們也沒用，
+      // 下一次重算就換一批
+      let best: { i: number; d: number } | null = null;
       for (let i = 0; i < ws.length; i++) {
-        if (!ws[i].lat || !ws[i].lon) continue;
+        if (!ws[i].lat || !ws[i].lon || ws[i].auto) continue;
         const p = at(ws[i]);
-        if (p && Math.hypot(p.x - pt.x, p.y - pt.y) < 14) return { kind: "wp", i };
+        if (!p) continue;
+        const d = Math.hypot(p.x - pt.x, p.y - pt.y);
+        // 重疊時取**最近的那一個**，不是第一個碰到的
+        if (d < PICK_WP_PX && (best === null || d < best.d)) best = { i, d };
       }
+      if (best) return { kind: "wp", i: best.i };
       for (let i = 1; i < ws.length; i++) {
         const a = at(ws[i - 1]), b = at(ws[i]);
         if (!a || !b) continue;
@@ -187,8 +199,12 @@ export default function TerrainStage({ wps, sel, onSelect, tipFor, placing,
     };
     map.on("click", (e) => {
       const pl = placeRefBox.current?.current;
-      if (pl?.placing && pl.onPlace) { pl.onPlace(e.lngLat); return; }
       const h = hitTest(e.point);
+      // **放點模式下也要先看有沒有點到既有航點。** 原本這裡直接放點就 return，
+      // 於是點在一個已經在那裡的點上只會在它旁邊再疊一個——那個點永遠選不到，
+      // 也就刪不掉（使用者 2026-09-09）。航段不擋放點：它很長，擋了會很難放
+      if (h?.kind === "wp") { onSelect(h.i); return; }
+      if (pl?.placing && pl.onPlace) { pl.onPlace(e.lngLat); return; }
       if (h) onSelect(h.i);
     });
     map.on("mousedown", (e) => {
@@ -235,6 +251,19 @@ export default function TerrainStage({ wps, sel, onSelect, tipFor, placing,
 
   return (
     <div className={`stage3d-wrap${placing ? " placing" : ""}`}>
+      {/* **圖例直接回答「哪個是起飛點」。** 形狀本身有分，但那要先知道
+          規則才讀得出來——使用者 2026-09-09：「我還是不知道哪個是起飛」。 */}
+      <div className="stage-legend">
+        <span><svg width="14" height="14" viewBox="0 0 14 14">
+          <line x1="1" y1="7" x2="13" y2="7" stroke="#0ca30c" strokeWidth="1.6"/>
+          <line x1="7" y1="1" x2="7" y2="13" stroke="#0ca30c" strokeWidth="1.6"/>
+          <circle cx="7" cy="7" r="4" fill="none" stroke="#0ca30c" strokeWidth="2.4"/>
+        </svg>起飛點</span>
+        <span><svg width="14" height="14" viewBox="0 0 14 14">
+          <circle cx="7" cy="7" r="4.2" fill="#3987e5"/></svg>航點</span>
+        <span><svg width="14" height="14" viewBox="0 0 14 14">
+          <path d="M7,12 L12,3 H2 Z" fill="#0ca30c"/></svg>降落點</span>
+      </div>
       <div ref={box} className="stage3d" />
       {tip && (
         <div className="stage-tip"
@@ -491,29 +520,32 @@ function makeRouteLayer(map: maplibregl.Map, dataRef: { current: StageData },
       const col = i === sel ? PICK : hot ? HOT : w.bad ? RED : BLUE;
       const gcol = i === sel ? PICK : hot ? HOT : GROUND_PT;
       const r = (big ? 1.7 : w.auto ? 0.7 : 1.1) * mScale;
+      // **接地點畫得比航點大**：它們是這條航線的兩端，而且航段的管子很粗
+      // （0.9 m），跟航點一樣大的話在 1× 下讀不出形狀
+      const gr = r * 1.35;
       if (w.kind === "takeoff") {
         // 空心環 ＋ 地面十字。**環是空的**：那個形狀順便說它拖不動
         const ring = new THREE.Mesh(
-          new THREE.TorusGeometry(r * 1.5, r * 0.42, 6, 20),
+          new THREE.TorusGeometry(gr * 1.6, gr * 0.5, 6, 20),
           new THREE.MeshBasicMaterial({ color: gcol }));
         ring.position.copy(at);
         group.add(ring);
         if (w.ground != null) {
           const g0 = v(w.lon, w.lat, w.ground);
-          const arm = r * 2.6;
+          const arm = gr * 3.0;
           for (const [dx, dy] of [[1, 0], [0, 1]] as const) {
             const a = g0.clone(), b2 = g0.clone();
             a.x -= arm * dx; a.y -= arm * dy;
             b2.x += arm * dx; b2.y += arm * dy;
             group.add(new THREE.Mesh(
-              new THREE.TubeGeometry(new THREE.LineCurve3(a, b2), 1, r * 0.3, 4, false),
+              new THREE.TubeGeometry(new THREE.LineCurve3(a, b2), 1, gr * 0.34, 4, false),
               new THREE.MeshBasicMaterial({ color: gcol })));
           }
         }
       } else if (w.kind === "land") {
         // 向下三角＝往這裡下來
         const cone = new THREE.Mesh(
-          new THREE.ConeGeometry(r * 1.5, r * 3, 4),
+          new THREE.ConeGeometry(gr * 1.7, gr * 3.4, 4),
           new THREE.MeshBasicMaterial({ color: gcol }));
         cone.rotation.x = Math.PI;          // 尖端朝下
         cone.position.copy(at);
