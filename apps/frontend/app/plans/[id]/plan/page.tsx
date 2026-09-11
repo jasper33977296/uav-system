@@ -685,13 +685,15 @@ export default function PlanPage() {
     .filter((p) => p.seq != null && p.plan != null)
     .map((p) => ({ seq: p.seq as number, lat: p.lat ?? 0, lon: p.lon ?? 0,
       amsl: p.plan as number, ground: p.ground,
-      bad: badSeq.has(p.seq as number), fixed: p.seq === 0,
+      bad: badSeq.has(p.seq as number), fixed: !isNew && p.seq === 0,
       kind: p.kind, auto: p.auto, srcI: p.src_i ?? null }))
     .map((w) => {
       // **位置直接讀操作員那份，不等後端。** 剖面要跑一趟後端才回來，
       // 中間那幾百毫秒點不動，拖起來像卡住（使用者 2026-09-09）。
       // 系統補的中繼點沒有 `srcI`，它們本來就要重算才知道在哪
       if (isNew) {
+        if (w.kind === "takeoff" && hasHome)
+          return { ...w, lat: Number(home.lat), lon: Number(home.lon) };
         const m = w.srcI != null ? pts[w.srcI] : null;
         return m ? { ...w, lat: m.lat, lon: m.lon } : w;
       }
@@ -917,6 +919,11 @@ export default function PlanPage() {
             }}
             onMove={(i, l) => {
               if (isNew) {
+                if (stageWps[i]?.kind === "takeoff") {
+                  setHome({ lat: String(l.lat.toFixed(7)),
+                            lon: String(l.lng.toFixed(7)) });
+                  return;
+                }
                 const k = stageWps[i]?.srcI ?? -1;
                 if (k < 0 || k >= pts.length) return;
                 setPts((p) => p.map((q, j) =>
@@ -971,6 +978,13 @@ export default function PlanPage() {
                 <>
                   <div className="rail-row"><span>航點</span>
                     <b className="num">seq {w.seq}</b></div>
+                  {isNew && w.kind === "takeoff" && (
+                    // 刪掉之後回到「放起飛點」：航點留著，重新放一個起飛點就接回去
+                    <button className="btn-plain btn-sm" onClick={() => {
+                      setHome({ lat: "", lon: "" }); setProf(null); setChk(null);
+                      setDecisions([]); setPlaceKind("home"); setSelWp(-1);
+                    }}>刪除起飛點</button>
+                  )}
                   {mi >= 0 && (
                     <>
                       <div className="seg2">
