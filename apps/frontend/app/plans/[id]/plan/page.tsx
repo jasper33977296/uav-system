@@ -342,6 +342,24 @@ function editable(f: StoredFence | null | undefined): Fence | null {
            alt_max_m: alt };
 }
 
+/** 新頂點插進**讓周長增加最少的那條邊**，不是一律接在最後——照點擊順序接，
+ *  點的順序一亂圈就交叉（使用者 2026-09-11：每放一點就重算圍起來的範圍）。
+ *  凹的形狀照樣留著：場地不是凸的，不用凸包。 */
+function insertVertex(pts: [number, number][], p: [number, number]) {
+  if (pts.length < 3) return { points: [...pts, p], at: pts.length };
+  const k = Math.cos(p[0] * Math.PI / 180);
+  const xy = (q: [number, number]) => [q[1] * 111320 * k, q[0] * 110574];
+  const d = (a: number[], b: number[]) => Math.hypot(a[0] - b[0], a[1] - b[1]);
+  const P = xy(p);
+  let best = 0, cost = Infinity;
+  pts.forEach((q, i) => {
+    const a = xy(q), b = xy(pts[(i + 1) % pts.length]);
+    const c = d(a, P) + d(P, b) - d(a, b);
+    if (c < cost) { cost = c; best = i; }
+  });
+  return { points: [...pts.slice(0, best + 1), p, ...pts.slice(best + 1)], at: best + 1 };
+}
+
 export default function PlanPage() {
   // Next 15 的 page props `params` 是 Promise；client component 用 useParams 取
   const id = String(useParams()?.id ?? "");
@@ -870,7 +888,8 @@ export default function PlanPage() {
                  ["none", "不設"]] as const).map(([k, t]) => (
                 <button key={k} aria-pressed={fence.shape === k}
                   onClick={() => { editFence({ ...fence, shape: k });
-                                   setFenceDraw(k === "polygon"); }}>{t}</button>
+                                   setFenceDraw(k === "polygon");
+                                   if (k === "polygon") setSelWp(-1); else setFenceSel(-1); }}>{t}</button>
               ))}
             </div>
           </div>
@@ -883,9 +902,14 @@ export default function PlanPage() {
           )}
           {fence.shape === "polygon" && (
             <>
+              {/* **按下去時只編輯圍欄**：航線變淡、點不到；放開時反過來 */}
               <button className="btn-plain btn-sm" aria-pressed={fenceDraw}
-                onClick={() => setFenceDraw((v) => !v)}>
-                {fenceDraw ? "點地圖加頂點（進行中）" : "點地圖加頂點"}</button>
+                onClick={() => {
+                  const on = !fenceDraw;
+                  setFenceDraw(on);
+                  if (on) setSelWp(-1); else setFenceSel(-1);
+                }}>
+                {fenceDraw ? "編輯圍欄（進行中）" : "編輯圍欄"}</button>
               <button className="btn-plain btn-sm"
                 disabled={!fence.points.length}
                 onClick={() => { editFence({ ...fence, points: [] }); setFenceSel(-1); }}>
@@ -944,6 +968,7 @@ export default function PlanPage() {
             assumeM={assume} onBuildings={onBlds}
             tipFor={tipFor}
             fence={fenceShape}
+            editTarget={fenceDraw ? "fence" : "route"}
             fenceSel={fence.shape === "polygon" ? fenceSel : -1}
             onFenceSelect={(i) => { setFenceSel(i); setSelWp(-1); }}
             onFenceMove={(i, l) => {
@@ -961,8 +986,9 @@ export default function PlanPage() {
               // 畫圍欄的時候地圖的點擊是頂點，不是航點——**一次只能在畫
               // 一種東西**，不然使用者分不出下一下會加到哪裡
               if (fenceDraw && fence.shape === "polygon") {
-                editFence({ ...fence,
-                  points: [...fence.points, [l.lat, l.lng]] });
+                const r = insertVertex(fence.points, [l.lat, l.lng]);
+                editFence({ ...fence, points: r.points });
+                setFenceSel(r.at);
                 return;
               }
               // **起飛點是解鎖的地方，不是航線上的一個點**——它寫進 home，
@@ -1004,12 +1030,12 @@ export default function PlanPage() {
               選項 F）。右欄本來就只在「選到一個航點」時才有內容——讓它蓋住
               一小塊地形，比永久佔掉 264 px 划算。可以收起來看底下那塊。 */}
           <aside className={`plan-rail${railOpen ? "" : " shut"}`}>
-            <h2>{fenceSel >= 0 && fence.shape === "polygon" ? "選取的圍欄頂點" : "選取的航點"}
+            <h2>{fenceDraw && fence.shape === "polygon" ? "選取的圍欄頂點" : "選取的航點"}
               <button className="rail-toggle" title={railOpen ? "收起" : "展開"}
                 onClick={() => setRailOpen((v) => !v)}>{railOpen ? "▸" : "◂"}</button>
             </h2>
             {(() => {
-              const fv = fence.shape === "polygon" ? fence.points[fenceSel] : undefined;
+              const fv = fenceDraw && fence.shape === "polygon" ? fence.points[fenceSel] : undefined;
               if (fv) return (
                 <>
                   <div className="rail-row"><span>圍欄頂點</span>

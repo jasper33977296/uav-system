@@ -1550,6 +1550,9 @@ def _rtl_vs_ceiling(rtl_alt_m: float, alt_max: float) -> str | None:
 # 50 m 的地方解鎖，圈就跟著移 50 m，而規劃頁檢查的是以規劃起飛點為心的
 # 那一個。圍欄任務裡的圓有自己的圓心，寫進去的就是檢查過的那一個。
 
+FENCE_CROSSING_MSG = ("圍欄多邊形的邊交叉了——圈內圈外會跟畫面上看到的不一樣，"
+                      "拖一下頂點把交叉解開")
+
 #: FENCE_ACTION：1＝返航（不行就降落）。定義見 ArduCopter.apm.pdef.xml
 FC_FENCE_ACTION = 1
 FENCE_TYPE_ALT_MAX = 1
@@ -1560,6 +1563,12 @@ _FENCE_CMD = {"inclusion_polygons": 5001, "exclusion_polygons": 5002,
 #: 寫之前要先問飛控的。沒有的名字（舊韌體沒有 `_TP`、`RTL_ALT_M`）會安靜地缺席
 FC_FENCE_READ = ["FENCE_ENABLE", "FENCE_TYPE", "FENCE_ACTION", "FENCE_ALT_MAX",
                  "FENCE_ALT_MAX_TP", "FENCE_MARGIN", "RTL_ALT_M", "RTL_ALT"]
+
+
+def fence_crossing(poly) -> bool:
+    """多邊形的邊自己交叉。**三角形不會交叉**，四點以上才要看。
+    拖頂點很容易拖出一個蝴蝶結，而那時圈內圈外跟畫面上看到的不一樣。"""
+    return len(poly) >= 4 and not buildings._ring_ok([tuple(q) for q in poly])
 
 
 def _fence_norm(fence: dict | None) -> dict | None:
@@ -1623,6 +1632,8 @@ def fc_fence_plan(fence: dict | None, vals: dict) -> dict:
             for poly in n[key]:
                 if len(poly) < 3:
                     continue
+                if fence_crossing(poly):
+                    out["problems"].append(FENCE_CROSSING_MSG)
                 npoly += 1
                 items += [{"command": cmd, "p1": float(len(poly)),
                            "lat": la, "lon": lo} for la, lo in poly]
@@ -1703,6 +1714,10 @@ def check_fence(wps: list[dict], fence: dict,
     problems, warnings = [], []
     # 高度上限：與 `FENCE_ALT_MAX` 同義，**離起飛點**。
     # frame 10（地形跟隨）的高度不是離起飛點的，比不了——說出來，不猜
+    for poly in (fence.get("inclusion_polygons") or []) + (fence.get("exclusion_polygons") or []):
+        if fence_crossing(poly):
+            problems.append(FENCE_CROSSING_MSG)
+            break
     amax = fence.get("alt_max")
     if amax is not None:
         if rtl_alt_m is not None and (why := _rtl_vs_ceiling(rtl_alt_m, float(amax))):

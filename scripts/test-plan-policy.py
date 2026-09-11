@@ -344,6 +344,21 @@ ck("規劃頁也報返航高度撞上限（同一句話）",
        [{"seq": 0, "lat": HOME["lat"], "lon": HOME["lon"], "alt": 5, "frame": 3,
          "command": 16, "action": "waypoint"}], circ, None, 40)[0]))
 
+print("\n── 圍欄多邊形交叉（使用者 2026-09-11：頂點可以拖，就拖得出蝴蝶結）──")
+sq = [(HOME["lat"] + 0.0005, HOME["lon"] - 0.0005), (HOME["lat"] + 0.0005, HOME["lon"] + 0.0005),
+      (HOME["lat"] - 0.0005, HOME["lon"] + 0.0005), (HOME["lat"] - 0.0005, HOME["lon"] - 0.0005)]
+bow = [sq[0], sq[2], sq[1], sq[3]]
+ck("正方形不算交叉", not pc.fence_crossing(sq))
+ck("蝴蝶結算交叉", pc.fence_crossing(bow))
+ck("三角形不會交叉", not pc.fence_crossing(sq[:3]))
+ck("凹的形狀不算交叉（場地不是凸的）",
+   not pc.fence_crossing([sq[0], sq[1], (HOME["lat"], HOME["lon"]), sq[2], sq[3]]))
+wp0 = [{"seq": 0, "lat": HOME["lat"], "lon": HOME["lon"], "alt": 5, "frame": 3,
+        "command": 16, "action": "waypoint"}]
+ck("規劃頁報交叉", pc.FENCE_CROSSING_MSG in pc.check_fence(wp0, pc.fence_polygon(bow, 30))[0])
+ck("交叉的圍欄不寫進飛控", pc.FENCE_CROSSING_MSG in pc.fc_fence_plan(
+   pc.fence_polygon(bow, 30), {"RTL_ALT_M": 2})["problems"])
+
 if fails:
     print(f"✗ {len(fails)} 項沒過：" + "、".join(fails))
     sys.exit(1)

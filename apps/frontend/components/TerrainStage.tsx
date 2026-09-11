@@ -60,6 +60,7 @@ export default function TerrainStage({ wps, sel, onSelect, tipFor, placing,
                                       onPlace, onMove, center, assumeM = null,
                                       onBuildings, fence = null, flyTo = null,
                                       fenceSel = -1, onFenceSelect, onFenceMove,
+                                      editTarget = "route",
                                       exaggeration = 1 }: {
   wps: StageWp[]; sel: number; onSelect: (i: number) => void;
   tipFor?: (h: StageHit) => StageTip | null;
@@ -77,6 +78,9 @@ export default function TerrainStage({ wps, sel, onSelect, tipFor, placing,
    *  兩份可能不同步的資料（§9-F） */
   onBuildings?: (bs: BuildingFeat[]) => void;
   fence?: FenceShape | null;
+  /** **現在在編輯哪一種點。** 兩種點互不干擾（使用者 2026-09-11）：
+   *  `fence` 時只有圍欄頂點點得到、拖得動，航線變淡；`route` 時反過來 */
+  editTarget?: "route" | "fence";
   /** 選中的圍欄頂點（多邊形）。-1＝沒有 */
   fenceSel?: number;
   onFenceSelect?: (i: number) => void;
@@ -89,7 +93,14 @@ export default function TerrainStage({ wps, sel, onSelect, tipFor, placing,
   const box = useRef<HTMLDivElement>(null);
   const mapRef = useRef<maplibregl.Map | null>(null);
   const [tip, setTip] = useState<{ t: StageTip; x: number; y: number } | null>(null);
-  const dataRef = useRef({ wps, sel, hover: null as StageHit | null, dirty: true });
+  const dataRef = useRef({ wps, sel, hover: null as StageHit | null, dirty: true,
+                           dim: false });
+  const targetRef = useRef(editTarget);
+  targetRef.current = editTarget;
+  if (dataRef.current.dim !== (editTarget === "fence")) {
+    dataRef.current.dim = editTarget === "fence";
+    dataRef.current.dirty = true;
+  }
   if (dataRef.current.wps !== wps || dataRef.current.sel !== sel) {
     dataRef.current.dirty = true;
   }
@@ -218,6 +229,7 @@ export default function TerrainStage({ wps, sel, onSelect, tipFor, placing,
      *  地面——人眼認定「那個點在哪裡」涵蓋整根柱子，命中也該如此。 */
     const PICK_WP_PX = 30;
     const hitTest = (pt: { x: number; y: number }): StageHit | null => {
+      if (targetRef.current === "fence") return null;
       const ws = dataRef.current.wps;
       const proj = projRef.current;
       if (!proj) return null;
@@ -251,7 +263,7 @@ export default function TerrainStage({ wps, sel, onSelect, tipFor, placing,
      *  `queryRenderedFeatures` 查。**頂點優先於航點**：頂點在邊界上、很小，
      *  兩者疊在一起時人要點的多半是頂點 */
     const hitFence = (pt: { x: number; y: number }): number | null => {
-      if (!map.getLayer("fence-pt")) return null;
+      if (targetRef.current !== "fence" || !map.getLayer("fence-pt")) return null;
       const fs = map.queryRenderedFeatures(
         [[pt.x - 10, pt.y - 10], [pt.x + 10, pt.y + 10]], { layers: ["fence-pt"] });
       let best: { i: number; d: number } | null = null;
@@ -291,7 +303,8 @@ export default function TerrainStage({ wps, sel, onSelect, tipFor, placing,
           / Math.pow(2, map.getZoom());
         const near = mpp * PICK_WP_PX;           // 像素容忍換算成公尺
         let hit: number | null = null, bd = Infinity;
-        dataRef.current.wps.forEach((w, i) => {
+        // 編輯圍欄時航點不參與：點在航點旁邊也是加頂點，不是選航點
+        if (targetRef.current !== "fence") dataRef.current.wps.forEach((w, i) => {
           if (!w.lat || !w.lon || w.auto) return;
           const dy = (w.lat - e.lngLat.lat) * 110574;
           const dx = (w.lon - e.lngLat.lng) * 111320
@@ -363,13 +376,13 @@ export default function TerrainStage({ wps, sel, onSelect, tipFor, placing,
   }, []);
 
   useEffect(() => { dataRef.current.dirty = true; mapRef.current?.triggerRepaint(); },
-    [wps, sel]);
+    [wps, sel, editTarget]);
 
   useEffect(() => {
     const m = mapRef.current;
     if (!m) return;
-    return whenReady(m, () => paintFence(m, fence, fenceSel));
-  }, [fence, fenceSel]);
+    return whenReady(m, () => paintFence(m, fence, fenceSel, editTarget !== "fence"));
+  }, [fence, fenceSel, editTarget]);
 
   useEffect(() => {
     if (!flyTo) return;
@@ -516,7 +529,9 @@ function frameRoute(map: maplibregl.Map, dataRef: { current: StageData },
 }
 
 /** three.js 自訂圖層：航線畫在真高度上，每個航點往地面垂一根線。 */
-interface StageData { wps: StageWp[]; sel: number; hover: StageHit | null; dirty: boolean }
+interface StageData { wps: StageWp[]; sel: number; hover: StageHit | null; dirty: boolean;
+  /** 在編輯圍欄：航線照畫，但淡掉 */
+  dim: boolean }
 
 /** 用**畫圖用的那個矩陣**把 (lon, lat, 海拔) 投影回螢幕像素。
  *
@@ -606,7 +621,7 @@ function whenReady(m: maplibregl.Map, fn: () => void): () => void {
 
 /** 圍欄畫成地面上的一圈虛線——**它是平面範圍**，高度上限由剖面圖那條線講。
  *  圓形用 64 邊形近似：地圖上看不出差別，而且與多邊形共用同一組圖層。 */
-function fenceGeo(f: FenceShape | null, sel = -1): GeoJSON.FeatureCollection {
+function fenceGeo(f: FenceShape | null, sel = -1, dim = false): GeoJSON.FeatureCollection {
   let ring: [number, number][] = [];
   if (f?.shape === "circle" && f.center && f.radius_m) {
     const [lat, lon] = f.center, r = f.radius_m;
@@ -619,21 +634,25 @@ function fenceGeo(f: FenceShape | null, sel = -1): GeoJSON.FeatureCollection {
     ring = f.points!.map(([la, lo]) => [lo, la] as [number, number]);
     ring.push(ring[0]);
   }
+  const line: GeoJSON.Feature[] = f?.shape === "polygon" && f.points?.length === 2
+    ? [{ type: "Feature", properties: {},
+         geometry: { type: "LineString",
+                     coordinates: f.points.map(([la, lo]) => [lo, la]) } }] : [];
   const feats: GeoJSON.Feature[] = ring.length
     ? [{ type: "Feature", properties: {},
-         geometry: { type: "Polygon", coordinates: [ring] } }] : [];
+         geometry: { type: "Polygon", coordinates: [ring] } }] : line;
   // 頂點單獨畫出來——**還沒滿三點時多邊形不成立**，但使用者要看得到
   // 自己點了哪幾下，不然前兩下像沒有反應
   if (f?.shape === "polygon") {
     (f.points ?? []).forEach(([la, lo], i) =>
-      feats.push({ type: "Feature", properties: { i, sel: i === sel },
+      feats.push({ type: "Feature", properties: { i, sel: !dim && i === sel, dim },
                    geometry: { type: "Point", coordinates: [lo, la] } }));
   }
   return { type: "FeatureCollection", features: feats };
 }
 
-function paintFence(map: maplibregl.Map, f: FenceShape | null, sel = -1) {
-  const data = fenceGeo(f, sel);
+function paintFence(map: maplibregl.Map, f: FenceShape | null, sel = -1, dim = false) {
+  const data = fenceGeo(f, sel, dim);
   const src = map.getSource("fence") as maplibregl.GeoJSONSource | undefined;
   if (src) { src.setData(data); return; }
   const before = map.getLayer("route3d") ? "route3d" : undefined;
@@ -648,6 +667,8 @@ function paintFence(map: maplibregl.Map, f: FenceShape | null, sel = -1) {
     // 頂點要抓得到，所以比線粗；選中的加一圈亮邊
     paint: { "circle-radius": ["case", ["get", "sel"], 7, 5.5],
              "circle-color": "#fab219",
+             "circle-opacity": ["case", ["get", "dim"], 0.35, 1],
+             "circle-stroke-opacity": ["case", ["get", "dim"], 0.35, 1],
              "circle-stroke-width": ["case", ["get", "sel"], 2.5, 1],
              "circle-stroke-color": ["case", ["get", "sel"], "#f0eee6", "#1b1a17"] } },
     before);
@@ -773,6 +794,15 @@ function makeRouteLayer(map: maplibregl.Map, dataRef: { current: StageData },
         group.add(halo);
       }
     });
+    if (dataRef.current.dim) {
+      group.traverse((o) => {
+        const mat = (o as THREE.Mesh).material as THREE.MeshBasicMaterial | undefined;
+        if (mat && typeof mat.opacity === "number") {
+          mat.transparent = true;
+          mat.opacity *= 0.3;
+        }
+      });
+    }
   };
 
   return {
