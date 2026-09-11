@@ -1,0 +1,155 @@
+<!doctype html>
+<html lang="zh-Hant"><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>地址定位與飛控圍欄</title>
+<style>
+:root{--page:#1b1a17;--surface:#262624;--surface-2:#30302c;--ink:#f0eee6;
+ --ink-2:#c2bfb3;--muted:#8f8b80;--hairline:#3a3833;--border:rgba(240,238,230,.1);
+ --accent:#d97757;--accent-bg:rgba(217,119,87,.12);--series-1:#3987e5;
+ --ok:#0ca30c;--warn:#fab219;--danger:#e05e5e}
+*{margin:0;padding:0;box-sizing:border-box}
+body{background:var(--page);color:var(--ink);
+ font:14px/1.55 system-ui,"Noto Sans TC",sans-serif;padding:20px 24px 60px}
+h1{font-size:20px;margin:0 0 4px}
+h2{font-size:14px;color:var(--accent);margin:30px 0 4px}
+.note{color:var(--muted);font-size:12.5px;margin-bottom:12px;max-width:80ch}
+.note b{color:var(--ink-2);font-weight:600}
+.opt{border:1px solid var(--border);border-radius:10px;margin-bottom:14px;
+ background:var(--surface);overflow:hidden}
+.opt>header{display:flex;gap:10px;align-items:baseline;padding:7px 12px;
+ border-bottom:1px solid var(--hairline);background:var(--surface-2)}
+.opt>header b{font-size:12.5px}.opt>header span{color:var(--muted);font-size:12px}
+.pane{padding:12px}
+.tag{font-size:11px;border:1px solid var(--border);border-radius:4px;padding:1px 6px;color:var(--muted)}
+.tag.pick{color:var(--accent);border-color:var(--accent)}
+.map{border:1px solid var(--border);border-radius:9px;overflow:hidden;
+ background:radial-gradient(60% 80% at 45% 50%,#3f4a35,#2b3226 72%)}
+.btn{background:transparent;border:1px solid var(--border);border-radius:7px;
+ padding:4px 10px;font-size:12.5px;color:var(--ink-2);cursor:pointer}
+.btn.accent{color:var(--accent);border-color:var(--accent);background:var(--accent-bg)}
+.chip{border:1px solid var(--border);border-radius:999px;padding:3px 10px;font-size:12px;color:var(--ink-2)}
+.chip.bad{color:var(--danger);border-color:var(--danger)}
+.chip.ok{color:var(--ok);border-color:var(--ok)}
+.bar{display:flex;gap:10px;align-items:flex-end;flex-wrap:wrap;background:var(--surface-2);
+ border:1px solid var(--border);border-radius:10px;padding:9px 11px}
+.f{display:flex;flex-direction:column;gap:3px}
+.k{font-size:11px;color:var(--muted);letter-spacing:.04em}
+.inp{background:var(--surface-2);border:1px solid var(--border);border-radius:6px;
+ padding:4px 8px;width:96px;color:var(--ink);font-variant-numeric:tabular-nums}
+.seg{display:flex;border:1px solid var(--border);border-radius:7px;overflow:hidden}
+.seg button{padding:4px 9px;font-size:12px;color:var(--muted);background:none;border:0;cursor:pointer}
+.seg button[aria-pressed=true]{color:var(--accent);background:var(--accent-bg)}
+table{width:100%;border-collapse:collapse;font-size:12.5px;margin-top:8px}
+th{text-align:left;color:var(--muted);font-weight:500;padding:5px 9px;
+ border-bottom:1px solid var(--hairline)}
+td{padding:5px 9px;border-bottom:1px solid var(--hairline)}
+</style></head><body>
+
+<h1>地址定位 ＋ 飛控圍欄</h1>
+<p class="note">起飛點拖曳／刪除已經直接做了（不需要討論）。這一頁只談兩件要你決定的事，
+底下的數字都是<b>實測或讀自這台機的資料</b>，不是舉例。</p>
+
+<h2>① 從地址開始</h2>
+<p class="note">找不到門牌是<b>實測</b>：OSM 的台灣門牌很稀疏。
+「竹東鎮中興路四段」→ 2 筆（路段）；「新竹縣竹東鎮」→ 1 筆（鎮）；「台北101」→ 1 筆（地標）；
+「新竹市東區光復路二段101號」→ <b>0 筆</b>；「工業技術研究院 中興院區」→ <b>0 筆</b>。
+精準到門牌的是內政部 TGOS，要申請——PoC 階段先不問。</p>
+
+<div class="opt"><header><b>A</b><span>搜什麼就查什麼，查不到就說查不到</span></header>
+<div class="pane">
+ <div class="bar">
+  <div class="f"><span class="k">地址、地標或座標</span>
+   <input class="inp" style="width:280px" value="新竹市東區光復路二段101號"></div>
+  <button class="btn accent">搜尋</button>
+  <span class="note" style="margin:0">找不到。換個寫法試試（路名、地標）</span>
+ </div>
+</div></div>
+
+<div class="opt"><header><b>B</b><span>查不到門牌就往上退一層，並說出退到哪</span>
+ <span class="tag pick">我建議這個</span></header>
+<div class="pane">
+ <div class="bar">
+  <div class="f"><span class="k">地址、地標或座標</span>
+   <input class="inp" style="width:280px" value="竹東鎮中興路四段195號"></div>
+  <button class="btn accent">搜尋</button>
+ </div>
+ <table>
+  <thead><tr><th>結果</th><th>精度</th><th></th></tr></thead>
+  <tbody>
+   <tr><td>中興路四段・頭重里・竹東鎮</td><td><span class="chip">只到路段</span></td><td><button class="btn">移過去</button></td></tr>
+   <tr><td>中興路四段・石碑・竹東鎮</td><td><span class="chip">只到路段</span></td><td><button class="btn">移過去</button></td></tr>
+  </tbody>
+ </table>
+ <p class="note" style="margin:8px 0 0">「195號」查不到，自動改查「中興路四段」——<b>精度那一格照實寫</b>，
+ 地圖移過去之後起飛點還是你自己點。</p>
+</div></div>
+
+<p class="note">兩個都一樣的部分：按 Enter 才查（OSM 的服務一秒只准一次，不能邊打邊查）；
+貼 <b>24.7734, 121.0459</b> 或 Google Maps 連結直接跳過去，不上網；
+查詢是從地面站送到 OSM 的外部服務——<b>現場沒網路時地址查不了</b>，座標照樣能用。</p>
+
+<h2>② 飛控圍欄：先講查到的事實</h2>
+<div class="opt"><header><b>現況</b><span>這台機 09-07 08:28 的參數快照（1244 筆，4.7）</span></header>
+<div class="pane">
+ <table>
+  <thead><tr><th>參數</th><th>機上</th><th>飛控文件的範圍</th><th>跟規劃端的差</th></tr></thead>
+  <tbody>
+   <tr><td>FENCE_ENABLE</td><td>0</td><td>0／1</td><td>關著——現在飛控不擋任何東西</td></tr>
+   <tr><td>FENCE_TYPE</td><td>1</td><td>位元：1 高度、2 圓、4 多邊形</td><td></td></tr>
+   <tr><td>FENCE_ACTION</td><td>3</td><td>0–5</td><td><span class="chip bad">白名單說明寫錯</span>
+     3 是 SmartRTL→返航→降落，不是「原地煞停」（煞停是 4）。09-07 就是照錯的說明寫進去的。<b>說明已修正</b></td></tr>
+   <tr><td>FENCE_RADIUS</td><td>300 m</td><td>30–10000 m</td><td>規劃端允許 &lt;30 m，要擋</td></tr>
+   <tr><td>FENCE_ALT_MAX</td><td>3 m</td><td>10–1000 m</td><td>文件下限 10，機上接受了 3（讀回是 3）</td></tr>
+   <tr><td>FENCE_MARGIN</td><td>0.5 m</td><td>1–10 m</td><td></td></tr>
+   <tr><td>FENCE_ALT_MAX_TP</td><td>1</td><td>0 海拔／1 離起飛點／3 離地</td><td>＝1 才跟規劃端同義，寫之前要先確認</td></tr>
+   <tr><td>RTL_ALT_M</td><td>2 m</td><td></td><td>選返航類動作時要低於高度上限</td></tr>
+  </tbody>
+ </table>
+ <p class="note" style="margin:8px 0 0">
+ <b>圓形</b>只要寫參數；<b>多邊形</b>要走「圍欄任務」協定（MAV_MISSION_TYPE_FENCE），本系統目前只會傳航線任務，要新寫。<br>
+ <b>這次驗不到真機</b>：兩台機最後一次心跳是 26 小時前，模擬器也沒開。<br>
+ FENCE_ENABLE=1 且有圓或多邊形時，飛控要有 GPS 定位才肯解鎖——室內會解鎖不了（現在不飛，但要知道）。</p>
+</div></div>
+
+<h2>③ 什麼時候寫進飛控</h2>
+<div class="opt"><header><b>P</b><span>跟著「上傳航線」一起寫</span><span class="tag pick">我建議這個</span></header>
+<div class="pane">
+ <table>
+  <thead><tr><th>上傳時的順序</th><th>結果</th></tr></thead>
+  <tbody>
+   <tr><td>1. 讀 FENCE_ALT_MAX_TP，不是 1 就停</td><td>1 ✓</td></tr>
+   <tr><td>2. 寫 FENCE_TYPE／RADIUS／ALT_MAX／MARGIN／ACTION，逐個讀回</td><td>TYPE 1→3、RADIUS 300→120、ALT_MAX 3→30 ✓</td></tr>
+   <tr><td>3. （多邊形）上傳圍欄任務，逐點讀回</td><td>—</td></tr>
+   <tr><td>4. 最後才寫 FENCE_ENABLE=1——前面任何一步失敗就不開</td><td>0→1 ✓</td></tr>
+   <tr><td>5. 上傳航線（原本那段）</td><td>✓</td></tr>
+  </tbody>
+ </table>
+ <p class="note" style="margin:8px 0 0">航線跟飛控裡的圍欄<b>永遠是同一份</b>。
+ 另一顆按鈕（Q）的問題是：規劃頁寫了一個圈、之後上傳別的航線，飛控裡留著的是上一份的圈。</p>
+</div></div>
+<div class="opt"><header><b>Q</b><span>規劃頁另一顆「寫進飛控」</span></header>
+<div class="pane"><span class="chip">圍欄 圓形 120 m・上限 30 m</span> <button class="btn accent">寫進飛控</button></div></div>
+
+<h2>④ 越界之後飛機做什麼（FENCE_ACTION 的預設）</h2>
+<table>
+ <thead><tr><th></th><th>動作</th><th>後果</th></tr></thead>
+ <tbody>
+  <tr><td><b>1</b> <span class="tag pick">我建議</span></td><td>返航（不行就降落）</td>
+   <td>往起飛點飛——那條線我們已經會檢查（剖面圖上的返航層）。要求 RTL_ALT_M 低於高度上限，否則不寫</td></tr>
+  <tr><td><b>4</b></td><td>煞停（不行就降落）</td><td>停在邊界上。停不住就<b>原地降落</b>——邊界外面可能是屋頂或樹</td></tr>
+  <tr><td><b>2</b></td><td>一律降落</td><td>在越界那一點直接降</td></tr>
+ </tbody>
+</table>
+
+<h2>⑤ 多邊形這次做不做</h2>
+<div class="opt"><header><b>R</b><span>一起做：新增圍欄任務上傳與讀回</span></header>
+<div class="pane"><p class="note" style="margin:0">你選過規劃端要有多邊形（L），這樣兩邊一致。代價是新協定，要先在模擬器上驗過才上真機。</p></div></div>
+<div class="opt"><header><b>S</b><span>先做圓形＋高度上限，多邊形的航線上傳時說清楚「飛控只收到高度上限」</span></header>
+<div class="pane"><p class="note" style="margin:0">圓形只動參數，風險小；多邊形之後補。</p></div></div>
+
+<h2>另外兩件，我先照建議做，不同意再說</h2>
+<p class="note"><b>T</b>　航線沒有圍欄時，<b>不動</b>飛控裡的圍欄，上傳結果列出飛控現值（不偷偷關掉別人設的保護）。<br>
+<b>V</b>　人工審查也綁圍欄：圍欄改了，那一份的審查就失效——因為它現在會寫進飛控了。沒有圍欄的航線不受影響。</p>
+
+<p class="note" style="margin-top:24px">要你回的：<b>① A／B　③ P／Q　④ 1／4／2　⑤ R／S</b></p>
+</body></html>
