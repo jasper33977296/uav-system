@@ -670,8 +670,11 @@ export default function CommandPanel() {
         // 地形預檢的話跟著上傳結果一起回（`check.terrain.notes`）。
         // **只挑地形那幾句**：`warnings` 裡還有圍欄、機種、frame 方言，
         // 全列會變成沒人讀的一大段（使用者：字太多）
+        // 飛控圍欄的結果也一起說（2026-09-11）：寫了什麼、或者為什麼沒動
         setResult({ ok: true, text: `${action}成功`,
-                    notes: body?.check?.terrain?.notes });
+                    notes: [...(body?.check?.terrain?.notes ?? []),
+                            ...(body?.fc_fence?.summary
+                              ? [`飛控圍欄：${body.fc_fence.summary}`] : [])] });
         // 顯示到即時頁的事**已經搬到後端**（指令服務在上傳／啟動／改航線成功
         // 後呼叫 /plans/{id}/show，前端由 mission_shown 事件觸發重畫）。
         // 原因：上傳的呼叫端不只有這個畫面——驗收 rig、MCP、curl 都會上傳，

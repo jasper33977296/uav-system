@@ -6,7 +6,9 @@ import tarfile
 import asyncpg
 import json
 import os
+import re
 import time
+import urllib.parse
 import urllib.request
 from datetime import datetime, timedelta, timezone
 from uuid import UUID
@@ -2674,6 +2676,8 @@ async def get_sign(plan_id: str):
     if not wps:
         raise HTTPException(404, "無此路徑或沒有航點")
     now = plan_check.waypoints_hash(wps)
+    fc = await db.pool.fetchval("SELECT fence FROM plans WHERE id = $1", plan_id)
+    fnow = plan_check.fence_hash(json.loads(fc) if isinstance(fc, str) else fc)
     row = await db.pool.fetchrow(
         "SELECT * FROM plan_checks WHERE plan_id = $1 "
         "ORDER BY checked_at DESC LIMIT 1", plan_id)
@@ -2681,14 +2685,17 @@ async def get_sign(plan_id: str):
         return {"signed": False, "stale": False, "hash": now,
                 "why": "這一份還沒有人看過檢查結果"}
     d = dict(row)
-    stale = d["waypoints_hash"] != now
+    wp_stale = d["waypoints_hash"] != now
+    fence_stale = d.get("fence_hash") != fnow
+    stale = wp_stale or fence_stale
     for k in ("problems", "acknowledged", "limits"):
         if isinstance(d.get(k), str):
             d[k] = json.loads(d[k])
     d["id"] = str(d["id"]); d["plan_id"] = str(d["plan_id"])
     d["checked_at"] = d["checked_at"].isoformat()
     return {"signed": True, "stale": stale, "hash": now, **d,
-            "why": "航點在簽核之後改過了，這份簽核不算數" if stale else None}
+            "why": ("航點在簽核之後改過了，這份簽核不算數" if wp_stale else
+                    "圍欄在簽核之後改過了，這份簽核不算數" if fence_stale else None)}
 
 
 @router.post("/plans/{plan_id}/sign")
@@ -2721,10 +2728,11 @@ async def sign_plan(plan_id: str, body: SignIn):
     h = plan_check.waypoints_hash(wps)
     await db.pool.execute(
         "INSERT INTO plan_checks (plan_id, waypoints_hash, ok, problems, "
-        "acknowledged, assumed_m, wp_spd, limits, signed_by) "
-        "VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)",
+        "acknowledged, assumed_m, wp_spd, limits, signed_by, fence_hash) "
+        "VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)",
         plan_id, h, chk["ok"], jdumps(chk["problems"]), jdumps(ack),
-        body.assume_m, body.wp_spd, jdumps(chk.get("limits")), body.signed_by)
+        body.assume_m, body.wp_spd, jdumps(chk.get("limits")), body.signed_by,
+        plan_check.fence_hash(fence))
     return {"ok": chk["ok"], "hash": h, "acknowledged": ack,
             "unacknowledged": missed, "check": chk}
 
@@ -3305,3 +3313,101 @@ async def link_metrics_batch(batch: LinkBatch):
 
     return {"accepted_seq": accepted, "stored": stored,
             "duplicate": duplicate, "outside_session": outside}
+
+# ── 地址定位（使用者裁定 2026-09-11 選 B）──────────────────────────────
+# **查不到門牌就往上退一層，並說出退到哪。** OSM 的台灣門牌很稀疏（實測
+# 「光復路二段101號」「中興路四段195號」都是 0 筆），精準到門牌的 TGOS
+# 要申請——PoC 階段先不問。查詢是送到外部服務的：現場沒網路時查不了，
+# 貼座標照樣能用（那一條不上網）。
+
+_GEO_UA = "uav-system-poc/0.1 (ground station route planning)"
+#: Nominatim 的使用規範：一秒最多一次。**不能邊打邊查**，所以是按 Enter 才查
+_GEO_GAP_S = 1.1
+_geo_lock = asyncio.Lock()
+_geo_last = [0.0]
+_geo_cache: dict[str, list] = {}
+_COORD_RE = re.compile(r"(-?\d{1,3}\.\d+)\s*[,，\s]\s*(-?\d{1,3}\.\d+)")
+_GEO_AREA = {"city", "town", "village", "suburb", "city_district", "district",
+             "county", "state", "hamlet", "neighbourhood", "quarter",
+             "municipality", "borough"}
+
+
+def _geo_precision(t: str | None) -> str:
+    if t in ("house", "building"):
+        return "門牌"
+    if t in ("road", "street"):
+        return "路段"
+    if t in _GEO_AREA:
+        return "行政區"
+    return "地標"
+
+
+def _geo_fallbacks(q: str) -> list[str]:
+    """門牌 → 巷弄 → 段 → 路。每退一層都是一個新的查詢。"""
+    out = [q]
+    for pat in (r"\d+(之\d+)?號.*$", r"\d+[巷弄].*$", r"[一二三四五六七八九十\d]+段.*$"):
+        nxt = re.sub(pat, "", out[-1]).strip()
+        if nxt and nxt != out[-1]:
+            out.append(nxt)
+    return out
+
+
+def _geo_name(display: str) -> str:
+    parts = [x.strip() for x in display.split(",")]
+    parts = [x for x in parts if x and not x.isdigit() and x not in ("臺灣", "台灣")]
+    return "・".join(parts[:3])
+
+
+async def _nominatim(q: str) -> list[dict]:
+    if q in _geo_cache:
+        return _geo_cache[q]
+    url = ("https://nominatim.openstreetmap.org/search?format=jsonv2&limit=5"
+           "&countrycodes=tw&accept-language=zh-TW&q=" + urllib.parse.quote(q))
+    req = urllib.request.Request(url, headers={"User-Agent": _GEO_UA})
+    async with _geo_lock:
+        wait = _GEO_GAP_S - (time.monotonic() - _geo_last[0])
+        if wait > 0:
+            await asyncio.sleep(wait)
+        loop = asyncio.get_running_loop()
+        try:
+            raw = await loop.run_in_executor(
+                None, lambda: urllib.request.urlopen(req, timeout=8).read())
+        finally:
+            _geo_last[0] = time.monotonic()
+    res = [{"name": _geo_name(x.get("display_name", "")),
+            "lat": float(x["lat"]), "lon": float(x["lon"]),
+            "precision": _geo_precision(x.get("addresstype"))}
+           for x in json.loads(raw)]
+    _geo_cache[q] = res
+    return res
+
+
+@router.get("/geocode")
+async def geocode(q: str):
+    """地址、地標或座標 → 大致位置。**起飛點還是使用者自己點**，這裡只負責
+    把地圖移過去。"""
+    q = (q or "").strip()
+    if not q:
+        raise HTTPException(422, "沒有要查的東西")
+    m = _COORD_RE.search(q)
+    if m:
+        a, b = float(m.group(1)), float(m.group(2))
+        if abs(a) > 90 >= abs(b):
+            a, b = b, a                 # 有人會先寫經度
+        if abs(a) <= 90 and abs(b) <= 180:
+            return {"query": q, "used": q, "fallback": False, "source": "coord",
+                    "results": [{"name": f"{a:.6f}, {b:.6f}", "lat": a, "lon": b,
+                                 "precision": "座標"}]}
+    for i, cand in enumerate(_geo_fallbacks(q)):
+        try:
+            res = await _nominatim(cand)
+        except (OSError, ValueError) as e:
+            raise HTTPException(503, {
+                "msg": "連不上地址服務（OSM Nominatim）",
+                "hint": "現場沒網路時直接貼座標，例如 24.7734, 121.0459",
+                "error": str(e)}) from e
+        if res:
+            return {"query": q, "used": cand, "fallback": i > 0, "source": "osm",
+                    "results": res}
+    return {"query": q, "used": None, "fallback": False, "source": "osm",
+            "results": []}

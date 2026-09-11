@@ -118,6 +118,9 @@ async def migrate() -> None:
     await pool.execute(
         "CREATE INDEX IF NOT EXISTS plan_checks_plan_idx "
         "ON plan_checks (plan_id, checked_at DESC)")
+    # 2026-09-11：圍欄會寫進飛控之後，審查也綁圍欄。NULL＝那次審查時沒有圍欄
+    await pool.execute(
+        "ALTER TABLE plan_checks ADD COLUMN IF NOT EXISTS fence_hash TEXT")
     # 038：飛控板的唯一 ID（AUTOPILOT_VERSION.uid2）。**目前唯一機器可驗證的
     # 身分**——sysid 只是機上可改的參數。NULL＝還沒問到（不是「沒有」）
     await pool.execute("ALTER TABLE drones ADD COLUMN IF NOT EXISTS board_uid TEXT")

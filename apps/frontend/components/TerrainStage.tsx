@@ -58,7 +58,7 @@ export interface StageTip { title: string; rows: [string, string][]; bad?: boole
 
 export default function TerrainStage({ wps, sel, onSelect, tipFor, placing,
                                       onPlace, onMove, center, assumeM = null,
-                                      onBuildings, fence = null,
+                                      onBuildings, fence = null, flyTo = null,
                                       exaggeration = 1 }: {
   wps: StageWp[]; sel: number; onSelect: (i: number) => void;
   tipFor?: (h: StageHit) => StageTip | null;
@@ -76,6 +76,8 @@ export default function TerrainStage({ wps, sel, onSelect, tipFor, placing,
    *  兩份可能不同步的資料（§9-F） */
   onBuildings?: (bs: BuildingFeat[]) => void;
   fence?: FenceShape | null;
+  /** 地址定位的結果。**只在 `n` 變的時候飛過去**——放點、拖點時不動鏡頭 */
+  flyTo?: { lat: number; lon: number; n: number } | null;
   exaggeration?: number;
 }) {
   const box = useRef<HTMLDivElement>(null);
@@ -321,6 +323,12 @@ export default function TerrainStage({ wps, sel, onSelect, tipFor, placing,
     if (!m) return;
     return whenReady(m, () => paintFence(m, fence));
   }, [fence]);
+
+  useEffect(() => {
+    if (!flyTo) return;
+    mapRef.current?.flyTo({ center: [flyTo.lon, flyTo.lat], zoom: 17, essential: true });
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [flyTo?.n]);
 
   return (
     <div className={`stage3d-wrap${placing ? " placing" : ""}`}>

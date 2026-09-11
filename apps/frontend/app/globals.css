@@ -1983,3 +1983,12 @@ details.card summary { cursor: pointer; font-size: 14px; font-weight: 600; }
    不必用文字說 */
 .plan-head .btn-plain[aria-pressed="true"] {
   color: var(--status-warn); border-color: var(--status-warn); }
+
+/* 地址查詢的結果：浮在工具列下面，蓋住地圖一小塊，選了就收 */
+.geo-box { position: relative; }
+.geo-list { position: absolute; top: calc(100% + 6px); left: 0; z-index: 30;
+  min-width: 420px; display: flex; flex-direction: column; gap: 6px;
+  background: var(--surface); border: 1px solid var(--border); border-radius: 9px;
+  padding: 9px 10px; box-shadow: 0 8px 24px rgba(0, 0, 0, .35); }
+.geo-row { display: flex; align-items: center; gap: 8px; font-size: 13px; }
+.geo-row > span:first-child { flex: 1; }

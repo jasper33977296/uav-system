@@ -1215,6 +1215,77 @@ async def terrain_crosscheck(sysid: int, plan_id: str | None = None):
     }
 
 
+async def _write_fc_fence(sysid: int, plan_id: str, fence: dict | None,
+                         ap) -> dict:
+    """**航線跟飛控裡的圍欄是同一份**（使用者裁定 2026-09-11 選 P）。
+
+    順序：讀現值 → 關 `FENCE_ENABLE` → 寫種類／越界動作／高度上限（逐個讀回）
+    → 傳圍欄任務（逐項讀回）→ **最後才開** `FENCE_ENABLE`。任何一步沒過就停，
+    整次上傳不做——飛機不該帶著「不是這份航線的圍欄」去飛這份航線。
+
+    這份航線沒有圍欄時**不動**飛控裡的：那可能是別人為這個場地設的保護，
+    偷偷關掉比留著更糟。只回報現值。
+    """
+    if plan_check.fence_hash(fence) is None:
+        names = ["FENCE_ENABLE", "FENCE_TYPE"]
+        try:
+            cur = (await _run(sysid, "param_get", mav.job_get_params, names,
+                              params={"names": names, "why": "fc_fence_current"})
+                   )["values"]
+        except HTTPException:
+            cur = {}
+        en = cur.get("FENCE_ENABLE")
+        return {"written": False, "current": cur,
+                "summary": "這份航線沒有圍欄，飛控裡的沒動"
+                           + ("" if en is None else f"（現在 FENCE_ENABLE={int(en)}）")}
+    if caps.autopilot_name(ap) != "ardupilot":
+        return {"written": False, "summary": "飛控圍欄沒有寫（不是 ArduPilot）",
+                "warnings": ["這份航線有圍欄，但這台不是 ArduPilot——飛控圍欄沒有寫"
+                             "（只支援 ArduPilot 的 FENCE_*），規劃端的檢查照舊"]}
+    want = plan_check.FC_FENCE_READ
+    vals = (await _run(sysid, "param_get", mav.job_get_params, want,
+                       params={"names": want, "why": "fc_fence"}))["values"]
+    plan = plan_check.fc_fence_plan(fence, vals)
+    problems = plan["problems"] + [
+        m for n, v in plan["params"].items() if (m := fcparams.validate(n, v))]
+    if problems:
+        await _audit(sysid, "mission_upload", {"plan_id": plan_id},
+                     "rejected_fc_fence", "；".join(problems))
+        raise HTTPException(409, {
+            "msg": "飛控圍欄寫不進去，未上傳", "problems": problems,
+            "how_to": ["把規劃頁的圍欄高度上限調到比返航高度高",
+                       "或改飛控的 RTL_ALT_M，讓返航高度低於圍欄上限",
+                       "或把這份航線的圍欄設成「不設」——飛控裡的圍欄就不會被動到"]})
+    before = {k: vals[k] for k in
+              ("FENCE_ENABLE", "FENCE_TYPE", "FENCE_ACTION", "FENCE_ALT_MAX")
+              if k in vals}
+    off = not vals.get("FENCE_ENABLE")
+    try:
+        if not off:
+            await _run(sysid, "param_set", mav.job_set_params, {"FENCE_ENABLE": 0},
+                       params={"FENCE_ENABLE": 0, "why": "fc_fence"})
+            off = True
+        wrote = await _run(sysid, "param_set", mav.job_set_params, plan["params"],
+                           params={**plan["params"], "why": "fc_fence"})
+        if wrote["clamped"]:
+            raise HTTPException(409, {"msg": "飛控把圍欄參數存成了別的值",
+                                      "problems": wrote["clamped"]})
+        if plan["items"]:
+            await _run(sysid, "fence_upload", mav.job_upload_mission,
+                       mav.fence_wire_items(plan["items"]),
+                       mav.M.MAV_MISSION_TYPE_FENCE,
+                       params={"plan_id": plan_id, "items": len(plan["items"])})
+        await _run(sysid, "param_set", mav.job_set_params, {"FENCE_ENABLE": 1},
+                   params={"FENCE_ENABLE": 1, "why": "fc_fence"})
+    except HTTPException as e:
+        d = e.detail if isinstance(e.detail, dict) else {"msg": str(e.detail)}
+        state = "圍欄停在關著" if off else "飛控圍欄維持原本那份"
+        raise HTTPException(e.status_code, {
+            **d, "msg": f"飛控圍欄沒寫完，{state}，未上傳航線：{d.get('msg', '')}"}) from e
+    return {"written": True, "summary": plan["summary"], "before": before,
+            "items": len(plan["items"]), "warnings": plan["warnings"]}
+
+
 @app.post("/api/command/{sysid}/mission/upload", tags=["任務"],
           summary="② 上傳任務到無人機（會逐項讀回比對）")
 async def mission_upload(sysid: int, body: UploadIn):
@@ -1295,14 +1366,18 @@ async def mission_upload(sysid: int, body: UploadIn):
     if settings.sign_enforce:
         h = plan_check.waypoints_hash(wps)
         sg = await pool.fetchrow(
-            "SELECT waypoints_hash, ok, problems, acknowledged, assumed_m, "
-            "signed_by, checked_at FROM plan_checks WHERE plan_id = $1 "
+            "SELECT waypoints_hash, fence_hash, ok, problems, acknowledged, "
+            "assumed_m, signed_by, checked_at FROM plan_checks WHERE plan_id = $1 "
             "ORDER BY checked_at DESC LIMIT 1", body.plan_id)
         why = None
         if sg is None:
             why = "這一份還沒有人看過檢查結果"
         elif sg["waypoints_hash"] != h:
             why = "航點在簽核之後改過了，那份簽核不算數"
+        elif sg["fence_hash"] != plan_check.fence_hash(mf):
+            # 圍欄會寫進飛控（2026-09-11），改了圍欄卻沿用舊審查＝放行一份
+            # 沒人看過的保護設定。沒有圍欄的航線兩邊都是 None，不受影響
+            why = "圍欄在簽核之後改過了，那份簽核不算數"
         else:
             probs = sg["problems"]
             acks = sg["acknowledged"]
@@ -1422,9 +1497,19 @@ async def mission_upload(sysid: int, body: UploadIn):
         raise HTTPException(409, {"msg": "任務未通過幾何預檢，未上傳", **report})
     if not report["ok"]:
         log.warning("預檢有問題但未啟用擋門，照常上傳：%s", "；".join(report["problems"]))
-    res = await _run(sysid, "mission_upload", mav.job_upload_mission,
-                     build_items(wps),
-                     params={"plan_id": body.plan_id, "items": len(wps)})
+    fc_fence = await _write_fc_fence(sysid, body.plan_id, mf, ap)
+    report["warnings"] = (list(report.get("warnings") or [])
+                          + fc_fence.get("warnings", []))
+    try:
+        res = await _run(sysid, "mission_upload", mav.job_upload_mission,
+                         build_items(wps),
+                         params={"plan_id": body.plan_id, "items": len(wps)})
+    except HTTPException as e:
+        if not fc_fence.get("written"):
+            raise
+        d = e.detail if isinstance(e.detail, dict) else {"msg": str(e.detail)}
+        raise HTTPException(e.status_code, {
+            **d, "msg": f"{d.get('msg', '')}（飛控圍欄已經寫入並打開——是這份航線的）"}) from e
     # issue 020：記「這台機當前飛的任務」——backend create_session 據此綁架次。
     # sysid→drone 靠 drones.mav_sysid（backend 心跳時寫入）。
     await pool.execute("UPDATE drones SET current_plan_id = $1 WHERE mav_sysid = $2",
@@ -1432,7 +1517,7 @@ async def mission_upload(sysid: int, body: UploadIn):
     # **上傳成功 → 即時畫面就該畫這一份**：從這一刻起機上的航線就是它，
     # 畫面上還畫別份（或什麼都不畫）就是與飛機的事實對不上
     await guard_client.show_on_live(sysid, body.plan_id, "已上傳到機上")
-    return {**res, "check": report}
+    return {**res, "check": report, "fc_fence": fc_fence}
 
 
 # ── 群組任務指令層（issue 013-B；doc/group-missions-design.md §7）────────

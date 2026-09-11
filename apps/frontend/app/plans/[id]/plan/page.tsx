@@ -279,7 +279,7 @@ function Profile({ p, ceilM }: { p: Profile;
           <line x1={PAD_L} x2={W - PAD_R} y1={Y(ceilAmsl)} y2={Y(ceilAmsl)}
             stroke="var(--status-warn)" strokeWidth="1" strokeDasharray="2 3" />
           <text x={W - PAD_R - 4} y={Y(ceilAmsl) - 4} textAnchor="end"
-            fill="var(--status-warn)" fontSize="10">圍欄上限（飛控不擋）</text>
+            fill="var(--status-warn)" fontSize="10">圍欄上限</text>
         </>
       )}
       {rtlBand.length > 0 && (
@@ -401,6 +401,24 @@ export default function PlanPage() {
     setFence(f); setFenceOwn(true);
   }, []);
   const fenceBody = () => (fenceOwnRef.current ? fenceRef.current : undefined);
+  const [geoQ, setGeoQ] = useState("");
+  const [geo, setGeo] = useState<{ query: string; used: string | null;
+    fallback: boolean; err?: string;
+    results: { name: string; lat: number; lon: number; precision: string }[] } | null>(null);
+  const [flyTo, setFlyTo] = useState<{ lat: number; lon: number; n: number } | null>(null);
+  const geocode = async () => {
+    const q = geoQ.trim();
+    if (!q) return;
+    try {
+      const r = await fetch(`${API}/api/geocode?q=${encodeURIComponent(q)}`);
+      const d = await r.json();
+      setGeo(r.ok ? d : { query: q, used: null, fallback: false, results: [],
+        err: errText(d.detail, "查不到") });
+    } catch (e) {
+      setGeo({ query: q, used: null, fallback: false, results: [],
+               err: `查不到：${(e as Error).message}` });
+    }
+  };
   const [chk, setChk] = useState<Check | null>(null);
   const [spd, setSpd] = useState<{ wp: number | null; rad: number | null;
     rtl?: number | null; src: string }>(
@@ -754,14 +772,49 @@ export default function PlanPage() {
         )}
         {isNew && (
           <>
-          {/* 座標仍然可以直接打（有時候起飛點是別人給的一組數字），
-              但**主要的放法是在地圖上點**——那才看得到地形 */}
-          <label className="f"><span>起飛點緯度</span>
-            <input value={home.lat} placeholder="在地圖上點"
-              onChange={(e) => setHome((h) => ({ ...h, lat: e.target.value }))} /></label>
-          <label className="f"><span>起飛點經度</span>
-            <input value={home.lon} placeholder="在地圖上點"
-              onChange={(e) => setHome((h) => ({ ...h, lon: e.target.value }))} /></label>
+          {/* **使用者不會記得經緯度**（2026-09-11）：先用地址把地圖移到大致的
+              地方，起飛點還是自己點。座標也收在同一格——貼上就跳過去 */}
+          <div className="f geo-box"><span>地址、地標或座標</span>
+            <input value={geoQ} placeholder="竹東鎮中興路四段" style={{ width: 230 }}
+              onChange={(e) => setGeoQ(e.target.value)}
+              onKeyDown={(e) => { if (e.key === "Enter") geocode(); }} />
+            {geo && (
+              <div className="geo-list">
+                {geo.err
+                  ? <div className="hint-line">{geo.err}</div>
+                  : !geo.results.length
+                    ? <div className="hint-line">找不到。換個寫法試試（路名、地標）</div>
+                    : <>
+                        {geo.fallback && (
+                          <div className="hint-line">「{geo.query}」查不到，改查「{geo.used}」</div>
+                        )}
+                        {geo.results.map((g, i) => (
+                          <div key={i} className="geo-row">
+                            {/* 同名的結果可以差一公里以上（實測「中興路四段」兩筆
+                                差 1.2 km），名字一樣時座標是唯一分得開的東西 */}
+                            <span>{g.name}
+                              {geo.results.filter((x) => x.name === g.name).length > 1 && (
+                                <span className="muted num">　{g.lat.toFixed(4)}, {g.lon.toFixed(4)}</span>
+                              )}</span>
+                            <span className="chip">{g.precision === "座標" ? "座標"
+                              : g.precision === "門牌" ? "門牌" : `只到${g.precision}`}</span>
+                            <button className="btn-plain btn-sm" onClick={() => {
+                              setFlyTo({ lat: g.lat, lon: g.lon, n: Date.now() });
+                              setStarted(true); setGeo(null);
+                            }}>移過去</button>
+                            {g.precision === "座標" && (
+                              <button className="btn-plain btn-sm" onClick={() => {
+                                setHome({ lat: g.lat.toFixed(7), lon: g.lon.toFixed(7) });
+                                setFlyTo({ lat: g.lat, lon: g.lon, n: Date.now() });
+                                setPlaceKind("wp"); setStarted(true); setGeo(null);
+                              }}>設為起飛點</button>
+                            )}
+                          </div>
+                        ))}
+                      </>}
+              </div>
+            )}
+          </div>
           {/* **開始畫之前只問起飛點。** 高度與速度在看到地形之後才談——
               舊版要人在放第一個點以前就填那兩個數字，順序是反的 */}
           {started && (
@@ -848,7 +901,7 @@ export default function PlanPage() {
           )}
           {fence.shape !== "none" && <span className="hint-line">
             離起飛點算
-            <InfoTip tip={"這個圍欄是**規劃端的檢查**：航點超出去，這一頁會擋下。\n但**飛控不會照它擋**——飛控看的是它自己的 FENCE_ENABLE／FENCE_RADIUS／FENCE_ALT_MAX，這一頁還沒有寫那幾個參數。所以圈畫出來不代表飛機飛不出去。\n高度上限比的是**離起飛點**的高度；地形跟隨（frame 10）的航點高度不是離起飛點的，比不了，會照實說。"} />
+            <InfoTip tip={"航點超出圍欄，這一頁會擋下。\n**按「上傳」時一起寫進飛控**（ArduPilot）：先關圍欄、寫種類／越界返航／高度上限、傳圍欄形狀，逐項讀回，全部對了才打開。任何一步沒過，這份航線就不上傳。\n在那之前飛控裡是它原本的圍欄。\n高度上限是**離起飛點**；返航高度不低於上限時不會寫——越界之後的返航本身就會再越界。"} />
           </span>}
           </>
         )}
@@ -862,8 +915,9 @@ export default function PlanPage() {
             <span className="chip">圍欄 {fence.shape === "circle"
               ? `圓形 ${fence.radius_m} m` : `多邊形 ${fence.points.length} 點`}
               {fence.alt_max_m != null && `・上限 ${fence.alt_max_m} m`}</span>
-            {/* **這一顆不能省。** 畫了一個圈很容易被讀成「飛機不會飛出去」 */}
-            <span className="chip bad">飛控不擋</span>
+            {/* **在規劃頁上它還只是規劃**：上傳那一刻才寫進飛控（2026-09-11 選 P）。
+                少了這一顆，畫了一個圈會被讀成「飛機現在就不會飛出去」 */}
+            <span className="chip">上傳時寫進飛控</span>
           </>
         )}
         {!isNew && sign && (
@@ -888,9 +942,10 @@ export default function PlanPage() {
             tipFor={tipFor}
             fence={fenceShape}
             placing={(isNew && started) || fenceDraw}
+            flyTo={flyTo}
             center={isNew
-              ? [hasHome ? Number(home.lon) : VIEW.lon,
-                 hasHome ? Number(home.lat) : VIEW.lat]
+              ? [hasHome ? Number(home.lon) : flyTo?.lon ?? VIEW.lon,
+                 hasHome ? Number(home.lat) : flyTo?.lat ?? VIEW.lat]
               : undefined}
             onPlace={(l) => {
               // 畫圍欄的時候地圖的點擊是頂點，不是航點——**一次只能在畫
@@ -978,6 +1033,10 @@ export default function PlanPage() {
                 <>
                   <div className="rail-row"><span>航點</span>
                     <b className="num">seq {w.seq}</b></div>
+                  {isNew && w.kind === "takeoff" && hasHome && (
+                    <div className="rail-row"><span>位置</span>
+                      <b className="num">{Number(home.lat).toFixed(6)}, {Number(home.lon).toFixed(6)}</b></div>
+                  )}
                   {isNew && w.kind === "takeoff" && (
                     // 刪掉之後回到「放起飛點」：航點留著，重新放一個起飛點就接回去
                     <button className="btn-plain btn-sm" onClick={() => {
