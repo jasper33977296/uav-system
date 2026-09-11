@@ -1992,3 +1992,9 @@ details.card summary { cursor: pointer; font-size: 14px; font-weight: 600; }
   padding: 9px 10px; box-shadow: 0 8px 24px rgba(0, 0, 0, .35); }
 .geo-row { display: flex; align-items: center; gap: 8px; font-size: 13px; }
 .geo-row > span:first-child { flex: 1; }
+
+/* **數字格只要數字那麼寬**（使用者 2026-09-11：選項壓回一列）。原本每一格
+   都被撐到 132 px，而裡面裝的是「3」「1」「30」 */
+.plan-head.newform { gap: 8px; }
+.newform .f.f-num { min-width: 0; }
+.newform .f-num input { width: 60px; }

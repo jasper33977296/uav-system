@@ -794,7 +794,7 @@ export default function PlanPage() {
           {/* **使用者不會記得經緯度**（2026-09-11）：先用地址把地圖移到大致的
               地方，起飛點還是自己點。座標也收在同一格——貼上就跳過去 */}
           <div className="f geo-box"><span>地址、地標或座標</span>
-            <input value={geoQ} placeholder="竹東鎮中興路四段" style={{ width: 230 }}
+            <input value={geoQ} placeholder="竹東鎮中興路四段" style={{ width: 150 }}
               onChange={(e) => setGeoQ(e.target.value)}
               onKeyDown={(e) => { if (e.key === "Enter") geocode(); }} />
             {geo && (
@@ -847,12 +847,12 @@ export default function PlanPage() {
                   ))}
                 </div>
               </div>
-              <label className="f">
+              <label className="f f-num">
                 <span>{MODE_TEXT[pol.mode]} m</span>
                 <input type="number" step="0.5" value={pol.height_m}
                   onChange={(e) => setPol((q) =>
                     ({ ...q, height_m: Number(e.target.value) }))} /></label>
-              <label className="f"><span>速度 m/s</span>
+              <label className="f f-num"><span>速度 m/s</span>
                 <input type="number" step="0.1" value={pol.speed_ms}
                   onChange={(e) => setPol((q) =>
                     ({ ...q, speed_ms: Number(e.target.value) }))} /></label>
@@ -882,7 +882,7 @@ export default function PlanPage() {
         {(stageWps.length > 0 || (isNew && started)) && (
           <>
             <span className="head-sep" />
-          <div className="f"><span>圍欄</span>
+          <div className="f"><span>圍欄<InfoTip tip={"航點超出圍欄，這一頁會擋下。\n**按「上傳」時一起寫進飛控**（ArduPilot）：先關圍欄、寫種類／越界返航／高度上限、傳圍欄形狀，逐項讀回，全部對了才打開。任何一步沒過，這份航線就不上傳。\n在那之前飛控裡是它原本的圍欄。\n高度上限是**離起飛點**；返航高度不低於上限時不會寫——越界之後的返航本身就會再越界。"} /></span>
             <div className="seg2">
               {([["circle", "圓形"], ["polygon", "多邊形"],
                  ["none", "不設"]] as const).map(([k, t]) => (
@@ -894,7 +894,7 @@ export default function PlanPage() {
             </div>
           </div>
           {fence.shape === "circle" && (
-            <label className="f"><span>半徑 m（以起飛點為心）</span>
+            <label className="f f-num"><span>半徑 m<InfoTip tip="圓心是起飛點" /></span>
               <input type="number" step="10" value={fence.radius_m ?? ""}
                 onChange={(e) => editFence({ ...fence,
                   radius_m: e.target.value === "" ? null : Number(e.target.value) })} />
@@ -909,42 +909,33 @@ export default function PlanPage() {
                   setFenceDraw(on);
                   if (on) setSelWp(-1); else setFenceSel(-1);
                 }}>
-                {fenceDraw ? "編輯圍欄（進行中）" : "編輯圍欄"}</button>
+                編輯圍欄</button>
               <button className="btn-plain btn-sm"
                 disabled={!fence.points.length}
                 onClick={() => { editFence({ ...fence, points: [] }); setFenceSel(-1); }}>
-                清掉重畫（{fence.points.length} 點）</button>
+                清掉重畫</button>
             </>
           )}
           {fence.shape !== "none" && (
-            <label className="f"><span>高度上限 m</span>
+            <label className="f f-num"><span>高度上限 m</span>
               <input type="number" step="5" placeholder="不設"
                 value={fence.alt_max_m ?? ""}
                 onChange={(e) => editFence({ ...fence,
                   alt_max_m: e.target.value === "" ? null : Number(e.target.value) })} />
             </label>
           )}
-          {fence.shape !== "none" && <span className="hint-line">
-            離起飛點算
-            <InfoTip tip={"航點超出圍欄，這一頁會擋下。\n**按「上傳」時一起寫進飛控**（ArduPilot）：先關圍欄、寫種類／越界返航／高度上限、傳圍欄形狀，逐項讀回，全部對了才打開。任何一步沒過，這份航線就不上傳。\n在那之前飛控裡是它原本的圍欄。\n高度上限是**離起飛點**；返航高度不低於上限時不會寫——越界之後的返航本身就會再越界。"} />
-          </span>}
           </>
         )}
-        <span className="head-sep" />
         {/* **最低離地／返航／脈絡那三顆晶片砍了**（使用者 2026-09-09）：
             它們佔掉一整列，而地圖被擠扁。同樣的數字剖面圖上都畫得出來
             ——最窄那一段有標、返航是圖上那條虛線、高度基準與起飛點海拔
             在剖面的 Y 軸上。這一列只留**看圖看不出來的**：圍欄與審查狀態 */}
         {fenceShape && (
-          <>
-            <span className="chip">圍欄 {fence.shape === "circle"
-              ? `圓形 ${fence.radius_m} m`
-              : `多邊形 ${fence.points.length} 點${fence.points.length < 3 ? "・還不成立" : ""}`}
-              {fence.alt_max_m != null && `・上限 ${fence.alt_max_m} m`}</span>
-            {/* **在規劃頁上它還只是規劃**：上傳那一刻才寫進飛控（2026-09-11 選 P）。
-                少了這一顆，畫了一個圈會被讀成「飛機現在就不會飛出去」 */}
-            <span className="chip">上傳時寫進飛控</span>
-          </>
+          // 半徑與上限在旁邊的輸入格裡看得到，這一顆只說看不到的兩件事：
+          // 多邊形成不成立，以及**上傳那一刻才寫進飛控**
+          <span className="chip">{fence.shape === "polygon"
+            ? `${fence.points.length} 點・${fence.points.length < 3 ? "還不成立" : "上傳時寫進飛控"}`
+            : "上傳時寫進飛控"}</span>
         )}
         {!isNew && sign && (
           <span className={`chip${sign.signed && !sign.stale ? "" : " bad"}`}
