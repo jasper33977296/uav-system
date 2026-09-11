@@ -1223,25 +1223,38 @@ async def _write_fc_fence(sysid: int, plan_id: str, fence: dict | None,
     → 傳圍欄任務（逐項讀回）→ **最後才開** `FENCE_ENABLE`。任何一步沒過就停，
     整次上傳不做——飛機不該帶著「不是這份航線的圍欄」去飛這份航線。
 
-    這份航線沒有圍欄時**不動**飛控裡的：那可能是別人為這個場地設的保護，
-    偷偷關掉比留著更糟。只回報現值。
+    這份航線沒有圍欄時把飛控的圍欄**關掉**（見下面那一支）。
     """
-    if plan_check.fence_hash(fence) is None:
-        names = ["FENCE_ENABLE", "FENCE_TYPE"]
-        try:
-            cur = (await _run(sysid, "param_get", mav.job_get_params, names,
-                              params={"names": names, "why": "fc_fence_current"})
-                   )["values"]
-        except HTTPException:
-            cur = {}
-        en = cur.get("FENCE_ENABLE")
-        return {"written": False, "current": cur,
-                "summary": "這份航線沒有圍欄，飛控裡的沒動"
-                           + ("" if en is None else f"（現在 FENCE_ENABLE={int(en)}）")}
     if caps.autopilot_name(ap) != "ardupilot":
+        if plan_check.fence_hash(fence) is None:
+            return {"written": False, "summary": None}
         return {"written": False, "summary": "飛控圍欄沒有寫（不是 ArduPilot）",
                 "warnings": ["這份航線有圍欄，但這台不是 ArduPilot——飛控圍欄沒有寫"
                              "（只支援 ArduPilot 的 FENCE_*），規劃端的檢查照舊"]}
+    if plan_check.fence_hash(fence) is None:
+        # **航線沒有圍欄，飛控就沒有圍欄**（使用者裁定 2026-09-11 選 U）。
+        # 原本是不動——怕關掉別人為場地設的保護；但那樣傳過一次帶圍欄的航線，
+        # 圍欄就一直開著，室內要解鎖得另外手動改參數。關不掉就不傳：
+        # 飛機不該帶著上一份航線的圍欄去飛這一份
+        cur = (await _run(sysid, "param_get", mav.job_get_params, ["FENCE_ENABLE"],
+                          params={"names": ["FENCE_ENABLE"], "why": "fc_fence_off"})
+               )["values"]
+        if "FENCE_ENABLE" not in cur:
+            raise HTTPException(409, {
+                "msg": "這份航線沒有圍欄，但讀不到飛控的 FENCE_ENABLE，未上傳",
+                "how_to": ["稍後再試一次（參數回覆在這條鏈路上容易被丟）"]})
+        if not cur["FENCE_ENABLE"]:
+            return {"written": False, "summary": "這份航線沒有圍欄，飛控圍欄本來就關著"}
+        try:
+            await _run(sysid, "param_set", mav.job_set_params, {"FENCE_ENABLE": 0},
+                       params={"FENCE_ENABLE": 0, "why": "fc_fence_off"})
+        except HTTPException as e:
+            d = e.detail if isinstance(e.detail, dict) else {"msg": str(e.detail)}
+            raise HTTPException(e.status_code, {
+                **d, "msg": f"這份航線沒有圍欄，但飛控圍欄關不掉，未上傳：{d.get('msg', '')}"}) from e
+        return {"written": True, "summary": "這份航線沒有圍欄，飛控圍欄已關閉",
+                "before": {"FENCE_ENABLE": cur["FENCE_ENABLE"]},
+                "fail_note": "飛控圍欄已經關閉"}
     want = plan_check.FC_FENCE_READ
     vals = (await _run(sysid, "param_get", mav.job_get_params, want,
                        params={"names": want, "why": "fc_fence"}))["values"]
@@ -1283,7 +1296,8 @@ async def _write_fc_fence(sysid: int, plan_id: str, fence: dict | None,
         raise HTTPException(e.status_code, {
             **d, "msg": f"飛控圍欄沒寫完，{state}，未上傳航線：{d.get('msg', '')}"}) from e
     return {"written": True, "summary": plan["summary"], "before": before,
-            "items": len(plan["items"]), "warnings": plan["warnings"]}
+            "items": len(plan["items"]), "warnings": plan["warnings"],
+            "fail_note": "飛控圍欄已經寫入並打開——是這份航線的"}
 
 
 @app.post("/api/command/{sysid}/mission/upload", tags=["任務"],
@@ -1505,11 +1519,11 @@ async def mission_upload(sysid: int, body: UploadIn):
                          build_items(wps),
                          params={"plan_id": body.plan_id, "items": len(wps)})
     except HTTPException as e:
-        if not fc_fence.get("written"):
+        if not fc_fence.get("fail_note"):
             raise
         d = e.detail if isinstance(e.detail, dict) else {"msg": str(e.detail)}
         raise HTTPException(e.status_code, {
-            **d, "msg": f"{d.get('msg', '')}（飛控圍欄已經寫入並打開——是這份航線的）"}) from e
+            **d, "msg": f"{d.get('msg', '')}（{fc_fence['fail_note']}）"}) from e
     # issue 020：記「這台機當前飛的任務」——backend create_session 據此綁架次。
     # sysid→drone 靠 drones.mav_sysid（backend 心跳時寫入）。
     await pool.execute("UPDATE drones SET current_plan_id = $1 WHERE mav_sysid = $2",

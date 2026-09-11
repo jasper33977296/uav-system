@@ -390,6 +390,7 @@ export default function PlanPage() {
     { shape: "none", radius_m: 120, points: [], alt_max_m: null });
   /** 多邊形的頂點靠點地圖加。開著時地圖的點擊給圍欄，不給航點 */
   const [fenceDraw, setFenceDraw] = useState(false);
+  const [fenceSel, setFenceSel] = useState(-1);
   const fenceRef = useRef<Fence>(fence);
   fenceRef.current = fence;
   /** 這一頁的編輯器**能不能代表**這份航線的圍欄。QGC 匯進來的可以有排除區、
@@ -887,7 +888,7 @@ export default function PlanPage() {
                 {fenceDraw ? "點地圖加頂點（進行中）" : "點地圖加頂點"}</button>
               <button className="btn-plain btn-sm"
                 disabled={!fence.points.length}
-                onClick={() => editFence({ ...fence, points: [] })}>
+                onClick={() => { editFence({ ...fence, points: [] }); setFenceSel(-1); }}>
                 清掉重畫（{fence.points.length} 點）</button>
             </>
           )}
@@ -913,7 +914,8 @@ export default function PlanPage() {
         {fenceShape && (
           <>
             <span className="chip">圍欄 {fence.shape === "circle"
-              ? `圓形 ${fence.radius_m} m` : `多邊形 ${fence.points.length} 點`}
+              ? `圓形 ${fence.radius_m} m`
+              : `多邊形 ${fence.points.length} 點${fence.points.length < 3 ? "・還不成立" : ""}`}
               {fence.alt_max_m != null && `・上限 ${fence.alt_max_m} m`}</span>
             {/* **在規劃頁上它還只是規劃**：上傳那一刻才寫進飛控（2026-09-11 選 P）。
                 少了這一顆，畫了一個圈會被讀成「飛機現在就不會飛出去」 */}
@@ -937,10 +939,18 @@ export default function PlanPage() {
       {/* 只有起飛點時也要畫得出來——`stageWps.length` 會是 1 */}
       {(stageWps.length > 0 || (isNew && started)) && (
         <div className="plan-work">
-          <TerrainStage wps={stageWps} sel={selWp} onSelect={setSelWp}
+          <TerrainStage wps={stageWps} sel={selWp}
+            onSelect={(i) => { setSelWp(i); setFenceSel(-1); }}
             assumeM={assume} onBuildings={onBlds}
             tipFor={tipFor}
             fence={fenceShape}
+            fenceSel={fence.shape === "polygon" ? fenceSel : -1}
+            onFenceSelect={(i) => { setFenceSel(i); setSelWp(-1); }}
+            onFenceMove={(i, l) => {
+              setFence((f) => ({ ...f,
+                points: f.points.map((p, j) => (j === i ? [l.lat, l.lng] : p)) }));
+              setFenceOwn(true);
+            }}
             placing={(isNew && started) || fenceDraw}
             flyTo={flyTo}
             center={isNew
@@ -994,11 +1004,24 @@ export default function PlanPage() {
               選項 F）。右欄本來就只在「選到一個航點」時才有內容——讓它蓋住
               一小塊地形，比永久佔掉 264 px 划算。可以收起來看底下那塊。 */}
           <aside className={`plan-rail${railOpen ? "" : " shut"}`}>
-            <h2>選取的航點
+            <h2>{fenceSel >= 0 && fence.shape === "polygon" ? "選取的圍欄頂點" : "選取的航點"}
               <button className="rail-toggle" title={railOpen ? "收起" : "展開"}
                 onClick={() => setRailOpen((v) => !v)}>{railOpen ? "▸" : "◂"}</button>
             </h2>
             {(() => {
+              const fv = fence.shape === "polygon" ? fence.points[fenceSel] : undefined;
+              if (fv) return (
+                <>
+                  <div className="rail-row"><span>圍欄頂點</span>
+                    <b className="num">{fenceSel + 1}／{fence.points.length}</b></div>
+                  <div className="rail-row"><span>位置</span>
+                    <b className="num">{fv[0].toFixed(6)}, {fv[1].toFixed(6)}</b></div>
+                  <button className="btn-plain btn-sm" onClick={() => {
+                    setFence((f) => ({ ...f, points: f.points.filter((_, j) => j !== fenceSel) }));
+                    setFenceOwn(true); setFenceSel(-1);
+                  }}>刪除這個頂點</button>
+                </>
+              );
               const w = stageWps[selWp];
               if (!w) return <div className="hint-line">在 3D 上點一個航點</div>;
               const out = legs.find((l) => l.from === w.seq);   // 從它出發的那一段

@@ -59,6 +59,7 @@ export interface StageTip { title: string; rows: [string, string][]; bad?: boole
 export default function TerrainStage({ wps, sel, onSelect, tipFor, placing,
                                       onPlace, onMove, center, assumeM = null,
                                       onBuildings, fence = null, flyTo = null,
+                                      fenceSel = -1, onFenceSelect, onFenceMove,
                                       exaggeration = 1 }: {
   wps: StageWp[]; sel: number; onSelect: (i: number) => void;
   tipFor?: (h: StageHit) => StageTip | null;
@@ -76,6 +77,11 @@ export default function TerrainStage({ wps, sel, onSelect, tipFor, placing,
    *  兩份可能不同步的資料（§9-F） */
   onBuildings?: (bs: BuildingFeat[]) => void;
   fence?: FenceShape | null;
+  /** 選中的圍欄頂點（多邊形）。-1＝沒有 */
+  fenceSel?: number;
+  onFenceSelect?: (i: number) => void;
+  /** 拖曳圍欄頂點：跟航點一樣只動位置 */
+  onFenceMove?: (i: number, lngLat: { lng: number; lat: number }) => void;
   /** 地址定位的結果。**只在 `n` 變的時候飛過去**——放點、拖點時不動鏡頭 */
   flyTo?: { lat: number; lon: number; n: number } | null;
   exaggeration?: number;
@@ -97,6 +103,9 @@ export default function TerrainStage({ wps, sel, onSelect, tipFor, placing,
   const moveRef = useRef(onMove);
   moveRef.current = onMove;
   const dragRef = useRef<number | null>(null);
+  const fenceRef = useRef({ onFenceSelect, onFenceMove });
+  fenceRef.current = { onFenceSelect, onFenceMove };
+  const fenceDragRef = useRef<number | null>(null);
   const placeRefBox = useRef<{ current: {
     placing?: boolean; onPlace?: (l: { lng: number; lat: number }) => void } } | null>(null);
   if (placeRefBox.current) placeRefBox.current.current = { placing, onPlace };
@@ -238,8 +247,28 @@ export default function TerrainStage({ wps, sel, onSelect, tipFor, placing,
       }
       return null;
     };
+    /** 圍欄頂點畫在 maplibre 的圖層上，不在 three.js 那一層，所以用它自己的
+     *  `queryRenderedFeatures` 查。**頂點優先於航點**：頂點在邊界上、很小，
+     *  兩者疊在一起時人要點的多半是頂點 */
+    const hitFence = (pt: { x: number; y: number }): number | null => {
+      if (!map.getLayer("fence-pt")) return null;
+      const fs = map.queryRenderedFeatures(
+        [[pt.x - 10, pt.y - 10], [pt.x + 10, pt.y + 10]], { layers: ["fence-pt"] });
+      let best: { i: number; d: number } | null = null;
+      for (const f of fs) {
+        const i = f.properties?.i;
+        if (typeof i !== "number") continue;
+        const [lo, la] = (f.geometry as GeoJSON.Point).coordinates;
+        const p = map.project([lo, la]);
+        const d = Math.hypot(p.x - pt.x, p.y - pt.y);
+        if (!best || d < best.d) best = { i, d };
+      }
+      return best?.i ?? null;
+    };
     map.on("click", (e) => {
       const pl = placeRefBox.current?.current;
+      const fv = hitFence(e.point);
+      if (fv != null) { fenceRef.current.onFenceSelect?.(fv); return; }
       const h = hitTest(e.point);
       // **放點模式下也要先看有沒有點到既有航點。** 原本這裡直接放點就 return，
       // 於是點在一個已經在那裡的點上只會在它旁邊再疊一個——那個點永遠選不到，
@@ -277,6 +306,14 @@ export default function TerrainStage({ wps, sel, onSelect, tipFor, placing,
       if (h) onSelect(h.i);
     });
     map.on("mousedown", (e) => {
+      const fv = hitFence(e.point);
+      if (fv != null && fenceRef.current.onFenceMove) {
+        fenceDragRef.current = fv;
+        map.dragPan.disable(); map.dragRotate.disable();
+        fenceRef.current.onFenceSelect?.(fv);
+        e.preventDefault();
+        return;
+      }
       const h = hitTest(e.point);
       if (h?.kind === "wp" && !dataRef.current.wps[h.i]?.fixed && moveRef.current) {
         dragRef.current = h.i;
@@ -286,13 +323,23 @@ export default function TerrainStage({ wps, sel, onSelect, tipFor, placing,
       }
     });
     const endDrag = () => {
-      if (dragRef.current == null) return;
+      if (dragRef.current == null && fenceDragRef.current == null) return;
       dragRef.current = null;
+      fenceDragRef.current = null;
       map.dragPan.enable(); map.dragRotate.enable();
     };
     map.on("mouseup", endDrag);
     map.on("dragend", endDrag);
     map.on("mousemove", (e) => {
+      if (fenceDragRef.current != null) {
+        fenceRef.current.onFenceMove?.(fenceDragRef.current, e.lngLat);
+        return;
+      }
+      if (hitFence(e.point) != null) {
+        map.getCanvas().style.cursor = "grab";
+        setTip(null);
+        return;
+      }
       if (dragRef.current != null) {
         moveRef.current?.(dragRef.current, e.lngLat);
         return;
@@ -321,8 +368,8 @@ export default function TerrainStage({ wps, sel, onSelect, tipFor, placing,
   useEffect(() => {
     const m = mapRef.current;
     if (!m) return;
-    return whenReady(m, () => paintFence(m, fence));
-  }, [fence]);
+    return whenReady(m, () => paintFence(m, fence, fenceSel));
+  }, [fence, fenceSel]);
 
   useEffect(() => {
     if (!flyTo) return;
@@ -559,7 +606,7 @@ function whenReady(m: maplibregl.Map, fn: () => void): () => void {
 
 /** 圍欄畫成地面上的一圈虛線——**它是平面範圍**，高度上限由剖面圖那條線講。
  *  圓形用 64 邊形近似：地圖上看不出差別，而且與多邊形共用同一組圖層。 */
-function fenceGeo(f: FenceShape | null): GeoJSON.FeatureCollection {
+function fenceGeo(f: FenceShape | null, sel = -1): GeoJSON.FeatureCollection {
   let ring: [number, number][] = [];
   if (f?.shape === "circle" && f.center && f.radius_m) {
     const [lat, lon] = f.center, r = f.radius_m;
@@ -578,15 +625,15 @@ function fenceGeo(f: FenceShape | null): GeoJSON.FeatureCollection {
   // 頂點單獨畫出來——**還沒滿三點時多邊形不成立**，但使用者要看得到
   // 自己點了哪幾下，不然前兩下像沒有反應
   if (f?.shape === "polygon") {
-    for (const [la, lo] of f.points ?? [])
-      feats.push({ type: "Feature", properties: {},
-                   geometry: { type: "Point", coordinates: [lo, la] } });
+    (f.points ?? []).forEach(([la, lo], i) =>
+      feats.push({ type: "Feature", properties: { i, sel: i === sel },
+                   geometry: { type: "Point", coordinates: [lo, la] } }));
   }
   return { type: "FeatureCollection", features: feats };
 }
 
-function paintFence(map: maplibregl.Map, f: FenceShape | null) {
-  const data = fenceGeo(f);
+function paintFence(map: maplibregl.Map, f: FenceShape | null, sel = -1) {
+  const data = fenceGeo(f, sel);
   const src = map.getSource("fence") as maplibregl.GeoJSONSource | undefined;
   if (src) { src.setData(data); return; }
   const before = map.getLayer("route3d") ? "route3d" : undefined;
@@ -598,8 +645,11 @@ function paintFence(map: maplibregl.Map, f: FenceShape | null) {
              "line-dasharray": [3, 2] } }, before);
   map.addLayer({ id: "fence-pt", type: "circle", source: "fence",
     filter: ["==", ["geometry-type"], "Point"],
-    paint: { "circle-radius": 4, "circle-color": "#fab219",
-             "circle-stroke-width": 1, "circle-stroke-color": "#1b1a17" } },
+    // 頂點要抓得到，所以比線粗；選中的加一圈亮邊
+    paint: { "circle-radius": ["case", ["get", "sel"], 7, 5.5],
+             "circle-color": "#fab219",
+             "circle-stroke-width": ["case", ["get", "sel"], 2.5, 1],
+             "circle-stroke-color": ["case", ["get", "sel"], "#f0eee6", "#1b1a17"] } },
     before);
 }
 
