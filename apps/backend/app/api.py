@@ -1,4 +1,5 @@
 import bisect
+from collections import deque
 import asyncio
 import io
 import tarfile
@@ -3195,6 +3196,9 @@ class LinkSample(BaseModel):
     throughput_down_kbps: float | None = None
     in_interference_zone: bool | None = None
     raw: dict | None = None         # modem 原始回應，便於事後追查
+    #: 機上時鐘對過了沒（2026-09-14）。False＝`time` 是錯的：Pi 換電池重開時
+    #: 牆鐘停在上次存下的時間，要等對時才跳上來。不填＝舊版代理，照舊採信
+    clock_synced: bool | None = None
 
 
 class LinkBatch(BaseModel):
@@ -3234,6 +3238,39 @@ def _require_aware(ts: datetime) -> datetime:
     return ts
 
 
+#: 機上時鐘跟地面站差多少才喊（秒）。即時樣本走 5G 過來本身有延遲，單筆不準，
+#: 看最近 10 筆的中位數
+CLOCK_SKEW_WARN_S = 1.5
+_skew: dict[str, deque] = {}
+_skew_warned: dict[str, float] = {}
+
+
+async def _watch_clock_skew(target, s: "LinkSample") -> None:
+    """**兩邊時間要對得齊**（使用者 2026-09-14）。機上說時鐘對過了，它標的時間
+    應該只比地面站收到的這一刻早一個傳輸延遲；差得比那多，就是兩邊時鐘不一致
+    ——訊號、補傳、事件的時間會對不齊，而且沒有任何地方會報錯。"""
+    key = s.drone_id or "primary"
+    d = _skew.setdefault(key, deque(maxlen=10))
+    d.append((datetime.now(timezone.utc) - s.time).total_seconds())
+    if len(d) < d.maxlen:
+        return
+    med = sorted(d)[len(d) // 2]
+    if abs(med) < CLOCK_SKEW_WARN_S or time.monotonic() - _skew_warned.get(key, -1e9) < 600:
+        return
+    _skew_warned[key] = time.monotonic()
+    did = getattr(target, "drone_id", None)
+    msg = f"機上時鐘與地面站差 {med:+.1f} 秒——訊號、補傳、事件的時間會對不齊"
+    if not did:
+        log.warning("%s（%s）", msg, key)
+        return
+    try:
+        ev = await db.insert_event(did, getattr(target, "session_id", None), "warn",
+                                   "clock_skew", {"skew_s": round(med, 2), "msg": msg})
+        await manager.broadcast({"type": "event", "event": ev})
+    except Exception:
+        log.exception("時鐘偏差事件寫入失敗")
+
+
 @router.post("/link-metrics/live")
 async def link_metrics_live(s: LinkSample):
     """即時通道：更新 live state 並跑鏈路狀態機。**不寫資料庫。**
@@ -3261,10 +3298,16 @@ async def link_metrics_live(s: LinkSample):
     target = fleet.get(s.drone_id) if s.drone_id else live
     if target is None:
         raise HTTPException(404, f"未知的 drone_id：{s.drone_id}（該機尚未註冊）")
+    if s.clock_synced is False:
+        # 即時樣本是當下送的，機上時鐘沒對過時改用收到的這一刻——比錯的時間準
+        s = s.model_copy(update={"time": datetime.now(timezone.utc)})
+    else:
+        await _watch_clock_skew(target, s)
     # mode="json" 讓 datetime 變成 ISO 字串。live.link 會被 WebSocket 廣播出去，
     # 放進 datetime 物件會讓 json.dumps 拋錯而整個廣播迴圈死掉。
     m = s.model_dump(mode="json", exclude_none=False)
     m.pop("drone_id", None)
+    m.pop("clock_synced", None)
     m["source"] = "modem"
     # **哨兵值先拿掉再說**：模組在受限服務下會把 SINR 回成無效標記
     # （實測 -3276），照單全收的話畫面會把它當成「最差 -3276 dB」。
@@ -3300,6 +3343,7 @@ async def link_metrics_batch(batch: LinkBatch):
         _require_aware(s.time)
         # 這裡不能用 mode="json"：time 要保持 datetime 才能寫進 TIMESTAMPTZ
         m = s.model_dump(exclude_none=False)
+        m.pop("clock_synced", None)
         m["source"] = "modem"
         modem_raw.drop_sentinels(m)  # 同 live 那條路（見 modem_raw.py）
         modem_raw.enrich(m)
