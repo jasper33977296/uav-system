@@ -28,7 +28,7 @@ import time
 
 from pymavlink import mavutil
 
-from . import db, dialect, msg_registry, px4_events, video_rec
+from . import db, dialect, ext_stream, msg_registry, px4_events, video_rec
 from .capture import Recorder
 from .config import settings
 from .state import MISSION_STATE, LiveState, fleet, live
@@ -641,8 +641,10 @@ class MavlinkRx:
             st.rc_link = _derive_rc(ent)
             await self._rc_event(st, ent, prev_rc)
         elif t == "EXTENDED_SYS_STATE":
+            prev_landed = st.landed_state
             st.landed_state = _LANDED.get(msg.landed_state)
             await self._landed_transition(st)
+            ext_stream.on_landed(st, prev_landed)
         elif t == "STATUSTEXT":
             await self._statustext(ent, st, msg)
         elif t in ("COMMAND_ACK", "MISSION_ACK"):
@@ -739,6 +741,7 @@ class MavlinkRx:
         text = text.strip()
         if not text:
             return
+        ext_stream.on_statustext(st, sev, text)
         now = time.monotonic()
         # **預檢失敗的原因，飛控本來就在講**——原本只進事件流，於是畫面上
         # 只寫得出「預檢未過」，操作員得自己去事件流裡翻。記到 state 上，
@@ -1060,6 +1063,7 @@ class MavlinkRx:
             st.landed_stopped = False
             st.on_ground_since = None
             log.info("session started: %s（%s）", st.session_id, st.drone_name)
+            ext_stream.on_armed(st)
             # 影像（022）走背景：本 worker 是單執行緒，這裡 await 住（HTTP 逾時
             # 2s）會讓整條 MAVLink 處理停擺。影像是附加價值，不准拖累飛行資料。
             asyncio.create_task(video_rec.on_session_start(st.session_id, st.sysid, st))
@@ -1068,6 +1072,7 @@ class MavlinkRx:
                 db.snapshot_params_for_session(st.session_id, st))
         elif not armed and st.armed:
             sid, st.session_id, st.armed = st.session_id, None, False
+            ext_stream.on_disarmed(st)
             if sid:
                 await db.end_session(sid)
                 log.info("session ended: %s", sid)

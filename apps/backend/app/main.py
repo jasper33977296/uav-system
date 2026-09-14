@@ -6,7 +6,7 @@ from contextlib import asynccontextmanager
 from fastapi import FastAPI, WebSocket, WebSocketDisconnect
 from fastapi.middleware.cors import CORSMiddleware
 
-from . import agent_link, db, mavlink_rx, msg_registry, video_rec
+from . import agent_link, db, ext_stream, mavlink_rx, msg_registry, video_rec
 from .api import router
 from .config import settings
 from .link_events import transition as link_transition
@@ -64,6 +64,7 @@ async def _close_orphan_sessions() -> None:
             await db.blackout_close(st.blackout_id, "telemetry_resumed")
             log.info("失明結束：%s（%s）", st.drone_name, st.blackout_id)
             st.blackout_id = None
+            ext_stream.on_telemetry_resumed(st)
         if (not st.connected and st.ever_connected and not st.blackout_id
                 and st._lost_since is not None
                 and now - st._lost_since >= BLACKOUT_OPEN_S):
@@ -72,6 +73,7 @@ async def _close_orphan_sessions() -> None:
                 started_at=_wall_of(st._lost_since))
             if st.blackout_id:
                 log.warning("失明開始：%s（armed=%s）", st.drone_name, st.armed)
+                ext_stream.on_telemetry_lost(st)
 
         if not st.connected and st._lost_since is None:
             st._lost_since = now
@@ -86,6 +88,7 @@ async def _close_orphan_sessions() -> None:
         if now - seen < SESSION_LOST_S:
             continue
         sid, st.session_id, st.armed = st.session_id, None, False
+        ext_stream.on_session_lost(st)
         # **不清 _lost_since**：失明還在繼續，只是架次先收了。清掉的話
         # 失明記錄會被當成新的一段重開，事後看起來像斷了兩次
         log.warning("架次 %s 因失去遙測而收尾（%s，已 %.0f 秒沒有資料）",
@@ -246,6 +249,7 @@ async def lifespan(app: FastAPI):
     # 路線 B（issues/011）：pymavlink 單迴圈＝原始層錄製＋解碼＋多機 demux，
     # mavsdk 退役、零副程序
     rx_task = await mavlink_rx.start()
+    db.event_listeners.append(ext_stream.on_db_event)
     # 地面站那一層的錄製檔登錄進 `captures`（issues/014）。**檔案是
     # `capture.py` 每天換檔寫出來的，沒有一個「建檔時機」可以掛**，所以開機
     # 對帳一次；`/api/captures` 進來時也會再對一次（那是人按的，不是熱路徑）
@@ -261,6 +265,7 @@ async def lifespan(app: FastAPI):
         asyncio.create_task(_link_and_db_loop(), name="link-db-loop"),
         asyncio.create_task(_broadcast_loop(), name="ws-broadcast"),
         asyncio.create_task(_msg_registry_loop(), name="ws-msg-registry"),
+        asyncio.create_task(ext_stream.run(), name="ext-stream"),
         # 影像（022）：片段入庫＋錄製狀態校正。獨立 task，例外自己吞
         asyncio.create_task(video_rec.loop(), name="video-rec"),
     ]
@@ -281,6 +286,7 @@ app.add_middleware(
 )
 
 app.include_router(router)
+app.include_router(ext_stream.router)
 
 
 @app.websocket("/ws/telemetry")
@@ -291,6 +297,12 @@ async def ws_telemetry(ws: WebSocket):
             await ws.receive_text()  # 目前不處理 client 訊息，僅維持連線
     except WebSocketDisconnect:
         manager.disconnect(ws)
+
+
+@app.websocket("/ws/v1/missions/{mission_id}")
+async def ws_mission(ws: WebSocket, mission_id: str, after_seq: int | None = None):
+    """對外即時串流（doc/external-live-api.md）。"""
+    await ext_stream.serve(ws, mission_id, after_seq)
 
 
 async def _crosscheck_normalized(link) -> None:

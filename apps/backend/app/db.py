@@ -148,6 +148,10 @@ async def migrate() -> None:
     # 分得出（有 id），**人喊出來分不出**——與 squads 同一條理由
     await pool.execute("CREATE UNIQUE INDEX IF NOT EXISTS idx_missions_name "
                        "ON missions (lower(name))")
+    # 外部控制端用 /api/start 建立的任務：最後一台上鎖 3 秒後自動結束（doc/external-live-api.md §2.5）。
+    # 畫面建立的任務照舊由操作員結束
+    await pool.execute(
+        "ALTER TABLE missions ADD COLUMN IF NOT EXISTS external BOOLEAN NOT NULL DEFAULT false")
     # §4.5 曾經限制「同時只能有一個進行中的任務」，**§4.6 拿掉了**——使用者的
     # 目標是多組同時跑多個任務。改用「一台機同時只能執行一個任務」，那條窄得多
     await pool.execute("DROP INDEX IF EXISTS idx_missions_one_active")
@@ -1236,6 +1240,9 @@ async def _snapshot_params_inner(session_id: str, st) -> None:
 #: 紀錄；讀的那一端自己認得舊值（前端 lib/severity.ts）。
 SEVERITY_ALIASES = {"warn": "warning"}
 
+#: 事件寫入後同步呼叫的旁聽者（對外串流）。不得拋錯、不得 await
+event_listeners: list = []
+
 
 async def insert_event(drone_id: str, session_id: str | None,
                        severity: str, type_: str, detail: dict,
@@ -1248,6 +1255,11 @@ async def insert_event(drone_id: str, session_id: str | None,
         """,
         drone_id, session_id, severity, type_, jdumps(detail), source,
     )
+    for fn in event_listeners:
+        try:
+            fn(drone_id, severity, type_, detail)
+        except Exception:
+            log.exception("事件旁聽者失敗（不影響寫入）")
     return {"id": row["id"], "time": row["time"].isoformat(),
             "severity": severity, "type": type_, "detail": detail, "source": source}
 

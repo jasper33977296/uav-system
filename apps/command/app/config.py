@@ -17,6 +17,8 @@ class Settings(BaseSettings):
     # 起飛→任務序列要讀高度（等實際到達才切 MISSION），來源是 backend 的
     # live 快照（同主機不同容器）
     backend_api: str = "http://localhost:38000"
+    #: 回給外部控制端的串流網址用：主機名取呼叫端連進來的那個，port 是 backend 對外的
+    backend_public_port: int = 38000
     # **不再有系統預設圍欄**（2026-08-26 使用者裁定）：圍欄是每份航線自己的
     # 事，一個全域數字只對一個場地成立，而它會產生「seq 6 離起飛點 54 m，
     # 超過圍欄半徑 50 m」這種**看起來很具體的假錯誤**——那個 50 是模擬環境

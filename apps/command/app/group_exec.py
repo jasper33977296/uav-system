@@ -39,6 +39,7 @@ _FRESH_S = 5.0            # 心跳新鮮度門檻：router.drones 不會自己�
 
 class GroupExecutor:
     def __init__(self, router, pool, build_items, audit):
+        self.missions: dict[str, str] = {}
         self.router = router
         self.pool = pool
         self._build_items = build_items     # main.build_items（避免循環 import，注入）
@@ -89,6 +90,22 @@ class GroupExecutor:
             "UPDATE group_assignments SET phase=$3, error=$4, updated_at=now() "
             "WHERE group_id=$1 AND drone_id=$2",
             gid, drone_id, phase, json.dumps(error) if error else None)
+        mid = self.missions.get(gid)
+        if mid and phase != "idle":
+            msg = error.get("msg") if isinstance(error, dict) else (str(error) if error else None)
+            note = {"drone_id": drone_id, "step": phase, "msg": msg}
+            if phase in ("upload_failed", "prearm_failed"):
+                guard_client.notify_mission(mid, {"kind": "start_failed", **note})
+            else:
+                guard_client.notify_mission(mid, {"kind": "start_step", "ok": error is None, **note})
+                if phase in ("flying", "rtl"):
+                    guard_client.notify_mission(mid, {"kind": "start_done", "drone_id": drone_id})
+
+    def _notify_aborted(self, gid, members, msg):
+        mid = self.missions.get(gid)
+        if mid:
+            for m in members:
+                guard_client.notify_mission(mid, {"kind": "aborted", "drone_id": m["drone_id"], "msg": msg})
 
     # ── 阻塞式 MAV 工作丟進 router 執行緒（不擋事件迴圈）────────────
     async def _submit(self, fn, sysid: int, *args, timeout: float = 35.0):
@@ -189,7 +206,7 @@ class GroupExecutor:
                 "autopilot_notes": getattr(e, "autopilot_notes", [])}
 
     # ── execute：嚴格 gate → 202 非同步啟動 ────────────────────────
-    async def execute(self, gid: str) -> dict:
+    async def execute(self, gid: str, prepare=None) -> dict:
         g, members = await self._load(gid)
         if g is None:
             return {"error": "not_found"}
@@ -207,6 +224,10 @@ class GroupExecutor:
             await self._set_status(gid, "gate_rejected")
             return {"rejected": True, "group_id": gid, "members": gated}
 
+        mission = None
+        if prepare is not None:
+            mission = await prepare(members, g.get("name") or "群飛")
+            self.missions[gid] = mission["id"]
         await self._set_status(gid, "executing")
         for m in members:
             await self._set_phase(gid, m["drone_id"], "idle")
@@ -215,13 +236,19 @@ class GroupExecutor:
         self.runs[gid] = {"task": task, "abort": abort}
         await self._audit(0, f"group_execute:{gid}", {"members": len(members)},
                           "accepted", "序列啟動")
-        return {"status": "executing", "group_id": gid,
+        return {"status": "executing", "group_id": gid, "mission": mission,
                 "members": [{"drone_id": m["drone_id"], "drone_name": m["drone_name"],
                              "mav_sysid": m["mav_sysid"],
                              "layer_index": m["layer_index"]} for m in members]}
 
     # ── 背景序列（兩階段提交）─────────────────────────────────────
     async def _sequence(self, gid, g, members, abort):
+        mid = self.missions.get(gid)
+        if mid:
+            for m in members:
+                guard_client.notify_mission(mid, {
+                    "kind": "start_begin", "drone_id": m["drone_id"],
+                    "sysid": m["mav_sysid"], "plan_id": m["plan_id"]})
         params = g.get("params")
         if isinstance(params, str):
             params = json.loads(params)
@@ -340,6 +367,7 @@ class GroupExecutor:
         except Exception:
             log.exception("group %s 序列異常", gid)
             await self._set_status(gid, "aborted")
+            self._notify_aborted(gid, members, "序列異常")
         finally:
             self.runs.pop(gid, None)
 
@@ -391,6 +419,7 @@ class GroupExecutor:
         """序列中（起飛前）失敗：全撤——已解鎖者 disarm，未動者留 idle。status=aborted。"""
         await self._set_status(gid, "aborting")
         await self._retract(gid, members)
+        self._notify_aborted(gid, members, reason)
         await self._set_status(gid, "aborted")
         await self._audit(0, f"group_auto_abort:{gid}", {"reason": reason},
                           "rejected", reason)
@@ -439,6 +468,7 @@ class GroupExecutor:
             run["abort"].set()
         await self._set_status(gid, "aborting")
         actions = await self._retract(gid, members)
+        self._notify_aborted(gid, members, "操作員全撤")
         await self._set_status(gid, "aborted")
         await self._audit(0, f"group_abort:{gid}", {"actions": actions},
                           "accepted", "操作員全撤")

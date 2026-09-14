@@ -6,6 +6,7 @@
 而多機的風險本來就更高（一次動好幾台）。2026-08-26 補上。
 """
 import asyncio
+import concurrent.futures
 import json
 import logging
 import urllib.request
@@ -160,3 +161,21 @@ async def drone_id_of(sysid: int) -> str | None:
     return row["id"] if row else None
 
 
+
+
+#: 單執行緒：通知的順序就是串流上事件的順序
+_notify_pool = concurrent.futures.ThreadPoolExecutor(max_workers=1, thread_name_prefix="mission-notify")
+
+
+def notify_mission(mission_id: str, payload: dict) -> None:
+    """起飛流程的進度告訴 backend 的對外串流（doc/external-live-api.md）。不等、失敗不擋指令。"""
+    def _post():
+        req = urllib.request.Request(
+            f"{settings.backend_api}/api/ext/missions/{mission_id}/notify",
+            data=json.dumps(payload).encode(), method="POST",
+            headers={"Content-Type": "application/json"})
+        try:
+            urllib.request.urlopen(req, timeout=3).read()
+        except Exception as e:
+            log.warning("任務串流通知失敗（%s）：%s", payload.get("kind"), e)
+    _notify_pool.submit(_post)

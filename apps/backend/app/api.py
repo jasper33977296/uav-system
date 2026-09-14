@@ -2052,7 +2052,7 @@ async def active_missions(drone_id: str | None = None):
     """
     if drone_id:
         rows = await db.pool.fetch(
-            "SELECT m.id::text, m.name, m.note, m.created_at, m.squad_id::text "
+            "SELECT m.id::text, m.name, m.note, m.created_at, m.squad_id::text, m.external "
             "  FROM missions m WHERE m.ended_at IS NULL AND $1::uuid IN ("
             "    SELECT md.drone_id FROM mission_drones md WHERE md.mission_id = m.id"
             "    UNION"
@@ -2060,7 +2060,7 @@ async def active_missions(drone_id: str | None = None):
             drone_id)
     else:
         rows = await db.pool.fetch(
-            "SELECT id::text, name, note, created_at, squad_id::text "
+            "SELECT id::text, name, note, created_at, squad_id::text, external "
             "FROM missions WHERE ended_at IS NULL ORDER BY created_at DESC")
     return [dict(r) for r in rows]
 

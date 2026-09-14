@@ -24,7 +24,7 @@ import urllib.request
 import uuid
 
 import asyncpg
-from fastapi import FastAPI, HTTPException
+from fastapi import FastAPI, HTTPException, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel
@@ -38,7 +38,7 @@ from . import capabilities as caps
 import plan_check          # libs/ 的共用實作（PYTHONPATH=/srv/libs）
 import terrain             # 地形圖磚（issues/047 §1-B）
 
-from . import admission, group_exec, guard_client, mav, params as fcparams, plans
+from . import admission, group_exec, guard_client, mav, missions as ext_missions, params as fcparams, plans
 from .config import settings
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(name)s %(message)s")
@@ -297,6 +297,8 @@ async def lifespan(app):
     await pool.execute("ALTER TABLE drones ADD COLUMN IF NOT EXISTS mav_sysid INT")
     await pool.execute("ALTER TABLE drones ADD COLUMN IF NOT EXISTS current_plan_id UUID")
     await pool.execute("ALTER TABLE drones ADD COLUMN IF NOT EXISTS plan_cleared_at TIMESTAMPTZ")
+    await pool.execute(
+        "ALTER TABLE IF EXISTS missions ADD COLUMN IF NOT EXISTS external BOOLEAN NOT NULL DEFAULT false")
     # 群組執行期即時態欄位（issue 013-B；backend migrate 也建，這裡防序）
     await pool.execute("ALTER TABLE group_assignments ADD COLUMN IF NOT EXISTS error JSONB")
     await pool.execute(
@@ -693,6 +695,17 @@ def _airborne(sysid: int) -> tuple[bool | None, str, float | None]:
     return mav.airborne_of(router, sysid) if router else (None, "指令服務未連線", None)
 
 
+#: /api/start 進行中的機 → 任務編號。起飛流程每一步要告訴對外串流
+_start_mission: dict[int, str] = {}
+
+
+def _note_step(sysid: int, step: str) -> None:
+    mid = _start_mission.get(sysid)
+    if mid:
+        guard_client.notify_mission(mid, {"kind": "start_step", "sysid": sysid,
+                                          "step": step, "ok": True})
+
+
 @app.post("/api/command/{sysid}/mission/fly", tags=["一鍵"])
 async def mission_fly(sysid: int, body: FlyIn):
     """起飛→任務自動序列（實戰教訓 2026-08-11：地面直接 MISSION_START
@@ -713,6 +726,7 @@ async def mission_fly(sysid: int, body: FlyIn):
     steps = {}
     if body.plan_id:
         steps["upload"] = await mission_upload(sysid, UploadIn(plan_id=body.plan_id))
+        _note_step(sysid, "upload")
     # **這一段只是「離地」，高度跟著任務走。** mid 在這裡就解出來（原本是
     # 序列跑完才解）——不給 plan_id 的呼叫用的是機上現有任務，那份任務的
     # 起飛高度同樣該由它自己決定
@@ -724,6 +738,7 @@ async def mission_fly(sysid: int, body: FlyIn):
         alt_target, alt_src = await _mission_takeoff_alt(mid)
     steps["takeoff_alt"] = {"alt_m": alt_target, "source": alt_src}
     steps.update(await _do_takeoff(sysid, alt_target))
+    _note_step(sysid, "takeoff")
 
     # 等機真的離地（退回高度判準時 80% 即視為到位，PX4 收斂段不必等滿）
     # **必須看這一台的高度**：原本讀 backend `/api/live`，而那個端點只回**主機**。
@@ -759,13 +774,16 @@ async def mission_fly(sysid: int, body: FlyIn):
                      f"起飛後 {body.alt_timeout_s:.0f}s 判定不到離地"
                      f"（{why}，alt_rel {alt} m / 目標 {alt_target} m）")
         raise HTTPException(504, {
+            "code": "not_airborne",
             "msg": f"起飛後判定不到機已離地（{why}，"
                    f"目前 alt_rel {alt} m / 目標 {alt_target} m）",
             "hint": "機停在懸停狀態，未啟動任務——檢查 RC/遙測後可重試或 RTL",
             "steps": steps})
     steps["airborne"] = {"alt_rel": alt, "basis": basis}
+    _note_step(sysid, "airborne")
 
     steps["mission"] = await _run(sysid, "mode:mission", mav.job_set_mode, "mission")
+    _note_step(sysid, "mission")
     await _audit(sysid, "mission_fly", body.model_dump(), "accepted", json.dumps(steps))
     if mid:
         await guard_client.show_on_live(sysid, mid, "起飛→任務")
@@ -1454,19 +1472,41 @@ async def mission_upload(sysid: int, body: UploadIn):
 # ── 群組任務指令層（issue 013-B；doc/group-missions-design.md §7）────────
 # 資料層（建群組/預檢/材料化）在 backend :38000 的 /api/groups；這裡是指令層：
 # 兩階段執行＋全撤＋群組 RTL。逐台能力 gate 在 executor 內（嚴格 gate＝唯一真相）。
+class GroupExecIn(BaseModel):
+    #: 給了才建立（或掛上）任務並回傳對外串流；畫面按的群飛不帶，行為照舊
+    mission_id: str | None = None
+    mission_name: str | None = None
+
+
 @app.post("/api/command/group/{group_id}/execute", status_code=202)
-async def group_execute(group_id: str):
+async def group_execute(group_id: str, request: Request, body: GroupExecIn | None = None):
     """兩階段提交（§3）。**非同步啟動**：嚴格 gate 通過→立即回 202＋群組 handle，
     背景序列跑逐台 upload→arm→start，即時態逐步寫 DB（前端輪詢 backend GET）。
     gate 失敗→同步 409＋逐台原因（未啟動序列）。中止只能透過 abort，不是斷 HTTP。"""
     _require_enabled()
-    r = await executor.execute(group_id)
+    prepare = None
+    if body is not None and (body.mission_id or body.mission_name):
+        try:
+            mid = ext_missions.parse_id(body.mission_id)
+        except ext_missions.MissionError as e:
+            raise HTTPException(e.status, e.detail())
+
+        async def prepare(members, plan_name):
+            return await ext_missions.ensure(
+                pool, mid, body.mission_name,
+                [(m["drone_id"], m["drone_name"]) for m in members], plan_name)
+    try:
+        r = await executor.execute(group_id, prepare)
+    except ext_missions.MissionError as e:
+        raise HTTPException(e.status, e.detail())
     if r.get("error") == "not_found":
         raise HTTPException(404, "無此群組")
     if r.get("error") == "bad_status":
         raise HTTPException(409, {"msg": f"群組狀態為 {r['status']}，非可執行狀態", **r})
     if r.get("rejected"):
         raise HTTPException(409, {"msg": "嚴格 gate 未通過，未啟動序列", **r})
+    if r.get("mission"):
+        r["stream"] = _stream_of(request, r["mission"])
     return r
 
 
@@ -1683,25 +1723,66 @@ async def ext_get_plan(name: str, raw: bool = False):
 
 
 class StartIn(BaseModel):
-    mission: str | None = None       # 任務庫 id 或名稱（主要來源）
+    plan_id: str | None = None       # 路徑庫 id 或名稱（主要來源）
+    mission: str | None = None       # plan_id 的舊名（改名前「任務」指的是路徑），下一版移除
     plan: str | None = None          # 次要：missions/ 下的 .plan 檔名
+    #: 任務編號（UUID），也是對外串流的連線編號。不給就由地面站產生
+    mission_id: str | None = None
+    mission_name: str | None = None
     sysid: int | None = None         # 省略＝唯一在線的那台；多台必填
     store: bool = True               # 保留相容；plan 路徑一律入庫（現版經 mission_fly 需 DB mission，去重不洗版）
     takeoff_alt: float | None = None  # 省略＝跟著任務的 NAV_TAKEOFF（見 FlyIn.takeoff_alt）
 
 
+_CODE_OF = {400: "bad_request", 403: "forbidden", 404: "not_found", 409: "conflict",
+            422: "invalid_request", 501: "not_supported", 502: "vehicle_rejected",
+            503: "unavailable", 504: "timeout"}
+
+
+def _coded(e: HTTPException) -> HTTPException:
+    """對外端點的錯誤補成 {code, msg}。內部端點的形狀不動——畫面讀的是那一份。"""
+    d = e.detail
+    if isinstance(d, dict) and d.get("code") and d.get("msg"):
+        return e
+    base = {"code": _CODE_OF.get(e.status_code, "error")}
+    if isinstance(d, dict):
+        return HTTPException(e.status_code, {**base, **{k: v for k, v in d.items() if v is not None},
+                                             "msg": d.get("msg") or json.dumps(d, ensure_ascii=False)})
+    return HTTPException(e.status_code, {**base, "msg": str(d)})
+
+
+def _stream_of(request: Request, mission: dict) -> dict:
+    host = request.url.hostname or "localhost"
+    return {"mission_id": mission["id"],
+            "url": f"ws://{host}:{settings.backend_public_port}/ws/v1/missions/{mission['id']}"}
+
+
 @app.post("/api/start", tags=["一鍵"], summary="一鍵：上傳→解鎖→起飛→切任務")
-async def start(body: StartIn):
-    """**一鍵起飛**：取航線（任務庫 id/名稱 或 .plan 檔）→ 幾何預檢 → 委派 mission/fly
-    （上傳回讀→arm→起飛→到高度→AUTO.MISSION）。航線來源二選一：
-      {"mission": "<id 或名稱>"}   任務庫（主要）
+async def start(body: StartIn, request: Request):
+    """**一鍵起飛**：取航線（路徑庫 id/名稱 或 .plan 檔）→ 幾何預檢 → 建立或掛上任務 →
+    委派 mission/fly（上傳回讀→arm→起飛→到高度→AUTO.MISSION）。航線來源二選一：
+      {"plan_id": "<id 或名稱>"}   路徑庫（主要；舊名 mission）
       {"plan": "xxx.plan"}         missions/ 目錄（會先入庫再飛）
-    失敗帶 mission/fly 的 step 與 PX4 原因。成功回 {source, plan_id, name, sysid, ok, steps}。"""
+    `mission_id`（UUID）給了就用它建立或掛進那個任務，沒給由地面站產生；回應的
+    `stream` 是對外即時串流的網址（doc/external-live-api.md）。錯誤一律 {code, msg}。"""
+    try:
+        return await _start(body, request)
+    except ext_missions.MissionError as e:
+        raise HTTPException(e.status, e.detail())
+    except HTTPException as e:
+        raise _coded(e)
+
+
+async def _start(body: StartIn, request: Request) -> dict:
     _require_enabled()
-    if bool(body.mission) == bool(body.plan):
-        raise HTTPException(422, "mission 與 plan 二選一（mission＝任務庫，plan＝.plan 檔）")
-    if body.mission:
-        m = await _resolve_mission(body.mission)
+    ref = body.plan_id or body.mission
+    if bool(ref) == bool(body.plan):
+        raise HTTPException(422, {"code": "plan_required",
+                                  "msg": "plan_id 與 plan 二選一（plan_id＝路徑庫的 id 或名稱，"
+                                         "plan＝地面站 missions/ 目錄的 .plan 檔名）"})
+    mission_id = ext_missions.parse_id(body.mission_id)
+    if ref:
+        m = await _resolve_mission(ref)
         plan_id, name, src, skipped = m["id"], m["name"], "db", []
         if m["same_name_count"] > 1:
             log.warning("任務名稱「%s」有 %d 筆同名，取最新的 %s",
@@ -1718,7 +1799,29 @@ async def start(body: StartIn):
                                        parsed.get("vehicle_type"))
         name, src, skipped = path.name, "file", parsed["skipped"]
     sysid = _resolve_sysid(body.sysid)
-    # 委派現版正確流程（capability gate＋到高度 gating＋逐台 audit＋X-Client 都自動繼承）
-    result = await mission_fly(sysid, FlyIn(plan_id=plan_id, takeoff_alt=body.takeoff_alt))
+    drone = await pool.fetchrow(
+        "SELECT id::text AS id, name FROM drones WHERE mav_sysid = $1", sysid)
+    if drone is None:
+        raise HTTPException(409, {"code": "drone_unknown",
+                                  "msg": f"sysid {sysid} 在地面站還沒有機體記錄，建不了任務",
+                                  "how_to": ["等地面站收到這台機的心跳（通常幾秒內）再試"]})
+    ms = await ext_missions.ensure(pool, mission_id, body.mission_name,
+                                   [(drone["id"], drone["name"])], name)
+    note = {"drone_id": drone["id"], "sysid": sysid}
+    guard_client.notify_mission(ms["id"], {"kind": "start_begin", "plan_id": plan_id, **note})
+    _start_mission[sysid] = ms["id"]
+    try:
+        # 委派現版正確流程（capability gate＋到高度 gating＋逐台 audit＋X-Client 都自動繼承）
+        result = await mission_fly(sysid, FlyIn(plan_id=plan_id, takeoff_alt=body.takeoff_alt))
+    except Exception as e:
+        d = getattr(e, "detail", None)
+        msg = d.get("msg") if isinstance(d, dict) else (d or f"{type(e).__name__}: {e}")
+        guard_client.notify_mission(ms["id"], {"kind": "start_failed", "msg": str(msg), **note})
+        raise
+    finally:
+        _start_mission.pop(sysid, None)
+    guard_client.notify_mission(ms["id"], {"kind": "start_done", **note})
     return {"source": src, "plan_id": plan_id, "name": name, "sysid": sysid,
-            "skipped": skipped, **result}
+            "skipped": skipped, **result,
+            "mission_id": ms["id"], "mission_name": ms["name"],
+            "stream": _stream_of(request, ms)}

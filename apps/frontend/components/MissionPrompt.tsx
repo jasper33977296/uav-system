@@ -21,7 +21,7 @@ import { errText, getJson } from "@/lib/fetchJson";
 import { API } from "@/lib/signal";
 import { useUavStore } from "@/lib/store";
 
-interface Mission { id: string; name: string }
+interface Mission { id: string; name: string; external?: boolean }
 interface Squad { id: string; name: string; members: { drone_id: string }[] }
 
 export default function MissionPrompt() {
@@ -73,7 +73,8 @@ export default function MissionPrompt() {
       // 落地：**問，不自動關**。問的是**這台機所屬的那個任務**
       activeOf(droneId).then((m) => {
         setActive(m);
-        if (m) { setErr(null); setAsk("end"); }
+        // 外部控制端建立的任務在最後一台上鎖 3 秒後自己結束，不必問
+        if (m && !m.external) { setErr(null); setAsk("end"); }
       }).catch(() => {});
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
