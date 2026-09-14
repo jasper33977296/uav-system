@@ -1,7 +1,7 @@
 # 對外即時串流：任務執行中的無人機狀態
 
 > 給**外部控制端**用。2026-09-14 與使用者逐條定案（§11）。
-> 狀態：**規格草案，尚未實作**。
+> 狀態：**已實作（2026-09-14），尚未實飛驗收**，見 §12。
 
 外部控制端自己產生一組 UUID 當**任務編號**，用它連上地面站的 WebSocket，再帶著同一組編號呼叫起飛。
 **從起飛那一刻起每 0.5 秒**收到任務裡每一台機的狀態，外加預計航線、已飛過的實際軌跡與重要事件；
@@ -54,8 +54,9 @@
 * **先連再起飛**：`/api/start` 要等飛機爬到起飛高度、切進任務模式才回應。先連上，
   上傳、解鎖、起飛那一段才看得到。
 * **不帶 `mission_id` 也可以**：地面站自己產生，放在回應的 `stream` 裡——但那時飛機已經在天上了。
+  這台機若已經在一個進行中的任務裡，就直接掛進那個任務。
 * **群飛**：`POST :38001/api/command/group/{group_id}/execute`，同樣帶 `{"mission_id": "<UUID>"}`，
-  一條連線涵蓋群組裡的所有機。
+  一條連線涵蓋群組裡的所有機。**不帶 `mission_id` 也不帶 `mission_name` 時照舊不建任務**（畫面按的群飛就是這樣）。
 * **看從我們畫面啟動的任務**：`GET :38000/api/missions/active` 拿到任務編號，連同一個網址。
   這種任務由操作員在畫面上結束（§2.5）。
 
@@ -76,6 +77,7 @@
 ```json
 {"source": "db", "plan_id": "…", "name": "0914-square-test-v5", "sysid": 1, "ok": true,
  "steps": {…},
+ "mission_id": "8f0c…", "mission_name": "0914-square-test-v5 09-14 12:01",
  "stream": {"mission_id": "8f0c…", "url": "ws://<地面站>:38000/ws/v1/missions/8f0c…"}}
 ```
 
@@ -94,8 +96,12 @@
 | `409` | `mission_ended` | `mission_id` 對到的任務已經結束 | 那個任務的名稱與結束時間；要再飛就產生新的 UUID |
 | `409` | `mission_busy` | 這台機已經在**另一個**進行中的任務裡 | 那個任務的名稱與編號 |
 | `409` | `mission_name_taken` | `mission_name` 與既有任務同名（不分大小寫） | 撞名的是哪一個任務 |
+| `422` | `plan_required` | `plan_id` 與 `plan` 都沒給或都給了 | 兩者的差別 |
+| `409` | `drone_unknown` | 這個 sysid 在地面站還沒有機體記錄 | 等收到心跳再試 |
 
-起飛流程本身的失敗（預檢不過、解鎖被拒、沒離地…）**也是同一個格式**。
+起飛流程本身的失敗（預檢不過、解鎖被拒、沒離地…）**也是同一個格式**：沒有專屬代碼的依 HTTP 狀態給通用代碼
+（`forbidden`、`not_found`、`conflict`、`vehicle_rejected`、`timeout`…），起飛後判定不到離地是 `not_airborne`。
+群飛執行帶 `mission_id` 時同理。其他指令端點（上傳、切模式）的錯誤形狀照舊。
 
 `mission_id` 對到一個**進行中**的任務時，這次起飛就掛到那個任務底下（例如群飛裡補飛一台）。
 
@@ -155,11 +161,13 @@
 ```
 
 `seq` 在同一個任務內**所有型別共用、嚴格遞增**，補送就靠它（§5）。
+**只屬於一條連線的訊息不帶 `seq`**：`hello`，以及連上時補的 `route`、`track`——它們不進補送緩衝。
+`seq` 不從 1 開始（以毫秒時間起算，地面站重啟後仍比重啟前的大），只保證遞增。
 
 ### 3.1 `hello`：連上時第一則
 
 ```json
-{"v": 1, "type": "hello", "mission_id": "…", "seq": 1840, "ts": "…",
+{"v": 1, "type": "hello", "mission_id": "…", "ts": "…",
  "phase": "active", "mission_name": "0914-square-test-v5 09-14 12:01",
  "started_at": "2026-09-14T04:01:31.000Z",
  "drones": [{"drone_id": "1d2f…", "name": "pi5-sdmodelh7v2-ardu", "sysid": 1}],
@@ -187,8 +195,10 @@
     "properties": {"role": "waypoint", "seq": 3, "kind": "waypoint"}}]}}
 ```
 
-* 點的 `kind`：`takeoff`／`waypoint`／`land`。
-* 第三個座標是**離起飛點高度**（公尺）。
+* 點的 `kind`：`takeoff`／`waypoint`／`land`／`rtl`。`seq` 是**路徑自己的項目序號**（0 起，含沒有座標的指令項），
+  與 `state.mission_progress.current`、`waypoint_reached` 的序號對得上（ArduPilot 機上的序號多一格 home，地面站換算好了）。
+* 第三個座標是**離起飛點高度**（公尺）。高度基準是離地（frame 10）而換不出來時只給 [經度, 緯度]。
+* `reason`：`initial`（起飛流程開始、或第一次連上）／`reconnect`（帶 `after_seq` 重連）／`change_route`（飛行中改航線）。
 
 ### 3.3 `track`：已經飛過的實際軌跡
 
@@ -196,7 +206,7 @@
 之後控制端用每則 `state` 的位置接著往下畫。群飛時每台機各一則。
 
 ```json
-{"v": 1, "type": "track", "mission_id": "…", "seq": 1842, "ts": "…",
+{"v": 1, "type": "track", "mission_id": "…", "ts": "…",
  "drone_id": "1d2f…",
  "geojson": {"type": "Feature",
    "geometry": {"type": "MultiLineString", "coordinates": [
@@ -249,7 +259,7 @@
 | `flight_mode` | 原廠模式名 | ArduPilot：`AUTO`、`LOITER`、`RTL`、`LAND`、`STABILIZE`… |
 | `mode_verb` | `mission`／`hold`／`rtl`／`land`／`position`／`guided`／`null` | **廠牌無關**的動作。手動類模式（STABILIZE 等）是 `null`。判斷用這個，顯示用 `flight_mode` |
 | `landed` | `on_ground`／`takeoff`／`in_air`／`landing`／`null` | 飛控的著地狀態 |
-| `mission_progress.current` | 航點序號 | **跑完後維持在最後一項**。飛控跑完 Land 會立刻回報「第 1 項」，那不是任務重來，這裡不照送 |
+| `mission_progress.current` | 路徑序號 | **跑完後維持在最後一項**。飛控跑完 Land 會立刻回報「第 1 項」，那不是任務重來，這裡不照送 |
 | `mission_progress.state` | `not_started`／`active`／`paused`／`complete`／`null` | 飛控上那份航線的執行狀態 |
 | `gps.fix` | 0～6 | 3＝3D，≥4＝差分／RTK |
 | `link.state` | `ok`／`degraded`／`stale`／`lost`／`unknown` | 5G 鏈路。`link.age_s` 超過 5 秒是 `stale`、超過 30 秒是 `lost` |
@@ -305,7 +315,7 @@
 | `telemetry_lost`／`telemetry_resumed` | 這台機的遙測斷了 10 秒以上／恢復 |
 | `failsafe` | 飛控回報進入 CRITICAL／EMERGENCY 狀態 |
 | `crash` | 飛控送出 `Crash: Disarming` |
-| `vehicle_text` | 飛控的文字訊息，**只轉警告以上**；同一句 30 秒內重複的折成一則（`detail.count`）——實測真機每分鐘會重複送同一句預檢失敗，不過濾會把其他事件淹掉 |
+| `vehicle_text` | 飛控的文字訊息，**只轉警告以上**；同一句 30 秒內重複的不另外送，下一次送出時 `detail.count` 帶上累積次數——實測真機每分鐘會重複送同一句預檢失敗，不過濾會把其他事件淹掉 |
 
 `severity`：`info`／`warning`／`critical`。
 
@@ -364,7 +374,7 @@ TCP 可能要**好幾十秒**才發現對方不在了。那段時間連線看起
 |---|---|---|
 | `live` | < 2 | 全部照送 |
 | `stale` | 2～10 | 全部照送，由 `freshness` 標明。控制端應該把那台機畫淡 |
-| `old` | > 10 | `position`、`heading`、速度、`armed`、`landed`、`flight_mode` 改成 `null`；**最後已知位置放在 `last_known`**：`{"lat", "lon", "alt_rel", "at"}` |
+| `old` | > 10 | 除了身分、`freshness`、`age_s`、`connected`、`link` 以外全部是 `null`（位置、朝向、速度、模式、解鎖、著地、任務進度、電量、GPS）；**最後已知位置放在 `last_known`**：`{"lat", "lon", "alt_rel", "at"}` |
 | `never` | 從未收到 | 除身分外全部 `null` |
 
 `old` 時把位置拿掉而不是只標記，是為了**讓人讀不到那個數字**——一個標著「舊」的座標仍然會被畫成「飛機在這裡」。
@@ -419,7 +429,7 @@ function connect() {
   ws = new WebSocket(`ws://GS:38000/ws/v1/missions/${missionId}${q}`);
   ws.onmessage = (e) => {
     const m = JSON.parse(e.data);
-    lastSeq = m.seq;
+    if (m.seq != null) lastSeq = m.seq;
     resetWatchdog();
     if (m.type === "route") L.geoJSON(m.geojson).addTo(map);            // GeoJSON：[經度, 緯度]
     if (m.type === "track") {
@@ -497,25 +507,24 @@ await fetch("http://GS:38001/api/start", {method: "POST",
 
 ---
 
-## 12. 實作要動的地方
+## 12. 實作（2026-09-14）
 
-* **command**
-  * `/api/start`：新參數 `plan_id`／`mission_id`／`mission_name`，舊的 `mission` 當 `plan_id` 的別名；
-    以 `mission_id` 建立（或掛到進行中的）任務，並把這台機加進任務；回傳 `stream`。
-  * `group/{id}/execute`：同樣接受 `mission_id`。
-  * 錯誤回應統一成 `{code, msg, how_to?}`；起飛流程既有的錯誤有些只有 `msg`，要補 `code`。
-  * 起飛流程每一步的結果、失敗、全撤通知 backend。
-* **backend**
-  * `missions` 加一欄標記「外部建立」，**只有這種任務會自動結束**。畫面上落地時問「任務結束了嗎？」
-    的提示，碰到已經自動結束的任務不要再問。
-  * `/ws/v1/missions/{uuid}`：未知的 UUID 進 `waiting`；每連線一個送出佇列、0.5 秒的節拍、
-    60 秒環形緩衝。backend 重啟時補送緩衝會不見——重連時用 `hello.replay.gap` 誠實說出缺了一段。
-  * `state.link` 帶完整訊號指標，沿用 `/api/ext/live` 的白名單；串流驗收通過後移除 `/api/ext/live`。
-  * `route`：由路徑的航點與起飛點組（與規劃頁同一份資料）。`track`：由 `telemetry` 表組，斷 10 秒切段。
-  * `event`：接在既有事件寫入的地方轉出；**`Crash: Disarming` 目前沒有任何地方特別處理**，要新接。
-  * 結束判定：架次結束（`disarmed`／`telemetry_lost`）＋墜機文字＋最後一台上鎖後 3 秒（期間又解鎖則取消）。
-  * 任務進度：跑完後飛控跳回第 1 項的那一下不照送。
-* **驗收**：用 SITL 跑一次單機、一次群飛；先連再起飛看得到解鎖與爬升；中途切斷控制端，
-  分別在 60 秒內與超過 60 秒重連，看補送與 `track`；拔掉遙測看 `old`／`telemetry_lost`；
-  上鎖後 3 秒內再解鎖，任務不應結束；連上後不起飛，30 秒收到 `never_started`；
-  `ended` 之後 30 秒內重連拿得到 `ended`、超過則收到 `error` 與 `4410`；每一種錯誤都看得到 `msg`。
+| 地方 | 做了什麼 |
+|---|---|
+| `apps/backend/app/ext_stream.py` | 串流本體：一個任務一個串流、0.5 秒一拍、60 秒補送緩衝、每條連線各自的送出佇列、結束判定、`route`／`track` 的組法 |
+| `apps/backend/app/main.py` | `/ws/v1/missions/{uuid}`；失明開始／結束、架次因失聯收尾時通知串流 |
+| `apps/backend/app/mavlink_rx.py` | 解鎖／上鎖、著地狀態轉換、STATUSTEXT（墜機判斷與 `vehicle_text`）通知串流 |
+| `apps/backend/app/db.py` | `missions.external`；`insert_event` 寫完通知旁聽者——模式、航點、任務狀態、failsafe、鏈路事件由這裡轉出 |
+| `apps/command/app/missions.py` | `/api/start` 與群飛的任務建立／掛上，以及 422／409 |
+| `apps/command/app/main.py` | `/api/start` 新參數與 `stream`、錯誤補成 `{code, msg}`、起飛流程每一步通知 backend（`POST /api/ext/missions/{id}/notify`，內部用） |
+| `apps/command/app/group_exec.py` | 群飛帶 `mission_id` 時建任務、逐台進度與失敗／全撤通知 |
+| `apps/frontend/components/MissionPrompt.tsx` | 外部建立的任務落地時不問「結束了嗎」 |
+
+**驗過的**（都沒有動到飛機）：
+* `scripts/test-ext-stream.py`：判斷邏輯——航線與軌跡的組法、新舊分級、序號換算與「飛完回報第 1 項」、結束原因、文字折疊、3 秒結束與取消、等待逾時、佇列丟棄。
+* `scripts/test-ext-missions.py`：任務建立，接真資料庫、只動臨時機與臨時任務。
+* `scripts/test-ext-stream-live.py`：打正在跑的 backend，起飛流程用 notify 模擬——4400、4410、等待中每 0.5 秒一則、30 秒 `never_started`、結束後重連拿得到 `ended`、失敗後約 3 秒自動結束並寫回 `ended_at`、`after_seq` 補送接得上、缺口回報。
+
+**還沒驗的**（要真的飛）：解鎖／離地／著地／上鎖事件的時序、墜機判定、`track` 的實際內容、群飛。先用 SITL 飛一趟單機與一趟群飛。
+
+**還沒做**：串流實飛驗收後移除 `/api/ext/live`（`api.py` 的端點與 `EXT_LIVE_KEYS`／`EXT_LINK_KEYS`）。
