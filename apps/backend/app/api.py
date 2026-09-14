@@ -1905,7 +1905,9 @@ class WaypointIn(BaseModel):
     p4: float | None = None
 
 
-class MissionIn(BaseModel):
+# 叫 PlanIn 不叫 MissionIn：同名的「任務」類別定義在下面，會把這個蓋掉——
+# 匯入 .plan 因此從 09-08 起一律 500（缺 waypoints）
+class PlanIn(BaseModel):
     name: str
     source: str = "plan-file"        # plan-file / vehicle
     waypoints: list[WaypointIn] = Field(min_length=2, max_length=500)
@@ -2259,7 +2261,7 @@ async def mission_waypoints(plan_id: str):
 
 
 @router.post("/plans")
-async def save_mission(m: MissionIn):
+async def save_mission(m: PlanIn):
     """存入任務庫並附上幾何預檢報告。**不因預檢失敗而拒存**——任務庫
     可放草稿；真正的擋門在 command 服務上傳到機那一步。"""
     wps = [w.model_dump() for w in m.waypoints]
