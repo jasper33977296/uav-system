@@ -136,7 +136,7 @@ export default function MissionPrompt() {
         <div className="modal-text">
           {ask === "start" ? (<>
             <div className="hint-line">
-              取一個名字，這幾台機接下來的每一趟都會自動歸到它底下，直到你把它結束。
+              取一個名字，這一趟和這幾台機接下來的每一趟都會歸到它底下，直到你把它結束。
             </div>
             <input className="msearch" autoFocus value={name} style={{ width: "100%" }}
               placeholder="例如：低速測線實驗"
@@ -179,7 +179,7 @@ export default function MissionPrompt() {
           {ask === "start" ? (<>
             <button className="btn-plain" onClick={() => setAsk(null)}>先不指定</button>
             <button className="btn-plain" disabled={!name.trim() || busy}
-              onClick={create}>{busy ? "建立中…" : "建立並開始"}</button>
+              onClick={create}>{busy ? "建立中…" : "建立任務"}</button>
           </>) : (<>
             <button className="btn-plain" onClick={() => setAsk(null)}>還要再飛</button>
             <button className="btn-plain" disabled={busy} onClick={end}>
