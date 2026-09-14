@@ -16,6 +16,9 @@
 | ② 上傳 | `POST /api/command/{sysid}/mission/upload` <br>`{"mission_id": "..."}` | 寫進飛控，**並逐項讀回比對** |
 | ③ 執行 | `POST /api/command/{sysid}/mission/start` | 讓飛控開始執行**它機上現有**的那份任務 |
 
+**要在自己的地圖上看執行中的飛機**：見 [`external-live-api.md`](external-live-api.md)
+（起飛時拿到一條 WebSocket，每 0.5 秒送狀態；規格草案，尚未實作）。
+
 **想一次做完**：`POST /api/start`（`{"mission": "<id 或名稱>"}`）——
 上傳→解鎖→起飛→切任務，每步讀回確認。
 自動化流程用它；互動操作建議走三步，**因為中途出錯時看得出停在哪一步**。
