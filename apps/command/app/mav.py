@@ -961,16 +961,7 @@ def job_clear_mission(r: MavRouter, sysid: int) -> dict:
             "note": "機上已無任務" if left == 0 else f"機上還有 {left} 項"}
 
 
-def fence_wire_items(items: list[dict]) -> list[dict]:
-    """`plan_check.fc_fence_plan` 的圍欄項 → MISSION_ITEM_INT 的欄位。"""
-    return [{"seq": i, "frame": M.MAV_FRAME_GLOBAL, "command": int(it["command"]),
-             "p1": float(it["p1"]), "p2": 0.0, "p3": 0.0, "p4": 0.0,
-             "x": int(round(it["lat"] * 1e7)), "y": int(round(it["lon"] * 1e7)),
-             "z": 0.0} for i, it in enumerate(items)]
-
-
-def job_upload_mission(r: MavRouter, sysid: int, items: list,
-                       mission_type: int | None = None) -> dict:
+def job_upload_mission(r: MavRouter, sysid: int, items: list) -> dict:
     """完整上傳握手 → 機端 ACK → 回讀逐項比對 → 收 PX4 廣播的驗證訊息。
 
     丟包韌性（對齊實戰工具 upload_mission.py v3，戶外 5G 實測經驗）：
@@ -978,15 +969,12 @@ def job_upload_mission(r: MavRouter, sysid: int, items: list,
     - 項目遺失由機端重複請求同 seq 自然補（協定內建），總期限 30 秒
     - 回讀的 REQUEST_LIST 重試 3 次、逐項重試 2 次
     """
-    mt = M.MAV_MISSION_TYPE_MISSION if mission_type is None else mission_type
-    fence = mt == M.MAV_MISSION_TYPE_FENCE
+    mt = M.MAV_MISSION_TYPE_MISSION
     d = dialect(r, sysid)
     # ArduPilot：seq 0 留給 home，真航點往後移一格（line[i] 是要送給機上的第 i 項）。
     # 佔位用第一個航點的座標而不是 0,0,0——實測 ArduPilot 會用實際 home 覆蓋它，
     # 但萬一某版本沒覆蓋，一個「任務起點附近」的 home 遠比 (0,0,0) 安全。
-    # **圍欄任務沒有這一格**：home 佔位只屬於航線任務
-    home_slot = d["home_at_seq0"] and not fence
-    if home_slot and items:
+    if d["home_at_seq0"] and items:
         f = items[0]
         home = {**f, "seq": 0, "command": M.MAV_CMD_NAV_WAYPOINT,
                 "frame": M.MAV_FRAME_GLOBAL, "p1": 0, "p2": 0, "p3": 0, "p4": 0}
@@ -1034,7 +1022,7 @@ def job_upload_mission(r: MavRouter, sysid: int, items: list,
     # 逐項比座標（不是只比筆數）——這個檢查是唯一會發現「機上內容跟我們以為的
     # 不一樣」的東西。ArduPilot 的 seq 0 是機端自己的 home，內容本來就不等於我們
     # 送的佔位值，**跳過它的內容比對**但仍要求它存在（筆數已含）。
-    skip = 1 if home_slot else 0
+    skip = 1 if d["home_at_seq0"] else 0
     for seq in range(skip, n):
         it = None
         for _ in range(2):
@@ -1048,11 +1036,6 @@ def job_upload_mission(r: MavRouter, sysid: int, items: list,
         if (it.command != o["command"] or abs(it.x - o["x"]) > 2
                 or abs(it.y - o["y"]) > 2 or abs(it.z - o["z"]) > 0.5):
             raise CommandError(f"回讀比對不符（seq {seq}）：機上內容與上傳不一致")
-        # 圍欄項的 param1 是頂點數或圓的半徑——**半徑不對，圈就不是那個圈**
-        if fence and abs(it.param1 - o["p1"]) > 0.05:
-            raise CommandError(
-                f"回讀比對不符（圍欄第 {seq} 項）：param1 機上 {it.param1:g}，"
-                f"上傳的是 {o['p1']:g}")
     r._sendto(sysid, lambda m: m.mission_ack_encode(sysid, 1, M.MAV_MISSION_ACCEPTED, mt))
 
     # 聽 3 秒 PX4 廣播的任務驗證結果（被拒原因直接看得到；

@@ -304,45 +304,15 @@ ck("沒有高度上限就不判高度",
    pc.check_fence(far, pc.fence_circle(HOME, 500))[0])
 
 print()
-print("\n── 寫進飛控的圍欄（使用者裁定 2026-09-11：P／越界返航／多邊形）──")
+print("\n── 審查指紋也綁圍欄 ──")
 circ = pc.fence_circle(HOME, 120, 30)
-poly4 = pc.fence_polygon([(HOME["lat"] + 0.0002, HOME["lon"]),
-                          (HOME["lat"] - 0.0003, HOME["lon"] + 0.0007),
-                          (HOME["lat"] - 0.0006, HOME["lon"]),
-                          (HOME["lat"] - 0.0001, HOME["lon"] - 0.0006)], 30)
-fp = pc.fc_fence_plan(circ, {"FENCE_ALT_MAX_TP": 1, "RTL_ALT_M": 2})
-ck("圓也走圍欄任務（有自己的圓心，不跟著解鎖位置跑）",
-   [i["command"] for i in fp["items"]] == [5003] and fp["items"][0]["p1"] == 120,
-   fp["items"])
-ck("種類＝高度上限＋圍欄任務形狀（1|4），不開以 home 為心的圓（2）",
-   fp["params"]["FENCE_TYPE"] == 5, fp["params"])
-ck("越界動作是返航（1）", fp["params"]["FENCE_ACTION"] == 1, fp["params"])
-ck("參數裡沒有 FENCE_ENABLE（由呼叫端最先關、最後開）",
-   "FENCE_ENABLE" not in fp["params"], fp["params"])
-pp = pc.fc_fence_plan(poly4, {"RTL_ALT": 1500})
-ck("多邊形每個頂點一項，param1＝頂點數",
-   len(pp["items"]) == 4 and all(i["command"] == 5001 and i["p1"] == 4
-                                 for i in pp["items"]), pp["items"])
-ck("舊韌體 RTL_ALT 是 cm：1500 cm＝15 m 低於 30 m，不擋", not pp["problems"],
-   pp["problems"])
-ck("返航高度不低於上限就不寫", any("返航本身就會越界" in x for x in
-   pc.fc_fence_plan(circ, {"RTL_ALT_M": 30})["problems"]))
-ck("讀不到返航高度就不寫", any("讀不到返航高度" in x for x in
-   pc.fc_fence_plan(circ, {})["problems"]))
-ck("高度上限不是離起飛點算的就不寫", any("FENCE_ALT_MAX_TP" in x for x in
-   pc.fc_fence_plan(circ, {"FENCE_ALT_MAX_TP": 0, "RTL_ALT_M": 2})["problems"]))
-ck("沒有圍欄就什麼都不寫", pc.fc_fence_plan({}, {})["params"] == {})
-ck("審查指紋：沒有圍欄是 None（舊審查照樣算數）",
+ck("沒有圍欄是 None（舊審查照樣算數）",
    pc.fence_hash(None) is None and pc.fence_hash({}) is None)
-ck("審查指紋：同一個圍欄 JSON 來回一次不變",
+ck("同一個圍欄 JSON 來回一次不變",
    pc.fence_hash(circ) == pc.fence_hash(__import__("json").loads(
        __import__("json").dumps(circ))))
-ck("審查指紋：半徑一改就變",
+ck("半徑一改就變",
    pc.fence_hash(circ) != pc.fence_hash(pc.fence_circle(HOME, 121, 30)))
-ck("規劃頁也報返航高度撞上限（同一句話）",
-   any("返航本身就會越界" in x for x in pc.check_fence(
-       [{"seq": 0, "lat": HOME["lat"], "lon": HOME["lon"], "alt": 5, "frame": 3,
-         "command": 16, "action": "waypoint"}], circ, None, 40)[0]))
 
 print("\n── 圍欄多邊形交叉（使用者 2026-09-11：頂點可以拖，就拖得出蝴蝶結）──")
 sq = [(HOME["lat"] + 0.0005, HOME["lon"] - 0.0005), (HOME["lat"] + 0.0005, HOME["lon"] + 0.0005),
@@ -356,8 +326,6 @@ ck("凹的形狀不算交叉（場地不是凸的）",
 wp0 = [{"seq": 0, "lat": HOME["lat"], "lon": HOME["lon"], "alt": 5, "frame": 3,
         "command": 16, "action": "waypoint"}]
 ck("規劃頁報交叉", pc.FENCE_CROSSING_MSG in pc.check_fence(wp0, pc.fence_polygon(bow, 30))[0])
-ck("交叉的圍欄不寫進飛控", pc.FENCE_CROSSING_MSG in pc.fc_fence_plan(
-   pc.fence_polygon(bow, 30), {"RTL_ALT_M": 2})["problems"])
 
 if fails:
     print(f"✗ {len(fails)} 項沒過：" + "、".join(fails))

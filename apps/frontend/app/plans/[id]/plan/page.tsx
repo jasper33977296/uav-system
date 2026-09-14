@@ -882,7 +882,7 @@ export default function PlanPage() {
         {(stageWps.length > 0 || (isNew && started)) && (
           <>
             <span className="head-sep" />
-          <div className="f"><span>圍欄<InfoTip tip={"航點超出圍欄，這一頁會擋下。\n**按「上傳」時一起寫進飛控**（ArduPilot）：先關圍欄、寫種類／越界返航／高度上限、傳圍欄形狀，逐項讀回，全部對了才打開。任何一步沒過，這份航線就不上傳。\n在那之前飛控裡是它原本的圍欄。\n高度上限是**離起飛點**；返航高度不低於上限時不會寫——越界之後的返航本身就會再越界。"} /></span>
+          <div className="f"><span>圍欄<InfoTip tip={"航點超出圍欄，這一頁會擋下。\n**飛控不照它擋**：這個圍欄不會寫進飛控，飛機飛出去時沒有東西攔它。\n高度上限是**離起飛點**的高度；地形跟隨（frame 10）的航點高度不是離起飛點的，比不了，會照實說。"} /></span>
             <div className="seg2">
               {([["circle", "圓形"], ["polygon", "多邊形"],
                  ["none", "不設"]] as const).map(([k, t]) => (
@@ -932,10 +932,11 @@ export default function PlanPage() {
             在剖面的 Y 軸上。這一列只留**看圖看不出來的**：圍欄與審查狀態 */}
         {fenceShape && (
           // 半徑與上限在旁邊的輸入格裡看得到，這一顆只說看不到的兩件事：
-          // 多邊形成不成立，以及**上傳那一刻才寫進飛控**
-          <span className="chip">{fence.shape === "polygon"
-            ? `${fence.points.length} 點・${fence.points.length < 3 ? "還不成立" : "上傳時寫進飛控"}`
-            : "上傳時寫進飛控"}</span>
+          // 多邊形成不成立，以及**飛控不照它擋**——不然畫了一個圈會被讀成飛不出去
+          <span className={`chip${fence.shape === "polygon" && fence.points.length < 3 ? "" : " bad"}`}>
+            {fence.shape === "polygon"
+              ? `${fence.points.length} 點・${fence.points.length < 3 ? "還不成立" : "飛控不擋"}`
+              : "飛控不擋"}</span>
         )}
         {!isNew && sign && (
           <span className={`chip${sign.signed && !sign.stale ? "" : " bad"}`}

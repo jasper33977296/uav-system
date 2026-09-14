@@ -190,7 +190,7 @@ def check_waypoints(wps: list[dict], fence_r: float, fence_alt: float,
     if fence:
         ha_f = (terrain.surface(origin["lat"], origin["lon"], dem).ground
                 if origin and dem is not None else None)
-        fp, fw = check_fence(nav, fence, ha_f, rtl_alt_m)
+        fp, fw = check_fence(nav, fence, ha_f)
         problems += fp
         warnings += fw
 
@@ -1532,37 +1532,10 @@ def _in_polygon(lat: float, lon: float, poly) -> bool:
     return inside
 
 
-def _rtl_vs_ceiling(rtl_alt_m: float, alt_max: float) -> str | None:
-    """越界的處置是返航（FENCE_ACTION=1），而返航會先爬到 RTL_ALT_M。
-    **那個高度不低於圍欄上限的話，處置本身就會再越界。** 規劃頁與寫進
-    飛控之前共用這一句，不各寫一份。"""
-    if rtl_alt_m >= alt_max:
-        return (f"越界會返航，而返航高度 {rtl_alt_m:g} m 不低於圍欄上限 "
-                f"{alt_max:g} m——返航本身就會越界")
-    return None
-
-
-# ── 寫進飛控的圍欄（使用者裁定 2026-09-11：跟著上傳一起寫、越界返航、
-#    多邊形一起做）──────────────────────────────────────────────
-#
-# **形狀一律走圍欄任務**（MAV_MISSION_TYPE_FENCE），圓也是。飛控另有一個
-# `FENCE_RADIUS`，但那個圓是以**解鎖的位置**為心——飛機在離規劃起飛點
-# 50 m 的地方解鎖，圈就跟著移 50 m，而規劃頁檢查的是以規劃起飛點為心的
-# 那一個。圍欄任務裡的圓有自己的圓心，寫進去的就是檢查過的那一個。
-
 FENCE_CROSSING_MSG = ("圍欄多邊形的邊交叉了——圈內圈外會跟畫面上看到的不一樣，"
                       "拖一下頂點把交叉解開")
-
-#: FENCE_ACTION：1＝返航（不行就降落）。定義見 ArduCopter.apm.pdef.xml
-FC_FENCE_ACTION = 1
-FENCE_TYPE_ALT_MAX = 1
-#: 圍欄任務裡的多邊形與圓
-FENCE_TYPE_SHAPES = 4
-_FENCE_CMD = {"inclusion_polygons": 5001, "exclusion_polygons": 5002,
-              "inclusion_circles": 5003, "exclusion_circles": 5004}
-#: 寫之前要先問飛控的。沒有的名字（舊韌體沒有 `_TP`、`RTL_ALT_M`）會安靜地缺席
-FC_FENCE_READ = ["FENCE_ENABLE", "FENCE_TYPE", "FENCE_ACTION", "FENCE_ALT_MAX",
-                 "FENCE_ALT_MAX_TP", "FENCE_MARGIN", "RTL_ALT_M", "RTL_ALT"]
+_FENCE_KEYS = ("inclusion_polygons", "exclusion_polygons",
+               "inclusion_circles", "exclusion_circles")
 
 
 def fence_crossing(poly) -> bool:
@@ -1585,98 +1558,22 @@ def _fence_norm(fence: dict | None) -> dict | None:
 
     out = {k: ([[pt(p) for p in poly] for poly in fence.get(k) or []]
                if k.endswith("polygons") else [circ(c) for c in fence.get(k) or []])
-           for k in _FENCE_CMD}
+           for k in _FENCE_KEYS}
     am = fence.get("alt_max")
     out["alt_max"] = None if am is None else round(float(am), 2)
-    if not any(out[k] for k in _FENCE_CMD) and out["alt_max"] is None:
+    if not any(out[k] for k in _FENCE_KEYS) and out["alt_max"] is None:
         return None
     return out
 
 
 def fence_hash(fence: dict | None) -> str | None:
-    """圍欄的指紋。**人工審查也綁它**（使用者裁定 2026-09-11）：圍欄現在會
-    寫進飛控，改了圍欄卻沿用舊的審查，等於放行一份沒人看過的保護設定。
-    沒有圍欄回 None——沒有圍欄的航線，舊的審查照樣算數。"""
+    """圍欄的指紋。**人工審查也綁它**：圍欄一改，檢查結果就不是審查時看到的
+    那一份。沒有圍欄回 None——沒有圍欄的航線，舊的審查照樣算數。"""
     n = _fence_norm(fence)
     if n is None:
         return None
     return hashlib.sha256(json.dumps(n, sort_keys=True, separators=(",", ":"))
                           .encode()).hexdigest()[:32]
-
-
-def _rtl_m(vals: dict) -> float | None:
-    if vals.get("RTL_ALT_M") is not None:
-        return float(vals["RTL_ALT_M"])
-    if vals.get("RTL_ALT") is not None:
-        return float(vals["RTL_ALT"]) / 100.0          # 4.7 之前是 cm
-    return None
-
-
-def fc_fence_plan(fence: dict | None, vals: dict) -> dict:
-    """把這份航線的圍欄換成要寫進飛控的參數與圍欄任務項。**純計算**，
-    寫入在指令服務。
-
-    `vals` 是寫之前從飛控讀到的（`FC_FENCE_READ`）。回
-    `{params, items, problems, warnings, summary}`；`problems` 非空就不寫。
-    `params` 不含 `FENCE_ENABLE`——那一格由呼叫端**最先關、最後開**。
-    """
-    out: dict = {"params": {}, "items": [], "problems": [], "warnings": [],
-                 "summary": None}
-    n = _fence_norm(fence)
-    if n is None:
-        return out
-    items = []
-    npoly = ncirc = 0
-    for key, cmd in _FENCE_CMD.items():
-        if key.endswith("polygons"):
-            for poly in n[key]:
-                if len(poly) < 3:
-                    continue
-                if fence_crossing(poly):
-                    out["problems"].append(FENCE_CROSSING_MSG)
-                npoly += 1
-                items += [{"command": cmd, "p1": float(len(poly)),
-                           "lat": la, "lon": lo} for la, lo in poly]
-        else:
-            for c in n[key]:
-                ncirc += 1
-                items.append({"command": cmd, "p1": c["radius"],
-                              "lat": c["lat"], "lon": c["lon"]})
-    am = n["alt_max"]
-    ftype = ((FENCE_TYPE_ALT_MAX if am is not None else 0)
-             | (FENCE_TYPE_SHAPES if items else 0))
-    if not ftype:
-        return out
-    params = {"FENCE_TYPE": ftype, "FENCE_ACTION": FC_FENCE_ACTION}
-    if am is not None:
-        params["FENCE_ALT_MAX"] = am
-        tp = vals.get("FENCE_ALT_MAX_TP")
-        if tp is not None and int(tp) != 1:
-            out["problems"].append(
-                f"飛控的高度上限不是離起飛點算的（FENCE_ALT_MAX_TP={int(tp)}）"
-                f"——寫進去的 {am:g} m 在飛控上會是別的意思")
-        rtl = _rtl_m(vals)
-        if rtl is None:
-            out["problems"].append(
-                "讀不到返航高度，判斷不了越界之後的返航會不會自己再越界")
-        elif (why := _rtl_vs_ceiling(rtl, am)):
-            out["problems"].append(why)
-        mg = vals.get("FENCE_MARGIN")
-        if mg is not None and float(mg) >= am:
-            out["warnings"].append(
-                f"飛控的圍欄緩衝 {float(mg):g} m 不小於上限 {am:g} m——"
-                f"一離地就在緩衝區裡")
-    parts = []
-    if npoly:
-        parts.append(f"多邊形 {npoly} 個" if npoly > 1
-                     else f"多邊形 {len(items) - ncirc} 點")
-    if ncirc:
-        parts.append(f"圓 {ncirc} 個")
-    if am is not None:
-        parts.append(f"上限 {am:g} m")
-    parts.append("越界返航")
-    out.update(params=params, items=items, summary="・".join(parts))
-    return out
 
 
 def fence_circle(home: dict, radius_m: float,
@@ -1703,8 +1600,7 @@ def fence_polygon(points, alt_max: float | None = None) -> dict:
 
 
 def check_fence(wps: list[dict], fence: dict,
-                home_amsl: float | None = None,
-                rtl_alt_m: float | None = None) -> tuple[list[str], list[str]]:
+                home_amsl: float | None = None) -> tuple[list[str], list[str]]:
     """航點對這份航線自帶圍欄的檢查。回傳 (problems, warnings)。
 
     **這是規劃端的約束，不是飛行中的保護。** 圍欄畫在這裡，飛機不會因此
@@ -1720,8 +1616,6 @@ def check_fence(wps: list[dict], fence: dict,
             break
     amax = fence.get("alt_max")
     if amax is not None:
-        if rtl_alt_m is not None and (why := _rtl_vs_ceiling(rtl_alt_m, float(amax))):
-            problems.append(why)
         skipped_frames = set()
         for w in wps:
             if w.get("alt") is None or not _is_nav(w):
