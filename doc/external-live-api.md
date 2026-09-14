@@ -219,7 +219,7 @@
 {"v": 1, "type": "state", "mission_id": "…", "seq": 1843, "ts": "2026-09-14T07:30:12.500Z",
  "phase": "active",
  "drones": [{
-   "drone_id": "1d2f…", "name": "pi5-sdmodelh7v2-ardu",
+   "drone_id": "1d2f…", "name": "pi5-sdmodelh7v2-ardu", "sysid": 1,
    "freshness": "live", "age_s": 0.3, "connected": true,
    "position": {"lat": 24.773540, "lon": 121.045880, "alt_rel": 12.3, "alt_msl": 135.6},
    "last_known": null,
@@ -229,12 +229,17 @@
    "mission_progress": {"current": 3, "total": 8, "state": "active"},
    "battery": {"pct": 76, "voltage": 15.9},
    "gps": {"fix": 3, "sats": 22},
-   "link": {"sinr": 18.0, "rsrp": -100, "rtt_ms": 27, "state": "ok", "age_s": 0.4}}]}
+   "link": {"state": "ok", "age_s": 0.4, "time": "2026-09-14T07:30:12.130Z",
+            "rsrp": -100.0, "rsrq": -11.0, "sinr": 18.0, "cqi": null,
+            "pci": 133, "cell_id": 2179073, "band": "n79", "nr_mode": "SA",
+            "rtt_ms": 27.0, "jitter_ms": null, "packet_loss_pct": null,
+            "throughput_up_kbps": null, "throughput_down_kbps": null}}]}
 ```
 
 | 欄位 | 單位／值域 | 說明 |
 |---|---|---|
 | `freshness` | `live`／`stale`／`old`／`never` | 見 §6 |
+| `sysid` | 整數 | 下指令用的號碼 |
 | `age_s` | 秒 | 距離最後一次收到這台機的遙測 |
 | `position.alt_rel` | 公尺 | **離起飛點** |
 | `position.alt_msl` | 公尺 | 海拔 |
@@ -248,8 +253,36 @@
 | `mission_progress.state` | `not_started`／`active`／`paused`／`complete`／`null` | 飛控上那份航線的執行狀態 |
 | `gps.fix` | 0～6 | 3＝3D，≥4＝差分／RTK |
 | `link.state` | `ok`／`degraded`／`stale`／`lost`／`unknown` | 5G 鏈路。`link.age_s` 超過 5 秒是 `stale`、超過 30 秒是 `lost` |
+| `link.age_s` | 秒 | 訊號量測幾秒前收到的。太大代表**量測送不回來**，這與「訊號很差」是兩件事 |
+| `link.time` | ISO 8601 | 這筆量測的採樣時刻 |
+| `link.rsrp` | dBm | 參考訊號接收功率 |
+| `link.rsrq` | dB | 參考訊號接收品質 |
+| `link.sinr` | dB | 訊號干擾雜訊比 |
+| `link.cqi` | 0～15 | 通道品質指示 |
+| `link.pci` | — | Physical Cell ID（十進位；只在鄰區內唯一） |
+| `link.cell_id` | — | 全域 cell 識別碼（NCI/CGI） |
+| `link.band` | — | 頻段，如 `n79` |
+| `link.nr_mode` | `SA`／`NSA`／`LTE` | |
+| `link.rtt_ms` | ms | 來回時間 |
+| `link.jitter_ms` | ms | 抖動 |
+| `link.packet_loss_pct` | % | 封包遺失率 |
+| `link.throughput_up_kbps`／`link.throughput_down_kbps` | kbps | 上行／下行吞吐 |
+
+訊號指標量測不到的是 `null`，不補假值。
 
 `waiting` 時送的是 `{"type": "state", "phase": "waiting", "drones": []}`——只為了讓控制端知道連線還活著（§4）。
+
+**原本輪詢快照 `/api/ext/live` 的欄位全部在 `state` 裡**，快照在串流上線時移除（2026-09-14 定案）：
+
+| `/api/ext/live` | `state.drones[]` |
+|---|---|
+| `drone_name`／`mav_sysid` | `name`／`sysid` |
+| `connected`／`armed` | 同名 |
+| `lat`／`lon`／`alt_rel`／`alt_msl` | `position.*`（`old` 時改看 `last_known`） |
+| `ground_speed`／`vertical_speed`／`heading` | 同名 |
+| `telem_age_s` | `age_s`，另有 `freshness` |
+| `link_state`／`link_age_s` | `link.state`／`link.age_s` |
+| `link.*`（14 項訊號指標） | `link.*`，名稱不變 |
 
 ### 3.5 `event`：重要變化
 
@@ -346,7 +379,7 @@ TCP 可能要**好幾十秒**才發現對方不在了。那段時間連線看起
 * 每個連線**各自排隊**：送不出去時丟掉最舊的 `state`（`route`、`track`、`event`、`ended` 不丟），
   下一則 `state` 帶 `"dropped": N`。**一個慢的控制端不准拖慢其他人**——包括本系統自己的畫面
   （現有的 `/ws/telemetry` 是一個送完才送下一個，實作時不能沿用）。
-* 流量：每台機的 `state` 約 0.7 KB，一秒兩則；`track` 一分鐘的飛行約 3 KB。
+* 流量：每台機的 `state` 約 1 KB，一秒兩則；`track` 一分鐘的飛行約 3 KB。
 * 關閉碼：
 
 | code | 意思 |
@@ -438,6 +471,7 @@ await fetch("http://GS:38001/api/start", {method: "POST",
 * **不送圍欄**。控制端只需要預計航線與實際軌跡。
 * 不送影像、不送原始 MAVLink、不送 IMU／驅動診斷這類內部欄位。
 * 逐則訊息只補送 60 秒；軌跡以外更早的資料走匯出。
+* **不再提供輪詢快照** `/api/ext/live`：即時資料只走串流。
 
 ---
 
@@ -459,6 +493,7 @@ await fetch("http://GS:38001/api/start", {method: "POST",
 | 12 | 錯誤 | HTTP 與 WebSocket 的錯誤都帶 `code`＋`msg`（＋`how_to`），不只給代碼 |
 | 13 | 連上後等多久 | 30 秒內沒有人用這個編號起飛就關閉 |
 | 14 | 結束後保留多久 | `ended` 之後補送緩衝再留 30 秒 |
+| 15 | 輪詢快照 | `/api/ext/live` 的欄位全部併進 `state`（含完整訊號指標），快照端點在串流上線時移除 |
 
 ---
 
@@ -475,6 +510,7 @@ await fetch("http://GS:38001/api/start", {method: "POST",
     的提示，碰到已經自動結束的任務不要再問。
   * `/ws/v1/missions/{uuid}`：未知的 UUID 進 `waiting`；每連線一個送出佇列、0.5 秒的節拍、
     60 秒環形緩衝。backend 重啟時補送緩衝會不見——重連時用 `hello.replay.gap` 誠實說出缺了一段。
+  * `state.link` 帶完整訊號指標，沿用 `/api/ext/live` 的白名單；串流驗收通過後移除 `/api/ext/live`。
   * `route`：由路徑的航點與起飛點組（與規劃頁同一份資料）。`track`：由 `telemetry` 表組，斷 10 秒切段。
   * `event`：接在既有事件寫入的地方轉出；**`Crash: Disarming` 目前沒有任何地方特別處理**，要新接。
   * 結束判定：架次結束（`disarmed`／`telemetry_lost`）＋墜機文字＋最後一台上鎖後 3 秒（期間又解鎖則取消）。

@@ -1125,7 +1125,7 @@ async def live_snapshot():
     return live.telemetry_dict()
 
 
-#: 對外的即時快照白名單（`doc/external-api-v2.html#ext-live`）。**白名單而不是黑名單**：
+#: 對外的即時快照白名單（`doc/external-api-v1.html` §5；串流上線後移除，見 `doc/external-live-api.md` §12）。**白名單而不是黑名單**：
 #: 內部欄位日後只會愈加愈多，用排除法的話每加一個欄位就會**默默流到外部系統**，
 #: 而且外部整合的形狀會跟著我方的內部演進一起變。列舉法讓「對外承諾的形狀」
 #: 是一個看得見、改得動的東西。

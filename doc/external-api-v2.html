@@ -261,13 +261,12 @@ footer.doc-foot{border-top:1px solid var(--line); padding-top:16px; font-size:13
     <li><a href="#s-dc"><span class="n">11</span><span>3 秒斷線規則</span><span class="todo">規劃中</span></a></li>
     <li><a href="#s-reconnect"><span class="n">12</span><span>重連與補送</span><span class="todo">規劃中</span></a></li>
     <li><a href="#s-stale"><span class="n">13</span><span>過期資料</span><span class="todo">規劃中</span></a></li>
-    <li><a href="#ext-live"><span class="n">14</span><span>即時快照（輪詢）</span></a></li>
   </ol>
   <p class="grp">其他</p>
   <ol>
-    <li><a href="#s-errors"><span class="n">15</span><span>錯誤格式與狀態碼</span></a></li>
-    <li><a href="#s-example"><span class="n">16</span><span>範例程式</span></a></li>
-    <li><a href="#s-not"><span class="n">17</span><span>不提供的東西</span></a></li>
+    <li><a href="#s-errors"><span class="n">14</span><span>錯誤格式與狀態碼</span></a></li>
+    <li><a href="#s-example"><span class="n">15</span><span>範例程式</span></a></li>
+    <li><a href="#s-not"><span class="n">16</span><span>不提供的東西</span></a></li>
   </ol>
 </nav>
 
@@ -286,8 +285,8 @@ footer.doc-foot{border-top:1px solid var(--line); padding-top:16px; font-size:13
         <tr><td><code>/api/start</code> 的回應</td><td class="old">範例寫 <code>mission_id</code></td><td>實際回 <code>plan_id</code>、<code>name</code>、<code>steps</code>（<a href="#s-start">§6</a>）</td><td><span class="st live">已上線</span></td></tr>
         <tr><td>名詞</td><td class="old">「任務」同時指航線</td><td>分成<strong>路徑</strong>、<strong>任務</strong>、<strong>架次</strong>三個（<a href="#s-terms">§1</a>）</td><td>—</td></tr>
         <tr><td>起飛參數</td><td class="old"><code>mission</code>（其實是路徑）</td><td><code>plan_id</code>（路徑）＋ <code>mission_id</code>（任務 UUID）；<code>mission</code> 暫留為別名</td><td><span class="st plan">規劃中</span></td></tr>
-        <tr><td>即時資料</td><td class="old">輪詢 <code>/api/ext/live</code></td><td>WebSocket 串流，從起飛開始每 0.5 秒推送（<a href="#s-stream">§8</a>）；輪詢保留給完整訊號指標</td><td><span class="st plan">規劃中</span></td></tr>
-        <tr><td>錯誤回應</td><td class="old">只保證 <code>detail.msg</code></td><td>一律 <code>code</code>＋<code>msg</code>，能自己排除的再附 <code>how_to</code>（<a href="#s-errors">§15</a>）</td><td><span class="st plan">規劃中</span></td></tr>
+        <tr><td>即時資料</td><td class="old">輪詢 <code>/api/ext/live</code></td><td>WebSocket 串流，從起飛開始每 0.5 秒推送（<a href="#s-stream">§8</a>）。快照的欄位全部併進串流的 <code>state</code>（<a href="#s-snapshot-map">對照表</a>），<strong>快照 <code>/api/ext/live</code> 在串流上線時移除</strong></td><td><span class="st plan">規劃中</span></td></tr>
+        <tr><td>錯誤回應</td><td class="old">只保證 <code>detail.msg</code></td><td>一律 <code>code</code>＋<code>msg</code>，能自己排除的再附 <code>how_to</code>（<a href="#s-errors">§14</a>）</td><td><span class="st plan">規劃中</span></td></tr>
       </tbody>
     </table>
   </div>
@@ -314,7 +313,7 @@ footer.doc-foot{border-top:1px solid var(--line); padding-top:16px; font-size:13
       <thead><tr><th>埠</th><th>服務</th><th>本文件用到的</th></tr></thead>
       <tbody>
         <tr><td class="num"><code>38001</code></td><td>指令（command）</td><td>無人機清單、路徑清單、上傳、起飛、切模式</td></tr>
-        <tr><td class="num"><code>38000</code></td><td>資料（backend）</td><td>即時串流、即時快照、架次匯出</td></tr>
+        <tr><td class="num"><code>38000</code></td><td>資料（backend）</td><td>即時串流、架次匯出</td></tr>
       </tbody>
     </table>
   </div>
@@ -647,7 +646,7 @@ footer.doc-foot{border-top:1px solid var(--line); padding-top:16px; font-size:13
 <pre class="json">{"v": 1, "type": "state", "mission_id": "8f0c…", "seq": 1843, "ts": "2026-09-14T07:30:12.500Z",
  "phase": "active",
  "drones": [{
-   "drone_id": "1d2f…", "name": "pi5-sdmodelh7v2-ardu",
+   "drone_id": "1d2f…", "name": "pi5-sdmodelh7v2-ardu", "sysid": 1,
    "freshness": "live", "age_s": 0.3, "connected": true,
    "position": {"lat": 24.773540, "lon": 121.045880, "alt_rel": 12.3, "alt_msl": 135.6},
    "last_known": null,
@@ -657,13 +656,18 @@ footer.doc-foot{border-top:1px solid var(--line); padding-top:16px; font-size:13
    "mission_progress": {"current": 3, "total": 8, "state": "active"},
    "battery": {"pct": 76, "voltage": 15.9},
    "gps": {"fix": 3, "sats": 22},
-   "link": {"sinr": 18.0, "rsrp": -100, "rtt_ms": 27, "state": "ok", "age_s": 0.4}}]}</pre>
+   "link": {"state": "ok", "age_s": 0.4, "time": "2026-09-14T07:30:12.130Z",
+            "rsrp": -100.0, "rsrq": -11.0, "sinr": 18.0, "cqi": null,
+            "pci": 133, "cell_id": 2179073, "band": "n79", "nr_mode": "SA",
+            "rtt_ms": 27.0, "jitter_ms": null, "packet_loss_pct": null,
+            "throughput_up_kbps": null, "throughput_down_kbps": null}}]}</pre>
   </div>
   <p class="prose"><code>waiting</code> 時送的是 <code>{"type": "state", "phase": "waiting", "drones": []}</code>，只為了讓控制端知道連線還活著（<a href="#s-dc">§11</a>）。</p>
   <div class="tablewrap section-table">
     <table>
       <thead><tr><th>欄位</th><th>單位／值域</th><th>說明</th></tr></thead>
       <tbody>
+        <tr><td><code>sysid</code></td><td class="fmt">整數</td><td>下指令用的號碼（<a href="#ext-drones">§3</a>）</td></tr>
         <tr><td><code>freshness</code></td><td class="fmt"><code>live</code>／<code>stale</code>／<code>old</code>／<code>never</code></td><td>這台機的資料多新，見 <a href="#s-stale">§13</a></td></tr>
         <tr><td><code>age_s</code></td><td class="fmt">秒</td><td>距離最後一次收到這台機的遙測</td></tr>
         <tr><td><code>position.lat</code> / <code>lon</code></td><td class="fmt">十進位度</td><td>具名欄位，不會跟 GeoJSON 的順序搞混</td></tr>
@@ -679,9 +683,52 @@ footer.doc-foot{border-top:1px solid var(--line); padding-top:16px; font-size:13
         <tr><td><code>mission_progress.state</code></td><td class="fmt"><code>not_started</code>／<code>active</code>／<code>paused</code>／<code>complete</code>／<code>null</code></td><td>飛控上那份路徑的執行狀態</td></tr>
         <tr><td><code>gps.fix</code></td><td class="fmt">0–6</td><td>3＝3D 定位，≥4＝差分／RTK</td></tr>
         <tr><td><code>link.state</code></td><td class="fmt"><code>ok</code>／<code>degraded</code>／<code>stale</code>／<code>lost</code>／<code>unknown</code></td><td>5G 鏈路。<code>link.age_s</code> 超過 5 秒是 <code>stale</code>、超過 30 秒是 <code>lost</code></td></tr>
+        <tr><td><code>link.age_s</code></td><td class="fmt">秒</td><td>訊號量測幾秒前收到的。太大代表<strong>量測送不回來</strong>，這與「訊號很差」是兩件事</td></tr>
+        <tr><td><code>link.*</code></td><td class="fmt">—</td><td>訊號指標，見下表</td></tr>
       </tbody>
     </table>
   </div>
+
+  <p class="lbl" style="margin-top:22px">訊號指標（<code>link</code> 物件）</p>
+  <div class="tablewrap section-table" style="margin-top:0">
+    <table>
+      <thead><tr><th>key</th><th>單位</th><th>意義</th></tr></thead>
+      <tbody>
+        <tr><td><code>time</code></td><td class="fmt">ISO 8601</td><td>這筆量測的採樣時刻</td></tr>
+        <tr><td><code>rsrp</code></td><td class="fmt">dBm</td><td>參考訊號接收功率（訊號多強）</td></tr>
+        <tr><td><code>rsrq</code></td><td class="fmt">dB</td><td>參考訊號接收品質</td></tr>
+        <tr><td><code>sinr</code></td><td class="fmt">dB</td><td>訊號干擾雜訊比</td></tr>
+        <tr><td><code>cqi</code></td><td class="fmt">0–15</td><td>通道品質指示</td></tr>
+        <tr><td><code>pci</code></td><td class="fmt">—</td><td>Physical Cell ID（十進位；只在鄰區內唯一）</td></tr>
+        <tr><td><code>cell_id</code></td><td class="fmt">—</td><td>全域 cell 識別碼（NCI/CGI）</td></tr>
+        <tr><td><code>band</code></td><td class="fmt">—</td><td>頻段，如 <code>n79</code></td></tr>
+        <tr><td><code>nr_mode</code></td><td class="fmt">—</td><td><code>SA</code> / <code>NSA</code> / <code>LTE</code></td></tr>
+        <tr><td><code>rtt_ms</code></td><td class="fmt">ms</td><td>來回時間</td></tr>
+        <tr><td><code>jitter_ms</code></td><td class="fmt">ms</td><td>抖動</td></tr>
+        <tr><td><code>packet_loss_pct</code></td><td class="fmt">%</td><td>封包遺失率</td></tr>
+        <tr><td><code>throughput_up_kbps</code></td><td class="fmt">kbps</td><td>上行吞吐</td></tr>
+        <tr><td><code>throughput_down_kbps</code></td><td class="fmt">kbps</td><td>下行吞吐</td></tr>
+      </tbody>
+    </table>
+  </div>
+  <p class="prose">量測不到的欄位是 <code>null</code>，不會補假值。</p>
+
+  <p class="lbl" id="s-snapshot-map" style="margin-top:22px; scroll-margin-top:16px">原本輪詢快照 <code>/api/ext/live</code> 的欄位在哪裡</p>
+  <div class="tablewrap section-table" style="margin-top:0">
+    <table>
+      <thead><tr><th>/api/ext/live</th><th>state 的 drones[]</th></tr></thead>
+      <tbody>
+        <tr><td><code>drone_name</code> / <code>mav_sysid</code></td><td><code>name</code> / <code>sysid</code></td></tr>
+        <tr><td><code>connected</code> / <code>armed</code></td><td>同名</td></tr>
+        <tr><td><code>lat</code> / <code>lon</code> / <code>alt_rel</code> / <code>alt_msl</code></td><td><code>position.*</code>（<code>old</code> 時改看 <code>last_known</code>）</td></tr>
+        <tr><td><code>ground_speed</code> / <code>vertical_speed</code> / <code>heading</code></td><td>同名</td></tr>
+        <tr><td><code>telem_age_s</code></td><td><code>age_s</code>，另有 <code>freshness</code></td></tr>
+        <tr><td><code>link_state</code> / <code>link_age_s</code></td><td><code>link.state</code> / <code>link.age_s</code></td></tr>
+        <tr><td><code>link.*</code>（上表 14 項）</td><td><code>link.*</code>，名稱不變</td></tr>
+      </tbody>
+    </table>
+  </div>
+  <p class="prose">快照 <code>/api/ext/live</code> 在串流上線時移除，<strong>即時資料只走串流</strong>。</p>
 
   <h3><code>event</code>：重要變化</h3>
   <div class="panel">
@@ -776,7 +823,7 @@ footer.doc-foot{border-top:1px solid var(--line); padding-top:16px; font-size:13
   </div>
   <p>地面站<strong>保證每 0.5 秒一定送一則</strong>——<code>waiting</code> 時送保持連線用的 <code>state</code>，起飛後送真正的 <code>state</code>。3 秒是正常間隔的 6 倍，一般的網路抖動不會誤判。</p>
   <p><strong>為什麼不能等 WebSocket 自己報錯</strong>：網路半路斷掉時（5G 或跨網段的路由掉包），TCP 可能要好幾十秒才發現對方不在了。那段時間連線看起來還開著，地圖上的飛機卻停在原地——<strong>看起來像懸停，其實是資料沒有進來</strong>。</p>
-  <p>判斷斷線後，把地圖上的機體標成「資料中斷」，不要讓它停在最後的位置看起來正常。範例見 <a href="#s-example">§16</a>。</p>
+  <p>判斷斷線後，把地圖上的機體標成「資料中斷」，不要讓它停在最後的位置看起來正常。範例見 <a href="#s-example">§15</a>。</p>
   <div class="note">
     <p>這裡的「連線斷了」與 <a href="#s-stale">§13</a> 的「資料舊了」是兩件事：連線好好的，飛機的遙測也可能斷了。</p>
   </div>
@@ -834,72 +881,8 @@ footer.doc-foot{border-top:1px solid var(--line); padding-top:16px; font-size:13
 </section>
 
 <!-- ══════════ 14 ══════════ -->
-<section id="ext-live">
-  <h2><span class="n">14</span>即時快照（輪詢）</h2>
-  <hr class="rule">
-  <p>一次拿一台機的<strong>完整訊號指標</strong>與位置。要畫地圖請用 <a href="#s-stream">§8</a> 的串流；這一支適合要看 RSRQ、PCI、頻段這些串流沒有帶的欄位。伺服器端每秒更新，<strong>輪詢建議 1–5 次/秒</strong>。</p>
-
-  <article class="ep">
-    <div class="ep-head"><span class="verb get">GET</span><code class="url mono"><span class="host" data-host="b">http://10.141.2.21:38000</span>/api/ext/live</code><span class="st live">已上線</span></div>
-    <p class="ep-sum">預設回主機那一台；要指定機體加 <code>?sysid=1</code>。</p>
-    <p class="lbl">payload</p>
-    <div class="tablewrap"><table>
-      <thead><tr><th>key</th><th>value</th><th>資料格式</th></tr></thead>
-      <tbody><tr><td class="none" colspan="3">none</td></tr></tbody>
-    </table></div>
-    <p class="lbl">回應</p>
-    <div class="panel">
-      <div class="panel-bar"><span>200</span><button class="copy" type="button">複製</button></div>
-<pre class="json">{
-  "drone_name": "pi5-sdmodelh7v2-ardu",
-  "mav_sysid": 1,
-  "connected": true,
-  "armed": false,
-  "lat": 24.773548, "lon": 121.045883,   // null = 尚未定位
-  "alt_rel": 0.2, "alt_msl": 129.2,
-  "ground_speed": 0.01, "vertical_speed": -0.01, "heading": 258.5,
-  "telem_age_s": 0.0,          // 這些數字幾秒前收到的
-  "link_state": "ok",
-  "link_age_s": 0.37,          // 訊號量測幾秒前收到的
-  "link": {
-    "time": "2026-09-14T07:59:52.373456Z",
-    "rsrp": -60.0, "rsrq": -11.0, "sinr": 30.0, "cqi": null,
-    "pci": 133, "cell_id": 2179073, "band": "n79", "nr_mode": "SA",
-    "rtt_ms": 19.8, "jitter_ms": null, "packet_loss_pct": null,
-    "throughput_up_kbps": null, "throughput_down_kbps": null
-  }
-}</pre>
-    </div>
-  </article>
-
-  <p class="lbl" style="margin-top:26px">訊號指標（<code>link</code> 物件）</p>
-  <div class="tablewrap section-table" style="margin-top:0">
-    <table>
-      <thead><tr><th>key</th><th>單位</th><th>意義</th></tr></thead>
-      <tbody>
-        <tr><td><code>rsrp</code></td><td class="fmt">dBm</td><td>參考訊號接收功率（訊號多強）</td></tr>
-        <tr><td><code>rsrq</code></td><td class="fmt">dB</td><td>參考訊號接收品質</td></tr>
-        <tr><td><code>sinr</code></td><td class="fmt">dB</td><td>訊號干擾雜訊比</td></tr>
-        <tr><td><code>cqi</code></td><td class="fmt">0–15</td><td>通道品質指示</td></tr>
-        <tr><td><code>pci</code></td><td class="fmt">—</td><td>Physical Cell ID（十進位；只在鄰區內唯一）</td></tr>
-        <tr><td><code>cell_id</code></td><td class="fmt">—</td><td>全域 cell 識別碼（NCI/CGI）</td></tr>
-        <tr><td><code>band</code></td><td class="fmt">—</td><td>頻段，如 <code>n79</code></td></tr>
-        <tr><td><code>nr_mode</code></td><td class="fmt">—</td><td><code>SA</code> / <code>NSA</code> / <code>LTE</code></td></tr>
-        <tr><td><code>rtt_ms</code></td><td class="fmt">ms</td><td>來回時間</td></tr>
-        <tr><td><code>jitter_ms</code></td><td class="fmt">ms</td><td>抖動</td></tr>
-        <tr><td><code>packet_loss_pct</code></td><td class="fmt">%</td><td>封包遺失率</td></tr>
-        <tr><td><code>throughput_up_kbps</code></td><td class="fmt">kbps</td><td>上行吞吐</td></tr>
-        <tr><td><code>throughput_down_kbps</code></td><td class="fmt">kbps</td><td>下行吞吐</td></tr>
-        <tr><td><code>time</code></td><td class="fmt">ISO 8601</td><td>這筆量測的採樣時刻</td></tr>
-      </tbody>
-    </table>
-  </div>
-  <p class="prose">量測不到的欄位是 <code>null</code>，不會補假值。<code>link_age_s</code> 太大代表<strong>量測送不回來</strong>，這與「訊號很差」是兩件事。<code>telem_age_s</code> 同理：<strong>斷線時數值不會消失，只會變舊</strong>。</p>
-</section>
-
-<!-- ══════════ 15 ══════════ -->
 <section id="s-errors">
-  <h2><span class="n">15</span>錯誤格式與狀態碼</h2>
+  <h2><span class="n">14</span>錯誤格式與狀態碼</h2>
   <hr class="rule">
   <p>失敗一律回 4xx／5xx。<strong>每一個錯誤都同時帶機器讀的 <code>code</code> 與人讀的 <code>msg</code></strong>，呼叫端自己排除得了的再附 <code>how_to</code>。<code>msg</code> 可以直接顯示給人看。</p>
   <div class="panel">
@@ -929,9 +912,9 @@ footer.doc-foot{border-top:1px solid var(--line); padding-top:16px; font-size:13
   </div>
 </section>
 
-<!-- ══════════ 16 ══════════ -->
+<!-- ══════════ 15 ══════════ -->
 <section id="s-example">
-  <h2><span class="n">16</span>範例程式<span class="st plan">規劃中</span></h2>
+  <h2><span class="n">15</span>範例程式<span class="st plan">規劃中</span></h2>
   <hr class="rule">
   <p>最小的控制端（Leaflet）：先連串流、再起飛；畫預計航線、實際軌跡與機體位置；<strong>3 秒沒收到訊息就標成資料中斷並重連</strong>。</p>
   <div class="panel">
@@ -983,14 +966,15 @@ if (!r.ok) { const {detail} = await r.json(); alert(`${detail.code}：${detail.m
   </div>
 </section>
 
-<!-- ══════════ 17 ══════════ -->
+<!-- ══════════ 16 ══════════ -->
 <section id="s-not">
-  <h2><span class="n">17</span>不提供的東西</h2>
+  <h2><span class="n">16</span>不提供的東西</h2>
   <hr class="rule">
   <ul class="prose">
     <li><strong>沒有認證。</strong>任何連得到地面站的人都能看任何一個任務的即時狀態，也能指揮飛機。安全靠網段隔離——這件事要寫在這裡，不能靠「大家都知道」。</li>
     <li><strong>串流不收指令。</strong>暫停、返航、改航線照舊走 <code>:38001</code>。</li>
     <li><strong>不送圍欄。</strong>控制端只拿預計航線與實際軌跡。</li>
+    <li><strong>不再提供輪詢快照</strong> <code>/api/ext/live</code>：即時資料只走串流（v1 §5 的那一支，串流上線時移除）。</li>
     <li>不送影像、不送原始 MAVLink、不送 IMU 或驅動診斷這類內部欄位。</li>
     <li>逐則訊息只補送 60 秒；更早的完整資料走 <code>GET :38000/api/sessions/{session_id}/export</code>。</li>
   </ul>
