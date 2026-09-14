@@ -461,7 +461,7 @@ sysid 猜出當時是哪一台，正是這兩個欄位要防的錯誤。
 |---|---|---|
 | WebSocket 即時顯示 | 5 Hz | 不落地 |
 | `telemetry`／`link_metrics` 入庫 | 1 Hz，**僅 armed 時** | 上鎖時同座標重複萬筆無分析價值（issues/004） |
-| 原始 1Hz 資料 | **30 天** | TimescaleDB retention policy 自動清除 |
+| 原始 1Hz 資料 | **不設期限** | 2026-09-14 取消原本的 30 天 retention：軌跡與訊號是回放的原料 |
 | 1 分鐘彙總 | 永久 | continuous aggregate，每 10 分鐘刷新 |
 | **飛行影像** | **7 天** | 與量測資料脫鉤：約 **1.17 GB/飛行小時**（720p15 端到端實流實測；0.83 GB 是離線編碼參考值，zerolatency 約多 40%）。見 [flight-video-design.md](flight-video-design.md) §6 |
 | 匯出檔 | 使用者自管 | `GET /api/sessions/{id}/export`（lossless JSON） |

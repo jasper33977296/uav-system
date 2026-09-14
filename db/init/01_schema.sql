@@ -156,8 +156,8 @@ ALTER TABLE flight_sessions
 
 -- ============================================================
 -- 資料生命週期（2026-08-04 定案）：
---   原始 1Hz 資料保留 30 天（retention policy 自動清除）；
---   1 分鐘彙總永久保留；要長期保留原始資料先用匯出功能
+--   原始 1Hz 資料**不設保留期限**（2026-09-14 使用者裁定取消 30 天 retention）；
+--   1 分鐘彙總永久保留
 --   （GET /api/sessions/{id}/export，匯出後可 DELETE 移除）。
 -- ============================================================
 CREATE MATERIALIZED VIEW link_metrics_1m
@@ -183,5 +183,4 @@ SELECT add_continuous_aggregate_policy('telemetry_1m',
   start_offset => INTERVAL '2 hours', end_offset => INTERVAL '1 minute',
   schedule_interval => INTERVAL '10 minutes');
 
-SELECT add_retention_policy('link_metrics', INTERVAL '30 days');
-SELECT add_retention_policy('telemetry',    INTERVAL '30 days');
+-- 不加 retention policy：軌跡與訊號是回放的原料，自動清掉就回放不了（2026-09-14）

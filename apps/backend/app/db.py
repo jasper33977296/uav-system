@@ -121,6 +121,11 @@ async def migrate() -> None:
     # 2026-09-11：圍欄會寫進飛控之後，審查也綁圍欄。NULL＝那次審查時沒有圍欄
     await pool.execute(
         "ALTER TABLE plan_checks ADD COLUMN IF NOT EXISTS fence_hash TEXT")
+    # 2026-09-14：取消軌跡與訊號的 30 天保留（init SQL 原本會加）。已經建好的
+    # 資料庫也要拿掉，不然舊部署照樣在 30 天後把回放的原料清掉
+    for t in ("telemetry", "link_metrics"):
+        await pool.execute(
+            f"SELECT remove_retention_policy('{t}', if_exists => true)")
     # 038：飛控板的唯一 ID（AUTOPILOT_VERSION.uid2）。**目前唯一機器可驗證的
     # 身分**——sysid 只是機上可改的參數。NULL＝還沒問到（不是「沒有」）
     await pool.execute("ALTER TABLE drones ADD COLUMN IF NOT EXISTS board_uid TEXT")

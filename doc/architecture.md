@@ -189,7 +189,7 @@ erDiagram
         text action
     }
     telemetry {
-        timestamptz time "hypertable，30 天 retention"
+        timestamptz time "hypertable，不設保留期限"
         uuid drone_id "無 FK：hypertable 寫入效能"
         uuid session_id "無 FK，邏輯關聯"
         double lat

@@ -88,7 +88,7 @@ WIP（今日教訓：WIP 殘留＝別人的靈異事件）。pivot 方向與實�
    `in_interference_zone` 標注**（各機按自身 lat/lon）。否則僚機無研究資料＝「多機資料蒐集」承諾不成立。
 3. **資源實測入文件**：3 台 Gazebo 實際 CPU/RAM（單台基線 **160MiB/13%CPU**，本機 8 核／11GB avail
    → 3 台估 ~0.5GB/~40%CPU，餘裕大；跑通後補精確值＋「本機最多幾台」實測結論）。
-   資料量：3×1Hz×兩表（telemetry＋link_metrics）＝現況 3 倍，30 天 retention 無虞（順手確認）。
+   資料量：3×1Hz×兩表（telemetry＋link_metrics）＝現況 3 倍（只在解鎖時入庫，不設保留期限）。
 4. **環境跑通後**：收 013-B 剩兩項時序（起飛 skew 實測、群組 RTL 高度錯開）→ 013 全案收官
    → swarm_sim 退役（011 close）。
 

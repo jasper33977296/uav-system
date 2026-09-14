@@ -1623,8 +1623,8 @@ async def session_track(session_id: str):
 @router.get("/sessions/{session_id}/export")
 async def export_session(session_id: str):
     """整條航線匯出成單一 JSON（lossless，可離線分析或封存）。
-    配合 30 天 retention：要長期保留原始資料就先匯出；
-    匯出後可呼叫 DELETE 移除 DB 內的資料（UI 的「匯出並移除」流程）。"""
+    原始資料不設保留期限；要封存或騰空間時先匯出，
+    再呼叫 DELETE 移除 DB 內的資料（UI 的「匯出並移除」流程）。"""
     sess = await db.pool.fetchrow(
         """SELECT s.*, d.name AS drone_name, m.name AS plan_name
            FROM flight_sessions s

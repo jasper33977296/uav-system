@@ -363,8 +363,8 @@ DELETE $B/api/sessions/{id}                       # 刪除架次與其時序資�
 GET    $B/api/events?limit=100&session_id=…       # 事件流（link_degraded/lost/recovered…）
 ```
 
-資料庫有 30 天 retention：要長期保留原始資料就先 `export` 再 `DELETE`
-（UI 的「匯出並移除」流程）。指令留痕在 `command_log` 資料表，目前沒有讀取
+原始資料不設保留期限（2026-09-14 取消 30 天 retention）。要封存或騰空間時先
+`export` 再 `DELETE`（UI 的「匯出並移除」流程）。指令留痕在 `command_log` 資料表，目前沒有讀取
 端點，用 SQL 查。
 
 ---
