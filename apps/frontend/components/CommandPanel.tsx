@@ -476,14 +476,17 @@ export default function CommandPanel() {
   // 直接 === 永遠是 false 而且不會有任何錯誤訊息，只會安靜地永遠找不到
   const sysidNum = live?.mav_sysid ?? null;
   const [onboardId, setOnboardId] = useState<string | null>(null);
+  const [onboardCleared, setOnboardCleared] = useState<string | null>(null);
   useEffect(() => {
     if (sysidNum == null) return;
     let dead = false;
     const pull = () => fetch(`${API}/api/drones`).then((r) => r.json())
-      .then((ds: { mav_sysid?: number | null; current_plan_id?: string | null }[]) => {
+      .then((ds: { mav_sysid?: number | null; current_plan_id?: string | null;
+                   plan_cleared_at?: string | null }[]) => {
         if (dead) return;
         const d = ds.find((x) => x.mav_sysid === sysidNum);
         setOnboardId(d?.current_plan_id ?? null);
+        setOnboardCleared(d?.plan_cleared_at ?? null);
       }).catch(() => {});
     pull();
     const t = setInterval(pull, 5000);
@@ -1259,6 +1262,11 @@ export default function CommandPanel() {
                 「我不知道機上載的是哪一份」**，成因不改變他下一步要做什麼 */}
             機上路徑：{onboardName
               ? <b>{onboardName}</b>
+              : onboardCleared
+              ? <span style={{ opacity: 0.6 }}
+                  title={`${new Date(onboardCleared).toLocaleString("zh-TW", { hour12: false })} 清除，讀回確認機上 0 項`}>
+                  無
+                </span>
               : <span style={{ opacity: 0.6 }}
                   title="本系統沒有上傳過這台機的路徑——可能是別的地面站傳的，或機上本來就有一份">
                   未知

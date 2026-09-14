@@ -86,6 +86,8 @@ async def migrate() -> None:
     # issue 020：每機「當前飛的任務」——command 上傳任務時設，create_session
     # 據此綁 session.plan_id（任務↔架次因果鏈，非一次性補丁）
     await pool.execute("ALTER TABLE drones ADD COLUMN IF NOT EXISTS current_plan_id UUID")
+    # current_plan_id 是 NULL 有兩種意思：本系統沒上傳過（未知）、清除後讀回確認是空的（無）
+    await pool.execute("ALTER TABLE drones ADD COLUMN IF NOT EXISTS plan_cleared_at TIMESTAMPTZ")
     # 037：.plan 自報的目標機種。QGC 的 firmwareType/vehicleType 用的是
     # MAV_AUTOPILOT／MAV_TYPE 這兩個 enum，**與 HEARTBEAT 同源**，所以可以
     # 直接跟機端偵測到的值比對。NULL＝這份任務沒說（手繪、舊資料、從機上讀回）

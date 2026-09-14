@@ -296,6 +296,7 @@ async def lifespan(app):
     # 單埠多機的身分對應欄位（issues/011；backend migrate 也建，這裡防序）
     await pool.execute("ALTER TABLE drones ADD COLUMN IF NOT EXISTS mav_sysid INT")
     await pool.execute("ALTER TABLE drones ADD COLUMN IF NOT EXISTS current_plan_id UUID")
+    await pool.execute("ALTER TABLE drones ADD COLUMN IF NOT EXISTS plan_cleared_at TIMESTAMPTZ")
     # 群組執行期即時態欄位（issue 013-B；backend migrate 也建，這裡防序）
     await pool.execute("ALTER TABLE group_assignments ADD COLUMN IF NOT EXISTS error JSONB")
     await pool.execute(
@@ -1046,7 +1047,18 @@ async def mission_clear(sysid: int):
                                       "先 POST /api/command/{sysid}/mode/hold 並確認進了 hold",
                                       "此時再清除（機體在懸停，清除不會造成移動）"]})
     await guard_client.ask_guard(sysid, "mission_clear")
-    return await _run(sysid, "mission_clear", mav.job_clear_mission)
+    try:
+        res = await _run(sysid, "mission_clear", mav.job_clear_mission)
+    except HTTPException as e:
+        # 409 讀不回、504 逾時：可能已經清掉了，舊名字不能再掛著——改成未知
+        if e.status_code in (409, 504):
+            await pool.execute("UPDATE drones SET current_plan_id = NULL, "
+                               "plan_cleared_at = NULL WHERE mav_sysid = $1", sysid)
+        raise
+    # 不清 current_plan_id 的話，畫面還寫著舊路徑，下一趟架次也會掛到它名下
+    await pool.execute("UPDATE drones SET current_plan_id = NULL, plan_cleared_at = now() "
+                       "WHERE mav_sysid = $1", sysid)
+    return res
 
 
 def _terrain_probe_points(wps: list[dict], home) -> list:
@@ -1431,8 +1443,8 @@ async def mission_upload(sysid: int, body: UploadIn):
                      params={"plan_id": body.plan_id, "items": len(wps)})
     # issue 020：記「這台機當前飛的任務」——backend create_session 據此綁架次。
     # sysid→drone 靠 drones.mav_sysid（backend 心跳時寫入）。
-    await pool.execute("UPDATE drones SET current_plan_id = $1 WHERE mav_sysid = $2",
-                       body.plan_id, sysid)
+    await pool.execute("UPDATE drones SET current_plan_id = $1, plan_cleared_at = NULL "
+                       "WHERE mav_sysid = $2", body.plan_id, sysid)
     # **上傳成功 → 即時畫面就該畫這一份**：從這一刻起機上的航線就是它，
     # 畫面上還畫別份（或什麼都不畫）就是與飛機的事實對不上
     await guard_client.show_on_live(sysid, body.plan_id, "已上傳到機上")

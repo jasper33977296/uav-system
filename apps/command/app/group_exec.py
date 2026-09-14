@@ -237,7 +237,8 @@ class GroupExecutor:
                     await self._submit_audited(m["mav_sysid"], "upload",
                                                mav.job_upload_mission, items)
                     await self.pool.execute(
-                        "UPDATE drones SET current_plan_id=$1 WHERE mav_sysid=$2",
+                        "UPDATE drones SET current_plan_id=$1, plan_cleared_at=NULL "
+                        "WHERE mav_sysid=$2",
                         m["plan_id"], m["mav_sysid"])
                     await self._set_phase(gid, m["drone_id"], "uploaded")
                 except Exception as e:
