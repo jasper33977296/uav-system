@@ -477,6 +477,7 @@ export default function CommandPanel() {
   const sysidNum = live?.mav_sysid ?? null;
   const [onboardId, setOnboardId] = useState<string | null>(null);
   const [onboardCleared, setOnboardCleared] = useState<string | null>(null);
+  const panelOpen = useUavStore((s) => s.panelOpen);
   useEffect(() => {
     if (sysidNum == null) return;
     let dead = false;
@@ -1152,15 +1153,14 @@ export default function CommandPanel() {
                 flight_mode 字串**——比字串在混機環境必錯 */}
             {/* 失聯時這幾格一律「未知」。**模式與解鎖狀態誤判的代價最高**，
                 而停在最後一個值與「現在是這樣」在畫面上完全同形 */}
-            <span>{linkLost ? "模式 未知"
-              : modeLabel(live?.flight_mode, live?.mode_verb, mixedFleet)}</span>
-            <span>{linkLost ? "GPS 未知"
-              : `GPS ${live?.gps_fix ?? "—"} · ${live?.satellites ?? "—"}顆`}</span>
-            {/* **「不知道」與「0%」不得同形**，而 `—%` 讀起來像一個壞掉的數字。
-                與 HUD 的電池元件用同一句話（見 SimpleHud.Battery） */}
-            <span>{linkLost ? "電量 未知"
-              : live?.battery_pct != null
-                ? `電量 ${Math.round(live.battery_pct)}%` : "電量 不知道"}</span>
+            {/* 模式與 GPS 在右側機況卡、電量在 HUD——側欄打開時這裡不重複（使用者指示 2026-09-15），
+                側欄收起時才補上，不然畫面上就沒有 */}
+            {!panelOpen && (<>
+              <span>{linkLost ? "模式 未知"
+                : modeLabel(live?.flight_mode, live?.mode_verb, mixedFleet)}</span>
+              <span>{linkLost ? "GPS 未知"
+                : `GPS ${live?.gps_fix ?? "—"} · ${live?.satellites ?? "—"}顆`}</span>
+            </>)}
             {/* 編隊入口（§2.5 漸進顯示）：≥2 機連線才出現，單機永遠看不到 */}
             {Object.values(fleet).filter((t) => t.connected).length >= 2 && (
               <button className="btn-plain btn-sm" title="進入編隊（多機）模式"
