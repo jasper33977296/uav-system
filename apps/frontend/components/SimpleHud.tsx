@@ -7,7 +7,7 @@
  * 不出術語。安全機制原樣：兩段式確認＝按鈕變色＋「確定？」；返航單擊。
  * 專業數值/完整操作不刪除只隱藏（訊號格/▤ 開專業面板、⌃ 開完整控制）。
  */
-import { useEffect, useRef, useState } from "react";
+import { CSSProperties, useEffect, useLayoutEffect, useRef, useState } from "react";
 
 import EventModal from "@/components/EventModal";
 import InfoTip from "@/components/InfoTip";
@@ -354,6 +354,33 @@ export default function SimpleHud() {
   const [toast, setToast] = useState<Toast | null>(null);
   const toastTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const lastKeyRef = useRef<string | null>(null);
+  // 右上三件套與 toast 同高，那一排有緊急降落鈕：碰到就讓位，不蓋住（使用者指示 2026-09-15）
+  const toastRef = useRef<HTMLDivElement | null>(null);
+  const [toastBox, setToastBox] = useState<CSSProperties | null>(null);
+  useLayoutEffect(() => {
+    const el = toastRef.current;
+    if (!toast || !el) return;
+    Object.assign(el.style, { left: "", top: "", transform: "", maxWidth: "" });
+    const naturalW = el.getBoundingClientRect().width;
+    const stack = document.querySelector(".top-stack");
+    const place = () => {
+      const r = stack?.getBoundingClientRect();
+      if (!r || r.width === 0 || window.innerWidth / 2 + naturalW / 2 <= r.left - 12) {
+        setToastBox(null);
+        return;
+      }
+      const avail = r.left - 24;
+      const w = Math.min(naturalW, avail);
+      setToastBox(avail >= 240
+        ? { left: 12 + (avail - w) / 2, transform: "none", maxWidth: w }
+        : { top: r.bottom + 8 });
+    };
+    place();
+    const ro = new ResizeObserver(place);
+    if (stack) ro.observe(stack);
+    window.addEventListener("resize", place);
+    return () => { ro.disconnect(); window.removeEventListener("resize", place); };
+  }, [toast]);
   const candKey = candidate?.key ?? null;
   useEffect(() => {
     if (candKey && candKey !== lastKeyRef.current) {
@@ -373,7 +400,7 @@ export default function SimpleHud() {
   return (
     <>
       {toast && (
-        <div className={`hud-toast ${toast.sev}`}
+        <div className={`hud-toast ${toast.sev}`} ref={toastRef} style={toastBox ?? undefined}
           onClick={() => {
             // 起飛被拒例外：點擊展開任務控制面板看原因；其餘點擊即消
             if (toast.expand) useUavStore.getState().requestCmdPanel();

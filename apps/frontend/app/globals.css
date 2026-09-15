@@ -846,19 +846,20 @@ a:focus-visible, button:focus-visible, input:focus-visible, select:focus-visible
 
 /* 異常 toast（ui-spec §2.2 對正，使用者現場反饋）：**整個視窗**水平置中
    （fixed 脫離容器定位脈絡——先前 absolute 吃到地圖區寬度，抽屜開時偏位）、
-   垂直導覽列（48px）下方 12px；右上三件套不影響定位——toast 短暫且層級
-   最高，寧可蓋住也不偏移（舊「地圖自由區置中」方案廢止） */
+   垂直導覽列（48px）下方 12px。碰到右上三件套時由 SimpleHud 改到它左邊或下方
+   （2026-09-15：蓋住的是飛行控制與緊急降落鈕）。底色疊在實心面上：半透明會透字 */
 .hud-toast {
   position: fixed; left: 50%; transform: translateX(-50%);
   top: 60px; max-width: min(calc(100vw - 24px), 560px);
   z-index: 70; font-size: 14px; padding: 8px 14px 8px 16px; border-radius: 10px;
-  background: var(--status-warn-bg); color: var(--status-warn);
+  background: linear-gradient(var(--status-warn-bg), var(--status-warn-bg)), var(--surface);
+  color: var(--status-warn);
   border: none; cursor: pointer; display: flex; align-items: center; gap: 10px;
   box-shadow: 0 4px 16px rgba(0, 0, 0, 0.35);
 }
 .hud-toast-x { font-size: 12px; opacity: 0.7; }
-.hud-toast.err { background: var(--status-danger-bg); color: var(--status-danger); }
-.hud-toast.ok { background: var(--status-ok-bg); color: var(--status-ok); }
+.hud-toast.err { background: linear-gradient(var(--status-danger-bg), var(--status-danger-bg)), var(--surface); color: var(--status-danger); }
+.hud-toast.ok { background: linear-gradient(var(--status-ok-bg), var(--status-ok-bg)), var(--surface); color: var(--status-ok); }
 .hud-toast.hud-tap { cursor: pointer; }
 
 /* 失聯訊號格：0 格＋斜線（形狀先於顏色） */
