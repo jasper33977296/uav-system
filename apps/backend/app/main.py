@@ -6,7 +6,7 @@ from contextlib import asynccontextmanager
 from fastapi import FastAPI, WebSocket, WebSocketDisconnect
 from fastapi.middleware.cors import CORSMiddleware
 
-from . import agent_link, db, ext_stream, mavlink_rx, msg_registry, video_rec
+from . import agent_link, db, ext_history, ext_stream, mavlink_rx, msg_registry, video_rec
 from .api import router
 from .config import settings
 from .link_events import transition as link_transition
@@ -287,6 +287,7 @@ app.add_middleware(
 
 app.include_router(router)
 app.include_router(ext_stream.router)
+app.include_router(ext_history.router)
 
 
 @app.websocket("/ws/telemetry")

@@ -54,9 +54,9 @@ def _to_xy(pts: list[dict], origin: dict) -> list[tuple[float, float]]:
              (p["lat"] - origin["lat"]) * M_LAT) for p in pts]
 
 
-def _project(px: float, py: float, ref: list[tuple[float, float]],
-             cum: list[float], max_off: float) -> float | None:
-    """樣本 → 參考路徑里程。回傳 None＝離路徑太遠（**不硬塞**）。"""
+def _nearest(px: float, py: float, ref: list[tuple[float, float]],
+             cum: list[float]) -> tuple[float | None, float]:
+    """樣本 →（參考路徑里程, 偏離距離）。路徑不足一段時回 (None, inf)。"""
     best, best_d = None, math.inf
     for i in range(len(ref) - 1):
         ax, ay = ref[i]
@@ -70,7 +70,43 @@ def _project(px: float, py: float, ref: list[tuple[float, float]],
         d = math.hypot(px - cx, py - cy)
         if d < best_d:
             best_d, best = d, cum[i] + t * math.sqrt(len2)
-    return best if best_d <= max_off else None
+    return best, best_d
+
+
+def _project(px: float, py: float, ref: list[tuple[float, float]],
+             cum: list[float], max_off: float) -> float | None:
+    """樣本 → 參考路徑里程。回傳 None＝離路徑太遠（**不硬塞**）。"""
+    along, off = _nearest(px, py, ref, cum)
+    return along if along is not None and off <= max_off else None
+
+
+def projector(ref_path: list[dict], max_offset_m: float = DEFAULT_MAX_OFFSET_M):
+    """參考路徑 → `(lat, lon) → (里程, 偏離)` 的函式。不足兩點回 None。
+
+    對外任務歷史（doc/external-history-api.md §4）與畫面上的沿路徑對照**共用這一份投影**。
+    偏離超過上限時**里程給 None、偏離照給**：硬塞進某個里程的數字看起來完全正常，
+    而且沒有任何線索說它是垃圾。
+    """
+    ref = [p for p in (ref_path or []) if p.get("lat") is not None
+           and p.get("lon") is not None]
+    if len(ref) < 2:
+        return None
+    origin = ref[0]
+    rxy = _to_xy(ref, origin)
+    cum = [0.0]
+    for i in range(1, len(rxy)):
+        cum.append(cum[i - 1] + math.hypot(rxy[i][0] - rxy[i - 1][0],
+                                           rxy[i][1] - rxy[i - 1][1]))
+    k = m_lon(origin["lat"])
+
+    def project(lat: float, lon: float) -> tuple[float | None, float | None]:
+        along, off = _nearest((lon - origin["lon"]) * k,
+                              (lat - origin["lat"]) * M_LAT, rxy, cum)
+        if along is None:
+            return None, None
+        return (along if off <= max_offset_m else None), off
+
+    return project
 
 
 def _pct(sorted_vals: list[float], q: float) -> float | None:
