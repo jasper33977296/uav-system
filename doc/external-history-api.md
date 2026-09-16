@@ -1,7 +1,8 @@
 # 對外任務歷史：比較兩趟或多趟的訊號
 
 > 給**外部控制端**用。2026-09-16 定案（§9）。
-> 狀態：**已實作（2026-09-16）**，見 §10。即時那一半見 [`external-live-api.md`](external-live-api.md)。
+> 狀態：**已實作（2026-09-16）**，見 §10。即時那一半見 [`external-live-api.md`](external-live-api.md)
+> （串流與輪詢兩種傳法）。
 
 控制端要回答的是「**這次比上次好還是差**」：同一條路徑飛了兩趟以上，比較沿途的訊號。
 所以這裡給的是**一個任務的完整訊號樣本**，外加每一筆「沿預計航線走了多遠、偏離多少」
@@ -15,7 +16,7 @@
 |---|---|
 | 誰連誰 | 外部控制端呼叫地面站 backend `:38000` |
 | 方向 | **唯讀**。不動飛機、不改資料 |
-| 版本 | 路徑帶 `v1`，與即時串流同一條線；欄位名與串流的 `state.link` **逐字相同** |
+| 版本 | 路徑帶 `v1`，**版本號緊接在服務根之後**（`/api/v1/…`，與即時那半同一條規則）。先上線時用的 `/api/ext/v1/…` 保留為別名。欄位名與即時的 `state.link` **逐字相同** |
 | 時間 | 地面站時鐘（UTC、ISO 8601） |
 | 座標 | WGS84，具名欄位 `lat`／`lon` |
 | 認證 | **沒有**（與其他對外端點同，靠網段隔離） |
@@ -28,7 +29,7 @@
 ### 2.1 有哪些任務
 
 ```
-GET http://<地面站>:38000/api/ext/v1/missions?since=2026-09-01&limit=50
+GET http://<地面站>:38000/api/v1/ext/missions?since=2026-09-01&limit=50
 ```
 
 | 參數 | 說明 |
@@ -43,7 +44,7 @@ GET http://<地面站>:38000/api/ext/v1/missions?since=2026-09-01&limit=50
 {"missions": [{
   "mission_id": "8f0c2d1e-…",
   "name": "0914-square-test-v5 09-14 12:01",
-  "external": true,                      // 由外部控制端用 /api/start 建立
+  "external": true,                      // 由外部控制端用 /api/v1/start 建立
   "started_at": "2026-09-14T04:01:31.000Z",   // 第一趟解鎖
   "ended_at": "2026-09-14T04:02:35.570Z",     // null＝還在進行中
   "drones": [{"drone_id": "1d2f…", "name": "pi5-sdmodelh7v2-ardu", "sysid": 1}],
@@ -58,7 +59,7 @@ GET http://<地面站>:38000/api/ext/v1/missions?since=2026-09-01&limit=50
 ### 2.2 一個任務的完整訊號
 
 ```
-GET http://<地面站>:38000/api/ext/v1/missions/{mission_id}/signal
+GET http://<地面站>:38000/api/v1/ext/missions/{mission_id}/signal
 ```
 
 **一次一個任務**（2026-09-16 定案）：要比幾個就呼叫幾次，各自快取、各自失敗，
@@ -158,10 +159,10 @@ GET http://<地面站>:38000/api/ext/v1/missions/{mission_id}/signal
 
 ## 6. 拿得到與拿不到的
 
-* **只有掛在任務底下的架次拿得到。** 用 `/api/start` 帶 `mission_id` 起飛的一定有；
+* **只有掛在任務底下的架次拿得到。** 用 `/api/v1/start` 帶 `mission_id` 起飛的一定有；
   更早以前的飛行多半沒有掛任務，要先在畫面的資訊頁補歸。
 * **進行中的任務也給**（2026-09-16 定案）：資料到目前為止，`ended_at` 是 `null`。
-  要即時看請用串流（[`external-live-api.md`](external-live-api.md)），這支是事後比較用的。
+  要即時看請用串流或輪詢（[`external-live-api.md`](external-live-api.md)），這支是事後比較用的。
 * **原始資料不設保留期限**，所以舊任務照樣查得到。
 
 ---
@@ -173,7 +174,7 @@ GET http://<地面站>:38000/api/ext/v1/missions/{mission_id}/signal
 * **不做伺服器端的比較結論**（勝負、改善多少）。地面站給的是樣本與共同的 X 軸；
   **怎麼比是控制端的事**——我方不替它定義什麼叫「比較好」。
 * **不含飛行遙測**（姿態、速度、電量）。要那些請用架次匯出
-  `GET :38000/api/sessions/{session_id}/export`。
+  `GET :38000/api/v1/sessions/{session_id}/export`。
 * **沒有認證。** 與其他對外端點同一條：任何連得到地面站的人都拿得到這些資料。
 
 ---
@@ -184,13 +185,13 @@ GET http://<地面站>:38000/api/ext/v1/missions/{mission_id}/signal
 const GS = "10.141.2.21";
 // ① 挑出飛同一份路徑的任務
 const { missions } = await (await fetch(
-  `http://${GS}:38000/api/ext/v1/missions?plan_id=${planId}&limit=10`)).json();
+  `http://${GS}:38000/api/v1/ext/missions?plan_id=${planId}&limit=10`)).json();
 
 // ② 各自抓完整訊號（一次一個）
 const runs = [];
 for (const m of missions.slice(0, 3)) {
   const d = await (await fetch(
-    `http://${GS}:38000/api/ext/v1/missions/${m.mission_id}/signal`)).json();
+    `http://${GS}:38000/api/v1/ext/missions/${m.mission_id}/signal`)).json();
   runs.push({ name: m.name, sessions: d.drones.flatMap((x) => x.sessions) });
 }
 
@@ -223,7 +224,7 @@ const series = runs.map((r) => ({
 |---|---|
 | `apps/backend/app/chainage.py` | 投影拆出 `projector()`：`(lat, lon) → (里程, 偏離)`。畫面上的沿路徑對照改用同一份，**同一套投影只留一份** |
 | `apps/backend/app/ext_history.py` | 兩支端點。預計航線用 `ext_stream.route_geojson`、訊號欄位用 `ext_stream.LINK_KEYS`——即時與事後同一份 |
-| `apps/backend/app/main.py` | 掛上路由 |
+| `apps/backend/app/main.py` | 掛上路由；`_api_version` middleware 讓 `/api/v1/ext/…` 與先上線的 `/api/ext/v1/…` 走同一支 |
 
 統計（架次數、樣本數、第一趟起飛時間）是查詢時算的，沒有新增欄位。
 

@@ -216,7 +216,7 @@ footer.doc-foot{border-top:1px solid var(--line); padding-top:16px; font-size:13
 <header class="masthead">
   <div class="masthead-in">
     <div class="titleblock">
-      <h1>無人機管理系統 API <span class="ver">v2 · 2026-09-14</span></h1>
+      <h1>無人機管理系統 API <span class="ver">v2 · 2026-09-16</span></h1>
       <div class="legend">
         <span><span class="st live">已上線</span>現在就能呼叫</span>
       </div>
@@ -254,7 +254,7 @@ footer.doc-foot{border-top:1px solid var(--line); padding-top:16px; font-size:13
   </ol>
   <p class="grp">即時資料</p>
   <ol>
-    <li><a href="#s-stream"><span class="n">8</span><span>即時串流</span></a></li>
+    <li><a href="#s-stream"><span class="n">8</span><span>即時資料：兩種傳法</span></a></li>
     <li><a href="#s-messages"><span class="n">9</span><span>訊息格式</span></a></li>
     <li><a href="#s-end"><span class="n">10</span><span>任務何時結束</span></a></li>
     <li><a href="#s-dc"><span class="n">11</span><span>3 秒斷線規則</span></a></li>
@@ -285,11 +285,14 @@ footer.doc-foot{border-top:1px solid var(--line); padding-top:16px; font-size:13
       <thead><tr><th>項目</th><th>v1</th><th>v2</th><th>狀態</th></tr></thead>
       <tbody>
         <tr><td>上傳路徑的欄位</td><td class="old"><code>mission_id</code></td><td><code>plan_id</code>——09-08 改名後服務端只收這個名字</td><td><span class="st live">已上線</span></td></tr>
-        <tr><td><code>/api/start</code> 的回應</td><td class="old">範例寫 <code>mission_id</code></td><td>實際回 <code>plan_id</code>、<code>name</code>、<code>steps</code>（<a href="#s-start">§6</a>）</td><td><span class="st live">已上線</span></td></tr>
+        <tr><td><code>/api/v1/start</code> 的回應</td><td class="old">範例寫 <code>mission_id</code></td><td>實際回 <code>plan_id</code>、<code>name</code>、<code>steps</code>（<a href="#s-start">§6</a>）</td><td><span class="st live">已上線</span></td></tr>
         <tr><td>名詞</td><td class="old">「任務」同時指航線</td><td>分成<strong>路徑</strong>、<strong>任務</strong>、<strong>架次</strong>三個（<a href="#s-terms">§1</a>）</td><td>—</td></tr>
         <tr><td>起飛參數</td><td class="old"><code>mission</code>（其實是路徑）</td><td><code>plan_id</code>（路徑）＋ <code>mission_id</code>（任務 UUID）；<code>mission</code> 暫留為別名</td><td><span class="st live">已上線</span></td></tr>
-        <tr><td>即時資料</td><td class="old">輪詢 <code>/api/ext/live</code></td><td>WebSocket 串流，從起飛開始每 0.5 秒推送（<a href="#s-stream">§8</a>）。快照的欄位全部併進串流的 <code>state</code>（<a href="#s-snapshot-map">對照表</a>），<strong>快照 <code>/api/ext/live</code> 在串流實飛驗收後移除</strong></td><td><span class="st live">已上線</span></td></tr>
-        <tr><td>錯誤回應</td><td class="old">只保證 <code>detail.msg</code></td><td><code>/api/start</code> 與群飛執行一律 <code>code</code>＋<code>msg</code>，能自己排除的再附 <code>how_to</code>（<a href="#s-errors">§15</a>）</td><td><span class="st live">已上線</span></td></tr>
+        <tr><td>即時資料</td><td class="old">輪詢 <code>/api/ext/live</code></td><td>WebSocket 串流，從起飛開始每 0.5 秒推送（<a href="#s-stream">§8</a>）。快照的欄位全部併進串流的 <code>state</code>（<a href="#s-snapshot-map">對照表</a>），<strong>快照 <code>/api/ext/live</code> 在實飛驗收後移除</strong>——取代它的不是「不給輪詢」，是<strong>綁任務</strong>的輪詢（下一列）</td><td><span class="st live">已上線</span></td></tr>
+        <tr><td>路徑版本</td><td class="old">只有串流帶 <code>v1</code></td><td><strong>每一支對外端點都帶</strong>：<code>/api/v1/…</code>、<code>/ws/v1/…</code>。舊的無版本路徑保留為別名（<a href="#s-terms">§1</a>）</td><td><span class="st live">已上線</span></td></tr>
+        <tr><td>即時資料的傳法</td><td class="old">只有 WebSocket 串流</td><td><strong>串流與輪詢都給</strong>，訊息逐字相同：<code>GET /api/v1/ext/missions/{id}/live</code>（<a href="#s-stream">§8</a>）。長連線不方便就用輪詢</td><td><span class="st live">已上線</span></td></tr>
+        <tr><td>任務歷史</td><td class="old">沒有</td><td>兩支唯讀端點：歷史任務清單與<strong>一個任務的完整訊號</strong>，每一筆帶沿航線里程 <code>along_m</code> 與偏離 <code>offset_m</code>——兩趟才有共同的 X 軸（<a href="#s-history">§14</a>）</td><td><span class="st live">已上線</span></td></tr>
+        <tr><td>錯誤回應</td><td class="old">只保證 <code>detail.msg</code></td><td><code>/api/v1/start</code> 與群飛執行一律 <code>code</code>＋<code>msg</code>，能自己排除的再附 <code>how_to</code>（<a href="#s-errors">§15</a>）</td><td><span class="st live">已上線</span></td></tr>
       </tbody>
     </table>
   </div>
@@ -316,10 +319,14 @@ footer.doc-foot{border-top:1px solid var(--line); padding-top:16px; font-size:13
       <thead><tr><th>埠</th><th>服務</th><th>本文件用到的</th></tr></thead>
       <tbody>
         <tr><td class="num"><code>38001</code></td><td>指令（command）</td><td>無人機清單、路徑清單、上傳、起飛、切模式</td></tr>
-        <tr><td class="num"><code>38000</code></td><td>資料（backend）</td><td>即時串流、架次匯出</td></tr>
+        <tr><td class="num"><code>38000</code></td><td>資料（backend）</td><td>即時資料（串流與輪詢）、任務歷史、架次匯出</td></tr>
       </tbody>
     </table>
   </div>
+  <p><strong>路徑一律帶版本</strong>，版本號緊接在服務根之後：<code>/api/v1/…</code>、<code>/ws/v1/…</code>。
+  不帶版本的舊路徑仍然通（別名），<strong>但請一律寫版本化的那一種</strong>——2026-09-08 把上傳欄位
+  <code>mission_id</code> 改名成 <code>plan_id</code> 之所以會<strong>無聲</strong>打斷照 v1 寫的程式，
+  就是因為當時這一組沒有版本可以並存。</p>
   <p>時間一律是地面站時鐘（UTC、ISO 8601）；座標是 WGS84。</p>
 </section>
 
@@ -345,7 +352,7 @@ footer.doc-foot{border-top:1px solid var(--line); padding-top:16px; font-size:13
   <p>指令用 <strong><code>sysid</code></strong>（整數）指定無人機。這一支同時回答「哪些機在線」與「哪一台現在指得動」。</p>
 
   <article class="ep">
-    <div class="ep-head"><span class="verb get">GET</span><code class="url mono"><span class="host" data-host="c">http://10.141.2.21:38001</span>/api/ext/drones</code><span class="st live">已上線</span></div>
+    <div class="ep-head"><span class="verb get">GET</span><code class="url mono"><span class="host" data-host="c">http://10.141.2.21:38001</span>/api/v1/ext/drones</code><span class="st live">已上線</span></div>
     <p class="ep-sum">機隊清單。<strong><code>controllable</code> 是 <code>true</code> 才可以對它下指令</strong>。</p>
     <p class="lbl">payload</p>
     <div class="tablewrap"><table>
@@ -376,7 +383,7 @@ footer.doc-foot{border-top:1px solid var(--line); padding-top:16px; font-size:13
   <p>所有可用的航線都在<strong>路徑庫</strong>裡——在規劃頁畫的、匯入的、從機上讀回的都會存進來。清單回的 <code>id</code> 就是後面上傳與起飛要用的 <code>plan_id</code>。</p>
 
   <article class="ep">
-    <div class="ep-head"><span class="verb get">GET</span><code class="url mono"><span class="host" data-host="c">http://10.141.2.21:38001</span>/api/missions</code><span class="st live">已上線</span></div>
+    <div class="ep-head"><span class="verb get">GET</span><code class="url mono"><span class="host" data-host="c">http://10.141.2.21:38001</span>/api/v1/missions</code><span class="st live">已上線</span></div>
     <p class="ep-sum">可以飛的路徑清單，新的在前。<strong>網址還叫 <code>missions</code></strong>——那是改名前的叫法，內容是路徑。</p>
     <p class="lbl">payload</p>
     <div class="tablewrap"><table>
@@ -407,7 +414,7 @@ footer.doc-foot{border-top:1px solid var(--line); padding-top:16px; font-size:13
   <hr class="rule">
 
   <article class="ep" data-body='{"plan_id": "e961b301-0994-453f-ba80-627678d92153"}'>
-    <div class="ep-head"><span class="verb post">POST</span><code class="url mono"><span class="host" data-host="c">http://10.141.2.21:38001</span>/api/command/<span class="var">{sysid}</span>/mission/upload</code><span class="st live">已上線</span></div>
+    <div class="ep-head"><span class="verb post">POST</span><code class="url mono"><span class="host" data-host="c">http://10.141.2.21:38001</span>/api/v1/command/<span class="var">{sysid}</span>/mission/upload</code><span class="st live">已上線</span></div>
     <p class="ep-sum">把路徑庫的一份航線寫進飛控，並逐項讀回比對。</p>
     <p class="lbl">payload</p>
     <div class="tablewrap"><table>
@@ -435,11 +442,11 @@ footer.doc-foot{border-top:1px solid var(--line); padding-top:16px; font-size:13
 <section id="s-start">
   <h2><span class="n">06</span>執行任務</h2>
   <hr class="rule">
-  <p>一般用 <code>/api/start</code> 一支就好：<strong>上傳 → 解鎖 → 起飛 → 開始飛路徑</strong>，每步確認過才往下走。
-  要在自己的地圖上看這一趟，<strong>先連上 <a href="#s-stream">§8</a> 的串流再呼叫它</strong>。</p>
+  <p>一般用 <code>/api/v1/start</code> 一支就好：<strong>上傳 → 解鎖 → 起飛 → 開始飛路徑</strong>，每步確認過才往下走。
+  要在自己的地圖上看這一趟，<strong>先連上（或先拉一次）<a href="#s-stream">§8</a> 再呼叫它</strong>。</p>
 
   <article class="ep" data-body='{"mission": "0914-square-test-v5", "sysid": 1}'>
-    <div class="ep-head"><span class="verb post">POST</span><code class="url mono"><span class="host" data-host="c">http://10.141.2.21:38001</span>/api/start</code><span class="st live">已上線</span></div>
+    <div class="ep-head"><span class="verb post">POST</span><code class="url mono"><span class="host" data-host="c">http://10.141.2.21:38001</span>/api/v1/start</code><span class="st live">已上線</span></div>
     <p class="ep-sum">從地面直接起飛，執行一份路徑。要等飛機爬到起飛高度、開始飛路徑才回應。</p>
     <p class="lbl">payload</p>
     <div class="tablewrap"><table>
@@ -496,7 +503,7 @@ footer.doc-foot{border-top:1px solid var(--line); padding-top:16px; font-size:13
   </article>
 
   <article class="ep">
-    <div class="ep-head"><span class="verb post">POST</span><code class="url mono"><span class="host" data-host="c">http://10.141.2.21:38001</span>/api/command/<span class="var">{sysid}</span>/mission/start</code><span class="st live">已上線</span></div>
+    <div class="ep-head"><span class="verb post">POST</span><code class="url mono"><span class="host" data-host="c">http://10.141.2.21:38001</span>/api/v1/command/<span class="var">{sysid}</span>/mission/start</code><span class="st live">已上線</span></div>
     <p class="ep-sum">只在<strong>機已經解鎖並在空中</strong>時用：叫它開始飛機上現有的那份路徑。地面上的機請用上面那支。</p>
     <p class="lbl">payload</p>
     <div class="tablewrap"><table>
@@ -517,7 +524,7 @@ footer.doc-foot{border-top:1px solid var(--line); padding-top:16px; font-size:13
   <hr class="rule">
 
   <article class="ep" data-vars="mode:hold,rtl,land,mission">
-    <div class="ep-head"><span class="verb post">POST</span><code class="url mono"><span class="host" data-host="c">http://10.141.2.21:38001</span>/api/command/<span class="var">{sysid}</span>/mode/<span class="var">{mode}</span></code><span class="st live">已上線</span></div>
+    <div class="ep-head"><span class="verb post">POST</span><code class="url mono"><span class="host" data-host="c">http://10.141.2.21:38001</span>/api/v1/command/<span class="var">{sysid}</span>/mode/<span class="var">{mode}</span></code><span class="st live">已上線</span></div>
     <p class="ep-sum"><code>mode</code> 寫在網址裡：<code>hold</code> 原地懸停（可續飛）、<code>rtl</code> 返航降落、<code>land</code> 就地降落、<code>mission</code> 繼續飛路徑。</p>
     <p class="lbl">payload</p>
     <div class="tablewrap"><table>
@@ -534,10 +541,18 @@ footer.doc-foot{border-top:1px solid var(--line); padding-top:16px; font-size:13
 
 <!-- ══════════ 8 ══════════ -->
 <section id="s-stream">
-  <h2><span class="n">08</span>即時串流</h2>
+  <h2><span class="n">08</span>即時資料：兩種傳法</h2>
   <hr class="rule">
-  <p>控制端自己產生一組 UUID 當<strong>任務編號</strong>，用它連上串流，再帶著同一組編號起飛。
-  <strong>從起飛流程開始每 0.5 秒</strong>收到任務裡每一台機的狀態，外加預計航線、已飛過的軌跡與重要事件，拿來在自己的 OSM 地圖上畫。串流<strong>只讀</strong>，不收指令。</p>
+  <p>控制端自己產生一組 UUID 當<strong>任務編號</strong>，用它連上地面站，再帶著同一組編號起飛。
+  <strong>從起飛流程開始每 0.5 秒</strong>收到任務裡每一台機的狀態，外加預計航線、已飛過的軌跡與重要事件，拿來在自己的 OSM 地圖上畫。<strong>只讀</strong>，不收指令。</p>
+  <p><strong>拿的方式有兩種，送的是同一份訊息</strong>：地面站推的 WebSocket 串流，與控制端拉的 HTTP 輪詢。
+  <code>messages</code> 裡的每一則與串流送出去的<strong>逐字相同</strong>（<a href="#s-messages">§9</a>），
+  所以兩種可以混用——WebSocket 斷線的那段先用輪詢頂著，接回來再換回去。</p>
+
+  <div class="note warn">
+    <p><strong>尚未實飛驗收。</strong>兩種傳法的連線、等待、結束、重連補送、錯誤都已經對正在跑的地面站測過（含「同一個任務同時開串流與輪詢，訊息逐欄相同」）；解鎖、離地、著地、上鎖事件的時序與墜機判定，要真的飛一趟才算數。</p>
+  </div>
+
 
   <article class="ep" data-notest>
     <div class="ep-head"><span class="verb ws">WS</span><code class="url mono"><span class="host" data-host="w">ws://10.141.2.21:38000</span>/ws/v1/missions/<span class="var">{mission_id}</span></code><span class="st live">已上線</span></div>
@@ -549,22 +564,65 @@ footer.doc-foot{border-top:1px solid var(--line); padding-top:16px; font-size:13
     </table></div>
   </article>
 
-  <div class="note warn">
-    <p><strong>尚未實飛驗收。</strong>連線、等待、結束、重連補送、錯誤關閉都已經對正在跑的地面站測過；解鎖、離地、著地、上鎖事件的時序與墜機判定，要真的飛一趟才算數。</p>
+  <article class="ep" data-notest>
+    <div class="ep-head"><span class="verb get">GET</span><code class="url mono"><span class="host" data-host="b">http://10.141.2.21:38000</span>/api/v1/ext/missions/<span class="var">{mission_id}</span>/live</code><span class="st live">已上線</span></div>
+    <p class="ep-sum">同一份即時資料的<strong>輪詢版</strong>。給不方便維持長連線的控制端——走 HTTP proxy、跑在無狀態的後端，或就是想每秒拉一次。</p>
+    <p class="lbl">query</p>
+    <div class="tablewrap"><table>
+      <thead><tr><th>key</th><th>value</th><th>資料格式</th></tr></thead>
+      <tbody><tr><td><code>after_seq</code></td><td><code>1842</code></td><td class="fmt">int · 選填<br><strong>不帶＝快照</strong>：現在的 <code>route</code>、<code>track</code> 與現算的 <code>state</code>（任務已結束就再附 <code>ended</code>），第一次呼叫用它。<br><strong>帶＝補送</strong>：序號大於它的每一則，語意同串流重連</td></tr></tbody>
+    </table></div>
+    <p class="lbl">回應</p>
+    <div class="panel"><div class="panel-bar"><span class="rstat ok">200</span><button class="copy" type="button">複製</button></div>
+<pre class="json">{
+  "v": 1,
+  "mission_id": "8f0c…",
+  "ts": "2026-09-16T07:30:12.500Z",
+  "phase": "active",
+  "mission_name": "0914-square-test-v5 09-16 15:30",
+  "started_at": "2026-09-16T07:29:40.120Z",
+  "drones": [{"drone_id": "1d2f…", "name": "pi5-sdmodelh7v2-ardu", "sysid": 1}],
+  "seq": 1789538218542,          // 下一次帶 after_seq=這個
+  "replay": {"from_seq": 1789538218400, "gap": null},
+  "poll_after_s": 0.5,           // 地面站的節拍。拉得比它快只會拿到空的 messages
+  "messages": [ … ]              // 與串流逐字相同的 state／event／route／track／ended
+}</pre></div>
+    <p class="ep-sum">外層那幾個欄位就是串流 <code>hello</code> 的內容，而且<strong>每一次都給</strong>——輪詢沒有「連上的那一刻」，所以不另外分出一則 <code>hello</code>。</p>
+  </article>
+
+  <div class="note">
+    <p><strong>輪詢要注意兩件事。</strong></p>
+    <ul>
+      <li><strong>快照的 <code>state</code> 沒有 <code>seq</code></strong>：它與 <code>route</code>、<code>track</code> 一樣是「只屬於這一次呼叫」的訊息。要接續請用<strong>外層的</strong> <code>seq</code>，不要從 <code>messages</code> 裡挑。這一則是<strong>現算的</strong>，不是緩衝裡最後一則——剛掛上來的任務要到下一拍才有 <code>state</code>，而快照的用途正是「不必等下一拍」。</li>
+      <li><strong>緩衝一樣只有 60 秒</strong>：拉得太慢會掉東西，<code>replay.gap</code> 會說缺了哪一段（<a href="#s-reconnect">§12</a> 同一套）。不想漏就照 <code>poll_after_s</code> 的節拍拉。</li>
+    </ul>
   </div>
+
+  <h3>該選哪一個</h3>
+  <div class="tablewrap"><table>
+    <thead><tr><th></th><th>串流（WS）</th><th>輪詢（GET）</th></tr></thead>
+    <tbody>
+      <tr><td>延遲</td><td>事情發生就送到</td><td>最多差一個輪詢間隔</td></tr>
+      <tr><td>斷線</td><td>要自己做 3 秒看門狗（<a href="#s-dc">§11</a>）——TCP 可能幾十秒才發現對方不在</td><td>一次呼叫失敗就是失敗，下一次重試即可</td></tr>
+      <tr><td>連線</td><td>要維持長連線</td><td>無狀態，過 proxy 不必特別設定</td></tr>
+      <tr><td>流量</td><td>只送變化</td><td>每次都帶外層欄位（約 0.5 KB）＋那段期間的訊息</td></tr>
+      <tr><td>其餘</td><td colspan="2"><strong>完全一樣</strong>：進場（沒見過的編號是開場不是錯誤）、結束條件（最後一台上鎖 3 秒後）、過期分級、錯誤的 <code>code</code>／<code>msg</code>／<code>how_to</code>。<strong>輪詢不會讓任務活得比較久，也不會讓它提早結束</strong></td></tr>
+    </tbody>
+  </table></div>
 
   <h3>流程</h3>
   <div class="seq" role="list">
     <div class="seq-row" role="listitem"><span class="i">1</span><span class="dir">控制端</span><span class="what">產生一組 UUID，當任務編號</span></div>
     <div class="seq-row" role="listitem"><span class="i">2</span><span class="dir">控制端<span class="arr">→</span>地面站</span><span class="what">連 <code>/ws/v1/missions/{UUID}</code>。回 <code>hello</code>（<code>waiting</code>），之後每 0.5 秒一則保持連線</span></div>
-    <div class="seq-row" role="listitem"><span class="i">3</span><span class="dir">控制端<span class="arr">→</span>地面站</span><span class="what"><strong>30 秒內</strong>呼叫 <code>POST :38001/api/start</code>，帶 <code>{"plan_id": …, "mission_id": UUID}</code>。地面站用這個 UUID 建立任務</span></div>
+    <div class="seq-row" role="listitem"><span class="i">3</span><span class="dir">控制端<span class="arr">→</span>地面站</span><span class="what"><strong>30 秒內</strong>呼叫 <code>POST :38001/api/v1/start</code>，帶 <code>{"plan_id": …, "mission_id": UUID}</code>。地面站用這個 UUID 建立任務</span></div>
     <div class="seq-row" role="listitem"><span class="i">4</span><span class="dir">地面站<span class="arr">→</span>控制端</span><span class="what"><code>route</code>（預計航線）、每 0.5 秒 <code>state</code>、<code>event</code>——上傳、解鎖、爬升都看得到</span></div>
     <div class="seq-row" role="listitem"><span class="i">5</span><span class="dir">地面站<span class="arr">→</span>控制端</span><span class="what">最後一台上鎖 <strong>3 秒</strong>後：自動結束任務、送 <code>ended</code>、關閉連線</span></div>
   </div>
   <ul class="prose">
-    <li><strong>先連再起飛。</strong><code>/api/start</code> 要等飛機爬到起飛高度才回應，先連上，上傳、解鎖、起飛那一段才看得到。</li>
-    <li><strong>群飛</strong>：<code>POST :38001/api/command/group/{group_id}/execute</code> 同樣帶 <code>{"mission_id": UUID}</code>。不帶 <code>mission_id</code> 也不帶 <code>mission_name</code> 時照舊不建任務（畫面按的群飛就是這樣）。</li>
-    <li><strong>看從我們畫面啟動的任務</strong>：<code>GET :38000/api/missions/active</code> 拿到任務編號，連同一個網址。這種任務由操作員在畫面上結束。</li>
+    <li><strong>第 2 步換成輪詢也一樣</strong>：改拉 <code>GET :38000/api/v1/ext/missions/{UUID}/live</code>，其餘每一步都不變。</li>
+    <li><strong>先連再起飛。</strong><code>/api/v1/start</code> 要等飛機爬到起飛高度才回應，先連上（輪詢的話先拉一次），上傳、解鎖、起飛那一段才看得到。</li>
+    <li><strong>群飛</strong>：<code>POST :38001/api/v1/command/group/{group_id}/execute</code> 同樣帶 <code>{"mission_id": UUID}</code>。不帶 <code>mission_id</code> 也不帶 <code>mission_name</code> 時照舊不建任務（畫面按的群飛就是這樣）。</li>
+    <li><strong>看從我們畫面啟動的任務</strong>：<code>GET :38000/api/v1/missions/active</code> 拿到任務編號，連同一個網址。這種任務由操作員在畫面上結束。</li>
   </ul>
 
   <h3>階段 <code>phase</code></h3>
@@ -572,7 +630,7 @@ footer.doc-foot{border-top:1px solid var(--line); padding-top:16px; font-size:13
     <thead><tr><th>phase</th><th>什麼時候</th></tr></thead>
     <tbody>
       <tr><td><code>waiting</code></td><td>已經用這組 UUID 連上，還沒有人用它呼叫起飛。<strong>最多等 30 秒</strong>，逾時送 <code>ended</code>（<code>never_started</code>）並關閉</td></tr>
-      <tr><td><code>starting</code></td><td><strong>收到</strong> <code>/api/start</code> 那一刻起（不是等它回應），還沒有任何一台離地</td></tr>
+      <tr><td><code>starting</code></td><td><strong>收到</strong> <code>/api/v1/start</code> 那一刻起（不是等它回應），還沒有任何一台離地</td></tr>
       <tr><td><code>active</code></td><td>至少一台解鎖中</td></tr>
       <tr><td><code>ended</code></td><td>任務結束（<a href="#s-end">§10</a>），送出 <code>ended</code> 後連線關閉</td></tr>
     </tbody>
@@ -583,7 +641,8 @@ footer.doc-foot{border-top:1px solid var(--line); padding-top:16px; font-size:13
 <section id="s-messages">
   <h2><span class="n">09</span>訊息格式</h2>
   <hr class="rule">
-  <p>全部是 JSON 文字訊息。每一則都有下面這幾個欄位；<code>seq</code> 在同一個任務內<strong>所有型別共用、嚴格遞增</strong>，補送就靠它。<strong>只屬於一條連線的訊息不帶 <code>seq</code></strong>：<code>hello</code>，以及連上時補的 <code>route</code>、<code>track</code>。<code>seq</code> 不從 1 開始，只保證遞增。</p>
+  <p>全部是 JSON 文字訊息。每一則都有下面這幾個欄位；<code>seq</code> 在同一個任務內<strong>所有型別共用、嚴格遞增</strong>，補送就靠它。<strong>只屬於一次連線或一次呼叫的訊息不帶 <code>seq</code></strong>：<code>hello</code>、連上時補的 <code>route</code> 與 <code>track</code>，以及輪詢快照現算的那則 <code>state</code>。<code>seq</code> 不從 1 開始，只保證遞增。</p>
+  <p><strong>這一節對兩種傳法都適用</strong>：串流一則一則送，輪詢包在 <code>messages</code> 陣列裡送，同一個序號的那一則<strong>逐欄相同</strong>。</p>
   <div class="panel">
     <div class="panel-bar"><span>共同欄位</span><button class="copy" type="button">複製</button></div>
 <pre class="json">{"v": 1, "type": "state", "mission_id": "8f0c…", "seq": 1843, "ts": "2026-09-14T07:30:12.500Z"}</pre>
@@ -770,7 +829,7 @@ footer.doc-foot{border-top:1px solid var(--line); padding-top:16px; font-size:13
  "drones": [{"drone_id": "1d2f…", "reason": "landed", "session_ids": ["…"],
              "landed_at": "2026-09-14T04:02:32.060Z", "disarmed_at": "2026-09-14T04:02:32.570Z"}]}</pre>
   </div>
-  <p class="prose"><code>session_ids</code> 是這台機在這個任務裡的架次，事後可以拿去 <code>GET :38000/api/sessions/{session_id}/export</code> 匯出完整資料。<code>waiting</code> 逾時的 <code>ended</code> 沒有 <code>drones</code>，改帶 <code>reason: "never_started"</code> 與 <code>msg</code>。</p>
+  <p class="prose"><code>session_ids</code> 是這台機在這個任務裡的架次，事後可以拿去 <code>GET :38000/api/v1/sessions/{session_id}/export</code> 匯出完整資料。<code>waiting</code> 逾時的 <code>ended</code> 沒有 <code>drones</code>，改帶 <code>reason: "never_started"</code> 與 <code>msg</code>。</p>
 
   <h3><code>error</code></h3>
   <p>以錯誤關閉連線之前先送這一則。WebSocket 的關閉原因最多 123 bytes，放不下一句完整的中文解釋。</p>
@@ -779,7 +838,7 @@ footer.doc-foot{border-top:1px solid var(--line); padding-top:16px; font-size:13
 <pre class="json">{"v": 1, "type": "error", "mission_id": "8f0c…", "ts": "…",
  "code": "mission_gone",
  "msg": "任務「0914 巡檢」已在 07:42:45 結束，結束後 30 秒的補送也過期了",
- "how_to": ["要看這次飛行的完整資料：GET :38000/api/sessions/{session_id}/export"]}</pre>
+ "how_to": ["要看這次飛行的完整資料：GET :38000/api/v1/sessions/{session_id}/export"]}</pre>
   </div>
 </section>
 
@@ -789,7 +848,7 @@ footer.doc-foot{border-top:1px solid var(--line); padding-top:16px; font-size:13
   <hr class="rule">
   <div class="big-rule">
     <span class="fig">3<small>秒</small></span>
-    <p><strong>用 <code>/api/start</code> 建立的任務</strong>：每一台都已上鎖，<strong>最後一台上鎖 3 秒後</strong>自動結束任務、送 <code>ended</code>、以 <code>1000</code> 關閉。這 3 秒內任何一台又解鎖，就不結束。</p>
+    <p><strong>用 <code>/api/v1/start</code> 建立的任務</strong>：每一台都已上鎖，<strong>最後一台上鎖 3 秒後</strong>自動結束任務、送 <code>ended</code>、以 <code>1000</code> 關閉。這 3 秒內任何一台又解鎖，就不結束。</p>
   </div>
   <ul class="prose">
     <li>要換電池再飛：開一個新任務（新的 UUID）。</li>
@@ -890,11 +949,10 @@ footer.doc-foot{border-top:1px solid var(--line); padding-top:16px; font-size:13
   <h2><span class="n">14</span>任務歷史與比較</h2>
   <hr class="rule">
   <p>要回答的是「<strong>這次比上次好還是差</strong>」：同一條路徑飛了兩趟以上，比較沿途的訊號。
-  這裡給的是<strong>一個任務的完整訊號樣本</strong>，外加每一筆「沿預計航線走了多遠、偏離多少」——有了它，兩趟才有共同的 X 軸。
-  完整規格見 <code>doc/external-history-api.md</code>。</p>
+  這裡給的是<strong>一個任務的完整訊號樣本</strong>，外加每一筆「沿預計航線走了多遠、偏離多少」——有了它，兩趟才有共同的 X 軸。</p>
 
   <article class="ep">
-    <div class="ep-head"><span class="verb get">GET</span><code class="url mono"><span class="host" data-host="b">http://10.141.2.21:38000</span>/api/ext/v1/missions</code><span class="st live">已上線</span></div>
+    <div class="ep-head"><span class="verb get">GET</span><code class="url mono"><span class="host" data-host="b">http://10.141.2.21:38000</span>/api/v1/ext/missions</code><span class="st live">已上線</span></div>
     <p class="ep-sum">歷史任務清單。<strong>要比較的兩個任務通常用 <code>plan_id</code> 挑</strong>——同一份路徑飛的兩趟，里程才對得起來。</p>
     <p class="lbl">query</p>
     <div class="tablewrap"><table>
@@ -913,7 +971,7 @@ footer.doc-foot{border-top:1px solid var(--line); padding-top:16px; font-size:13
 <pre class="json">{"missions": [{
   "mission_id": "8f0c2d1e-…",
   "name": "0914-square-test-v5 09-14 12:01",
-  "external": true,                           // 由外部控制端用 /api/start 建立
+  "external": true,                           // 由外部控制端用 /api/v1/start 建立
   "started_at": "2026-09-14T04:01:31.000Z",   // 第一趟解鎖
   "ended_at": "2026-09-14T04:02:35.570Z",     // null＝還在進行中
   "drones": [{"drone_id": "1d2f…", "name": "pi5-sdmodelh7v2-ardu", "sysid": 1}],
@@ -925,7 +983,7 @@ footer.doc-foot{border-top:1px solid var(--line); padding-top:16px; font-size:13
   </article>
 
   <article class="ep">
-    <div class="ep-head"><span class="verb get">GET</span><code class="url mono"><span class="host" data-host="b">http://10.141.2.21:38000</span>/api/ext/v1/missions/<span class="var">{mission_id}</span>/signal</code><span class="st live">已上線</span></div>
+    <div class="ep-head"><span class="verb get">GET</span><code class="url mono"><span class="host" data-host="b">http://10.141.2.21:38000</span>/api/v1/ext/missions/<span class="var">{mission_id}</span>/signal</code><span class="st live">已上線</span></div>
     <p class="ep-sum">一個任務的完整訊號，依「機 → 架次」分組。<strong>一次一個任務</strong>：要比幾個就呼叫幾次。訊號每秒一筆，一次回完，不分頁也不降採樣。</p>
     <p class="lbl">回應</p>
     <div class="panel">
@@ -970,7 +1028,7 @@ footer.doc-foot{border-top:1px solid var(--line); padding-top:16px; font-size:13
   </ul>
 
   <div class="note warn">
-    <p><strong>只有掛在任務底下的架次拿得到。</strong>用 <code>/api/start</code> 帶 <code>mission_id</code> 起飛的一定有；更早以前的飛行多半沒掛任務，要先在畫面的資訊頁補歸。</p>
+    <p><strong>只有掛在任務底下的架次拿得到。</strong>用 <code>/api/v1/start</code> 帶 <code>mission_id</code> 起飛的一定有；更早以前的飛行多半沒掛任務，要先在畫面的資訊頁補歸。</p>
   </div>
 </section>
 
@@ -987,7 +1045,7 @@ footer.doc-foot{border-top:1px solid var(--line); padding-top:16px; font-size:13
   "how_to": ["等那個任務結束再起飛", "或改用 mission_id 8f0c… 起飛，把這一趟掛進那個任務"]}}</pre>
   </div>
   <div class="note warn">
-    <p><strong><code>/api/start</code> 與群飛執行</strong>的錯誤一律是物件、一定有 <code>code</code> 與 <code>msg</code>；沒有專屬代碼的依 HTTP 狀態給通用代碼（<code>forbidden</code>、<code>not_found</code>、<code>conflict</code>、<code>vehicle_rejected</code>、<code>timeout</code>…），起飛後判定不到離地是 <code>not_airborne</code>。<strong>其他端點（上傳、切模式）形狀照舊</strong>：<code>detail</code> 是字串就直接顯示，是物件就顯示 <code>detail.msg</code>。</p>
+    <p><strong><code>/api/v1/start</code> 與群飛執行</strong>的錯誤一律是物件、一定有 <code>code</code> 與 <code>msg</code>；沒有專屬代碼的依 HTTP 狀態給通用代碼（<code>forbidden</code>、<code>not_found</code>、<code>conflict</code>、<code>vehicle_rejected</code>、<code>timeout</code>…），起飛後判定不到離地是 <code>not_airborne</code>。<strong>其他端點（上傳、切模式）形狀照舊</strong>：<code>detail</code> 是字串就直接顯示，是物件就顯示 <code>detail.msg</code>。</p>
   </div>
   <div class="tablewrap section-table">
     <table>
@@ -1010,7 +1068,8 @@ footer.doc-foot{border-top:1px solid var(--line); padding-top:16px; font-size:13
 <section id="s-example">
   <h2><span class="n">16</span>範例程式</h2>
   <hr class="rule">
-  <p>最小的控制端（Leaflet）：先連串流、再起飛；畫預計航線、實際軌跡與機體位置；<strong>3 秒沒收到訊息就標成資料中斷並重連</strong>。</p>
+  <p>最小的控制端（Leaflet）：先連上、再起飛；畫預計航線、實際軌跡與機體位置；<strong>3 秒沒收到訊息就標成資料中斷並重連</strong>。</p>
+  <p><strong>畫圖的 <code>draw(m)</code> 與傳法無關</strong>——下面輪詢版用的是同一個函式，因為兩種傳法送的是同一份訊息。</p>
   <div class="panel">
     <div class="panel-bar"><span>javascript</span><button class="copy" type="button">複製</button></div>
 <pre class="js">const GS = "10.141.2.21";
@@ -1025,22 +1084,27 @@ function connect() {
     const m = JSON.parse(e.data);
     if (m.seq != null) lastSeq = m.seq;
     resetWatchdog();
-    if (m.type === "route") L.geoJSON(m.geojson).addTo(map);              // GeoJSON：[經度, 緯度]
-    if (m.type === "track") {
-      tracks[m.drone_id]?.remove();
-      tracks[m.drone_id] = L.geoJSON(m.geojson, {style: {color: "red"}}).addTo(map);
-    }
-    if (m.type === "state") for (const d of m.drones) {
-      const p = d.position ?? d.last_known;                                // old 時位置在 last_known
-      if (!p) continue;
-      markers[d.drone_id] ??= L.marker([p.lat, p.lon]).addTo(map);        // Leaflet：[緯度, 經度]
-      markers[d.drone_id].setLatLng([p.lat, p.lon])
-        .setOpacity(d.freshness === "live" ? 1 : 0.4);
-    }
-    if (m.type === "error") console.warn(m.code, m.msg);
+    draw(m);
     if (m.type === "ended") { clearTimeout(watchdog); ws.onclose = null; }
   };
   ws.onclose = () => setTimeout(connect, 1000);
+}
+
+// 與傳法無關：串流與輪詢送的是同一份訊息
+function draw(m) {
+  if (m.type === "route") L.geoJSON(m.geojson).addTo(map);                // GeoJSON：[經度, 緯度]
+  if (m.type === "track") {
+    tracks[m.drone_id]?.remove();
+    tracks[m.drone_id] = L.geoJSON(m.geojson, {style: {color: "red"}}).addTo(map);
+  }
+  if (m.type === "state") for (const d of m.drones) {
+    const p = d.position ?? d.last_known;                                  // old 時位置在 last_known
+    if (!p) continue;
+    markers[d.drone_id] ??= L.marker([p.lat, p.lon]).addTo(map);          // Leaflet：[緯度, 經度]
+    markers[d.drone_id].setLatLng([p.lat, p.lon])
+      .setOpacity(d.freshness === "live" ? 1 : 0.4);
+  }
+  if (m.type === "error") console.warn(m.code, m.msg);
 }
 
 // §11：3 秒沒收到任何訊息＝連線斷了，不等 WebSocket 自己發現
@@ -1053,10 +1117,34 @@ function resetWatchdog() {
 }
 
 connect();
-const r = await fetch(`http://${GS}:38001/api/start`, {method: "POST",
+const r = await fetch(`http://${GS}:38001/api/v1/start`, {method: "POST",
   headers: {"Content-Type": "application/json", "X-Client": "my-controller"},
   body: JSON.stringify({plan_id: "0914-square-test-v5", mission_id: missionId})});
 if (!r.ok) { const {detail} = await r.json(); alert(`${detail.code}：${detail.msg}`); }</pre>
+  </div>
+
+  <p class="lbl" style="margin-top:22px">同一個控制端，改用輪詢</p>
+  <p>把 <code>connect()</code> 換成下面這個迴圈就好，<code>draw(m)</code> 一行都不用改。
+  沒有看門狗——一次呼叫失敗就是失敗，下一次重試即可。</p>
+  <div class="panel">
+    <div class="panel-bar"><span>javascript</span><button class="copy" type="button">複製</button></div>
+<pre class="js">let seq = null, timer = null;
+
+async function poll() {
+  const q = seq == null ? "" : `?after_seq=${seq}`;                        // 不帶＝快照
+  const r = await fetch(`http://${GS}:38000/api/v1/ext/missions/${missionId}/live${q}`);
+  if (r.status === 410) return stop();                                     // 結束且補送過期
+  if (!r.ok) { timer = setTimeout(poll, 1000); return; }                   // 失敗就下一次再試
+  const d = await r.json();
+  seq = d.seq;                                                             // 接續用外層的 seq
+  if (d.replay.gap) markGap(d.replay.gap);                                 // 缺了就照實標，不連成一條線
+  for (const m of d.messages) draw(m);                                     // 與串流版同一個函式
+  if (d.messages.some((m) => m.type === "ended")) return stop();
+  timer = setTimeout(poll, d.poll_after_s * 1000);                         // 照地面站的節拍
+}
+function stop() { clearTimeout(timer); }
+
+poll();</pre>
   </div>
 </section>
 
@@ -1066,15 +1154,15 @@ if (!r.ok) { const {detail} = await r.json(); alert(`${detail.code}：${detail.m
   <hr class="rule">
   <ul class="prose">
     <li><strong>沒有認證。</strong>任何連得到地面站的人都能看任何一個任務的即時狀態，也能指揮飛機。安全靠網段隔離——這件事要寫在這裡，不能靠「大家都知道」。</li>
-    <li><strong>串流不收指令。</strong>暫停、返航、改航線照舊走 <code>:38001</code>。</li>
+    <li><strong>兩種傳法都不收指令。</strong>暫停、返航、改航線照舊走 <code>:38001</code>。</li>
     <li><strong>不送圍欄。</strong>控制端只拿預計航線與實際軌跡。</li>
     <li><strong>歷史不做伺服器端的比較結論</strong>（勝負、改善多少）：地面站給樣本與共同的 X 軸，怎麼比是控制端的事。也不做 CSV、不降採樣。</li>
-    <li><strong>不再提供輪詢快照</strong> <code>/api/ext/live</code>：即時資料只走串流（v1 §5 的那一支，串流上線時移除）。</li>
+    <li><strong>不再提供全機隊的輪詢快照</strong> <code>/api/ext/live</code>（v1 §5 的那一支，實飛驗收後移除）：要輪詢即時資料請用<strong>綁任務</strong>的 <code>/api/v1/ext/missions/{id}/live</code>（<a href="#s-stream">§8</a>），它與串流是同一份訊息。<strong>不是不給輪詢，是輪詢也要綁任務</strong>。</li>
     <li>不送影像、不送原始 MAVLink、不送 IMU 或驅動診斷這類內部欄位。</li>
-    <li>逐則訊息只補送 60 秒；更早的完整資料走 <code>GET :38000/api/sessions/{session_id}/export</code>。</li>
+    <li>逐則訊息只補送 60 秒；更早的完整資料走 <code>GET :38000/api/v1/sessions/{session_id}/export</code>。</li>
   </ul>
   <footer class="doc-foot">
-    v2 · 2026-09-14。舊版保留為 <code>external-api-v1.html</code>（2026-09-07）。串流的完整規格與定案紀錄在 <code>doc/external-live-api.md</code>。
+    v2 · 2026-09-16。舊版保留為 <code>external-api-v1.html</code>（2026-09-07）。
   </footer>
 </section>
 

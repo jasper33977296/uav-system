@@ -10,20 +10,26 @@
 
 全部在 **command 服務（`:38001`）**。
 
+**路徑一律帶版本**，版本號緊接在服務根之後：`/api/v1/…`（即時那邊的 WebSocket 是 `/ws/v1/…`）。
+舊的無版本路徑保留為別名，**但對外請寫版本化的那一種**——2026-09-08 把上傳欄位 `mission_id`
+改名成 `plan_id` 之所以會**無聲**打斷外部呼叫端，就是因為當時這一組沒有版本可以並存。
+
 | 步 | 端點 | 說明 |
 |---|---|---|
-| ① 選任務 | `GET /api/missions` | 任務庫總表。**唯讀、不吃 `ENABLE_COMMANDS`**——只是看有哪些航線，不動飛機 |
-| ② 上傳 | `POST /api/command/{sysid}/mission/upload` <br>`{"mission_id": "..."}` | 寫進飛控，**並逐項讀回比對** |
-| ③ 執行 | `POST /api/command/{sysid}/mission/start` | 讓飛控開始執行**它機上現有**的那份任務 |
+| ① 選任務 | `GET /api/v1/missions` | 任務庫總表。**唯讀、不吃 `ENABLE_COMMANDS`**——只是看有哪些航線，不動飛機 |
+| ② 上傳 | `POST /api/v1/command/{sysid}/mission/upload` <br>`{"plan_id": "..."}` | 寫進飛控，**並逐項讀回比對**。欄位 09-08 由 `mission_id` 改名為 `plan_id`，服務端**只收新名字**，送舊的回 422 |
+| ③ 執行 | `POST /api/v1/command/{sysid}/mission/start` | 讓飛控開始執行**它機上現有**的那份任務 |
 
 **要在自己的地圖上看執行中的飛機**：見 [`external-live-api.md`](external-live-api.md)
-（控制端產生一組 UUID 當任務編號，先連上 WebSocket 再帶著它起飛；從起飛開始每 0.5 秒送狀態，
-最後一台上鎖 3 秒後結束）。
+（控制端產生一組 UUID 當任務編號，先連上再帶著它起飛；從起飛開始每 0.5 秒送狀態，
+最後一台上鎖 3 秒後結束）。**兩種傳法，同一份訊息**：WebSocket 串流
+`ws://:38000/ws/v1/missions/{uuid}`，或 HTTP 輪詢
+`GET :38000/api/v1/ext/missions/{uuid}/live`。
 
 **要事後比較兩趟或多趟的訊號**：見 [`external-history-api.md`](external-history-api.md)
-（一個任務的完整訊號樣本，每一筆帶沿預計航線的里程；規格草案，尚未實作）。
+（一個任務的完整訊號樣本，每一筆帶沿預計航線的里程；已實作 2026-09-16）。
 
-**想一次做完**：`POST /api/start`（`{"mission": "<id 或名稱>"}`）——
+**想一次做完**：`POST /api/v1/start`（`{"plan_id": "<id 或名稱>"}`；`mission` 是它的舊名，暫留為別名、下一版移除）——
 上傳→解鎖→起飛→切任務，每步讀回確認。
 自動化流程用它；互動操作建議走三步，**因為中途出錯時看得出停在哪一步**。
 
@@ -36,7 +42,7 @@
 * **`mission/start` 要求機已經解鎖並在空中。** 對停在地面的機切自動任務模式，
   等於叫它自己起飛——那是 [issues/031](../issues/031-arm-guard-auto-mode.md)
   記的那次事故（2026-08-13，SITL 上真的飛起來了）。要從地面一路到飛，
-  用 `/api/start` 或 `mission/fly`。
+  用 `/api/v1/start` 或 `mission/fly`。
 * **`mission/upload` 在地面是存檔，在空中是立即生效的航線變更。**
   飛控收到新任務的那一刻就照它飛——2026-08-24 SITL 實測：上傳完成的瞬間
   飛機就掉頭了，模式全程沒變、沒有任何確認步驟。
@@ -51,7 +57,7 @@
 查一台機現在能不能被指揮：
 
 ```
-GET http://<地面站>:38000/api/admission/<sysid>
+GET http://<地面站>:38000/api/v1/admission/<sysid>
 → {"state": "admitted", "reason": "板號、配號、代理連線三者相符"}
 ```
 
@@ -100,18 +106,18 @@ GS=http://localhost:38001
 BE=http://localhost:38000
 
 # ① 選任務
-curl -s $GS/api/missions | jq '.missions[] | {id, name, nav_count}'
+curl -s $GS/api/v1/missions | jq '.missions[] | {id, name, nav_count}'
 
 # 先確認這台機可以被指揮（省掉一次注定失敗的呼叫）
-curl -s $BE/api/admission/1 | jq .state       # 要是 "admitted"
+curl -s $BE/api/v1/admission/1 | jq .state       # 要是 "admitted"
 
 # ② 上傳
-curl -s -X POST $GS/api/command/1/mission/upload \
+curl -s -X POST $GS/api/v1/command/1/mission/upload \
      -H 'Content-Type: application/json' \
-     -d '{"mission_id":"6f812621-..."}'
+     -d '{"plan_id":"6f812621-..."}'
 
 # ③ 執行（機要已解鎖且在空中）
-curl -s -X POST $GS/api/command/1/mission/start
+curl -s -X POST $GS/api/v1/command/1/mission/start
 ```
 
 ---
