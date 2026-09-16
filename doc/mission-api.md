@@ -18,7 +18,10 @@
 
 **要在自己的地圖上看執行中的飛機**：見 [`external-live-api.md`](external-live-api.md)
 （控制端產生一組 UUID 當任務編號，先連上 WebSocket 再帶著它起飛；從起飛開始每 0.5 秒送狀態，
-最後一台上鎖 3 秒後結束。規格草案，尚未實作）。
+最後一台上鎖 3 秒後結束）。
+
+**要事後比較兩趟或多趟的訊號**：見 [`external-history-api.md`](external-history-api.md)
+（一個任務的完整訊號樣本，每一筆帶沿預計航線的里程；規格草案，尚未實作）。
 
 **想一次做完**：`POST /api/start`（`{"mission": "<id 或名稱>"}`）——
 上傳→解鎖→起飛→切任務，每步讀回確認。

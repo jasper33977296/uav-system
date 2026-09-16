@@ -219,6 +219,7 @@ footer.doc-foot{border-top:1px solid var(--line); padding-top:16px; font-size:13
       <h1>無人機管理系統 API <span class="ver">v2 · 2026-09-14</span></h1>
       <div class="legend">
         <span><span class="st live">已上線</span>現在就能呼叫</span>
+        <span><span class="st plan">規劃中</span>規格已定案，尚未實作</span>
       </div>
     </div>
     <div class="hosts">
@@ -261,11 +262,15 @@ footer.doc-foot{border-top:1px solid var(--line); padding-top:16px; font-size:13
     <li><a href="#s-reconnect"><span class="n">12</span><span>重連與補送</span></a></li>
     <li><a href="#s-stale"><span class="n">13</span><span>過期資料</span></a></li>
   </ol>
+  <p class="grp">歷史</p>
+  <ol>
+    <li><a href="#s-history"><span class="n">14</span><span>任務歷史與比較</span><span class="todo">規劃中</span></a></li>
+  </ol>
   <p class="grp">其他</p>
   <ol>
-    <li><a href="#s-errors"><span class="n">14</span><span>錯誤格式與狀態碼</span></a></li>
-    <li><a href="#s-example"><span class="n">15</span><span>範例程式</span></a></li>
-    <li><a href="#s-not"><span class="n">16</span><span>不提供的東西</span></a></li>
+    <li><a href="#s-errors"><span class="n">15</span><span>錯誤格式與狀態碼</span></a></li>
+    <li><a href="#s-example"><span class="n">16</span><span>範例程式</span></a></li>
+    <li><a href="#s-not"><span class="n">17</span><span>不提供的東西</span></a></li>
   </ol>
 </nav>
 
@@ -285,7 +290,7 @@ footer.doc-foot{border-top:1px solid var(--line); padding-top:16px; font-size:13
         <tr><td>名詞</td><td class="old">「任務」同時指航線</td><td>分成<strong>路徑</strong>、<strong>任務</strong>、<strong>架次</strong>三個（<a href="#s-terms">§1</a>）</td><td>—</td></tr>
         <tr><td>起飛參數</td><td class="old"><code>mission</code>（其實是路徑）</td><td><code>plan_id</code>（路徑）＋ <code>mission_id</code>（任務 UUID）；<code>mission</code> 暫留為別名</td><td><span class="st live">已上線</span></td></tr>
         <tr><td>即時資料</td><td class="old">輪詢 <code>/api/ext/live</code></td><td>WebSocket 串流，從起飛開始每 0.5 秒推送（<a href="#s-stream">§8</a>）。快照的欄位全部併進串流的 <code>state</code>（<a href="#s-snapshot-map">對照表</a>），<strong>快照 <code>/api/ext/live</code> 在串流實飛驗收後移除</strong></td><td><span class="st live">已上線</span></td></tr>
-        <tr><td>錯誤回應</td><td class="old">只保證 <code>detail.msg</code></td><td><code>/api/start</code> 與群飛執行一律 <code>code</code>＋<code>msg</code>，能自己排除的再附 <code>how_to</code>（<a href="#s-errors">§14</a>）</td><td><span class="st live">已上線</span></td></tr>
+        <tr><td>錯誤回應</td><td class="old">只保證 <code>detail.msg</code></td><td><code>/api/start</code> 與群飛執行一律 <code>code</code>＋<code>msg</code>，能自己排除的再附 <code>how_to</code>（<a href="#s-errors">§15</a>）</td><td><span class="st live">已上線</span></td></tr>
       </tbody>
     </table>
   </div>
@@ -824,7 +829,7 @@ footer.doc-foot{border-top:1px solid var(--line); padding-top:16px; font-size:13
   </div>
   <p>地面站<strong>保證每 0.5 秒一定送一則</strong>——<code>waiting</code> 時送保持連線用的 <code>state</code>，起飛後送真正的 <code>state</code>。3 秒是正常間隔的 6 倍，一般的網路抖動不會誤判。</p>
   <p><strong>為什麼不能等 WebSocket 自己報錯</strong>：網路半路斷掉時（5G 或跨網段的路由掉包），TCP 可能要好幾十秒才發現對方不在了。那段時間連線看起來還開著，地圖上的飛機卻停在原地——<strong>看起來像懸停，其實是資料沒有進來</strong>。</p>
-  <p>判斷斷線後，把地圖上的機體標成「資料中斷」，不要讓它停在最後的位置看起來正常。範例見 <a href="#s-example">§15</a>。</p>
+  <p>判斷斷線後，把地圖上的機體標成「資料中斷」，不要讓它停在最後的位置看起來正常。範例見 <a href="#s-example">§16</a>。</p>
   <div class="note">
     <p>這裡的「連線斷了」與 <a href="#s-stale">§13</a> 的「資料舊了」是兩件事：連線好好的，飛機的遙測也可能斷了。</p>
   </div>
@@ -882,8 +887,97 @@ footer.doc-foot{border-top:1px solid var(--line); padding-top:16px; font-size:13
 </section>
 
 <!-- ══════════ 14 ══════════ -->
+<section id="s-history">
+  <h2><span class="n">14</span>任務歷史與比較<span class="st plan">規劃中</span></h2>
+  <hr class="rule">
+  <p>要回答的是「<strong>這次比上次好還是差</strong>」：同一條路徑飛了兩趟以上，比較沿途的訊號。
+  這裡給的是<strong>一個任務的完整訊號樣本</strong>，外加每一筆「沿預計航線走了多遠、偏離多少」——有了它，兩趟才有共同的 X 軸。
+  完整規格見 <code>doc/external-history-api.md</code>。</p>
+
+  <article class="ep">
+    <div class="ep-head"><span class="verb get">GET</span><code class="url mono"><span class="host" data-host="b">http://10.141.2.21:38000</span>/api/ext/v1/missions</code><span class="st plan">規劃中</span></div>
+    <p class="ep-sum">歷史任務清單。<strong>要比較的兩個任務通常用 <code>plan_id</code> 挑</strong>——同一份路徑飛的兩趟，里程才對得起來。</p>
+    <p class="lbl">query</p>
+    <div class="tablewrap"><table>
+      <thead><tr><th>key</th><th>value</th><th>資料格式</th></tr></thead>
+      <tbody>
+        <tr><td><code>since</code> / <code>until</code></td><td><code>2026-09-01</code></td><td class="fmt">ISO 時間或日期 · 選填<br>比對任務第一趟的起飛時間</td></tr>
+        <tr><td><code>plan_id</code></td><td><code>"e961b301-…"</code></td><td class="fmt">string · 選填<br>只列飛過這份路徑的</td></tr>
+        <tr><td><code>external</code></td><td><code>true</code></td><td class="fmt">bool · 選填<br>只列外部控制端建立的；省略＝全部都列</td></tr>
+        <tr><td><code>drone_id</code></td><td><code>"1d2f…"</code></td><td class="fmt">string · 選填</td></tr>
+        <tr><td><code>limit</code></td><td><code>50</code></td><td class="fmt">int · 選填（最大 200）</td></tr>
+      </tbody>
+    </table></div>
+    <p class="lbl">回應</p>
+    <div class="panel">
+      <div class="panel-bar"><span>200</span><button class="copy" type="button">複製</button></div>
+<pre class="json">{"missions": [{
+  "mission_id": "8f0c2d1e-…",
+  "name": "0914-square-test-v5 09-14 12:01",
+  "external": true,                           // 由外部控制端用 /api/start 建立
+  "started_at": "2026-09-14T04:01:31.000Z",   // 第一趟解鎖
+  "ended_at": "2026-09-14T04:02:35.570Z",     // null＝還在進行中
+  "drones": [{"drone_id": "1d2f…", "name": "pi5-sdmodelh7v2-ardu", "sysid": 1}],
+  "plans": [{"plan_id": "e961b301-…", "name": "0914-square-test-v5"}],
+  "sessions": 1,                              // 架次數
+  "samples": 58                               // 訊號樣本數，0＝那次沒有量到訊號
+}]}</pre>
+    </div>
+  </article>
+
+  <article class="ep">
+    <div class="ep-head"><span class="verb get">GET</span><code class="url mono"><span class="host" data-host="b">http://10.141.2.21:38000</span>/api/ext/v1/missions/<span class="var">{mission_id}</span>/signal</code><span class="st plan">規劃中</span></div>
+    <p class="ep-sum">一個任務的完整訊號，依「機 → 架次」分組。<strong>一次一個任務</strong>：要比幾個就呼叫幾次。訊號每秒一筆，一次回完，不分頁也不降採樣。</p>
+    <p class="lbl">回應</p>
+    <div class="panel">
+      <div class="panel-bar"><span>200</span><button class="copy" type="button">複製</button></div>
+<pre class="json">{
+  "mission": {"mission_id": "8f0c…", "name": "…", "external": true,
+              "started_at": "…", "ended_at": "…"},
+  "method": {"max_offset_m": 60.0, "sample_interval_s": 1},
+  "drones": [{
+    "drone_id": "1d2f…", "name": "pi5-sdmodelh7v2-ardu", "sysid": 1,
+    "sessions": [{
+      "session_id": "…",
+      "plan_id": "e961b301-…", "plan_name": "0914-square-test-v5",
+      "started_at": "…", "ended_at": "…",
+      "end_reason": "disarmed",        // disarmed＝看到上鎖；telemetry_lost＝資料斷了
+      "reference": "plan",             // 里程的基準：plan／null
+      "route": { … },                  // 與串流的 route 同格式（§9）
+      "gaps": [{"from": "…", "to": "…", "seconds": 23.4}],   // 這段沒有資料
+      "samples": [{
+        "time": "2026-09-14T04:01:37.120Z",
+        "lat": 24.773540, "lon": 121.045880, "alt_rel": 12.3,
+        "along_m": 41.2, "offset_m": 3.7,
+        "rsrp": -100.0, "rsrq": -11.0, "sinr": 18.0, "cqi": null,
+        "pci": 133, "cell_id": 2179073, "band": "n79", "nr_mode": "SA",
+        "rtt_ms": 27.0, "jitter_ms": null, "packet_loss_pct": null,
+        "throughput_up_kbps": null, "throughput_down_kbps": null
+      }]
+    }]
+  }]
+}</pre>
+    </div>
+    <p class="prose">訊號欄位與即時串流的 <code>state.link</code> <strong>逐字相同</strong>（<a href="#s-messages">§9</a> 的下表）：即時看到的與事後拿到的是同一個東西。量不到的是 <code>null</code>，不補假值。</p>
+  </article>
+
+  <h3>兩趟怎麼對齊</h3>
+  <p><strong>時間對不齊</strong>：兩趟的速度不同，用時間當 X 軸會把「同一個地點」錯位。每一筆樣本都投影到<strong>那一趟自己的預計航線</strong>上，給出 <code>along_m</code>（走了多遠）與 <code>offset_m</code>（偏離多少），控制端拿 <code>along_m</code> 當共同的 X 軸。</p>
+  <ul class="prose">
+    <li><strong>基準是計畫航點，不是任一趟的實飛軌跡</strong>——拿其中一趟當基準，那一趟的偏航就變成零誤差。所以那一趟沒有綁路徑時 <code>reference</code> 是 <code>null</code>、<code>along_m</code> 全給 <code>null</code>，不退回用軌跡。</li>
+    <li><strong>偏離超過 <code>max_offset_m</code>（預設 60 m）的樣本 <code>along_m</code> 給 <code>null</code></strong>，<code>offset_m</code> 照給。硬塞進某個里程的數字看起來完全正常，而且沒有線索說它是垃圾。</li>
+    <li><strong><code>along_m</code> 只在同一份路徑之間可比。</strong>每一趟都帶 <code>plan_id</code>，比較前先確認相同。</li>
+    <li><code>gaps</code> 是超過 10 秒完全沒有資料的區間。<strong>與「訊號差」是兩件事</strong>：畫圖時要留白，不要把兩端連成一條線。</li>
+  </ul>
+
+  <div class="note warn">
+    <p><strong>只有掛在任務底下的架次拿得到。</strong>用 <code>/api/start</code> 帶 <code>mission_id</code> 起飛的一定有；更早以前的飛行多半沒掛任務，要先在畫面的資訊頁補歸。</p>
+  </div>
+</section>
+
+<!-- ══════════ 15 ══════════ -->
 <section id="s-errors">
-  <h2><span class="n">14</span>錯誤格式與狀態碼</h2>
+  <h2><span class="n">15</span>錯誤格式與狀態碼</h2>
   <hr class="rule">
   <p>失敗一律回 4xx／5xx。<strong>每一個錯誤都同時帶機器讀的 <code>code</code> 與人讀的 <code>msg</code></strong>，呼叫端自己排除得了的再附 <code>how_to</code>。<code>msg</code> 可以直接顯示給人看。</p>
   <div class="panel">
@@ -913,9 +1007,9 @@ footer.doc-foot{border-top:1px solid var(--line); padding-top:16px; font-size:13
   </div>
 </section>
 
-<!-- ══════════ 15 ══════════ -->
+<!-- ══════════ 16 ══════════ -->
 <section id="s-example">
-  <h2><span class="n">15</span>範例程式</h2>
+  <h2><span class="n">16</span>範例程式</h2>
   <hr class="rule">
   <p>最小的控制端（Leaflet）：先連串流、再起飛；畫預計航線、實際軌跡與機體位置；<strong>3 秒沒收到訊息就標成資料中斷並重連</strong>。</p>
   <div class="panel">
@@ -967,14 +1061,15 @@ if (!r.ok) { const {detail} = await r.json(); alert(`${detail.code}：${detail.m
   </div>
 </section>
 
-<!-- ══════════ 16 ══════════ -->
+<!-- ══════════ 17 ══════════ -->
 <section id="s-not">
-  <h2><span class="n">16</span>不提供的東西</h2>
+  <h2><span class="n">17</span>不提供的東西</h2>
   <hr class="rule">
   <ul class="prose">
     <li><strong>沒有認證。</strong>任何連得到地面站的人都能看任何一個任務的即時狀態，也能指揮飛機。安全靠網段隔離——這件事要寫在這裡，不能靠「大家都知道」。</li>
     <li><strong>串流不收指令。</strong>暫停、返航、改航線照舊走 <code>:38001</code>。</li>
     <li><strong>不送圍欄。</strong>控制端只拿預計航線與實際軌跡。</li>
+    <li><strong>歷史不做伺服器端的比較結論</strong>（勝負、改善多少）：地面站給樣本與共同的 X 軸，怎麼比是控制端的事。也不做 CSV、不降採樣。</li>
     <li><strong>不再提供輪詢快照</strong> <code>/api/ext/live</code>：即時資料只走串流（v1 §5 的那一支，串流上線時移除）。</li>
     <li>不送影像、不送原始 MAVLink、不送 IMU 或驅動診斷這類內部欄位。</li>
     <li>逐則訊息只補送 60 秒；更早的完整資料走 <code>GET :38000/api/sessions/{session_id}/export</code>。</li>
