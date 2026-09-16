@@ -14,7 +14,9 @@ from . import chainage, db
 from .ext_stream import LINK_KEYS, route_geojson
 
 log = logging.getLogger("ext_history")
-router = APIRouter(prefix="/api/ext/v1")
+#: 版本號由 `main._api_version` 從路徑前綴剝掉（`/api/v1/ext/…`，舊拼法
+#: `/api/ext/v1/…` 也收），所以這裡掛的是剝完的形狀
+router = APIRouter(prefix="/api/ext")
 
 MAX_LIMIT = 200
 #: 訊號欄位（LINK_KEYS 的第一項是 time，樣本裡另外擺在最前面）

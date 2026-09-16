@@ -18,7 +18,7 @@ from datetime import datetime, timedelta, timezone
 
 import asyncpg
 
-API = "http://localhost:38000/api/ext/v1"
+API = "http://localhost:38000/api/v1/ext"
 ok = True
 
 

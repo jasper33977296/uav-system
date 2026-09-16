@@ -285,6 +285,28 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
+#: 對外路徑的版本號**緊接在服務根之後**：`/api/v1/…`、`/ws/v1/…`。
+#: 09-08 把上傳欄位由 `mission_id` 改名成 `plan_id` 之所以會無聲打斷外部，
+#: 就是因為指令這一組沒有版本可以並存——只能靠文件通知，而文件到不了
+#: 已經寫死的程式。這裡用改寫而不是逐支加路由：**版本是路徑的前綴，
+#: 不是每一支端點各自的事**，逐支加會漏掉新端點。
+#:
+#: 舊的無版本路徑保留為別名（既有呼叫端不會斷）；`/api/ext/v1/…` 是
+#: 任務歷史先上線時用過的拼法，一併收下。
+API_VERSIONS = ("v1",)
+
+
+@app.middleware("http")
+async def _api_version(request, call_next):
+    p: str = request.scope["path"]
+    for v in API_VERSIONS:
+        for pre, rest in ((f"/api/{v}/", "/api/"), (f"/api/ext/{v}/", "/api/ext/")):
+            if p.startswith(pre):
+                request.scope["path"] = rest + p[len(pre):]
+                return await call_next(request)
+    return await call_next(request)
+
+
 app.include_router(router)
 app.include_router(ext_stream.router)
 app.include_router(ext_history.router)

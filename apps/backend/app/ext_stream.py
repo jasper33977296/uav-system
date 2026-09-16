@@ -14,7 +14,7 @@ import uuid
 from collections import deque
 from datetime import datetime, timedelta, timezone
 
-from fastapi import APIRouter, WebSocket, WebSocketDisconnect
+from fastapi import APIRouter, HTTPException, WebSocket, WebSocketDisconnect
 from pydantic import BaseModel
 
 from . import db
@@ -735,6 +735,94 @@ async def notify(mission_id: str, body: NotifyIn):
     return {"ok": True}
 
 
+# ── HTTP 輪詢：與 WebSocket 同一份資料，兩種傳法 ───────────────────
+async def _open(mid: str) -> Stream:
+    """拿到（必要時建立）這個編號的串流。**與 WS 進場走同一條路**——
+    輪詢的控制端一樣可以先用自己的 UUID 開場、再帶著它呼叫起飛。
+    """
+    s = streams.get(mid)
+    if s is not None:
+        return s
+    row = await db.pool.fetchrow("SELECT name, ended_at FROM missions WHERE id = $1::uuid", mid)
+    if row is not None and row["ended_at"] is not None:
+        raise HTTPException(410, {
+            "code": "mission_gone",
+            "msg": f"任務「{row['name']}」已在 {row['ended_at'].astimezone(TW):%m-%d %H:%M:%S} "
+                   f"結束，結束後 {KEEP_ENDED_S:.0f} 秒的補送也過期了",
+            "how_to": ["要看這次飛行的完整訊號：GET :38000/api/v1/ext/missions/{mission_id}/signal",
+                       "要看完整遙測：GET :38000/api/v1/sessions/{session_id}/export"]})
+    s = streams[mid] = Stream(mid)
+    if row is not None:
+        await _sync(s)
+        _index(s)
+    return s
+
+
+@router.get("/ext/missions/{mission_id}/live")
+async def live(mission_id: str, after_seq: int | None = None):
+    """即時資料的**輪詢版**：與 `/ws/v1/missions/{id}` 同一份訊息、同一組序號。
+
+    一推一拉，但 `messages` 裡的每一則與 WS 送出去的**逐字相同**——
+    控制端換一種傳法不必改訊息處理，兩種也可以混用（WS 斷線期間先用輪詢頂著）。
+
+    * **不帶 `after_seq`＝快照**：現在的 `route`、`track` 與最新一則 `state`
+      （結束了就再附 `ended`）。第一次呼叫用這個，不必等下一個 tick。
+    * **帶 `after_seq`＝補送**：那之後的每一則，語意同 WS 的 `?after_seq=`。
+      回應的 `seq` 就是下一次要帶的值；緩衝只留 60 秒，斷太久就會有 `gap`。
+
+    **輪詢不會讓任務活得比較久**：結束條件與 WS 完全一樣（最後一台上鎖
+    3 秒後），這支端點只是把同一份訊息換個方式交出去。
+    """
+    try:
+        mid = str(uuid.UUID(mission_id))
+    except ValueError:
+        raise HTTPException(422, {
+            "code": "mission_id_invalid",
+            "msg": f"網址裡的任務編號要是 UUID，收到的是「{mission_id}」",
+            "how_to": ["用 crypto.randomUUID() 或 uuid.uuid4() 產生"]})
+    s = await _open(mid)
+    # 輪詢的人也是「有人在看」。少了這一句，非外部任務會在 IDLE_DROP_S 之後
+    # 被當成沒人看而回收，而輪詢端根本沒有連線可以證明自己還在
+    s.last_client = time.monotonic()
+
+    oldest = s.buf[0][1]["seq"] if s.buf else None
+    msgs: list[dict] = []
+    gap = None
+    if after_seq is None:
+        for d in list(s.drones.values()):
+            body = await _route_body(d, "initial")
+            if body:
+                msgs.append(s.envelope("route", body))
+            if s.in_db:
+                msgs.append(s.envelope("track", await _track_body(s, d)))
+        if s.phase == "ended":
+            for kind in ("state", "ended"):
+                m = next((m for _, m in reversed(s.buf) if m["type"] == kind), None)
+                if m is not None:
+                    msgs.append(m)
+        else:
+            # **現算，不撿緩衝裡最後一則**：DB 裡剛出現的任務要到下一個 tick 才有
+            # state，而快照的用途就是「不必等下一個 tick」。內容與 tick 送的同一份
+            # （`ext_stream.tick`），只是不佔序號、不進緩衝——與 route／track 一樣
+            # 是只屬於這一次呼叫的訊息
+            msgs.append(s.envelope("state", {
+                "phase": s.phase,
+                "drones": [drone_state(d, fleet.get(d.drone_id)) for d in s.drones.values()]}))
+    else:
+        if after_seq < s.seq:
+            first = oldest if oldest is not None else s.seq + 1
+            if after_seq + 1 < first:
+                gap = {"from_seq": after_seq + 1, "to_seq": first - 1}
+        msgs = [m for _, m in s.buf if m["seq"] > after_seq]
+    return {"v": 1, "mission_id": s.id, "ts": _iso(), "phase": s.phase,
+            "mission_name": s.name, "started_at": s.started_at,
+            "drones": [{"drone_id": d.drone_id, "name": d.name, "sysid": d.sysid}
+                       for d in s.drones.values()],
+            "seq": s.seq, "replay": {"from_seq": oldest, "gap": gap},
+            "poll_after_s": TICK_S,
+            "messages": json_safe(msgs)}
+
+
 # ── WebSocket ─────────────────────────────────────────────────────
 async def _refuse(ws: WebSocket, mid: str, close_code: int, code: str, msg: str,
                   how_to: list[str]) -> None:
@@ -757,19 +845,13 @@ async def serve(ws: WebSocket, mission_id: str, after_seq: int | None) -> None:
                       f"網址裡的任務編號要是 UUID，收到的是「{mission_id}」",
                       ["用 crypto.randomUUID() 或 uuid.uuid4() 產生"])
         return
-    s = streams.get(mid)
-    if s is None:
-        row = await db.pool.fetchrow("SELECT name, ended_at FROM missions WHERE id = $1::uuid", mid)
-        if row is not None and row["ended_at"] is not None:
-            await _refuse(ws, mid, 4410, "mission_gone",
-                          f"任務「{row['name']}」已在 {row['ended_at'].astimezone(TW):%m-%d %H:%M:%S} "
-                          f"結束，結束後 {KEEP_ENDED_S:.0f} 秒的補送也過期了",
-                          ["要看這次飛行的完整資料：GET :38000/api/sessions/{session_id}/export"])
-            return
-        s = streams[mid] = Stream(mid)
-        if row is not None:
-            await _sync(s)
-            _index(s)
+    try:
+        s = await _open(mid)
+    except HTTPException as e:
+        # 進場的判斷與輪詢端點共用一份（連同那句話）；這裡只換成 WS 的關閉碼
+        d = e.detail
+        await _refuse(ws, mid, 4410, d["code"], d["msg"], d["how_to"])
+        return
     mark = s.seq
     bodies = []
     for d in list(s.drones.values()):

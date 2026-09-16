@@ -345,6 +345,28 @@ app.add_middleware(CORSMiddleware, allow_origins=["*"],
                    allow_methods=["*"], allow_headers=["*"])
 
 
+#: 對外路徑的版本號**緊接在服務根之後**：`/api/v1/…`、`/ws/v1/…`。
+#: 09-08 把上傳欄位由 `mission_id` 改名成 `plan_id` 之所以會無聲打斷外部，
+#: 就是因為指令這一組沒有版本可以並存——只能靠文件通知，而文件到不了
+#: 已經寫死的程式。這裡用改寫而不是逐支加路由：**版本是路徑的前綴，
+#: 不是每一支端點各自的事**，逐支加會漏掉新端點。
+#:
+#: 舊的無版本路徑保留為別名——我方畫面走的就是那一組，而且它不該被迫
+#: 跟著對外契約一起動。
+API_VERSIONS = ("v1",)
+
+
+@app.middleware("http")
+async def _api_version(request, call_next):
+    p: str = request.scope["path"]
+    for v in API_VERSIONS:
+        pre = f"/api/{v}/"
+        if p.startswith(pre):
+            request.scope["path"] = "/api/" + p[len(pre):]
+            break
+    return await call_next(request)
+
+
 @app.middleware("http")
 async def _capture_client(request, call_next):
     """把 X-Client header 塞進 contextvar，供 _audit 歸因（背景 task 沿用此 context）。"""
