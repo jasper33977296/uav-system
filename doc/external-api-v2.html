@@ -219,7 +219,6 @@ footer.doc-foot{border-top:1px solid var(--line); padding-top:16px; font-size:13
       <h1>無人機管理系統 API <span class="ver">v2 · 2026-09-14</span></h1>
       <div class="legend">
         <span><span class="st live">已上線</span>現在就能呼叫</span>
-        <span><span class="st plan">規劃中</span>規格已定案，尚未實作</span>
       </div>
     </div>
     <div class="hosts">
@@ -264,7 +263,7 @@ footer.doc-foot{border-top:1px solid var(--line); padding-top:16px; font-size:13
   </ol>
   <p class="grp">歷史</p>
   <ol>
-    <li><a href="#s-history"><span class="n">14</span><span>任務歷史與比較</span><span class="todo">規劃中</span></a></li>
+    <li><a href="#s-history"><span class="n">14</span><span>任務歷史與比較</span></a></li>
   </ol>
   <p class="grp">其他</p>
   <ol>
@@ -888,14 +887,14 @@ footer.doc-foot{border-top:1px solid var(--line); padding-top:16px; font-size:13
 
 <!-- ══════════ 14 ══════════ -->
 <section id="s-history">
-  <h2><span class="n">14</span>任務歷史與比較<span class="st plan">規劃中</span></h2>
+  <h2><span class="n">14</span>任務歷史與比較</h2>
   <hr class="rule">
   <p>要回答的是「<strong>這次比上次好還是差</strong>」：同一條路徑飛了兩趟以上，比較沿途的訊號。
   這裡給的是<strong>一個任務的完整訊號樣本</strong>，外加每一筆「沿預計航線走了多遠、偏離多少」——有了它，兩趟才有共同的 X 軸。
   完整規格見 <code>doc/external-history-api.md</code>。</p>
 
   <article class="ep">
-    <div class="ep-head"><span class="verb get">GET</span><code class="url mono"><span class="host" data-host="b">http://10.141.2.21:38000</span>/api/ext/v1/missions</code><span class="st plan">規劃中</span></div>
+    <div class="ep-head"><span class="verb get">GET</span><code class="url mono"><span class="host" data-host="b">http://10.141.2.21:38000</span>/api/ext/v1/missions</code><span class="st live">已上線</span></div>
     <p class="ep-sum">歷史任務清單。<strong>要比較的兩個任務通常用 <code>plan_id</code> 挑</strong>——同一份路徑飛的兩趟，里程才對得起來。</p>
     <p class="lbl">query</p>
     <div class="tablewrap"><table>
@@ -926,7 +925,7 @@ footer.doc-foot{border-top:1px solid var(--line); padding-top:16px; font-size:13
   </article>
 
   <article class="ep">
-    <div class="ep-head"><span class="verb get">GET</span><code class="url mono"><span class="host" data-host="b">http://10.141.2.21:38000</span>/api/ext/v1/missions/<span class="var">{mission_id}</span>/signal</code><span class="st plan">規劃中</span></div>
+    <div class="ep-head"><span class="verb get">GET</span><code class="url mono"><span class="host" data-host="b">http://10.141.2.21:38000</span>/api/ext/v1/missions/<span class="var">{mission_id}</span>/signal</code><span class="st live">已上線</span></div>
     <p class="ep-sum">一個任務的完整訊號，依「機 → 架次」分組。<strong>一次一個任務</strong>：要比幾個就呼叫幾次。訊號每秒一筆，一次回完，不分頁也不降採樣。</p>
     <p class="lbl">回應</p>
     <div class="panel">

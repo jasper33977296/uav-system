@@ -1,7 +1,7 @@
 # 對外任務歷史：比較兩趟或多趟的訊號
 
 > 給**外部控制端**用。2026-09-16 定案（§9）。
-> 狀態：**規格草案，尚未實作**。即時那一半見 [`external-live-api.md`](external-live-api.md)。
+> 狀態：**已實作（2026-09-16）**，見 §10。即時那一半見 [`external-live-api.md`](external-live-api.md)。
 
 控制端要回答的是「**這次比上次好還是差**」：同一條路徑飛了兩趟以上，比較沿途的訊號。
 所以這裡給的是**一個任務的完整訊號樣本**，外加每一筆「沿預計航線走了多遠、偏離多少」
@@ -217,13 +217,20 @@ const series = runs.map((r) => ({
 
 ---
 
-## 10. 實作要動的地方
+## 10. 實作（2026-09-16）
 
-* `apps/backend/app/chainage.py`：把 `_project` 拆成回傳「里程＋偏離」的共用函式，
-  現有的 `compare_along_path` 改用它——**同一套投影只留一份**。
-* 新的 `apps/backend/app/ext_history.py`：兩支端點；`route` 直接用
-  `ext_stream.route_geojson`，欄位白名單與 `ext_stream.LINK_KEYS` 共用。
-* 清單端點的統計（架次數、樣本數）用一次 `group by` 算出來，**不新增欄位**。
-* `gaps` 讀 `blackouts`（`session_id`、`started_at`、`ended_at`、`reason`）。
-* 驗收：拿今天的兩個任務實際跑一次，確認 `along_m` 在同一份路徑上對得起來、
-  沒有路徑的任務 `reference` 是 `null`；清單的樣本數與資料庫對得上。
+| 地方 | 做了什麼 |
+|---|---|
+| `apps/backend/app/chainage.py` | 投影拆出 `projector()`：`(lat, lon) → (里程, 偏離)`。畫面上的沿路徑對照改用同一份，**同一套投影只留一份** |
+| `apps/backend/app/ext_history.py` | 兩支端點。預計航線用 `ext_stream.route_geojson`、訊號欄位用 `ext_stream.LINK_KEYS`——即時與事後同一份 |
+| `apps/backend/app/main.py` | 掛上路由 |
+
+統計（架次數、樣本數、第一趟起飛時間）是查詢時算的，沒有新增欄位。
+
+**驗過的**（`scripts/test-ext-history.py`，打正在跑的 backend，只讀既有資料＋一組跑完就刪的臨時資料）：
+清單的架次數與樣本數與資料庫一致、樣本欄位就是 §3 那一組、綁路徑的架次 `reference` 是 `plan` 且
+87/87 筆算得出里程、把 `max_offset_m` 縮到 0.01 時里程全部變 `null` 而偏離照給、
+沒有綁路徑的架次 `reference` 是 `null` 且不退回用軌跡、`plan_id`／`drone_id`／`external`／時間窗四種篩選、
+不合法編號回 422、找不到回 404。投影重構另外比對過既有的沿路徑對照，行為沒變。
+
+**還沒做**：舊架次的補歸要在畫面上做（§6）；沒有補歸的飛行不會出現在任務歷史裡。
