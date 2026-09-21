@@ -72,7 +72,7 @@
 | [039](039-autonomous-flight-state-machine.md) | 全自動飛行的狀態機與安全守門：**飛行中上傳任務會立刻改道且無任何守門**（SITL 實測）。飛安裁定全數完成（08-31 複裁七條），A／C／E／G 待實作 | **high** | in-progress | `doc/autonomous-flight-state-machine.md` |
 | [040](040-sysid-must-be-assigned.md) | **sysid 由系統指派＋入列驗證協定**：驗證完成前不得指派任務或控制。唯一鍵值＝板號、撞號自動重新配號、代理強制；**A1–A4 完成**；A5 簽章**裁定不做**（設計留存，含重啟觸發條件）| **high** | in-progress | `mavlink_rx.py`＋`command`＋`drones` 表＋uav-agent |
 | [049](049-link-display-gated-on-mavlink.md) | 訊號面板被 MAVLink 綁架：飛控不在、5G 訊號就整塊消失（**036 的鏡像**：把「有資料」畫成「沒有資料」）；後端手上樣本新鮮，卻被廣播閘 `ever_connected` 擋掉 | medium | open | `backend/app/main.py:207`＋`useTelemetry.ts:40`／`SidePanel.tsx:381` |
-| [050](050-agent-fc-link-watchdog.md) | **飛控串列斷了，代理不知道、不出聲、也不試著救**：25 分鐘零告警，靠人工重啟才恢復（而重啟有效只是 pyserial 重設 termios 的副作用）；含偵測／取回／復原期間持續出聲三項需求 | **high** | open | `uav-agent/agent.py:1110`／`:1201`／`:1168` |
+| [050](050-agent-fc-link-watchdog.md) | **飛控串列斷了，代理不知道、不出聲、也不試著救**：25 分鐘零告警，靠人工重啟才恢復（而重啟有效只是 pyserial 重設 termios 的副作用）。**需求 1 偵測（a02f7d3）與 2 取回（17e5765）已完成並上機驗證**——真機重現原鏈路一秒未斷；剩需求 3「失聯期間持續出聲」，要與 049 一起改 | **high** | in-progress | `uav-agent/agent.py`＋`tools/fc-link-watchdog.py` |
 | [051](051-mission-list-planned-vs-flying.md) | 對外任務歷史清單把**「建了沒飛」報成「進行中」**：`started_at`／`ended_at` 兩個 null 意思不同而回應說不出差別；實查現在唯一被判成「進行中」的任務從來沒飛過（036／049 同族）| medium | **closed** | `backend/app/ext_history.py:74,102` |
 | [052](052-sample-interval-hardcoded.md) | 對外訊號的 `sample_interval_s` 是**寫死的常數 1**，而取樣率由機上 `--modem-interval` 決定、backend 沒有管道知道；同類錯誤已發生過（實測 2.61 s vs 宣稱 1 s）| medium | **closed** | `backend/app/ext_history.py:192` |
 | [053](053-gaps-telemetry-vs-samples.md) | `gaps` 是**遙測失明**不是訊號樣本缺口，而文件叫控制端拿它畫留白：真機上樣本可補傳、遙測與樣本各自會斷，兩個方向都會畫錯（模擬時重合所以看不出來）| medium | **closed** | `backend/app/ext_history.py:170-176` |
