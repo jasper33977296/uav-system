@@ -508,6 +508,15 @@ export default function CommandPanel() {
   //: （ui-spec §0.2c 條款 6）——身分不明時按鈕就不該是可按的。
   //: null＝還沒問到（不是「未入列」）：那兩者不能同形
   const [adm, setAdm] = useState<{ state: string; reason?: string } | null>(null);
+  // 選中機的 sysid。**算在早退之前**，因為下面那個 hook 要拿它當相依。
+  // （選中機統一的理由見下方 routerDead 附近那段註解）
+  const sid = live?.mav_sysid != null ? String(live.mav_sysid) : null;
+  // 換了機或換了航線，那份距離就不是在說同一件事了。
+  // **這個 hook 原本被放在下面兩個早退之後**（2026-09-21 fbabddf），
+  // 於是 health 還是 null 的那幾次 render 不會呼叫到它，health 一到
+  // hook 數量就變了——整個即時頁白畫面。**正是上面那段註解警告的那件事，
+  // 而它是第二次發生**（第一次 2026-08-25）。新增 hook 一律加在這條線以上。
+  useEffect(() => { setFarStart(null); }, [sid, planId]);
 
   if (health === null) return null;
   if (health === "off") return null;           // 服務未部署/未連線：不佔版面
@@ -522,9 +531,6 @@ export default function CommandPanel() {
   // **嚴格比對 false**：舊版服務沒有這個欄位時是 undefined，那是「不知道」，
   // 不該把整個面板鎖掉
   const routerDead = health.ok === false;
-  const sid = live?.mav_sysid != null ? String(live.mav_sysid) : null;
-  // 換了機或換了航線，那份距離就不是在說同一件事了
-  useEffect(() => { setFarStart(null); }, [sid, planId]);
   const dh = sid ? health.drones[sid] ?? null : null;
   const armed = dh?.armed ?? null;
   // 039 複裁 A：**RC 未連線不得起飛、不得開始執行路徑**。「機在地上失聯只告警」
