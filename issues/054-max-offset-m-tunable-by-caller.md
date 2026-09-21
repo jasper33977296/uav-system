@@ -1,6 +1,6 @@
 # 054 · `max_offset_m` 被外部調得動
 
-- 狀態：open
+- 狀態：closed
 - 嚴重度：low
 - 位置：`apps/backend/app/ext_history.py:129`
 - 建立：2026-09-21
@@ -42,3 +42,11 @@ async def mission_signal(mission_id: str,
 
 **反向的理由**（要留就要寫進文件）：不同場域的航線精度差很多，
 空曠地 60 m 可能太鬆。真有這個案例時再開回來，而那時要先量過。
+
+## 解決方式
+
+`mission_signal()` 不再收 `max_offset_m`，一律用 `chainage.DEFAULT_MAX_OFFSET_M`；
+用了哪個值照樣寫在 `method.max_offset_m` 裡。測試改成驗「帶了也不生效」，
+門檻本身改從內部呼叫 `chainage.projector()` 驗。
+
+2026-09-21，commit `0d404fb`。

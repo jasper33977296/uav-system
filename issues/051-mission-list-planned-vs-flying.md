@@ -1,6 +1,6 @@
 # 051 · 任務歷史清單把「建了沒飛」報成「進行中」
 
-- 狀態：open
+- 狀態：closed
 - 嚴重度：medium
 - 位置：`apps/backend/app/ext_history.py:74,102`＋`doc/external-history-api.md` §2.1
 - 建立：2026-09-21
@@ -66,3 +66,11 @@ LEFT JOIN LATERAL (SELECT min(started_at) AS started_at FROM flight_sessions x
 「**看 `state`**，不要自己從時間戳推」。
 
 取捨：多一個欄位，但少一條要在文件裡解釋、而且現在解釋錯了的規則。
+
+## 解決方式
+
+清單與 `mission` 都帶 `state`（`planned`／`flying`／`ended`），由架次數與 `ended_at` 算出來
+（`ext_history._state()`）。`started_at`／`ended_at` 照給，但它們是時間不是狀態。
+文件把「`ended_at` 是 null ＝進行中」那條錯規則刪掉，改成「看 `state`，別自己推」。
+
+2026-09-21，commit `0d404fb`。

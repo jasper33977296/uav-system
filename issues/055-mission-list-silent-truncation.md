@@ -1,6 +1,6 @@
 # 055 · 任務清單會無聲截斷
 
-- 狀態：open
+- 狀態：closed
 - 嚴重度：low
 - 位置：`apps/backend/app/ext_history.py:21,93`
 - 建立：2026-09-21
@@ -46,3 +46,11 @@ LIMIT {arg(max(1, min(limit, MAX_LIMIT)))}
 一直進來時會漏。
 
 真的需要 cursor 時再開回來，而那時要先量過資料量，不是先猜。
+
+## 解決方式
+
+清單回應加 `total`（同一組篩選、沒套 limit 的 count）與 `has_more`。
+仍然不做分頁：文件寫明超過 `limit` 時用 `since`／`until` 開時間窗往回拿，
+不加 offset——新任務一直進來時 offset 會漏。
+
+2026-09-21，commit `0d404fb`。

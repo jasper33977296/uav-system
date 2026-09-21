@@ -1,6 +1,6 @@
 # 052 · 對外訊號的 `sample_interval_s` 是寫死的常數
 
-- 狀態：open
+- 狀態：closed
 - 嚴重度：medium
 - 位置：`apps/backend/app/ext_history.py:192`
 - 建立：2026-09-21
@@ -63,3 +63,12 @@
 取捨：查詢時多算一次中位數（樣本本來就都在手上，成本可以忽略）。
 不要的做法：讓機上把旗標值回報上來——那還是「設定值」，而這個 issue 就是在講
 設定值與實際值可以差 30 倍。
+
+## 解決方式
+
+`method.sample_interval_s` 拿掉，改成每一趟底下的 `sample_interval_s`＝該趟相鄰樣本
+時間差的**中位數**（`ext_history._interval_s()`），不足兩筆給 `null`。
+`method` 只留真的是方法的東西（`max_offset_m`、`sample_gap_factor`）。
+文件寫明它是量到的，不是設定值。
+
+2026-09-21，commit `0d404fb`。
