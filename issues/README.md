@@ -90,7 +90,8 @@
 | [062](062-waypoint-hold-time-not-settable.md) | 規劃時設不了航點停留秒數。**資料模型其實已經支援**——`mission_time.py` 讀 `NAV_WAYPOINT` param1 算進飛行時間，缺的只是編輯端 | medium | open | 規劃 UI |
 | [063](063-waypoint-hidden-under-3d-building.md) | 點位落在建築物上被 3D 建物蓋住就再也選不到，只能整條路徑重來 | medium | open | `MapView.tsx` 圖層順序／命中測試 |
 | [064](064-2d-route-preview.md) | 控制端要看得到每條路徑的 2D 預覽圖。現有縮圖是等距 3D，同場地幾條路徑在斜角下形狀相似又可各自轉向，彼此比不了 | low | open | `MissionThumb3D.tsx` |
-| [065](065-round-trip-overlapping-waypoints.md) | **來回路徑的重疊點位選不到——規劃流程要重新設計**。表示法與選取是兩個問題；建議「折返」變成路徑屬性（源頭消滅重疊）＋航點列表保底。**spiderfy 散開顯示明確不建議**：飛行規劃介面不該把點畫在假座標上 | medium | needs-decision | 規劃 UI＋航線資料結構 |
+| [065](065-round-trip-overlapping-waypoints.md) | **來回路徑的重疊點位選不到——規劃流程要重新設計**。表示法與選取是兩個問題；建議「折返」變成路徑屬性（源頭消滅重疊）＋航點列表保底。**spiderfy 散開顯示確定不做**：飛行規劃介面不該把點畫在假座標上。**2026-09-21 定案走 D＋A**（折返變路徑屬性＋航點列表保底），三個細節待定 | medium | open | 規劃 UI＋航線資料結構 |
+| [066](066-plan-table-to-map-editing.md) | 規劃頁：點路徑表格列直接跳到地圖上那條路徑線就地編輯每個參數。**這是 065A／062／063／064 的共同編輯面**——分開做會做出三套不一樣的介面 | medium | open | `app/plans/page.tsx`＋`MapView.tsx` |
 
 「✔實測確認」= 2026-08-03 首次實飛（SITL 起飛 → 進干擾區 → RTL）取得的實際資料佐證，
 不只是讀碼推論。詳見 [progress/log/2026-08-03.md](../progress/log/2026-08-03.md)。
