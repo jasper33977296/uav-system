@@ -113,6 +113,24 @@ async def _link_of(sysid: int):
     return (row["drone_id"], row["session_id"]) if row else (None, None)
 
 
+#: 留痕的 detail 上限。欄位是 `text` 沒有長度限制，這個數字純粹是我們自己訂的。
+#: **原本是 500，而它剛好切在最有用的地方**：`mission_fly` 的 detail 開頭是
+#: 巨大的 `upload`（含地形檢查逐段結果），`transit`／`mission` 那幾格全在 500
+#: 之後——2026-09-21 查「重複執行到底有沒有飛到起始點」時，答案就在被切掉的
+#: 那一段裡（issues/060）。
+AUDIT_DETAIL_MAX = 20000
+
+
+def _clip(detail: str) -> str:
+    """太長就截，**但要說出來**——不然事後讀的人會以為那就是全部。"""
+    if detail is None:
+        return ""
+    if len(detail) <= AUDIT_DETAIL_MAX:
+        return detail
+    return (detail[:AUDIT_DETAIL_MAX]
+            + f"…【留痕截斷：原文 {len(detail)} 字元，上限 {AUDIT_DETAIL_MAX}】")
+
+
 async def _audit(sysid: int, action: str, params, result: str, detail: str = ""):
     # 2026-09-06：原本只寫 sysid，於是「這趟飛行下了什麼指令」在系統裡
     # 連不起來——307 筆歷史紀錄裡 drone_id 填了 0 筆（欄位 9/2 就加了，
@@ -126,7 +144,7 @@ async def _audit(sysid: int, action: str, params, result: str, detail: str = "")
         "INSERT INTO command_log "
         "(sysid, action, params, result, detail, client, drone_id, session_id) "
         "VALUES ($1, $2, $3, $4, $5, $6, $7, $8)",
-        sysid, action, json.dumps(params, default=str), result, detail[:500],
+        sysid, action, json.dumps(params, default=str), result, _clip(detail),
         _client_var.get(), did, sid)
 
 
@@ -594,23 +612,84 @@ async def emergency_land(sysid: int):
     return await _run(sysid, "emergency_land", mav.job_set_mode, "land")
 
 
+class MissionStartIn(BaseModel):
+    #: **重新執行 vs 繼續執行**（issues/060，2026-09-21 使用者裁定）。
+    #: 兩者在操作上長得像，意圖相反：
+    #:   * `False`（預設）＝**重新執行**：這是新的一趟，先飛到起始點再從頭跑
+    #:   * `True`＝**繼續執行**：接上剛才斷掉的地方，**不飛回起點**
+    #: 預設是重新執行——主要用途是同一條路徑飛多趟。
+    #: **不用同一個動作猜意圖**：猜錯的那一半會把「從第 7 點續」變成
+    #: 「飛回第 1 點重來」，而那在空中是一段沒有人預期的航程。
+    resume: bool = False
+    #: 同 `FlyIn`：離起始點太遠時，帶**操作員看到的那個距離**再送一次
+    accept_start_distance_m: float | None = None
+
+
+async def _transit_step(sysid: int, plan_id: str | None,
+                        accept: float | None) -> dict:
+    """飛到任務起始點那一段，回傳要寫進 `steps["transit"]` 的東西。
+
+    **這一段屬於「進任務」，不屬於「起飛」**（issues/060）：原本它只長在
+    `mission_fly` 裡，於是機已經在空中、要再跑一次同一條路徑時完全不經過，
+    而 ArduCopter 一進 AUTO 就從最近的下一個航點開始——航線第一段永遠沒飛到。
+
+    高度由 `_start_leg` 取自**航線替起始點寫的高度**，完全不看機當下的高度
+    （2026-09-21 使用者裁定：**以 plan 的起始點高度為絕對主導**）。理由是可預測：
+    同一條航線不論從哪裡重跑，走的都是同一個高度，趟與趟之間才比得了。
+    已知後果與 048 的關係見 issues/060。
+    """
+    leg = await _start_leg(sysid, plan_id)
+    # 不飛的時候也要寫進 steps 並說出為什麼——「飛過去了」與「沒飛、原地切任務」
+    # 要分得出來，而 2026-09-21 查這件事時就是卡在留痕看不出來
+    if leg.get("skip"):
+        return {"skipped": leg["skip"], **leg}
+    _check_start_leg(leg, accept)
+    d = router.drones.get(sysid) or {}
+    g_amsl = (d["alt_msl"] - d["alt_rel"]
+              if d.get("alt_msl") is not None and d.get("alt_rel") is not None else None)
+    return await _fly_to_start(sysid, leg, g_amsl)
+
+
 @app.post("/api/command/{sysid}/mission/start", tags=["任務"],
-          summary="③ 開始執行機上的任務")
-async def mission_start(sysid: int):
+          summary="③ 開始執行機上的任務（預設先飛到起始點）")
+async def mission_start(sysid: int, body: MissionStartIn | None = None):
     """讓飛控開始執行**它機上現有**的那份任務（不帶任務內容——那是上一步的事）。
 
     **機必須已經解鎖並在空中**：對停在地面的機切自動任務模式，等於叫它自己起飛。
     要從地面一路到飛，用 `/api/command/{sysid}/mission/fly` 或 `/api/start`。
+
+    **預設會先飛到任務起始點**（issues/060）。要接續剛才斷掉的地方請帶
+    `resume: true`——那時不會飛回起點，從飛控當下那一項繼續。
     """
+    body = body or MissionStartIn()
     _require_enabled(); await _require_capability(sysid, "mission_start")
-    await guard_client.ask_guard(sysid, "mission_start")
-    res = await _run(sysid, "mission_start", mav.job_command, 300, [0.0])
-    # 啟動的是**機上現有**的任務，所以要查這台機現在綁的是哪一份
+    # **先查機上綁的是哪一份**：要拿它算起始點，所以不能等啟動完才查
     mid = await pool.fetchval(
         "SELECT current_plan_id::text FROM drones WHERE mav_sysid = $1", sysid)
+    await guard_client.ask_guard(sysid, "resume" if body.resume else "start_mission")
+
+    steps: dict = {"mode": "resume" if body.resume else "restart", "plan_id": mid}
+    if body.resume:
+        # 繼續：切回任務模式，飛控從它當下那一項接著跑。**不送 MISSION_START 0**
+        # ——那會把序號歸零，正是「繼續」最不該發生的事
+        steps["resume"] = await _run(sysid, "mode:mission", mav.job_set_mode, "mission")
+    else:
+        try:
+            steps["transit"] = await _transit_step(sysid, mid,
+                                                   body.accept_start_distance_m)
+        except HTTPException as e:
+            await _audit(sysid, "mission_start", body.model_dump(), "failed",
+                         json.dumps(e.detail, ensure_ascii=False, default=str))
+            raise HTTPException(e.status_code, {**e.detail, "steps": steps}) \
+                if isinstance(e.detail, dict) else e
+        steps["mission"] = await _run(sysid, "mission_start", mav.job_command,
+                                      300, [0.0])
+    await _audit(sysid, "mission_start", body.model_dump(), "accepted",
+                 json.dumps(steps, ensure_ascii=False, default=str))
     if mid:
-        await guard_client.show_on_live(sysid, mid, "任務已啟動")
-    return res
+        await guard_client.show_on_live(
+            sysid, mid, "任務已繼續" if body.resume else "任務已啟動")
+    return {"ok": True, "steps": steps}
 
 
 async def _live() -> dict:
@@ -948,6 +1027,12 @@ async def mission_fly(sysid: int, body: FlyIn):
 
     # 先飛到任務起始點再切任務（見 `_start_leg`）。不飛的時候也寫進 steps，
     # 並說出為什麼——「飛過去了」與「沒飛、原地切任務」要分得出來
+    #
+    # **這裡刻意不用 `_transit_step`**（`mission_start` 用的那個）：本序列的 `leg`
+    # 是在**解鎖之前**就算好的，因為 far_start 那一關要擋在起飛前——飛起來之後
+    # 才告訴操作員「離起始點 300 m」已經太晚。`_transit_step` 是當場算，
+    # 適合已經在空中的情況。兩者共用 `_start_leg`／`_check_start_leg`／
+    # `_fly_to_start`，不同的只是「什麼時候算距離」這一個決定。
     if leg.get("skip"):
         steps["transit"] = {"skipped": leg["skip"], **leg}
     else:

@@ -18,7 +18,7 @@
 |---|---|---|
 | ① 選任務 | `GET /api/v1/missions` | 任務庫總表。**唯讀、不吃 `ENABLE_COMMANDS`**——只是看有哪些航線，不動飛機 |
 | ② 上傳 | `POST /api/v1/command/{sysid}/mission/upload` <br>`{"plan_id": "..."}` | 寫進飛控，**並逐項讀回比對**。欄位 09-08 由 `mission_id` 改名為 `plan_id`，服務端**只收新名字**，送舊的回 422 |
-| ③ 執行 | `POST /api/v1/command/{sysid}/mission/start` | 讓飛控開始執行**它機上現有**的那份任務 |
+| ③ 執行 | `POST /api/v1/command/{sysid}/mission/start` | 讓飛控開始執行**它機上現有**的那份任務。**預設先飛到任務起始點**；要接續中斷處帶 `{"resume": true}` |
 
 **要在自己的地圖上看執行中的飛機**：見 [`external-live-api.md`](external-live-api.md)
 （控制端產生一組 UUID 當任務編號，先連上再帶著它起飛；從起飛開始每 0.5 秒送狀態，
@@ -39,6 +39,13 @@
 
 ### 1.1 ③ 不會讓一台停在地上的機起飛，而 ② 在空中會立即改道
 
+* **`mission/start` 預設是「重新執行」**（2026-09-21 裁定，issues/060）：先用 GUIDED
+  飛到任務起始點、等到位，再送 `MISSION_START`。高度取**航線替起始點寫的高度**，
+  不看機當下在多高——同一條航線不論從哪裡重跑都走同一個高度，趟與趟才比得了。
+  * 起始點 3 m 內＝不飛，回應的 `steps.transit.skipped` 會說出原因。
+  * 離起始點超過門檻回 `409 far_start`，帶 `accept_start_distance_m` 再送一次。
+  * **要接續剛才中斷的地方請帶 `{"resume": true}`**：那時不飛回起點，
+    也不送 `MISSION_START`（那會把序號歸零），只切回任務模式讓飛控從當下那一項續。
 * **`mission/start` 要求機已經解鎖並在空中。** 對停在地面的機切自動任務模式，
   等於叫它自己起飛——那是 [issues/031](../issues/031-arm-guard-auto-mode.md)
   記的那次事故（2026-08-13，SITL 上真的飛起來了）。要從地面一路到飛，
