@@ -73,6 +73,11 @@
 | [038](038-board-identity.md) | 系統不知道哪台是哪台：本階段請求並記錄飛控板 UID；**比對與告警 09-02 實作**（撞號的 PX4 SITL 曾寫 46 筆假事件進真機記錄）| medium | in-progress | `mavlink_rx.py`＋uav-agent |
 | [039](039-autonomous-flight-state-machine.md) | 全自動飛行的狀態機與安全守門：**飛行中上傳任務會立刻改道且無任何守門**（SITL 實測）。飛安裁定全數完成（08-31 複裁七條），A／C／E／G 待實作 | **high** | in-progress | `doc/autonomous-flight-state-machine.md` |
 | [040](040-sysid-must-be-assigned.md) | **sysid 由系統指派＋入列驗證協定**：驗證完成前不得指派任務或控制。唯一鍵值＝板號、撞號自動重新配號、代理強制；**A1–A4 完成**；A5 簽章**裁定不做**（設計留存，含重啟觸發條件）| **high** | in-progress | `mavlink_rx.py`＋`command`＋`drones` 表＋uav-agent |
+| [051](051-mission-list-planned-vs-flying.md) | 對外任務歷史清單把**「建了沒飛」報成「進行中」**：`started_at`／`ended_at` 兩個 null 意思不同而回應說不出差別；實查現在唯一被判成「進行中」的任務從來沒飛過（036／049 同族）| medium | open | `backend/app/ext_history.py:74,102` |
+| [052](052-sample-interval-hardcoded.md) | 對外訊號的 `sample_interval_s` 是**寫死的常數 1**，而取樣率由機上 `--modem-interval` 決定、backend 沒有管道知道；同類錯誤已發生過（實測 2.61 s vs 宣稱 1 s）| medium | open | `backend/app/ext_history.py:192` |
+| [053](053-gaps-telemetry-vs-samples.md) | `gaps` 是**遙測失明**不是訊號樣本缺口，而文件叫控制端拿它畫留白：真機上樣本可補傳、遙測與樣本各自會斷，兩個方向都會畫錯（模擬時重合所以看不出來）| medium | open | `backend/app/ext_history.py:170-176` |
+| [054](054-max-offset-m-tunable-by-caller.md) | `max_offset_m` 被外部調得動（FastAPI 自動 query 的副作用），同一趟資料在不同呼叫下給出不同 `along_m`；文件沒寫這個參數 | low | open | `backend/app/ext_history.py:129` |
+| [055](055-mission-list-silent-truncation.md) | 任務清單**截斷了不說**：只有 `limit`（上限 200），沒有 `total`／`has_more`／cursor，拿到滿額時分不出是剛好還是被切掉 | low | open | `backend/app/ext_history.py:21,93` |
 
 「✔實測確認」= 2026-08-03 首次實飛（SITL 起飛 → 進干擾區 → RTL）取得的實際資料佐證，
 不只是讀碼推論。詳見 [progress/log/2026-08-03.md](../progress/log/2026-08-03.md)。
