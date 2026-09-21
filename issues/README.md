@@ -84,10 +84,10 @@
 | [056](056-mission-fly-skips-start-point.md) | 一鍵起飛**跳過航線第一個點**：ArduCopter 的 NAV_TAKEOFF 不看經緯度，而序列是先離地才切 AUTO，所以機直接飛往第二個點。改成離地後先 GUIDED 飛到起始點；超過 100 m 要確認。✔SITL；群飛與 PX4 尚未改 | high | **closed** | `command/app/main.py:mission_fly` |
 | [057](057-agent-events-never-consumed.md) | 代理的事件清單沒有人讀：18 處 `append`、0 處讀，其中包括**代理接管期間做過什麼**與失聯處置實際送了什麼指令——「我不在的時候發生了什麼」的答案被丟進黑洞。代理其實有一條會動的事件管道（意圖通道 `type:event`，後端在收），這個清單只是沒接上去；附帶無上限成長 | medium | open | `uav-agent/agent.py`＋`intent.py:141` |
 | [058](058-external-param-change-not-surfaced.md) | **別人改了飛控參數，畫面不說**：2026-09-21 排查花了數小時。我們不留存 `PARAM_VALUE`，所以說不出「它變了」；預檢字串原樣轉出，少了「哪個圍欄、我離它多遠」 | **high** | open | `mavlink_rx.py`＋即時頁預檢呈現 |
-| [059](059-agent-must-own-the-uart.md) | **uav-agent 必須永遠擁有 UART 最高優先權**：`get-gps.py`／`mavsdk_server` 與代理同開 `/dev/ttyAMA0`，兩邊各拿隨機片段——校正永遠跑不完且不報錯。050 需求 1 列過 `TIOCEXCL` 但沒做，理由取捨錯了（日常踩到的是非 root） | **high** | open | `agent.py` 開埠＋unit＋README |
-| [060](060-fly-to-start-only-on-takeoff.md) | **重複執行同一路徑仍不會先飛到起始點**：`_fly_to_start` 全檔只有一個呼叫點（`mission_fly`），已在空中重跑完全不經過。056 只修了起飛那一條；航線第一段永遠沒飛到＝A/B 比較的基準被破壞 | **high** | open | `apps/command/app/main.py:958` |
+| [059](059-agent-must-own-the-uart.md) | **uav-agent 必須永遠擁有 UART 最高優先權**：`get-gps.py`／`mavsdk_server` 與代理同開 `/dev/ttyAMA0`，兩邊各拿隨機片段——校正永遠跑不完且不報錯。050 需求 1 列過 `TIOCEXCL` 但沒做，理由取捨錯了（日常踩到的是非 root）。**09-21 裁定：搶埠要報到地面站**（走 057 的管道），啟動時發現被搶不拒絕啟動 | **high** | open | `agent.py` 開埠＋unit＋README |
+| [060](060-fly-to-start-only-on-takeoff.md) | **重複執行同一路徑仍不會先飛到起始點**：`_fly_to_start` 全檔只有一個呼叫點（`mission_fly`），已在空中重跑完全不經過。056 只修了起飛那一條；航線第一段永遠沒飛到＝A/B 比較的基準被破壞。**09-21 三項裁定**：重新／繼續分成兩個動作、高度以 plan 起始點為絕對主導、先做單機 | **high** | open | `apps/command/app/main.py:958` |
 | [061](061-external-repeat-is-a-new-mission.md) | 外部控制重複執行同一路徑要算成不同任務，名稱以時間自動產生——否則多趟資料疊在同一個任務下，「比較兩趟」拿不出來 | medium | open | `apps/command`＋對外契約 |
-| [062](062-waypoint-hold-time-not-settable.md) | 規劃時設不了航點停留秒數。**資料模型其實已經支援**——`mission_time.py` 讀 `NAV_WAYPOINT` param1 算進飛行時間，缺的只是編輯端 | medium | open | 規劃 UI |
+| [062](062-waypoint-hold-time-not-settable.md) | 規劃時設不了航點停留秒數。**資料模型其實已經支援**——`mission_time.py` 讀 `NAV_WAYPOINT` param1 算進飛行時間，缺的只是編輯端。**09-21 裁定：停留期間的樣本要標記**，任務歷史要說得出「靜止量測 N 秒、M 筆」 | medium | open | 規劃 UI |
 | [063](063-waypoint-hidden-under-3d-building.md) | 點位落在建築物上被 3D 建物蓋住就再也選不到，只能整條路徑重來 | medium | open | `MapView.tsx` 圖層順序／命中測試 |
 | [064](064-2d-route-preview.md) | 控制端要看得到每條路徑的 2D 預覽圖。現有縮圖是等距 3D，同場地幾條路徑在斜角下形狀相似又可各自轉向，彼此比不了 | low | open | `MissionThumb3D.tsx` |
 | [065](065-round-trip-overlapping-waypoints.md) | **來回路徑的重疊點位選不到——規劃流程要重新設計**。表示法與選取是兩個問題；建議「折返」變成路徑屬性（源頭消滅重疊）＋航點列表保底。**spiderfy 散開顯示確定不做**：飛行規劃介面不該把點畫在假座標上。**2026-09-21 定案走 D＋A**（折返變路徑屬性＋航點列表保底），三個細節待定 | medium | open | 規劃 UI＋航線資料結構 |

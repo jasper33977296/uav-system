@@ -1,6 +1,6 @@
 # 059 · uav-agent 必須永遠擁有 UART 的最高優先權
 
-- 狀態：open
+- 狀態：open（**裁定完成 2026-09-21**，待實作）
 - 嚴重度：**high**（飛安：橋的一端被別人靜默地搶走，而且很難看出來）
 - 位置：`uav-agent/agent.py` 的 `_open_serial_once`、`onboard/uav-link-node.service`
   （unit 設定）、`/opt/uav-agent/systemd/`
@@ -65,6 +65,14 @@ pyserial 的 `Serial(..., exclusive=True)`。之後任何非 `CAP_SYS_ADMIN` 的
 而它就是答案本身。
 
 搭配 050 已經做好的那兩個：termios 被改（`port_tampered`）與心跳失聯（`fc_link_ok`）。
+
+> **裁定（2026-09-21 使用者）：B 偵測到的結果要報到地面站**，讓操作員在畫面上
+> 就看得到「機上有別的程式在搶飛控」。今天這個資訊得 ssh 上去 `fuser` 才拿得到，
+> 而它就是答案本身；放在畫面上，下次五秒就解決。走 [057](057-agent-events-never-consumed.md)
+> 的事件管道——**那條管道要先接起來**，否則事件丟進去就消失。
+>
+> 附帶裁定：**啟動時發現埠已被別人開著，不拒絕啟動**。一個被干擾的橋仍然
+> 比沒有橋好，它該照跑並持續抱怨。
 
 ### C. 給其他程式一條**正確**的路，並寫進文件
 
