@@ -1,6 +1,6 @@
 # 060 · 重複執行同一條路徑時，仍然不會先飛到起始點
 
-- 狀態：open（**三項裁定完成 2026-09-21**，待實作）
+- 狀態：in-progress（**主體已實作並上線 `59380c9`**；行為驗證（SITL）未跑，見〈解決方式〉）
 - 嚴重度：**high**（航線第一段不會被飛到——研究資料缺一段，而且飛的軌跡
   與規劃的不同）
 - 位置：`apps/command/app/main.py:958`（`_fly_to_start` 的**唯一**呼叫點）
@@ -89,6 +89,39 @@ apps/command/app/main.py:958      在 mission_fly（一鍵起飛）裡
 * 061（外部控制重複執行視為不同任務）
 * 048（最低安全高度）——「飛過去的那一段用什麼高度」是同一個問題
 
-## 解決方式
+## 解決方式（進行中）
 
-（closed 時補）
+commit `59380c9`，已部署到 `uav-command`。
+
+* `_transit_step`：把「飛到起始點」抽成可重用的一步，`mission_start` 改成**預設
+  先走它**。共用既有的 `_start_leg`／`_check_start_leg`／`_fly_to_start`。
+* `MissionStartIn.resume`：重新執行（預設）與繼續執行分成兩個動作。繼續那一支
+  不飛回起點，也**不送 `MISSION_START`**——param1=0 會把序號歸零。守門動作跟著
+  分（HOLDING 只允許 `resume`）。
+* 高度維持 `_start_leg` 既有行為並寫成明文：**以 plan 的起始點高度為絕對主導**。
+* `mission_fly` 刻意不改用 `_transit_step`（理由在註解裡：它的 leg 算在解鎖前，
+  因為 far_start 要擋在起飛前）。
+* `doc/mission-api.md` 步驟③ 已更新。
+
+### 順手修掉一個擋住診斷的東西
+
+`_audit` 寫死 `detail[:500]`，而 `mission_fly` 的 detail 開頭是巨大的 `upload`
+檢查結果，`transit` 那一格全落在 500 之後——2026-09-21 查「重複執行到底有沒有
+飛到起始點」時，**答案就在被切掉的那一段裡**。改成 `_clip()`：上限 20000，
+而且截斷時會說出來（原文多長、上限多少）。
+
+### 驗證狀態
+
+`scripts/test-mission-start-transit.py` 17 項全過。**但那是結構測試（AST）**
+——驗的是程式形狀（哪個函式呼叫了誰、resume 那一支有沒有碰到不該碰的東西），
+**不是飛行行為**。
+
+**行為驗證還沒跑**：要走 `scripts/sitl-fly-to-start.py` 那條路（ArduCopter SITL
+＋產品端 API），涵蓋 056 當初的六個情境再加上 `mission_start` 的重新／繼續兩支。
+在那之前，這一條不該算完成。
+
+### 現場觀察到的那一趟
+
+2026-09-21 的 `command_log` 顯示三趟 `mission_fly`：07:30 與 07:41 都有
+`goto_start`，**07:45 那趟沒有**——與使用者回報的現象吻合。跳過的原因當時讀不到
+（留痕截斷），現在修好了，下次重現就看得到 `steps.transit.skipped` 的說明。
