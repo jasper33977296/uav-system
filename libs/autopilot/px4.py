@@ -121,6 +121,13 @@ class Px4Driver:
                 "param7": ground_amsl + alt,
                 "blank": float("nan"), "alt_semantics": "amsl"}
 
+    def goto_plan(self, lat, lon, alt, ground_amsl):
+        """**PX4 沒有實作**（2026-09-21）。候選是 `DO_REPOSITION`（param7 絕對
+        海拔），但現役機隊是 ArduPilot、手上沒有 PX4 可驗——一個沒驗過的飛行
+        動作不上線。呼叫端收到這個例外就維持原行為（原地起飛直接切任務）並寫明。
+        """
+        raise NotImplementedError("PX4 的「前往任務起始點」尚未實作與驗證")
+
     def wire_seq(self, index: int) -> int:
         return index              # PX4 不補 home，索引即 seq
 

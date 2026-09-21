@@ -173,6 +173,14 @@ class AutopilotDriver(Protocol):
         參數連 ACK 都不回，指令靜默丟棄）。
         """
 
+    def goto_plan(self, lat: float, lon: float, alt: float,
+                  ground_amsl: float | None) -> dict:
+        """空中飛到某一點（一鍵起飛的「前往任務起始點」）。`alt` 是相對 home。
+
+        回傳送法（訊息種類、要先進哪個模式、高度語意）。沒實作或沒驗過的
+        驅動丟 `NotImplementedError`——呼叫端據此維持原行為並寫明，不猜。
+        """
+
     def wire_seq(self, index: int) -> int:
         """我方航點索引 → **機端的 mission seq**（差異 5 的另一面）。
 

@@ -501,6 +501,9 @@ export default function CommandPanel() {
   // → React #310「Rendered more hooks than during the previous render」，
   // 整個即時頁白畫面。2026-08-25 實際炸過一次
   const [proposal, setProposal] = useState<any>(null);
+  //: 一鍵起飛被 `far_start` 擋下時的那份回覆（距離、門檻、起始點）＋原本的
+  //: 請求內容。確認時送回**畫面上顯示的那個距離**——後端比對的是那個數字
+  const [farStart, setFarStart] = useState<any>(null);
   //: 入列狀態（issues/040 A2）。**事先查、不要讓使用者用失敗去發現**
   //: （ui-spec §0.2c 條款 6）——身分不明時按鈕就不該是可按的。
   //: null＝還沒問到（不是「未入列」）：那兩者不能同形
@@ -520,6 +523,8 @@ export default function CommandPanel() {
   // 不該把整個面板鎖掉
   const routerDead = health.ok === false;
   const sid = live?.mav_sysid != null ? String(live.mav_sysid) : null;
+  // 換了機或換了航線，那份距離就不是在說同一件事了
+  useEffect(() => { setFarStart(null); }, [sid, planId]);
   const dh = sid ? health.drones[sid] ?? null : null;
   const armed = dh?.armed ?? null;
   // 039 複裁 A：**RC 未連線不得起飛、不得開始執行路徑**。「機在地上失聯只告警」
@@ -659,6 +664,13 @@ export default function CommandPanel() {
         body: payload ? JSON.stringify(payload) : undefined,
       });
       const body = await res.json().catch(() => ({}));
+      if (res.status === 409 && body?.detail?.code === "far_start") {
+        // **這不是拒絕，是一個問題**：起飛位置離任務起始點太遠，要人看過
+        // 距離再決定（使用者裁定 2026-09-21）。不進 noticeDenied——沒有東西被擋死
+        setFarStart({ ...body.detail, action, path, payload });
+        setBusy(null);
+        return;
+      }
       if (!res.ok) {
         const text = failText(action, res.status, body?.detail);
         setResult({ ok: false, text });
@@ -674,8 +686,16 @@ export default function CommandPanel() {
         // 地形預檢的話跟著上傳結果一起回（`check.terrain.notes`）。
         // **只挑地形那幾句**：`warnings` 裡還有圍欄、機種、frame 方言，
         // 全列會變成沒人讀的一大段（使用者：字太多）
-        setResult({ ok: true, text: `${action}成功`,
-                    notes: body?.check?.terrain?.notes });
+        // 一鍵起飛多回一段 `transit`（先飛到任務起始點）。**沒飛也要說**：
+        // 「飛過去了」與「沒飛、原地切任務」在畫面上要分得出來
+        const tr = body?.steps?.transit;
+        const trNote = tr?.skipped && tr?.distance_m == null
+          ? [`沒有先飛到任務起始點：${tr.skipped}`] : [];
+        setResult({ ok: true,
+                    text: tr?.arrived
+                      ? `${action}成功——先飛到任務起始點（${Math.round(tr.from_m)} m）才開始`
+                      : `${action}成功`,
+                    notes: [...(body?.check?.terrain?.notes ?? []), ...trNote] });
         // 顯示到即時頁的事**已經搬到後端**（指令服務在上傳／啟動／改航線成功
         // 後呼叫 /plans/{id}/show，前端由 mission_shown 事件觸發重畫）。
         // 原因：上傳的呼叫端不只有這個畫面——驗收 rig、MCP、curl 都會上傳，
@@ -1379,6 +1399,47 @@ export default function CommandPanel() {
               ))}
             </div>
           )}
+        </div>
+      )}
+
+      {/* 起飛位置離任務起始點太遠（> 門檻）：同 §6.3，確認畫面要說得出
+          會發生什麼——多遠、多高、那一段為什麼需要人看 */}
+      {farStart && (
+        <div className="modal-backdrop" onClick={() => setFarStart(null)}>
+          <div className="modal confirm-modal" onClick={(e) => e.stopPropagation()}>
+            <div className="modal-head">
+              <span className="name">起飛位置離任務起始點 {Math.round(farStart.distance_m)} m</span>
+            </div>
+            <div className="modal-text">
+              <div className="hint-line">
+                起飛後，無人機會以 <b>{farStart.alt_m} m</b> 高度<b>直線</b>飛到任務起始點
+                （{farStart.start?.lat?.toFixed(5)}, {farStart.start?.lon?.toFixed(5)}），
+                到位後才開始任務。
+              </div>
+              <div className="hint-line" style={{ marginTop: 6 }}>
+                這一段不在航線裡，規劃時沒人看過，而且超過 {farStart.threshold_m} m——
+                請確認機體放的位置、選的航線、選的機都對。
+              </div>
+              {farStart.alt_m < 3 && (
+                <div className="form-err" style={{ marginTop: 6 }}>
+                  ⚠ {farStart.alt_m} m 是很低的高度，途中離障礙物很近
+                </div>
+              )}
+              <div className="hint-line" style={{ marginTop: 6 }}>
+                途中切懸停或返航，序列就會停手，不會再切進任務。
+              </div>
+            </div>
+            <div className="modal-actions">
+              <button className="btn-plain" onClick={() => setFarStart(null)}>取消</button>
+              <button className="btn-danger" disabled={inFlight}
+                onClick={() => {
+                  const f = farStart;
+                  setFarStart(null);
+                  exec(f.action, f.path, false,
+                       { ...(f.payload ?? {}), accept_start_distance_m: f.distance_m });
+                }}>確認，起飛並飛過去</button>
+            </div>
+          </div>
         </div>
       )}
 

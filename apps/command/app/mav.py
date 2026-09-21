@@ -931,6 +931,34 @@ def job_takeoff(r: MavRouter, sysid: int, alt: float, ground_amsl=None) -> dict:
             "alt_semantics": t["alt_semantics"]}
 
 
+def job_goto(r: MavRouter, sysid: int, lat: float, lon: float, alt: float,
+             ground_amsl=None, set_mode: bool = True) -> dict:
+    """空中飛到某一點（送一次）。送法全部由驅動的 `goto_plan()` 給。
+
+    **這裡只送不等到位**：到位可能要幾分鐘，而一則工作的上限是
+    `JOB_TIMEOUT_S`。等待與判定在呼叫端（`main._fly_to_start`），它讀的是
+    router 的 per-sysid 位置；這則訊息沒有 ACK，重送是冪等的。
+
+    `set_mode=False` 給**重送**用：途中模式被換掉（飛手接手、failsafe）時，
+    重送絕不能把它切回 GUIDED——那是在跟接手的人搶飛機。
+    """
+    d = dialect(r, sysid)
+    p = d["driver"].goto_plan(lat, lon, alt, ground_amsl)   # NotImplementedError 往上拋
+    out = {"alt": p["alt"], "alt_semantics": p["alt_semantics"]}
+    cm = (r.drones.get(sysid) or {}).get("custom_mode")
+    if p.get("mode") and not (cm is not None and d["mode_matches"](cm, p["mode"])):
+        if not set_mode:
+            raise CommandError(f"機已不在 {p['mode']}，不重送（有人接手了）")
+        out["mode"] = job_set_mode(r, sysid, p["mode"])
+    if p["kind"] != "position_target":
+        raise CommandError(f"不認得的送法 {p['kind']}")
+    r._sendto(sysid, lambda m: m.set_position_target_global_int_encode(
+        0, sysid, 1, p["frame"], p["type_mask"],
+        int(round(lat * 1e7)), int(round(lon * 1e7)), float(alt),
+        0, 0, 0, 0, 0, 0, 0, 0))
+    return {"sent": "SET_POSITION_TARGET_GLOBAL_INT", "ack": "none", **out}
+
+
 def job_clear_mission(r: MavRouter, sysid: int) -> dict:
     """清掉機上那份任務（`MISSION_CLEAR_ALL`）＋ 讀回確認真的變成 0 項。
 

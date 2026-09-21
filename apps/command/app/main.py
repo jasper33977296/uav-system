@@ -671,6 +671,10 @@ class FlyIn(BaseModel):
     #: NAV_TAKEOFF 走**（見 `_mission_takeoff_alt`），不是一個固定值。
     takeoff_alt: float | None = None
     alt_timeout_s: float = 60.0
+    #: 起飛位置離任務起始點超過 `plan_check.FAR_START_M`（見 `_start_leg`）時，
+    #: 要帶**操作員看到的那個距離**再送一次。確認的是那個數字——機在這段時間
+    #: 被搬動、距離變得更遠，就要重看（同改航線提案的紀律）
+    accept_start_distance_m: float | None = None
 
 
 def _with_command(row) -> dict:
@@ -728,13 +732,148 @@ def _note_step(sysid: int, step: str) -> None:
                                           "step": step, "ok": True})
 
 
+#: 到位判定（水平距離，m）。ArduPilot 的 WPNAV_RADIUS 預設 2 m，GPS 抖動同量級。
+#: 起飛位置本來就在這個範圍內就不另外飛——原地起飛就是到了。
+START_ARRIVE_M = 3.0
+#: 確認之後距離又多了這麼多（m）就要重看：確認的是**那個**數字
+START_RECONFIRM_M = 20.0
+#: 這麼久沒拉近 1 m 就算卡住（s）。途中重送的間隔
+START_STALL_S, START_RESEND_S = 15.0, 5.0
+
+
+async def _start_leg(sysid: int, plan_id: str | None) -> dict:
+    """從起飛位置到任務起始點那一段 →（起始點、距離、高度、做不做）。
+
+    **為什麼要有這一段**（2026-09-21 使用者回報）：ArduCopter 的 NAV_TAKEOFF
+    忽略經緯度，而本序列又是先離地再切 AUTO——切進去時起飛項已經達成，機直接
+    往第二個點飛，航線第一個點從來沒被飛到。起飛位置離它越遠差越多。
+
+    回傳 `skip` 有值＝這一段不飛，而且說得出為什麼（沒有任務、沒有座標、
+    驅動沒實作、本來就在起始點）。
+    """
+    if not plan_id:
+        return {"skip": "沒有任務可讀，不知道起始點在哪"}
+    rows = await pool.fetch(
+        "SELECT lat, lon, alt, action, params FROM waypoints WHERE plan_id = $1 "
+        "ORDER BY seq", plan_id)
+    home = await pool.fetchval("SELECT home FROM plans WHERE id = $1", plan_id)
+    home = json.loads(home) if isinstance(home, str) else home
+    wps = [_with_command(r) for r in rows]
+    pt, src = plan_check.start_point(wps, home)
+    if pt is None:
+        return {"skip": src}
+    # 高度：**航線替起始點寫的高度**（使用者裁定 2026-09-21）——就是起飛項的高度
+    alt, alt_src = plan_check.takeoff_alt(wps)
+    if alt is None:
+        alt, alt_src = plan_check.FALLBACK_TAKEOFF_ALT, f"{alt_src}，用保底值"
+    leg = {"start": {"lat": pt[0], "lon": pt[1], "source": src},
+           "alt_m": alt, "alt_source": alt_src}
+    try:
+        mav.dialect(router, sysid)["driver"].goto_plan(pt[0], pt[1], alt, None)
+    except NotImplementedError as e:
+        return {**leg, "skip": f"{e}——維持原行為（原地起飛直接切任務）"}
+    d = (router.drones.get(sysid) or {}) if router else {}
+    if d.get("lat") is None or d.get("lon") is None:
+        return {**leg, "distance_m": None}
+    leg["distance_m"] = round(plan_check.dist_m(d["lat"], d["lon"], pt[0], pt[1]), 1)
+    if leg["distance_m"] <= START_ARRIVE_M:
+        leg["skip"] = f"起飛位置就在起始點 {START_ARRIVE_M:g} m 內"
+    return leg
+
+
+def _check_start_leg(leg: dict, accepted: float | None) -> None:
+    """起飛**之前**的關卡：距離不明就不飛、太遠就要人看過距離再確認。"""
+    if leg.get("skip"):
+        return
+    dist = leg.get("distance_m")
+    if dist is None:
+        # 不知道離多遠＝不知道要飛過一段什麼樣的路。沒有定位時 GUIDED 本來也
+        # 起不了飛，所以這一擋不會擋掉任何原本飛得起來的情況
+        raise HTTPException(409, {
+            "code": "position_unknown",
+            "msg": "讀不到這台機的位置，算不出它離任務起始點多遠",
+            "hint": "等 GPS 定位後再試"})
+    if dist <= plan_check.FAR_START_M:
+        return
+    if accepted is not None and dist <= accepted + START_RECONFIRM_M:
+        return
+    again = accepted is not None
+    raise HTTPException(409, {
+        "code": "far_start",
+        "msg": (f"這台機離任務起始點 {dist:.0f} m"
+                + (f"（確認時是 {accepted:.0f} m，之後又變遠了）" if again else "")
+                + f"，超過 {plan_check.FAR_START_M:.0f} m。起飛後它會以 "
+                f"{leg['alt_m']:g} m 高度直線飛過去——那一段不在航線裡，規劃時沒人看過"),
+        "hint": "確認機體放在對的位置、選的是對的航線與對的機。沒問題的話帶"
+                " accept_start_distance_m 再送一次",
+        "distance_m": dist, "threshold_m": plan_check.FAR_START_M,
+        "alt_m": leg["alt_m"], "start": leg["start"]})
+
+
+async def _fly_to_start(sysid: int, leg: dict, ground_amsl) -> dict:
+    """已在空中 → 飛到任務起始點 → **等到位**。沒到位就切 hold 停下、不切任務。
+
+    這則訊息沒有 ACK，所以「送出去了」不算數，只認位置。途中模式被換掉＝
+    有人接手（飛手／failsafe），序列就此停手，不把它搶回來。
+    """
+    s = leg["start"]
+    lat, lon, alt = s["lat"], s["lon"], leg["alt_m"]
+    sent = await _run(sysid, "goto_start", mav.job_goto, lat, lon, alt, ground_amsl,
+                      params={"lat": lat, "lon": lon, "alt": alt})
+    loop = asyncio.get_running_loop()
+    drv_matches = mav.dialect(router, sysid)["mode_matches"]
+    t0 = last_tx = best_t = loop.time()
+    best = d0 = leg["distance_m"]
+    deadline = t0 + 30.0 + d0 / 1.0              # 以 1 m/s 下限估，再給 30 s 餘裕
+    why, dist = "逾時", d0
+    while loop.time() < deadline:
+        await asyncio.sleep(1.0)
+        now = loop.time()
+        d = router.drones.get(sysid) or {}
+        cm = d.get("custom_mode")
+        if cm is not None and not drv_matches(cm, "guided"):
+            why = f"途中模式變成 {mav.dialect(router, sysid)['driver'].decode_mode(cm)}（有人接手）"
+            break
+        if d.get("lat") is None:
+            continue
+        dist = plan_check.dist_m(d["lat"], d["lon"], lat, lon)
+        if dist <= START_ARRIVE_M:
+            return {**leg, "arrived": True, "distance_m": round(dist, 1),
+                    "from_m": d0, "seconds": round(now - t0, 1), "sent": sent}
+        if dist < best - 1.0:
+            best, best_t = dist, now
+        elif now - best_t > START_STALL_S:
+            why = f"{START_STALL_S:.0f} 秒沒有拉近（卡在 {dist:.0f} m）"
+            break
+        if now - last_tx >= START_RESEND_S:
+            last_tx = now
+            try:
+                await loop.run_in_executor(None, router.submit, mav.job_goto, sysid,
+                                           lat, lon, alt, ground_amsl, False)
+            except Exception:
+                log.warning("前往起始點重送失敗", exc_info=True)
+    stopped = None
+    if not why.startswith("途中模式"):
+        # 還在 GUIDED 的話它會繼續往那一點飛——停下來，等人決定
+        try:
+            stopped = await _run(sysid, "mode:hold", mav.job_set_mode, "hold")
+        except HTTPException as e:
+            stopped = {"ok": False, "detail": e.detail}
+    raise HTTPException(504, {
+        "code": "start_not_reached",
+        "msg": f"沒有飛到任務起始點（{why}，剩 {dist:.0f} m / 出發時 {d0:.0f} m），未啟動任務",
+        "hint": "機停在懸停狀態——檢查遙測後可重試或 RTL",
+        "hold": stopped, "leg": leg})
+
+
 @app.post("/api/command/{sysid}/mission/fly", tags=["一鍵"])
 async def mission_fly(sysid: int, body: FlyIn):
     """起飛→任務自動序列（實戰教訓 2026-08-11：地面直接 MISSION_START
     在實機上會失敗，須先離地）：
 
-      （上傳＋回讀比對）→ 解鎖 → NAV_TAKEOFF → **等機端回報離地**
-      → 切 AUTO.MISSION（已在空中，PX4 跳過任務內的 takeoff 項續飛）
+      （起始點距離關卡）→（上傳＋回讀比對）→ 解鎖 → NAV_TAKEOFF
+      → **等機端回報離地** → **飛到任務起始點、等到位**
+      → 切 AUTO.MISSION（已在空中，任務內的 takeoff 項當場達成）
 
     沒判定到離地就不切任務——序列在任何一步失敗都停在安全狀態
     （PX4 起飛後自動懸停），並回報卡在哪一步。
@@ -746,14 +885,17 @@ async def mission_fly(sysid: int, body: FlyIn):
     _require_enabled(); await _require_capability(sysid, "mission_fly")
     await guard_client.ask_guard(sysid, "mission_fly")
     steps = {}
-    if body.plan_id:
-        steps["upload"] = await mission_upload(sysid, UploadIn(plan_id=body.plan_id))
-        _note_step(sysid, "upload")
     # **這一段只是「離地」，高度跟著任務走。** mid 在這裡就解出來（原本是
     # 序列跑完才解）——不給 plan_id 的呼叫用的是機上現有任務，那份任務的
     # 起飛高度同樣該由它自己決定
     mid = body.plan_id or await pool.fetchval(
         "SELECT current_plan_id::text FROM drones WHERE mav_sysid = $1", sysid)
+    # 起始點那一段**在解鎖之前**就先問清楚：太遠要人確認，而確認要在地上做
+    leg = await _start_leg(sysid, mid)
+    _check_start_leg(leg, body.accept_start_distance_m)
+    if body.plan_id:
+        steps["upload"] = await mission_upload(sysid, UploadIn(plan_id=body.plan_id))
+        _note_step(sysid, "upload")
     if body.takeoff_alt is not None:
         alt_target, alt_src = float(body.takeoff_alt), "呼叫端指定"
     else:
@@ -803,6 +945,23 @@ async def mission_fly(sysid: int, body: FlyIn):
             "steps": steps})
     steps["airborne"] = {"alt_rel": alt, "basis": basis}
     _note_step(sysid, "airborne")
+
+    # 先飛到任務起始點再切任務（見 `_start_leg`）。不飛的時候也寫進 steps，
+    # 並說出為什麼——「飛過去了」與「沒飛、原地切任務」要分得出來
+    if leg.get("skip"):
+        steps["transit"] = {"skipped": leg["skip"], **leg}
+    else:
+        dd = router.drones.get(sysid) or {}
+        g_amsl = (dd["alt_msl"] - dd["alt_rel"]
+                  if dd.get("alt_msl") is not None and dd.get("alt_rel") is not None else None)
+        try:
+            steps["transit"] = await _fly_to_start(sysid, leg, g_amsl)
+        except HTTPException as e:
+            await _audit(sysid, "mission_fly", body.model_dump(), "failed",
+                         json.dumps(e.detail, ensure_ascii=False))
+            raise HTTPException(e.status_code, {**e.detail, "steps": steps}) \
+                if isinstance(e.detail, dict) else e
+        _note_step(sysid, "transit")
 
     steps["mission"] = await _run(sysid, "mode:mission", mav.job_set_mode, "mission")
     _note_step(sysid, "mission")
@@ -1754,6 +1913,7 @@ class StartIn(BaseModel):
     sysid: int | None = None         # 省略＝唯一在線的那台；多台必填
     store: bool = True               # 保留相容；plan 路徑一律入庫（現版經 mission_fly 需 DB mission，去重不洗版）
     takeoff_alt: float | None = None  # 省略＝跟著任務的 NAV_TAKEOFF（見 FlyIn.takeoff_alt）
+    accept_start_distance_m: float | None = None  # 見 FlyIn.accept_start_distance_m
 
 
 _CODE_OF = {400: "bad_request", 403: "forbidden", 404: "not_found", 409: "conflict",
@@ -1834,7 +1994,8 @@ async def _start(body: StartIn, request: Request) -> dict:
     _start_mission[sysid] = ms["id"]
     try:
         # 委派現版正確流程（capability gate＋到高度 gating＋逐台 audit＋X-Client 都自動繼承）
-        result = await mission_fly(sysid, FlyIn(plan_id=plan_id, takeoff_alt=body.takeoff_alt))
+        result = await mission_fly(sysid, FlyIn(plan_id=plan_id, takeoff_alt=body.takeoff_alt,
+                                   accept_start_distance_m=body.accept_start_distance_m))
     except Exception as e:
         d = getattr(e, "detail", None)
         msg = d.get("msg") if isinstance(d, dict) else (d or f"{type(e).__name__}: {e}")

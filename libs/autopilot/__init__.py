@@ -78,6 +78,9 @@ class UnknownDriver:
     def takeoff_plan(self, alt, ground_amsl):
         raise KeyError("未知自駕儀，無起飛序列")
 
+    def goto_plan(self, lat, lon, alt, ground_amsl):
+        raise NotImplementedError("未知自駕儀，不知道怎麼下「飛到某點」")
+
     def wire_seq(self, index):
         return index
 

@@ -75,6 +75,14 @@ failsafe 邏輯留在 PX4，地面站只負責觸發與顯示。
 > **離地判定用機端的 `EXTENDED_SYS_STATE.landed_state`**，不是高度：`alt_rel`
 > 在沒有 GPS 定位時會漂（量過停在地面漂到 4.4 m）。機端沒送 landed_state 時才
 > 退回高度判準，且 `steps.airborne.basis` 會寫明退回了。
+>
+> **離地後先飛到任務起始點，才切任務**（2026-09-21，issues/056）：ArduCopter 的
+> NAV_TAKEOFF 不看經緯度，不這樣做的話，機會直接往第二個點飛。起始點取起飛項的座標
+> （是 0,0 時用 plannedHomePosition），途中高度用起飛項的高度，結果寫在 `steps.transit`
+> （`arrived`／`from_m`／`seconds`，或者 `skipped` 加上原因）。起飛位置離起始點
+> **超過 100 m** 時，會在解鎖前回 **409 `far_start`**（附 `distance_m`、`alt_m`、`start`）；
+> 確認後帶 `accept_start_distance_m`（看到的那個距離）再送一次，實際距離比它遠超過
+> 20 m 就要重新確認。沒有飛到起始點時回 504 `start_not_reached`，機會停在懸停、不切任務。
 
 **航線來源以任務庫（DB）為主**（2026-08-11 決定）：總表與內容都讀
 `missions`/`waypoints` 表，跟前端路徑管理頁看到的是同一份。`missions/` 目錄的

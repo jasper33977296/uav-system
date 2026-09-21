@@ -158,6 +158,21 @@ class ArduPilotDriver:
         return {"needs_guided": self.takeoff_needs_guided, "param7": alt,
                 "blank": 0.0, "alt_semantics": "relative"}
 
+    def goto_plan(self, lat: float, lon: float, alt: float,
+                  ground_amsl: float | None) -> dict:
+        """空中飛到某一點（一鍵起飛的「前往任務起始點」）。
+
+        Copter 在 **GUIDED** 下吃 `SET_POSITION_TARGET_GLOBAL_INT`，frame 6
+        （`GLOBAL_RELATIVE_ALT_INT`）＝高度相對 home，與 NAV_TAKEOFF 同語意。
+        type_mask 0x0FF8＝只給位置（速度／加速度／偏航全部忽略）。
+
+        **不用 `DO_REPOSITION`**：Copter 到 4.1 才支援，而 SITL 映像是 4.0.3。
+        代價是**這則訊息沒有 ACK**——到沒到只能看位置（呼叫端的責任）。
+        """
+        return {"kind": "position_target", "mode": "guided", "frame": 6,
+                "type_mask": 0x0FF8, "lat": lat, "lon": lon, "alt": alt,
+                "alt_semantics": "relative"}
+
     def wire_seq(self, index: int) -> int:
         return index + 1          # home 佔 seq 0（2026-08-25 SITL 實測：執行任務時 seq 從 1 起）
 

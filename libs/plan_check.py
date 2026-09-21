@@ -103,6 +103,33 @@ def takeoff_alt(wps: list[dict]) -> tuple[float | None, str]:
     return None, "航線裡沒有 NAV_TAKEOFF"
 
 
+#: 起飛位置離任務起始點超過這個距離（m），一鍵起飛要操作員**看過距離再確認**
+#: 才飛過去（使用者裁定 2026-09-21：選「確認」不選「拒絕」）。那一段不在航線裡，
+#: 規劃時沒人看過——近的多半是擺放偏差，遠的多半是選錯航線／選錯機／換了場地。
+FAR_START_M = 100.0
+
+
+def start_point(wps: list[dict], home=None) -> tuple[tuple[float, float] | None, str]:
+    """任務起始點 →（(lat, lon), 依據）。沒有可用座標時回 `(None, 原因)`。
+
+    **為什麼需要它**：ArduCopter 的 NAV_TAKEOFF 忽略經緯度、原地垂直爬升，而
+    `mission_fly` 是先在 GUIDED 離地才切 AUTO——切進去時起飛項已經達成，機直接
+    飛往第二個點。航線第一個點的座標從來沒被飛到（2026-09-21 使用者回報）。
+
+    優先序：起飛項自己的經緯度 → `.plan` 的 plannedHomePosition（很多 .plan
+    的起飛項是 0,0，同 `check_waypoints` 取原點的理由）。
+    """
+    for w in wps:
+        if _cmd(w) != _TAKEOFF:
+            continue
+        if w.get("lat") and w.get("lon"):
+            return (float(w["lat"]), float(w["lon"])), "航線的 NAV_TAKEOFF 座標"
+        break
+    if home and len(home) >= 2 and home[0] and home[1]:
+        return (float(home[0]), float(home[1])), "航線的 plannedHomePosition"
+    return None, "航線沒有帶座標的起飛項、也沒有 plannedHomePosition"
+
+
 def _is_nav(w: dict) -> bool:
     c = _cmd(w)
     return c is None or c in NAV_CMDS
