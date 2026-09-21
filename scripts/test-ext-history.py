@@ -49,8 +49,25 @@ async def main():
     chk("任務清單回 200", st == 200 and isinstance(body.get("missions"), list), st)
     ms = body["missions"]
     chk("每個任務都有必要欄位", all(
-        {"mission_id", "name", "external", "started_at", "ended_at",
+        {"mission_id", "name", "external", "state", "started_at", "ended_at",
          "drones", "plans", "sessions", "samples"} <= set(x) for x in ms))
+
+    # 051：狀態是算出來的一個欄位，不是外部從兩個 null 時間戳去猜
+    def want(x):
+        return "ended" if x["ended_at"] else ("flying" if x["sessions"] else "planned")
+    bad = [(x["name"], x["state"], want(x)) for x in ms if x["state"] != want(x)]
+    chk("每個任務的 state 與（架次數, ended_at）一致", not bad, bad[:2])
+    chk("沒飛過又沒結束的任務是 planned，不是進行中",
+        all(x["state"] == "planned" for x in ms if not x["sessions"] and not x["ended_at"]),
+        [(x["name"], x["state"]) for x in ms if not x["sessions"] and not x["ended_at"]])
+
+    # 055：截斷了要說得出來
+    chk("清單帶 total 與 has_more",
+        body["total"] == len(ms) and body["has_more"] is False, (body["total"], len(ms)))
+    _, one = get("/missions?limit=1")
+    chk("limit 切掉時 has_more 是 true、total 仍是全部",
+        len(one["missions"]) == 1 and one["total"] == body["total"] and one["has_more"] is True,
+        (len(one["missions"]), one["total"], one["has_more"]))
 
     # 統計要與資料庫對得上（統計是查詢時算的，不存欄位）
     flown = [x for x in ms if x["sessions"]]
@@ -73,8 +90,12 @@ async def main():
             st == 200 and len(samples) == m["samples"], (st, len(samples), m["samples"]))
         chk("樣本欄位就是文件那一組", all(set(s) == SAMPLE_KEYS for s in samples),
             sorted(set(samples[0]) ^ SAMPLE_KEYS) if samples else "沒有樣本")
-        chk("回應帶方法參數", sig["method"]["max_offset_m"] == 60.0
-            and sig["method"]["sample_interval_s"] == 1, sig.get("method"))
+        chk("method 只留方法本身（取樣間隔改放各趟底下）",
+            sig["method"]["max_offset_m"] == 60.0
+            and "sample_gap_factor" in sig["method"]
+            and "sample_interval_s" not in sig["method"], sig.get("method"))
+        chk("mission 帶 state", sig["mission"]["state"] in ("planned", "flying", "ended"),
+            sig["mission"].get("state"))
         planned = [x for x in sess if x["plan_id"]]
         chk("綁路徑的架次：reference=plan、有預計航線",
             all(x["reference"] == "plan" and x["route"]["features"] for x in planned),
@@ -87,13 +108,12 @@ async def main():
         chk("里程單調可用（0 ≤ along ≤ 路徑長）",
             all(0 <= s["along_m"] for s in got), got[:1])
 
-        # 偏離上限：**不硬塞**——里程給 null、偏離照給
+        # 054：門檻不給外部調——帶了也不生效，同一趟資料只有一種答案
         st, tight = get(f"/missions/{m['mission_id']}/signal?max_offset_m=0.01")
-        tp = [s for d in tight["drones"] for x in d["sessions"] for s in x["samples"]
-              if s["lat"] is not None]
-        chk("偏離超過上限：里程 null、偏離照給",
-            st == 200 and tp and all(s["along_m"] is None and s["offset_m"] is not None for s in tp),
-            f"{sum(1 for s in tp if s['along_m'] is not None)} 筆仍有里程")
+        tp = [s for d in tight["drones"] for x in d["sessions"] for s in x["samples"]]
+        chk("帶 max_offset_m 不生效，回應與不帶時完全相同",
+            st == 200 and tight == sig and tight["method"]["max_offset_m"] == 60.0,
+            f"{sum(1 for s in tp if s['along_m'] is not None)}/{len(tp)} 筆有里程")
 
     # 篩選
     if flown and flown[0]["plans"]:
@@ -126,7 +146,10 @@ async def main():
             "INSERT INTO flight_sessions (drone_id, started_at, ended_at, mission_id, end_reason) "
             "VALUES ($1::uuid, $2, $3, $4::uuid, 'disarmed') RETURNING id::text",
             did, t0, t0 + timedelta(minutes=1), mid)
-        for i in range(3):
+        # 取樣間隔刻意是 2 秒，中間挖一個 22 秒的洞：
+        # 052 要量得出 2.0（不是寫死的 1），053 要指得出那個洞
+        offsets = [0, 2, 4, 6, 8, 30, 32, 34]
+        for i in offsets:
             await pool.execute(
                 "INSERT INTO link_metrics (time, drone_id, session_id, lat, lon, alt_rel, sinr, rsrp) "
                 "VALUES ($1, $2::uuid, $3::uuid, 24.7, 121.0, 5.0, 20.0, -80.0)",
@@ -135,13 +158,40 @@ async def main():
         s0 = sig["drones"][0]["sessions"][0]
         chk("沒有綁路徑：reference=null、里程與偏離都 null、樣本照給",
             st == 200 and s0["reference"] is None and s0["route"] is None
-            and len(s0["samples"]) == 3
+            and len(s0["samples"]) == len(offsets)
             and all(x["along_m"] is None and x["offset_m"] is None for x in s0["samples"]),
             (s0["reference"], len(s0["samples"])))
+
+        # 052：取樣間隔是量出來的
+        chk("取樣間隔量得出 2.0（不是寫死的 1）", s0["sample_interval_s"] == 2.0,
+            s0["sample_interval_s"])
+
+        # 053：樣本缺口與遙測失明是兩件事
         chk("這一趟沒有失明記錄 → gaps 是空的", s0["gaps"] == [], s0["gaps"])
+        sg = s0["sample_gaps"]
+        chk("樣本缺口指得出那個 22 秒的洞，且與 gaps 分開",
+            len(sg) == 1 and sg[0]["seconds"] == 22.0, sg)
+        chk("缺口的兩端就是洞的兩側樣本",
+            sg and sg[0]["from"] == s0["samples"][4]["time"]
+            and sg[0]["to"] == s0["samples"][5]["time"],
+            (sg[0]["from"], s0["samples"][4]["time"]) if sg else None)
+
+        # 051：有架次、任務還沒結束 → flying
         _, one = get(f"/missions?drone_id={did}")
         chk("drone_id 篩選找得到這台機的任務",
             [x["mission_id"] for x in one["missions"]] == [mid], one["missions"])
+        chk("有架次、任務未結束 → state 是 flying",
+            one["missions"][0]["state"] == "flying", one["missions"][0]["state"])
+
+        # 052：一筆樣本說不出間隔 → null，而且不報缺口（不是空陣列）
+        await pool.execute("DELETE FROM link_metrics WHERE drone_id = $1::uuid AND time > $2",
+                           did, t0)
+        _, thin = get(f"/missions/{mid}/signal")
+        t0s = thin["drones"][0]["sessions"][0]
+        chk("只剩一筆樣本：間隔 null、sample_gaps 也 null（不是空陣列）",
+            len(t0s["samples"]) == 1 and t0s["sample_interval_s"] is None
+            and t0s["sample_gaps"] is None,
+            (len(t0s["samples"]), t0s["sample_interval_s"], t0s["sample_gaps"]))
     finally:
         await pool.execute("DELETE FROM link_metrics WHERE drone_id = $1::uuid", did)
         await pool.execute("DELETE FROM flight_sessions WHERE mission_id = $1::uuid", mid)

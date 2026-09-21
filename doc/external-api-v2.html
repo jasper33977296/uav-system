@@ -292,6 +292,7 @@ footer.doc-foot{border-top:1px solid var(--line); padding-top:16px; font-size:13
         <tr><td>路徑版本</td><td class="old">只有串流帶 <code>v1</code></td><td><strong>每一支對外端點都帶</strong>：<code>/api/v1/…</code>、<code>/ws/v1/…</code>。舊的無版本路徑保留為別名（<a href="#s-terms">§1</a>）</td><td><span class="st live">已上線</span></td></tr>
         <tr><td>即時資料的傳法</td><td class="old">只有 WebSocket 串流</td><td><strong>串流與輪詢都給</strong>，訊息逐字相同：<code>GET /api/v1/ext/missions/{id}/live</code>（<a href="#s-stream">§8</a>）。長連線不方便就用輪詢</td><td><span class="st live">已上線</span></td></tr>
         <tr><td>任務歷史</td><td class="old">沒有</td><td>兩支唯讀端點：歷史任務清單與<strong>一個任務的完整訊號</strong>，每一筆帶沿航線里程 <code>along_m</code> 與偏離 <code>offset_m</code>——兩趟才有共同的 X 軸（<a href="#s-history">§14</a>）</td><td><span class="st live">已上線</span></td></tr>
+        <tr><td>任務歷史的誠實度</td><td class="old">—</td><td>09-21 五項修正：清單帶 <code>state</code>（不必從時間戳推）與 <code>total</code>／<code>has_more</code>；<code>sample_interval_s</code> 改成<strong>每趟量出來</strong>；新增 <code>sample_gaps</code>（與遙測失明的 <code>gaps</code> 分開）；<code>max_offset_m</code> 不再吃 query（<a href="#s-history">§14</a>）</td><td><span class="st live">已上線</span></td></tr>
         <tr><td>錯誤回應</td><td class="old">只保證 <code>detail.msg</code></td><td><code>/api/v1/start</code> 與群飛執行一律 <code>code</code>＋<code>msg</code>，能自己排除的再附 <code>how_to</code>（<a href="#s-errors">§15</a>）</td><td><span class="st live">已上線</span></td></tr>
       </tbody>
     </table>
@@ -962,7 +963,7 @@ footer.doc-foot{border-top:1px solid var(--line); padding-top:16px; font-size:13
         <tr><td><code>plan_id</code></td><td><code>"e961b301-…"</code></td><td class="fmt">string · 選填<br>只列飛過這份路徑的</td></tr>
         <tr><td><code>external</code></td><td><code>true</code></td><td class="fmt">bool · 選填<br>只列外部控制端建立的；省略＝全部都列</td></tr>
         <tr><td><code>drone_id</code></td><td><code>"1d2f…"</code></td><td class="fmt">string · 選填</td></tr>
-        <tr><td><code>limit</code></td><td><code>50</code></td><td class="fmt">int · 選填（最大 200）</td></tr>
+        <tr><td><code>limit</code></td><td><code>50</code></td><td class="fmt">int · 選填（最大 200）<br>切掉時 <code>has_more</code> 會說；要再往回拿用 <code>since</code>／<code>until</code>，沒有 offset</td></tr>
       </tbody>
     </table></div>
     <p class="lbl">回應</p>
@@ -972,13 +973,16 @@ footer.doc-foot{border-top:1px solid var(--line); padding-top:16px; font-size:13
   "mission_id": "8f0c2d1e-…",
   "name": "0914-square-test-v5 09-14 12:01",
   "external": true,                           // 由外部控制端用 /api/v1/start 建立
-  "started_at": "2026-09-14T04:01:31.000Z",   // 第一趟解鎖
-  "ended_at": "2026-09-14T04:02:35.570Z",     // null＝還在進行中
+  "state": "ended",                           // planned／flying／ended——看這個，別自己推
+  "started_at": "2026-09-14T04:01:31.000Z",   // 第一趟解鎖。null＝還沒飛過
+  "ended_at": "2026-09-14T04:02:35.570Z",     // 任務被結束的時間
   "drones": [{"drone_id": "1d2f…", "name": "pi5-sdmodelh7v2-ardu", "sysid": 1}],
   "plans": [{"plan_id": "e961b301-…", "name": "0914-square-test-v5"}],
   "sessions": 1,                              // 架次數
   "samples": 58                               // 訊號樣本數，0＝那次沒有量到訊號
-}]}</pre>
+}],
+ "total": 6,                                  // 同一組篩選、沒套 limit 的總數
+ "has_more": false}                           // true＝被切掉了，還有更多</pre>
     </div>
   </article>
 
@@ -990,8 +994,8 @@ footer.doc-foot{border-top:1px solid var(--line); padding-top:16px; font-size:13
       <div class="panel-bar"><span>200</span><button class="copy" type="button">複製</button></div>
 <pre class="json">{
   "mission": {"mission_id": "8f0c…", "name": "…", "external": true,
-              "started_at": "…", "ended_at": "…"},
-  "method": {"max_offset_m": 60.0, "sample_interval_s": 1},
+              "state": "ended", "started_at": "…", "ended_at": "…"},
+  "method": {"max_offset_m": 60.0, "sample_gap_factor": 5.0},
   "drones": [{
     "drone_id": "1d2f…", "name": "pi5-sdmodelh7v2-ardu", "sysid": 1,
     "sessions": [{
@@ -1000,8 +1004,10 @@ footer.doc-foot{border-top:1px solid var(--line); padding-top:16px; font-size:13
       "started_at": "…", "ended_at": "…",
       "end_reason": "disarmed",        // disarmed＝看到上鎖；telemetry_lost＝資料斷了
       "reference": "plan",             // 里程的基準：plan／null
+      "sample_interval_s": 1.02,       // 這一趟「量到」的取樣間隔。null＝不足兩筆
       "route": { … },                  // 與串流的 route 同格式（§9）
-      "gaps": [{"from": "…", "to": "…", "seconds": 23.4}],   // 這段沒有資料
+      "gaps": [{"from": "…", "to": "…", "seconds": 23.4}],        // 遙測失明
+      "sample_gaps": [{"from": "…", "to": "…", "seconds": 22.0}], // 沒有訊號樣本
       "samples": [{
         "time": "2026-09-14T04:01:37.120Z",
         "lat": 24.773540, "lon": 121.045880, "alt_rel": 12.3,
@@ -1022,9 +1028,11 @@ footer.doc-foot{border-top:1px solid var(--line); padding-top:16px; font-size:13
   <p><strong>時間對不齊</strong>：兩趟的速度不同，用時間當 X 軸會把「同一個地點」錯位。每一筆樣本都投影到<strong>那一趟自己的預計航線</strong>上，給出 <code>along_m</code>（走了多遠）與 <code>offset_m</code>（偏離多少），控制端拿 <code>along_m</code> 當共同的 X 軸。</p>
   <ul class="prose">
     <li><strong>基準是計畫航點，不是任一趟的實飛軌跡</strong>——拿其中一趟當基準，那一趟的偏航就變成零誤差。所以那一趟沒有綁路徑時 <code>reference</code> 是 <code>null</code>、<code>along_m</code> 全給 <code>null</code>，不退回用軌跡。</li>
-    <li><strong>偏離超過 <code>max_offset_m</code>（預設 60 m）的樣本 <code>along_m</code> 給 <code>null</code></strong>，<code>offset_m</code> 照給。硬塞進某個里程的數字看起來完全正常，而且沒有線索說它是垃圾。</li>
+    <li><strong>偏離超過 <code>max_offset_m</code>（60 m）的樣本 <code>along_m</code> 給 <code>null</code></strong>，<code>offset_m</code> 照給。硬塞進某個里程的數字看起來完全正常，而且沒有線索說它是垃圾。<strong>這個門檻不給外部調</strong>——可調的話同一趟資料在不同呼叫下會給出不同的 <code>along_m</code>；用了哪個值寫在 <code>method.max_offset_m</code> 裡。</li>
     <li><strong><code>along_m</code> 只在同一份路徑之間可比。</strong>每一趟都帶 <code>plan_id</code>，比較前先確認相同。</li>
-    <li><code>gaps</code> 是超過 10 秒完全沒有資料的區間。<strong>與「訊號差」是兩件事</strong>：畫圖時要留白，不要把兩端連成一條線。</li>
+    <li><strong><code>sample_interval_s</code> 是量出來的，不是設定值</strong>：那一趟相鄰樣本時間差的中位數。取樣率由機上的旗標決定，地面站沒有管道知道它設成多少（2026-09-07 實測過設定 1.0 s、實際 2.61 s），所以只回報量到的。不足兩筆時是 <code>null</code>。</li>
+    <li><strong><code>gaps</code> 與 <code>sample_gaps</code> 是兩件事。</strong><code>gaps</code> ＝<strong>遙測失明</strong>（那段地面站看不到飛機，超過 10 秒沒遙測）；<code>sample_gaps</code> ＝<strong>那段沒有訊號樣本</strong>（相鄰樣本差超過取樣間隔的 <code>sample_gap_factor</code> 倍）。真機上樣本走機上代理、每 10 秒一批而且<strong>允許補傳</strong>，與遙測是兩條路——遙測斷了樣本可能是齊的，樣本斷了遙測可能照常。<strong>畫訊號圖要留白的是 <code>sample_gaps</code></strong>，不要把兩端連成一條線；<code>gaps</code> 另外標成「失聯」。算不出取樣間隔時 <code>sample_gaps</code> 是 <code>null</code> 而不是 <code>[]</code>——空陣列的意思是「沒有缺口」，而那時我們其實是「不知道」。</li>
+    <li><strong>任務是哪一態看 <code>state</code></strong>：<code>planned</code>（建了還沒飛）／<code>flying</code>（進行中）／<code>ended</code>。<strong>不要自己從時間戳推</strong>——<code>started_at</code> 在還沒飛時是 <code>null</code>，而舊的「<code>ended_at</code> 是 null ＝進行中」會把從沒飛過的任務判成正在飛。</li>
   </ul>
 
   <div class="note warn">

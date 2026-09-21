@@ -30,6 +30,51 @@ def _iso(dt: datetime | None) -> str | None:
     return dt.astimezone(timezone.utc).isoformat(timespec="milliseconds").replace("+00:00", "Z")
 
 
+#: 樣本缺口的門檻＝這一趟取樣間隔的幾倍。**不用固定秒數**：取樣間隔本來就因機
+#: 而異（機上的 `--modem-interval`，issues/052），固定值會在慢取樣時狂報、
+#: 快取樣時漏報
+SAMPLE_GAP_FACTOR = 5.0
+
+
+def _interval_s(times: list) -> float | None:
+    """這一趟的取樣間隔：相鄰樣本時間差的**中位數**。
+
+    **量出來的，不是設定值**（issues/052）——取樣率由機上的旗標決定，
+    地面站沒有管道知道它設成多少，而 2026-09-07 實測過設定 1.0 s 實際 2.61 s。
+    少於兩筆就給 `None`：一筆樣本說不出間隔。
+    """
+    if len(times) < 2:
+        return None
+    d = sorted((b - a).total_seconds() for a, b in zip(times, times[1:]))
+    n = len(d)
+    return round(d[n // 2] if n % 2 else (d[n // 2 - 1] + d[n // 2]) / 2, 3)
+
+
+def _sample_gaps(times: list, interval: float | None) -> list | None:
+    """**沒有訊號樣本**的那幾段（issues/053）。
+
+    與 `gaps`（遙測失明）是兩件事：真機的樣本走機上代理的 `/batch`、允許補傳，
+    所以遙測斷了樣本可能是齊的，樣本斷了遙測可能照常。**畫訊號圖要留白的是這個。**
+
+    算不出取樣間隔時回 `None`，不是 `[]`——空陣列的意思是「沒有缺口」。
+    """
+    if interval is None:
+        return None
+    lim = interval * SAMPLE_GAP_FACTOR
+    return [{"from": _iso(a), "to": _iso(b), "seconds": round((b - a).total_seconds(), 1)}
+            for a, b in zip(times, times[1:]) if (b - a).total_seconds() > lim]
+
+
+def _state(sessions: int, ended_at) -> str:
+    """任務現在是哪一態。**外部不該從兩個可為 null 的時間戳推導**（issues/051）：
+    `started_at` 是 null 有兩種意思（還沒飛／飛過但沒記到），而「進行中」要的是
+    「飛過而且還沒結束」——只看 `ended_at` 會把從沒飛過的任務判成進行中。
+    """
+    if ended_at is not None:
+        return "ended"
+    return "flying" if sessions else "planned"
+
+
 def _uuid(v: str, field: str) -> str:
     try:
         return str(uuid.UUID(v))
@@ -69,6 +114,14 @@ async def list_missions(since: str | None = None, until: str | None = None,
     if until:
         conds.append(f"coalesce(first.started_at, m.created_at) <= {arg(until)}::text::timestamptz")
     where = ("WHERE " + " AND ".join(conds)) if conds else ""
+    # **截斷了要說得出來**（issues/055）：不做分頁，但拿到滿額的呼叫端要分得出
+    # 「剛好這麼多」與「被切掉了」。count 在 limit 進 args 之前算
+    total = await db.pool.fetchval(f"""
+        SELECT count(*) FROM missions m
+          LEFT JOIN LATERAL (SELECT min(started_at) AS started_at FROM flight_sessions x
+                              WHERE x.mission_id = m.id) first ON true
+          {where}""", *args)
+    lim = max(1, min(limit, MAX_LIMIT))
     rows = await db.pool.fetch(f"""
         SELECT m.id::text AS mission_id, m.name, m.external, m.ended_at,
                first.started_at,
@@ -90,7 +143,7 @@ async def list_missions(since: str | None = None, until: str | None = None,
                               WHERE x.mission_id = m.id) first ON true
           {where}
          ORDER BY coalesce(first.started_at, m.created_at) DESC
-         LIMIT {arg(max(1, min(limit, MAX_LIMIT)))}""", *args)
+         LIMIT {arg(lim)}""", *args)
     out = []
     for r in rows:
         d = dict(r)
@@ -99,10 +152,11 @@ async def list_missions(since: str | None = None, until: str | None = None,
                 d[k] = json.loads(d[k])
         out.append({"mission_id": d["mission_id"], "name": d["name"],
                     "external": d["external"],
+                    "state": _state(d["sessions"], d["ended_at"]),
                     "started_at": _iso(d["started_at"]), "ended_at": _iso(d["ended_at"]),
                     "drones": d["drones"], "plans": d["plans"],
                     "sessions": d["sessions"], "samples": d["samples"]})
-    return {"missions": out}
+    return {"missions": out, "total": total, "has_more": total > len(out)}
 
 
 async def _route_of(plan_id: str | None) -> tuple[dict | None, list[dict]]:
@@ -125,12 +179,14 @@ async def _route_of(plan_id: str | None) -> tuple[dict | None, list[dict]]:
 
 
 @router.get("/missions/{mission_id}/signal")
-async def mission_signal(mission_id: str,
-                         max_offset_m: float = chainage.DEFAULT_MAX_OFFSET_M):
+async def mission_signal(mission_id: str):
     """一個任務的完整訊號，依「機 → 架次」分組。一次一個任務。
 
     每一筆樣本帶 `along_m`（沿預計航線走了多遠）與 `offset_m`（偏離多少）——
     兩趟的速度不同，時間對不齊，里程才是共同的 X 軸（doc/external-history-api.md §4）。
+
+    偏離上限**不給外部調**（issues/054）：它是「偏離多遠就不該再談里程」的方法判斷，
+    不是查詢條件；可調的話同一趟資料在不同呼叫下會給出不同的 `along_m`。
     """
     mid = _uuid(mission_id, "mission_id")
     m = await db.pool.fetchrow(
@@ -154,11 +210,14 @@ async def mission_signal(mission_id: str,
         if r["plan_id"] not in routes:
             routes[r["plan_id"]] = await _route_of(r["plan_id"])
         gj, ref = routes[r["plan_id"]]
-        project = chainage.projector(ref, max_offset_m)
+        project = chainage.projector(ref, chainage.DEFAULT_MAX_OFFSET_M)
+        srows = await db.pool.fetch(
+            f"SELECT {SAMPLE_COLS} FROM link_metrics WHERE session_id = $1::uuid ORDER BY time",
+            r["session_id"])
+        times = [x["time"] for x in srows]
+        interval = _interval_s(times)
         samples = []
-        for x in await db.pool.fetch(
-                f"SELECT {SAMPLE_COLS} FROM link_metrics WHERE session_id = $1::uuid ORDER BY time",
-                r["session_id"]):
+        for x in srows:
             along = off = None
             if project and x["lat"] is not None and x["lon"] is not None:
                 along, off = project(x["lat"], x["lon"])
@@ -184,10 +243,19 @@ async def mission_signal(mission_id: str,
             # **基準是計畫航點，不是任一趟的實飛軌跡**：沒有路徑就不給里程，
             # 退回用軌跡會讓那一趟的偏航變成零誤差（§4）
             "reference": "plan" if project else None,
-            "route": gj, "gaps": gaps, "samples": samples})
+            "sample_interval_s": interval,
+            "route": gj,
+            # `gaps`＝遙測失明（地面站看不到飛機）；`sample_gaps`＝沒有訊號樣本。
+            # **兩件事**，畫訊號圖要留白的是後者（issues/053）
+            "gaps": gaps, "sample_gaps": _sample_gaps(times, interval),
+            "samples": samples})
     return {"mission": {"mission_id": m["mission_id"], "name": m["name"],
                         "external": m["external"],
+                        "state": _state(len(rows), m["ended_at"]),
                         "started_at": _iso(min((r["started_at"] for r in rows), default=None)),
                         "ended_at": _iso(m["ended_at"])},
-            "method": {"max_offset_m": max_offset_m, "sample_interval_s": 1},
+            # `method` 只留真的是「方法」的東西。取樣間隔不在這裡——它是**量出來的**、
+            # 而且每一趟各自不同，所以擺在各趟底下（issues/052）
+            "method": {"max_offset_m": chainage.DEFAULT_MAX_OFFSET_M,
+                       "sample_gap_factor": SAMPLE_GAP_FACTOR},
             "drones": list(drones.values())}
