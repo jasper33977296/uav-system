@@ -228,6 +228,45 @@ class LiveState:
             return None
         return round(_time.monotonic() - self.link_seen_mono, 2)
 
+    #: 訊號樣本多新鮮才算「機上還在講話」。取樣是 1 Hz，30 秒等於連續掉三十筆
+    #: ——與 `_link_state_now()` 判 `lost` 的門檻同一個數字，不另立一套說法
+    LINK_PRESENT_S = 30.0
+
+    @property
+    def broadcastable(self) -> bool:
+        """這台機該不該出現在即時頁上——**有人在講話就算**。
+
+        兩個開得了這道閘的東西，對應機上兩條**完全獨立**的路：
+
+        * `ever_connected`：飛控的 MAVLink 到過。曾連上後來斷線的機要繼續廣播
+          最後已知位置（使用者定案），前端以紅框閃爍標示斷線——所以這裡
+          **不是**擋 `connected`。
+        * `link_present`：機上代理此刻正在送 5G 訊號樣本。訊號走的是代理直接
+          POST 的路，與 MAVLink 無關，但它的值是**搭遙測的便車**送出去的
+          （在 `telemetry_dict()` 裡）。只認 MAVLink 的話，「飛控啞掉 ＋ 後端在
+          那期間重啟」這個組合會讓一台每秒都在回報訊號的機整個從畫面消失——
+          2026-09-16 實際發生，空白 21 分鐘，而後端手上的樣本全程是新鮮的
+          （issues/049）。
+
+        **這不會放幽靈機回來**（issues/036 的 B：「沒有『最後已知』可言」）。
+        主機在啟動時就進 fleet，若這裡不擋，一台從來沒連上的機會從後端啟動那
+        一刻起就佔著即時頁。兩個條件都要求「真的有人在講話」：`link_present`
+        看的是**新鮮度**不是「曾經有過」，而只有訊號的機送出去的遙測欄位全是
+        None，前端照 036 的規矩顯示成「從未收到」，不會畫成 0。
+        """
+        return self.ever_connected or self.link_present
+
+    @property
+    def link_present(self) -> bool:
+        """機上代理現在還在送訊號樣本嗎。
+
+        **與「曾經送過」是兩回事**（issues/049）。一小時前來過一筆、之後就沒了
+        的機，代表機上沒有人在講話——那正是 036 要擋掉的幽靈機。所以這裡問的是
+        新鮮度，不是 `link_age_s is not None`。
+        """
+        age = self.link_age_s
+        return age is not None and age <= self.LINK_PRESENT_S
+
     def prearm_said(self) -> list[str]:
         """機上此刻還在講的預檢失敗原因。
 

@@ -110,7 +110,10 @@ export function EventsCard() {
   const selectedId = useUavStore((s) => s.selectedId);
   const live = useUavStore((s) => s.live);
   const [scope, setScope] = useState<"selected" | "all">("selected");
-  // fleet 裡的機都是**收過遙測**才進來的（見 store.setLive），所以不必再濾
+  // fleet 裡的機是**有人在講話**才進來的：收過遙測，或機上代理正在送 5G 訊號
+  // （issues/049 放寬了後端那道閘）。所以這裡仍然不必再濾，但**不能再假設
+  // 每一台都有遙測**——只有訊號的機位置／姿態全是 null，靠各處既有的
+  // `lat != null` 與 staleLevel 的 "never" 分支誠實呈現（036 的規矩）
   const knownDrones = Object.entries(fleet)
     .map(([id, t]) => ({ id, name: t.drone_name ?? id.slice(0, 6) }));
   const multi = knownDrones.length >= 2;
@@ -277,6 +280,10 @@ export default function SimpleHud() {
     prevClsRef.current = clsKey;
   }, [clsKey]);
   const droneLost = !!live && !live.connected;
+  // **從未連上 ≠ 斷線。** 前者沒有「最後已知」可言（issues/036 的 B），
+  // 而 049 之後這種機真的會出現在畫面上：機上代理每秒在送 5G 訊號，
+  // 但飛控一個字都沒講過（例如飛控啞掉期間 backend 重啟）
+  const neverConnected = droneLost && live!.ever_connected === false;
   // A 層：畫面上那些數字有多舊。**這個判斷要作用在數值本身**，
   // 不是只在旁邊掛一個標籤
   const lv = staleLevel(live?.telem_age_s);
@@ -310,6 +317,11 @@ export default function SimpleHud() {
   const candidate =
     !wsConnected
       ? { key: "ws", t: "與系統失去連線——畫面可能不是最新", sev: "err" as const }
+    : neverConnected
+      // **不可以說「最後已知位置」**——根本沒有。這台機唯一在講話的是
+      // 機上代理送的 5G 訊號，飛控那一端從頭到尾沒有資料
+      ? { key: "never", t: "收得到機上訊號，但飛控沒有遙測——畫面上沒有飛行資料",
+          sev: "err" as const }
     : droneLost
       ? { key: "lost", t: "無人機失聯——顯示的是最後已知位置", sev: "err" as const }
     : fsActive

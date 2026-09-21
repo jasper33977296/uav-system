@@ -87,6 +87,9 @@ export interface Telemetry {
   drone_id: string; drone_name?: string | null;
   primary?: boolean;                 // MAVLink 主機的廣播帶此旗標
   session_id: string | null; connected: boolean;
+  // **「沒連上」有兩種，畫面上要分得開**（issues/036、049）：曾連上後來斷線的
+  // 機有最後已知位置可報；從沒連上的（只有 5G 訊號、飛控沒講過話）沒有
+  ever_connected?: boolean;
   lat: number | null; lon: number | null;
   alt_msl: number | null; alt_rel: number | null;
   heading: number | null; roll: number | null; pitch: number | null;
