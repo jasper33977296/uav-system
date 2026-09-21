@@ -1,6 +1,6 @@
 # 049 · 訊號面板被 MAVLink 綁架：飛控不在，5G 訊號就整塊消失
 
-- 狀態：open
+- 狀態：**closed**（2026-09-21 改完、上線、端到端驗證）
 - 嚴重度：medium（顯示正確性；但發作時機正好是「最需要看訊號」的當下）
 - 位置：`apps/backend/app/main.py:207`（廣播閘）、`mavlink_rx.py:406`（唯一寫入點）、
   `apps/frontend/lib/useTelemetry.ts:40`、`apps/frontend/components/SidePanel.tsx:381`
@@ -128,4 +128,43 @@ if not st.ever_connected and st.link_age_s is None:
 
 ## 解決方式
 
-（closed 時補）
+commit `fb8ce52`。判準從 `ever_connected` 一個條件，擴成**「有過遙測**或**機上代理
+此刻正在送訊號」**，並從 `main.py` 的行內條件抽成 `LiveState.broadcastable`
+——那段推理比條件本身長得多，擺在廣播迴圈裡沒人讀得下去。
+
+`LiveState.link_present` **看新鮮度，不是「曾經有過」**：門檻 30s，與
+`_link_state_now()` 判 `lost` 同一個數字，不另立一套說法。一小時前來過一筆的機
+代表機上沒有人在講話，那正是 036 的 B 要擋掉的幽靈機。
+
+前端配套：只有訊號的機遙測欄位全是 None，各處既有的 `lat != null` 過濾與
+`staleLevel` 的 `"never"` 分支已經誠實呈現。但斷線橫幅原本會說謊
+（「無人機失聯——**顯示的是最後已知位置**」，而這種機根本沒有最後已知位置），
+加 `neverConnected` 分支改說「收得到機上訊號，但飛控沒有遙測」。
+
+### 驗證
+
+`scripts/test-link-only-broadcast.py` 13 項；前端 `tsc --noEmit` 結束碼 0。
+
+**端到端在真的後端與真的 WebSocket 上重現了 09-16**（停機上代理、重啟 backend、
+再用只送訊號不送 MAVLink 的節點頂上）：
+
+| 情境 | 8 秒內的 telemetry 廣播 |
+|---|---|
+| 沒有任何人在講話 | **0 則**（幽靈機仍被擋住，036 完好）|
+| 只有 5G 訊號、零 MAVLink | **41 則** ← 修好了 |
+| 訊號停掉超過 30 秒 | **0 則**（機上沒人講話就下線）|
+
+送出去的內容是誠實的：`connected=False ever_connected=False`、`lat/lon=None`、
+`telem_age_s=None`，而 `link: sinr=30.0 rsrp=-60.0 pci=133`。
+
+### 對外 API 不受影響（查證過）
+
+`doc/external-live-api.md` 的契約明寫「**與畫面用的 `/ws/telemetry` 分開**」，
+而這道閘只存在於 `_broadcast_loop`。`ext_stream.py` 直接讀 `fleet`，
+全檔不出現 `broadcastable`／`link_present`／`ever_connected`；`/api/ext/live`
+自己呼叫 `telemetry_dict()` 再過 `EXT_LIVE_KEYS` 白名單。送出去的欄位一個字沒變。
+
+### 機上側
+
+050 需求 3（失聯期間持續出聲）仍未做。本條修的是「後端手上有訊號卻不廣播」，
+那條修的是「飛控斷了代理不出聲」——兩者在同一個畫面上會合。

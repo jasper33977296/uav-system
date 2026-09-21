@@ -71,7 +71,10 @@
 | [038](038-board-identity.md) | 系統不知道哪台是哪台：本階段請求並記錄飛控板 UID；**比對與告警 09-02 實作**（撞號的 PX4 SITL 曾寫 46 筆假事件進真機記錄）| medium | in-progress | `mavlink_rx.py`＋uav-agent |
 | [039](039-autonomous-flight-state-machine.md) | 全自動飛行的狀態機與安全守門：**飛行中上傳任務會立刻改道且無任何守門**（SITL 實測）。飛安裁定全數完成（08-31 複裁七條），A／C／E／G 待實作 | **high** | in-progress | `doc/autonomous-flight-state-machine.md` |
 | [040](040-sysid-must-be-assigned.md) | **sysid 由系統指派＋入列驗證協定**：驗證完成前不得指派任務或控制。唯一鍵值＝板號、撞號自動重新配號、代理強制；**A1–A4 完成**；A5 簽章**裁定不做**（設計留存，含重啟觸發條件）| **high** | in-progress | `mavlink_rx.py`＋`command`＋`drones` 表＋uav-agent |
-| [049](049-link-display-gated-on-mavlink.md) | 訊號面板被 MAVLink 綁架：飛控不在、5G 訊號就整塊消失（**036 的鏡像**：把「有資料」畫成「沒有資料」）；後端手上樣本新鮮，卻被廣播閘 `ever_connected` 擋掉 | medium | open | `backend/app/main.py:207`＋`useTelemetry.ts:40`／`SidePanel.tsx:381` |
+| [046](046-crash-20260907-lowspeed-test.md) | 摔機 lowspeed-test-260907：機上 tlog 找到，**死因是機械**——與設定、與高度估計、與本系統改過的參數都無關（當天寫進飛控的參數全部讀回比對過）| **high** | **closed** | `issues/evidence/`＋機上 tlog |
+| [047](047-terrain-and-link-recovery.md) | 地形檢查與斷線重連：四項裁定分批實作。地形 A／B 兩條都做、DEM 上傳前與飛控核對、斷線恢復做到 L2、斷線畫面已實作；**補傳去重的根因是「從來沒有生效過」**；項次 6 的緩衝觸發條件仍是錯的 | **high** | in-progress | `libs/`＋`apps/backend`＋uav-agent |
+| [048](048-plan-safe-altitude.md) | 航線的「最低安全高度」與系統自行規劃：**現有檢查問錯了問題**——有效速度沒照飛控實際執行的語意算、安全高度該是兩個下限取大。起因是 046 那次摔機 | **high** | open | 航線檢查＋規劃流程 |
+| [049](049-link-display-gated-on-mavlink.md) | 訊號面板被 MAVLink 綁架：飛控不在、5G 訊號就整塊消失（**036 的鏡像**：把「有資料」畫成「沒有資料」）；後端手上樣本新鮮，卻被廣播閘 `ever_connected` 擋掉。**閘改成「有遙測或機上代理正在送訊號」**（看新鮮度，幽靈機仍擋住）；端到端重現驗證 0 則 → 41 則 | medium | **closed** | `backend/app/main.py:207`＋`useTelemetry.ts:40`／`SidePanel.tsx:381` |
 | [050](050-agent-fc-link-watchdog.md) | **飛控串列斷了，代理不知道、不出聲、也不試著救**：25 分鐘零告警，靠人工重啟才恢復（而重啟有效只是 pyserial 重設 termios 的副作用）。**需求 1 偵測（a02f7d3）與 2 取回（17e5765）已完成並上機驗證**——真機重現原鏈路一秒未斷；剩需求 3「失聯期間持續出聲」，要與 049 一起改 | **high** | in-progress | `uav-agent/agent.py`＋`tools/fc-link-watchdog.py` |
 | [051](051-mission-list-planned-vs-flying.md) | 對外任務歷史清單把**「建了沒飛」報成「進行中」**：`started_at`／`ended_at` 兩個 null 意思不同而回應說不出差別；實查現在唯一被判成「進行中」的任務從來沒飛過（036／049 同族）| medium | **closed** | `backend/app/ext_history.py:74,102` |
 | [052](052-sample-interval-hardcoded.md) | 對外訊號的 `sample_interval_s` 是**寫死的常數 1**，而取樣率由機上 `--modem-interval` 決定、backend 沒有管道知道；同類錯誤已發生過（實測 2.61 s vs 宣稱 1 s）| medium | **closed** | `backend/app/ext_history.py:192` |
@@ -80,6 +83,14 @@
 | [055](055-mission-list-silent-truncation.md) | 任務清單**截斷了不說**：只有 `limit`（上限 200），沒有 `total`／`has_more`／cursor，拿到滿額時分不出是剛好還是被切掉 | low | **closed** | `backend/app/ext_history.py:21,93` |
 | [056](056-mission-fly-skips-start-point.md) | 一鍵起飛**跳過航線第一個點**：ArduCopter 的 NAV_TAKEOFF 不看經緯度，而序列是先離地才切 AUTO，所以機直接飛往第二個點。改成離地後先 GUIDED 飛到起始點；超過 100 m 要確認。✔SITL；群飛與 PX4 尚未改 | high | **closed** | `command/app/main.py:mission_fly` |
 | [057](057-agent-events-never-consumed.md) | 代理的事件清單沒有人讀：18 處 `append`、0 處讀，其中包括**代理接管期間做過什麼**與失聯處置實際送了什麼指令——「我不在的時候發生了什麼」的答案被丟進黑洞。代理其實有一條會動的事件管道（意圖通道 `type:event`，後端在收），這個清單只是沒接上去；附帶無上限成長 | medium | open | `uav-agent/agent.py`＋`intent.py:141` |
+| [058](058-external-param-change-not-surfaced.md) | **別人改了飛控參數，畫面不說**：2026-09-21 排查花了數小時。我們不留存 `PARAM_VALUE`，所以說不出「它變了」；預檢字串原樣轉出，少了「哪個圍欄、我離它多遠」 | **high** | open | `mavlink_rx.py`＋即時頁預檢呈現 |
+| [059](059-agent-must-own-the-uart.md) | **uav-agent 必須永遠擁有 UART 最高優先權**：`get-gps.py`／`mavsdk_server` 與代理同開 `/dev/ttyAMA0`，兩邊各拿隨機片段——校正永遠跑不完且不報錯。050 需求 1 列過 `TIOCEXCL` 但沒做，理由取捨錯了（日常踩到的是非 root） | **high** | open | `agent.py` 開埠＋unit＋README |
+| [060](060-fly-to-start-only-on-takeoff.md) | **重複執行同一路徑仍不會先飛到起始點**：`_fly_to_start` 全檔只有一個呼叫點（`mission_fly`），已在空中重跑完全不經過。056 只修了起飛那一條；航線第一段永遠沒飛到＝A/B 比較的基準被破壞 | **high** | open | `apps/command/app/main.py:958` |
+| [061](061-external-repeat-is-a-new-mission.md) | 外部控制重複執行同一路徑要算成不同任務，名稱以時間自動產生——否則多趟資料疊在同一個任務下，「比較兩趟」拿不出來 | medium | open | `apps/command`＋對外契約 |
+| [062](062-waypoint-hold-time-not-settable.md) | 規劃時設不了航點停留秒數。**資料模型其實已經支援**——`mission_time.py` 讀 `NAV_WAYPOINT` param1 算進飛行時間，缺的只是編輯端 | medium | open | 規劃 UI |
+| [063](063-waypoint-hidden-under-3d-building.md) | 點位落在建築物上被 3D 建物蓋住就再也選不到，只能整條路徑重來 | medium | open | `MapView.tsx` 圖層順序／命中測試 |
+| [064](064-2d-route-preview.md) | 控制端要看得到每條路徑的 2D 預覽圖。現有縮圖是等距 3D，同場地幾條路徑在斜角下形狀相似又可各自轉向，彼此比不了 | low | open | `MissionThumb3D.tsx` |
+| [065](065-round-trip-overlapping-waypoints.md) | **來回路徑的重疊點位選不到——規劃流程要重新設計**。表示法與選取是兩個問題；建議「折返」變成路徑屬性（源頭消滅重疊）＋航點列表保底。**spiderfy 散開顯示明確不建議**：飛行規劃介面不該把點畫在假座標上 | medium | needs-decision | 規劃 UI＋航線資料結構 |
 
 「✔實測確認」= 2026-08-03 首次實飛（SITL 起飛 → 進干擾區 → RTL）取得的實際資料佐證，
 不只是讀碼推論。詳見 [progress/log/2026-08-03.md](../progress/log/2026-08-03.md)。
