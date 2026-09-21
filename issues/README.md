@@ -79,6 +79,7 @@
 | [054](054-max-offset-m-tunable-by-caller.md) | `max_offset_m` 被外部調得動（FastAPI 自動 query 的副作用），同一趟資料在不同呼叫下給出不同 `along_m`；文件沒寫這個參數 | low | **closed** | `backend/app/ext_history.py:129` |
 | [055](055-mission-list-silent-truncation.md) | 任務清單**截斷了不說**：只有 `limit`（上限 200），沒有 `total`／`has_more`／cursor，拿到滿額時分不出是剛好還是被切掉 | low | **closed** | `backend/app/ext_history.py:21,93` |
 | [056](056-mission-fly-skips-start-point.md) | 一鍵起飛**跳過航線第一個點**：ArduCopter 的 NAV_TAKEOFF 不看經緯度，而序列是先離地才切 AUTO，所以機直接飛往第二個點。改成離地後先 GUIDED 飛到起始點；超過 100 m 要確認。✔SITL；群飛與 PX4 尚未改 | high | **closed** | `command/app/main.py:mission_fly` |
+| [057](057-agent-events-never-consumed.md) | 代理的事件清單沒有人讀：18 處 `append`、0 處讀，其中包括**代理接管期間做過什麼**與失聯處置實際送了什麼指令——「我不在的時候發生了什麼」的答案被丟進黑洞。代理其實有一條會動的事件管道（意圖通道 `type:event`，後端在收），這個清單只是沒接上去；附帶無上限成長 | medium | open | `uav-agent/agent.py`＋`intent.py:141` |
 
 「✔實測確認」= 2026-08-03 首次實飛（SITL 起飛 → 進干擾區 → RTL）取得的實際資料佐證，
 不只是讀碼推論。詳見 [progress/log/2026-08-03.md](../progress/log/2026-08-03.md)。
