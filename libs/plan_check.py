@@ -39,6 +39,7 @@ _dist_m = dist_m
 # 可出現在任何位置、不計距離——與現場工具 check_plan.py 的語意一致
 NAV_CMDS = {16, 17, 18, 19, 20, 21, 22}
 _TAKEOFF, _RTL, _LAND = 22, 20, 21
+_WAYPOINT = 16
 
 
 #: 離地高度的警戒線（m）。**低於 0 是「會撞地」，0～這個值之間是「太貼了」**——
@@ -1042,6 +1043,14 @@ def route_profile(wps: list[dict], home: dict | None = None, dem=None,
                 pt["src_i"] = src_i
             out["points"].append(pt)
 
+    # 到點停留（issues/062）：`NAV_WAYPOINT` 的 param1。**規劃完要看得出來**
+    # ——沒有這一格，畫面上停 30 秒的點與飛過去的點長得一模一樣
+    holds = {w.get("seq"): h for w in wps
+             if _cmd(w) == _WAYPOINT and (h := hold_of(w))}
+    for pt in out["points"]:
+        if pt.get("seq") in holds:
+            pt["hold_s"] = holds[pt["seq"]]
+
     # 返航那一層：**從每一個取樣點回家的那條直線**，各自量一次
     if rtl_alt_m is not None and home and home.get("lat"):
         for pt in out["points"]:
@@ -1166,6 +1175,26 @@ def _fill_terrain(track: list[dict], h: float, dem) -> tuple[list[dict], int]:
     return out, total
 
 
+#: 一個點最多停多久（秒）。**不是飛控的上限**，是「這麼長一定是打錯」的界線：
+#: 一小時的定點量測是另一種任務，不該靠在航點上停
+HOLD_MAX_S = 3600.0
+
+
+def hold_of(w: dict) -> float:
+    """這個航點到點後停多久（秒）。`NAV_WAYPOINT` 的 param1——ArduCopter 與 PX4
+    都是「到點後停留」。其他指令的 param1 意思不同，一律回 0。"""
+    if _cmd(w) != _WAYPOINT:
+        return 0.0
+    p1 = w.get("p1")
+    if p1 is None:
+        p1 = (w.get("params") or {}).get("p1")
+    try:
+        v = float(p1 or 0.0)
+    except (TypeError, ValueError):
+        return 0.0
+    return v if v > 0 else 0.0
+
+
 def build_plan(points: list[dict], policy: dict | None = None,
                home: dict | None = None, dem=None,
                home_amsl: float | None = None) -> dict:
@@ -1276,6 +1305,8 @@ def build_plan(points: list[dict], policy: dict | None = None,
                    "手動改過——**改政策不會動它**", len(out) - 1)
         add(lat=float(p["lat"]), lon=float(p["lon"]), alt=alt,
             action="waypoint", command=16, frame=fr, h=h, alt_source=src,
+            # 到點停留（062）。**只給操作員放的點**：系統補的中繼點沒有 hold_s
+            **({"p1": float(p["hold_s"])} if p.get("hold_s") else {}),
             **({"src_i": p["_src"]} if p.get("_src") is not None else {}),
             **({"filled": True} if p.get("filled") else {}),
             **({"approach": True} if p.get("_lz") else {}))

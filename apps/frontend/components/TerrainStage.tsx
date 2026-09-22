@@ -33,6 +33,8 @@ export interface StageWp {
   /** 這一點是操作員的第幾個點（後端給的 `src_i`）。null＝系統補的，
    *  或起飛點。**拖曳與逐點編輯都認它**——用畫面上的位置去數會數錯 */
   srcI?: number | null;
+  /** 到點停留幾秒（issues/062，`NAV_WAYPOINT` 的 param1）。0／沒有＝飛過去 */
+  hold?: number;
 }
 
 const BLUE = 0x3987e5, RED = 0xe05e5e, PICK = 0xd97757, HOT = 0xf0eee6;
@@ -782,6 +784,17 @@ function makeRouteLayer(map: maplibregl.Map, dataRef: { current: StageData },
           new THREE.MeshBasicMaterial({ color: col }));
         sp.position.copy(at);
         group.add(sp);
+        if (w.hold) {
+          // **停留的點要看得出來**（062：「規劃完看不出來」）。兩圈平躺的細環
+          // ——與選取的單圈光暈分得開，顏色仍是這個點的類別色，不借橘色
+          for (const k of [3.0, 3.7]) {
+            const ring = new THREE.Mesh(
+              new THREE.TorusGeometry(r * k, r * 0.12, 6, 40),
+              new THREE.MeshBasicMaterial({ color: col, transparent: true, opacity: 0.85 }));
+            ring.position.copy(at);
+            group.add(ring);
+          }
+        }
       }
       if (i === sel || hot) {
         // 光暈：選取用實色、滑過用半透明。**它不遮住底下的顏色**

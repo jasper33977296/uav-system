@@ -32,6 +32,8 @@ interface Pt { d: number; lat?: number; lon?: number; ground: number | null;
   kind?: "takeoff" | "wp" | "land"; auto?: boolean;
   /** 操作員的第幾個點（後端 `src_i`）。系統補的沒有 */
   src_i?: number | null;
+  /** 到點停留秒數（062，`NAV_WAYPOINT` 的 param1）。後端只在大於 0 時給 */
+  hold_s?: number;
   /** **從這一點失聯返航會怎樣。** RTL 爬到 `RTL_ALT_M`（離起飛點）之後
    *  直線飛回起飛點——那條線在同一片地形上，起伏會撞。`rtl_agl` 是那條
    *  線上最低的離地；null ＝沒讀到 `RTL_ALT_M`，**沒判不是安全** */
@@ -378,7 +380,9 @@ export default function PlanPage() {
     land_at_home: false, land_mode: "vert",
   });
   const [pts, setPts] = useState<
-    { lat: number; lon: number; h?: number; alt_source?: string; kind: string }[]>([]);
+    { lat: number; lon: number; h?: number; alt_source?: string; kind: string;
+      /** 到點停留秒數（062）。沒有＝飛過去 */
+      hold_s?: number }[]>([]);
   const [decisions, setDecisions] = useState<Decision[]>([]);
   const [applied, setApplied] = useState<{ note?: string } | null>(null);
   const [sign, setSign] = useState<Sign | null>(null);
@@ -449,7 +453,7 @@ export default function PlanPage() {
   /** **改動只存在畫面上**（使用者裁定 2026-09-08：先只算不存）。
    *  每次變動送去後端試算——規則只有一份，前端不自己再算一次。 */
   const [ov, setOv] = useState<Record<number,
-    { alt?: number; speed?: number; lat?: number; lon?: number }>>({});
+    { alt?: number; speed?: number; lat?: number; lon?: number; hold?: number }>>({});
   const [busy, setBusy] = useState(false);
   const [saved, setSaved] = useState<string | null>(null);
   const spdRef = useRef<{ wp: number | null; rad: number | null;
@@ -723,7 +727,7 @@ export default function PlanPage() {
     .map((p) => ({ seq: p.seq as number, lat: p.lat ?? 0, lon: p.lon ?? 0,
       amsl: p.plan as number, ground: p.ground,
       bad: badSeq.has(p.seq as number), fixed: !isNew && p.seq === 0,
-      kind: p.kind, auto: p.auto, srcI: p.src_i ?? null }))
+      kind: p.kind, auto: p.auto, srcI: p.src_i ?? null, hold: p.hold_s ?? 0 }))
     .map((w) => {
       // **位置直接讀操作員那份，不等後端。** 剖面要跑一趟後端才回來，
       // 中間那幾百毫秒點不動，拖起來像卡住（使用者 2026-09-09）。
@@ -1056,7 +1060,21 @@ export default function PlanPage() {
                     : mine?.h ?? pol.height_m)
                 : cur.alt ?? Math.round((w.amsl - (prof?.home_amsl_m ?? 0)) * 10) / 10;
               const spdNow = cur.speed ?? out?.speed_ms ?? null;
-              const set = (k: "alt" | "speed", v: number) => {
+              // 到點停留（062）。**只有一般航點能停**——起飛、降落的 param1
+              // 意思不同；從零模式下系統補的中繼點也不行（它們會被重算掉）
+              const canHold = w.kind === "wp" && !w.auto && (!isNew || mi >= 0);
+              const holdNow = isNew ? (mine?.hold_s ?? 0) : (cur.hold ?? w.hold ?? 0);
+              const set = (k: "alt" | "speed" | "hold", v: number) => {
+                if (k === "hold") {
+                  const hv = Math.max(0, Math.min(3600, Number.isFinite(v) ? v : 0));
+                  if (isNew) {
+                    setPts((p) => p.map((q, j) =>
+                      j === mi ? { ...q, hold_s: hv > 0 ? hv : undefined } : q));
+                  } else {
+                    setOv((o) => ({ ...o, [w.seq]: { ...o[w.seq], hold: hv } }));
+                  }
+                  return;
+                }
                 if (isNew) {
                   // **改一個點的高度＝把它變成例外。** 之後改政策不會動它
                   if (k === "alt" && mi >= 0)
@@ -1170,6 +1188,20 @@ export default function PlanPage() {
                       <input type="range" min={0.2} max={8} step={0.1}
                         value={spdNow ?? 1}
                         onChange={(e) => set("speed", Number(e.target.value))} />
+                    </label>
+                  )}
+                  {canHold && (
+                    <label className="rail-field">
+                      <div className="rail-row"><span>到點停留（秒）<InfoTip
+                        tip={"飛到這一點後**停在原地**這麼久，再飛往下一點（寫進航點的 param1）。"
+                          + "定點量測用：飛過去只有一兩筆樣本，停 30 秒就是約 30 筆。"
+                          + "停留期間的樣本在任務歷史裡會標成靜止量測。0＝不停。"} /></span>
+                        <input className="numin" type="number" min={0} max={3600} step={1}
+                          value={holdNow}
+                          onChange={(e) => set("hold", Number(e.target.value))} /></div>
+                      <input type="range" min={0} max={120} step={1}
+                        value={Math.min(holdNow, 120)}
+                        onChange={(e) => set("hold", Number(e.target.value))} />
                     </label>
                   )}
                   {out && (() => {

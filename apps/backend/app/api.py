@@ -2796,6 +2796,9 @@ class PlanOverride(BaseModel):
     speed: float | None = None
     lat: float | None = None
     lon: float | None = None
+    #: 到點停留（秒，issues/062）。寫進 `NAV_WAYPOINT` 的 param1；0＝不停。
+    #: **只對 NAV_WAYPOINT 有效**——起飛、降落的 param1 意思不同
+    hold: float | None = Field(None, ge=0, le=plan_check.HOLD_MAX_S)
 
 
 class FenceIn(BaseModel):
@@ -2844,11 +2847,21 @@ def _apply_overrides(wps: list[dict], ov: list[PlanOverride]) -> list[dict]:
     alt = {o.seq: o.alt for o in ov if o.alt is not None}
     spd = {o.seq: o.speed for o in ov if o.speed is not None}
     pos = {o.seq: (o.lat, o.lon) for o in ov if o.lat is not None and o.lon is not None}
+    hold = {o.seq: o.hold for o in ov if o.hold is not None}
+    bad = [s for s in hold
+           if not any(w.get("seq") == s and plan_check._cmd(w) == 16 for w in wps)]
+    if bad:
+        # **不是航點就不能停**：起飛、降落的 param1 意思不同，照寫會改到別的東西
+        raise HTTPException(422, f"seq {'、'.join(map(str, bad))} 不是一般航點，"
+                                 "設不了停留時間")
     out = []
     for w in wps:
         w = dict(w)
         if w.get("seq") in alt:
             w["alt"] = alt[w["seq"]]
+        if w.get("seq") in hold:
+            w["p1"] = float(hold[w["seq"]])
+            w["params"] = {**(w.get("params") or {}), "p1": w["p1"]}
         if w.get("seq") in pos:
             w["lat"], w["lon"] = pos[w["seq"]]
         # 速度改的是**那個航點後面**的 DO_CHANGE_SPEED；航線裡沒有的話補一個
@@ -3001,6 +3014,8 @@ class DraftPoint(BaseModel):
     h: float | None = None
     #: 這個點之後的速度。同樣只有例外才給
     speed_ms: float | None = None
+    #: 到點停留（秒，issues/062）。不給＝不停
+    hold_s: float | None = Field(None, ge=0, le=plan_check.HOLD_MAX_S)
     alt_source: str | None = None     # policy／manual
     alt: float | None = None          # 舊欄位，仍收
     kind: str = "wp"          # wp／land
