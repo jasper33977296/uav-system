@@ -1,6 +1,6 @@
 # 059 · uav-agent 必須永遠擁有 UART 的最高優先權
 
-- 狀態：open（**裁定完成 2026-09-21**，待實作）
+- 狀態：in-progress（**A 完成並上機驗證 2026-09-22**，uav-agent `e3500ee`；剩 B，要先有 057）
 - 嚴重度：**high**（飛安：橋的一端被別人靜默地搶走，而且很難看出來）
 - 位置：`uav-agent/agent.py` 的 `_open_serial_once`、`onboard/uav-link-node.service`
   （unit 設定）、`/opt/uav-agent/systemd/`
@@ -55,6 +55,11 @@ MAVLink 框架對兩邊都是破的。後果：
 pyserial 的 `Serial(..., exclusive=True)`。之後任何非 `CAP_SYS_ADMIN` 的行程
 `open()` 會拿到 `EBUSY`——`mavsdk_server` 這類就再也開不起來了。
 
+> **更正（2026-09-22 實作時）：上面這句是錯的。** pyserial 的 `exclusive=True`
+> 做的是 `flock(LOCK_EX|LOCK_NB)`（`serialposix.py`），那是建議鎖，只擋得住同樣
+> 去 flock 的程式——`mavsdk_server`／`stty` 都不 flock，照樣開得起來。實作改成
+> 直接 `ioctl(TIOCEXCL)`。原句保留，因為照它做會做出一個看起來有、實際沒有的防線。
+
 **它擋不住 root**（root 可以無視 TIOCEXCL），所以不是唯一防線。
 
 ### B. 偵測「有別人開著」並大聲說
@@ -94,4 +99,28 @@ systemd 的 `DeviceAllow`／`PrivateDevices` 能不能讓別的服務根本看�
 
 ## 解決方式
 
-（closed 時補）
+### A（2026-09-22，uav-agent `e3500ee`，已部署）
+
+* `_open_serial_once` 拿到 fd 後呼叫 `_claim_exclusive`：`ioctl(fd, TIOCEXCL)`。
+  非 tty（`--dev udpin:`）跳過。下不成功只 `log.error`、**不擋開機**（本案裁定）。
+  結果放進狀態列 `port_exclusive`：`true`／`false`／`null`（不是 tty）。
+* **實作時翻出的第二件事**：獨佔旗標只在 tty 被**最後**釋放時才由核心清除。
+  只要別人（例如 root 的 `stty`）還開著，代理關掉自己的 fd 並不是最後一次，
+  050 需求 2 的「先關再開」會被**自己上次的獨佔**擋在外面。所以關舊埠之前先
+  `TIOCNXCL`（`_release_exclusive`）。pty 上重現過這個自鎖。
+
+驗證：
+
+| | 結果 |
+|---|---|
+| `tools/uart-exclusive.py`（pty、驗行為）| ✅ 全過；含兩個反例：pyserial `exclusive=True` 擋不住、只關不放會自鎖 |
+| `tools/fc-link-watchdog.py` | ✅ 全過（fake 綁的是真的 `_claim`／`_release`）|
+| 上機 Pi 5，`pi` 身分 `open("/dev/ttyAMA0")` | ✅ `EBUSY`；`stty -F` 也是 busy |
+| 上機，root 開 | 仍開得起來——**已知缺口，由 B 處理** |
+| 上機，重啟後鏈路 | ✅ `port_exclusive=true`、心跳 0.8 s、`msgs_from_fc` 持續增加、`port_tampered=0` |
+
+**沒驗到的**：在真的 UART 上跑「程式內先放再關再開」那條路（要讓飛控心跳斷 15 秒
+才會觸發）。pty 上驗過；真機只驗到行程重啟那種釋放。
+
+**A 擋不住的兩種**仍然成立，都是 B 的範圍：root，以及**早於代理開埠的人**
+（09-21 那次 `get-gps.py` 比代理早 7 秒——TIOCEXCL 只擋之後的 `open()`）。
