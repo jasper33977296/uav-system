@@ -6,7 +6,7 @@
 import json
 import logging
 import uuid
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 
 from fastapi import APIRouter, HTTPException
 
@@ -216,6 +216,22 @@ async def mission_signal(mission_id: str):
             r["session_id"])
         times = [x["time"] for x in srows]
         interval = _interval_s(times)
+        # **飛往起始點那一段要標出來**（issues/060，2026-09-21 使用者裁定）。
+        # 它算任務的一部分——是真的飛行，耗了電、可能正好飛過我們想量的區域，
+        # 不該從紀錄裡消失。但它**不在航線上**，沿航線里程對它沒有定義。
+        #
+        # 沒有這個標記的話，`along_m: null` 同時代表兩件完全不同的事：
+        # ①「這筆在航線開始之前」與 ②「這筆偏離航線太遠」。前者是預期中的，
+        # 後者是要看一眼的——**同形就等於兩個都看不見**。
+        transits = [(t["time"], t["time"] + timedelta(
+                        seconds=float((t["detail"] or {}).get("seconds") or 0)))
+                    for t in await db.pool.fetch(
+                        "SELECT time, detail FROM events WHERE session_id = $1::uuid "
+                        "AND type = 'transit' ORDER BY time", r["session_id"])]
+
+        def _phase(ts):
+            return "transit" if any(a <= ts <= b for a, b in transits) else "route"
+
         samples = []
         for x in srows:
             along = off = None
@@ -223,6 +239,9 @@ async def mission_signal(mission_id: str):
                 along, off = project(x["lat"], x["lon"])
             samples.append({"time": _iso(x["time"]), "lat": x["lat"], "lon": x["lon"],
                             "alt_rel": x["alt_rel"],
+                            # route＝在航線上；transit＝飛往起始點的那一段。
+                            # **里程只對 route 有意義**
+                            "phase": _phase(x["time"]),
                             "along_m": round(along, 2) if along is not None else None,
                             "offset_m": round(off, 2) if off is not None else None,
                             **{k: x[k] for k in METRIC_KEYS}})

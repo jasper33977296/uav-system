@@ -818,6 +818,12 @@ START_ARRIVE_M = 3.0
 START_RECONFIRM_M = 20.0
 #: 這麼久沒拉近 1 m 就算卡住（s）。途中重送的間隔
 START_STALL_S, START_RESEND_S = 15.0, 5.0
+#: 高度差在這個範圍內就算「到了那個高度」（m）。與 `START_ARRIVE_M` 同量級——
+#: 氣壓計的雜訊本來就有這個等級，訂得更嚴只會讓計時器永遠不啟動
+START_ALT_BAND_M = 2.0
+#: 替爬升／下降編的時間預算（m/s）。**保守值**：這不是效能估計，是「多久之後
+#: 我們可以確定它不是在改高度、而是真的卡住了」的下限
+START_VERT_MS = 0.5
 
 
 async def _start_leg(sysid: int, plan_id: str | None) -> dict:
@@ -889,6 +895,38 @@ def _check_start_leg(leg: dict, accepted: float | None) -> None:
         "alt_m": leg["alt_m"], "start": leg["start"]})
 
 
+async def _note_transit(sysid: int, leg: dict) -> None:
+    """把「飛去起點那一段」留成一筆事件（2026-09-21 使用者裁定，issues/060）。
+
+    **這一段算任務的一部分，但要標記出來。** 它是真的飛行——耗了電、可能失敗、
+    也可能正好飛過我們想量的區域，所以不該從任務紀錄裡消失。但它**不在航線上**，
+    沿航線里程對它沒有定義。
+
+    沒有這筆事件的話，對外的訊號資料裡 `along_m: null` 同時代表兩件完全不同的事：
+
+      * 這筆是飛去起點路上的樣本（航線還沒開始）
+      * 這筆偏離航線太遠（GPS 跳點、中途偏航）
+
+    寫入失敗不影響飛行——這是留痕，不是指令路徑。
+    """
+    try:
+        did, sid = await _link_of(sysid)
+        secs = float(leg.get("seconds") or 0.0)
+        await pool.execute(
+            "INSERT INTO events (time, drone_id, session_id, severity, type, "
+            "detail, source) VALUES (now() - ($1 || ' seconds')::interval, "
+            "$2, $3, 'info', 'transit', $4::jsonb, 'command')",
+            str(secs), did, sid,
+            json.dumps({"seconds": secs, "from_m": leg.get("from_m"),
+                        "alt_m": leg.get("alt_m"),
+                        "alt_gap_from_m": leg.get("alt_gap_from_m"),
+                        "start": leg.get("start"),
+                        "msg": "飛往任務起始點（不在航線上）"},
+                       ensure_ascii=False, default=str))
+    except Exception:
+        log.warning("transit 事件寫入失敗（不影響飛行）", exc_info=True)
+
+
 async def _fly_to_start(sysid: int, leg: dict, ground_amsl) -> dict:
     """已在空中 → 飛到任務起始點 → **等到位**。沒到位就切 hold 停下、不切任務。
 
@@ -903,8 +941,13 @@ async def _fly_to_start(sysid: int, leg: dict, ground_amsl) -> dict:
     drv_matches = mav.dialect(router, sysid)["mode_matches"]
     t0 = last_tx = best_t = loop.time()
     best = d0 = leg["distance_m"]
-    deadline = t0 + 30.0 + d0 / 1.0              # 以 1 m/s 下限估，再給 30 s 餘裕
-    why, dist = "逾時", d0
+    # 出發時離目標高度多遠。**這一段要編進時間預算**：高度以航線的起始點為準
+    # （2026-09-21 裁定），所以只要機不是剛好停在那個高度上就一定有這一段
+    d_now = router.drones.get(sysid) or {}
+    v0 = (abs(alt - d_now["alt_rel"])
+          if d_now.get("alt_rel") is not None else 0.0)
+    deadline = t0 + 30.0 + d0 / 1.0 + v0 / START_VERT_MS   # 水平 1 m/s、垂直保守值
+    why, dist, climbing = "逾時", d0, v0 > START_ALT_BAND_M
     while loop.time() < deadline:
         await asyncio.sleep(1.0)
         now = loop.time()
@@ -917,12 +960,30 @@ async def _fly_to_start(sysid: int, leg: dict, ground_amsl) -> dict:
             continue
         dist = plan_check.dist_m(d["lat"], d["lon"], lat, lon)
         if dist <= START_ARRIVE_M:
-            return {**leg, "arrived": True, "distance_m": round(dist, 1),
-                    "from_m": d0, "seconds": round(now - t0, 1), "sent": sent}
+            out = {**leg, "arrived": True, "distance_m": round(dist, 1),
+                   "from_m": d0, "alt_gap_from_m": round(v0, 1),
+                   "seconds": round(now - t0, 1), "sent": sent}
+            await _note_transit(sysid, out)
+            return out
+        # **還在改高度就不算卡住。** 機在爬升或下降時水平距離可以完全不動，
+        # 而停滯判定只量水平——2026-09-21 SITL 實測：機在 2.4 m、起始點高度
+        # 12 m、水平 200 m，15 秒內水平一公尺都沒縮，就被判成卡住了
+        # （issues/060）。高度以航線起始點為準這條裁定保證了這一段常常存在，
+        # 所以它不是邊角情況。**上面的絕對上限仍然兜著**：真的卡在爬升也會逾時。
+        v_gap = (abs(alt - d["alt_rel"]) if d.get("alt_rel") is not None else 0.0)
+        if v_gap > START_ALT_BAND_M:
+            best_t = now                       # 有在做事，重設停滯計時
+            climbing = True
+            continue
+        if climbing:
+            # 剛到高度：從這一刻才開始算水平有沒有進展，不要拿爬升期間的
+            # 距離當基準（那會讓計時器一進來就已經超時）
+            best, best_t, climbing = dist, now, False
         if dist < best - 1.0:
             best, best_t = dist, now
         elif now - best_t > START_STALL_S:
-            why = f"{START_STALL_S:.0f} 秒沒有拉近（卡在 {dist:.0f} m）"
+            why = (f"{START_STALL_S:.0f} 秒沒有拉近（卡在 {dist:.0f} m，"
+                   f"高度已到位）")
             break
         if now - last_tx >= START_RESEND_S:
             last_tx = now
@@ -940,7 +1001,9 @@ async def _fly_to_start(sysid: int, leg: dict, ground_amsl) -> dict:
             stopped = {"ok": False, "detail": e.detail}
     raise HTTPException(504, {
         "code": "start_not_reached",
-        "msg": f"沒有飛到任務起始點（{why}，剩 {dist:.0f} m / 出發時 {d0:.0f} m），未啟動任務",
+        "msg": (f"沒有飛到任務起始點（{why}，剩 {dist:.0f} m / 出發時 {d0:.0f} m"
+                + (f"，出發時離目標高度 {v0:.0f} m" if v0 > START_ALT_BAND_M else "")
+                + "），未啟動任務"),
         "hint": "機停在懸停狀態——檢查遙測後可重試或 RTL",
         "hold": stopped, "leg": leg})
 
