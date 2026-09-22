@@ -1,6 +1,6 @@
 # 059 · uav-agent 必須永遠擁有 UART 的最高優先權
 
-- 狀態：in-progress（A 完成並上機；**B 已部署 2026-09-22**（uav-agent `39273e2`，經 069 的 deploy.sh），`CAP_SYS_PTRACE` 生效；搶埠的上機實測（T2）待做）
+- 狀態：in-progress（A、**B 都上機驗證 2026-09-22**（uav-agent `5d4d1de` 起）；C 的前提不成立待決定、D 未評估）
 - 嚴重度：**high**（飛安：橋的一端被別人靜默地搶走，而且很難看出來）
 - 位置：`uav-agent/agent.py` 的 `_open_serial_once`、`onboard/uav-link-node.service`
   （unit 設定）、`/opt/uav-agent/systemd/`
@@ -169,3 +169,27 @@ MAVLink 出口**。照寫就是指一條不存在的路。搶埠的 notice 因�
    約 15 秒 → 事件流出現 critical 的 `agent_notice`、CommandPanel 出現警告、
    關掉後出現「已沒有別的程式」。
 4. 用 `sudo stty -F /dev/ttyAMA0 1500000` 驗「序列埠設定被外部改掉」那則也送得上來。
+
+### B 上機驗證（2026-09-22，T1／T2／T7）
+
+**第一次 T2 沒過，翻出 unit 少一個能力。** root 只開不讀佔著 `/dev/ttyAMA0` 15 秒，
+代理的名單一直是空的。`setpriv` 對照：
+
+| 能力 | 讀不到的行程 | 抓到 root 那支 |
+|---|---|---|
+| 只有 `CAP_SYS_PTRACE` | 158 | ✗ |
+| `CAP_SYS_PTRACE` ＋ `CAP_DAC_READ_SEARCH` | 0 | ✓ |
+
+PTRACE 管讀每個 fd 的連結；**列出 `/proc/<pid>/fd` 目錄本身是一般檔案權限**。
+unit 改成兩個都給（uav-agent `5d4d1de`）。
+
+**代理其實每次啟動都照實發了「看不到所有程式的開檔」的 notice**——誠實那條路是對的；
+是驗收時在日誌裡搜「看不到」（log 寫的是「讀不到」），**誤判 T1 通過**。更正於此。
+
+修正後：
+
+| | 結果 |
+|---|---|
+| T1 | ✅ `CapEff 0x80004`（兩個能力），啟動後 0 則「讀不到」 |
+| T2 | ✅ root 佔埠 → 5 秒內 critical notice，帶 **pid 10573、root、完整命令列**；關掉後 info「已沒有別的程式」；前端 WebSocket 的 `agent_state.fc_link.holders` 帶得出那一筆（CommandPanel 警告的資料來源；畫面本身沒用瀏覽器看）|
+| T7 | ✅ 重開與重新部署之後，`pi` 身分開埠仍是 `EBUSY` |

@@ -1,6 +1,6 @@
 # 050 · 飛控串列斷了，代理不知道、不出聲、也不試著救
 
-- 狀態：in-progress（需求 1、2 完成並上機；**需求 3 已部署 2026-09-22**（uav-agent `39273e2`）；上機實測（序列埠被改那則、真的失聯）待做）
+- 狀態：in-progress（需求 1、2、3 上機；**需求 3 的「真的讓飛控失聯」還沒做**——見 T3 與 F2）
 - 嚴重度：**high**（飛安相關：飛控失聯是代理的核心職責）
 - 位置：`uav-agent/agent.py` 的 `_check_port_tamper`／`_check_fc_link`／
   `_maybe_reopen_serial`／`_open_serial_once`；驗證在 `tools/fc-link-watchdog.py`
@@ -221,3 +221,12 @@ st.ever_connected = True
 - `uav-agent/tools/` 的 `backfill-flow.py` 與 `driver-parity.py` 在本次修改之前
   就是紅的（開乾淨 worktree 對照過）。後者失敗的是「機上四支驅動與
   `libs/autopilot` 上游逐字相同」——既有的漂移。
+
+### 需求 3 上機驗證（2026-09-22，T3）
+
+`sudo stty -F /dev/ttyAMA0 1500000` → **3 秒內回到 57600**，`port_tampered=1`，`fc_link_ok`
+全程 true、`msgs_from_fc` 4087 → 5044（鏈路沒斷）；地面站收到 warning
+「⚠ 飛控序列埠設定被外部改掉（速率變成 1500000，應為 57600）……已改回（第 1 次）」。
+
+**還沒驗**（F2）：真的讓飛控失聯（拔線或斷電）→ 失聯、每 60 秒持續、恢復三種 notice，
+以及 CommandPanel 說「斷的是代理與飛控之間的序列埠」。
