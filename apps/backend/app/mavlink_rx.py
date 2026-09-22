@@ -28,7 +28,7 @@ import time
 
 from pymavlink import mavutil
 
-from . import db, dialect, ext_stream, msg_registry, px4_events, video_rec
+from . import db, dialect, ext_stream, msg_registry, param_watch, px4_events, video_rec
 from .capture import Recorder
 from .config import settings
 from .state import MISSION_STATE, LiveState, fleet, live
@@ -461,6 +461,8 @@ class MavlinkRx:
                 msg.param_value, getattr(msg, "param_type", None), msg.autopilot
                 if hasattr(msg, "autopilot") else st.autopilot_raw)
             st.param_total = msg.param_count
+            # 058 A：變了要說出來。只排程、不等 DB（比對在讀完一輪之後）
+            param_watch.watch.on_param(st, msg.param_id, st.params[msg.param_id])
         elif t == "MISSION_CURRENT":
             # 機端正在飛第幾項。**系統原本完全沒有解這則訊息**——收得到但沒人看，
             # 於是「飛機正在飛第幾個航點」這件事在系統裡不存在（issues/039 需要它）。

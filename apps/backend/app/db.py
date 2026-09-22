@@ -472,6 +472,20 @@ async def migrate() -> None:
     await pool.execute(
         "ALTER TABLE flight_sessions ADD COLUMN IF NOT EXISTS param_set_id UUID "
         "REFERENCES param_sets(id) ON DELETE SET NULL")
+    # ── issue 058 A：每台機「最後一次確認的參數值」──────────────────────────
+    # param_sets 是**架次**的快照（解鎖那一刻），回答「這一趟用什麼設定飛的」；
+    # 這張是**機**的現況，回答「它變了嗎、上次確認是什麼時候」。存在 DB 而不是
+    # 記憶體：後端重啟、代理重開之後重讀一輪，**我們不在的時候被改的**也抓得到
+    # ——2026-09-21 那個沒有人記得的圍欄正是這種。
+    # confirmed_at＝最後一次讀到**這個值**；changed_at＝我方最後一次看到它變。
+    # value 用 double：NaN 是合法的參數值，JSONB 存不了（021 第一版踩過）
+    await pool.execute("""CREATE TABLE IF NOT EXISTS drone_params (
+        drone_id     UUID NOT NULL,
+        name         TEXT NOT NULL,
+        value        DOUBLE PRECISION,
+        confirmed_at TIMESTAMPTZ NOT NULL,
+        changed_at   TIMESTAMPTZ,
+        PRIMARY KEY (drone_id, name))""")
     # ── issue 023：missions 正名瘦身（路徑快照庫，不是任務庫）──────────────
     # kind 取代 created_by 兼差當判別欄。**加法不減法**：created_by 保留（歷史
     # 事實，留著零成本），只是不再被程式當分類用。

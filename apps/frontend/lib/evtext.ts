@@ -127,6 +127,28 @@ export function evText(
       const text = typeof d.text === "string" && d.text ? d.text : `代理事件 ${d.kind ?? "?"}`;
       return notes.length ? `${text}（${notes.join("；")}）` : text;
     }
+    // 飛控參數（issues/058 A）。**「是不是我們改的」一定要說**——2026-09-21
+    // 花了數小時才發現參數被系統以外的人改過，而畫面一個字都沒說
+    case "param_changed": {
+      const via = typeof d.via_command === "number"
+        ? "經由地面站指令服務" : "不是經由地面站指令服務";
+      // 舊值是從上一趟的架次快照借來的，還是我們一路看著的——**意思不同**：
+      // 前者只說得出「上一趟飛的時候是這樣」
+      const since = typeof d.last_confirmed_at === "string"
+        ? (d.compared_to === "session_snapshot"
+          ? `；對照上一趟 ${shortTime(d.last_confirmed_at)} 解鎖時的快照`
+          : `；上次確認舊值是 ${shortTime(d.last_confirmed_at)}`) : "";
+      return `參數 ${d.name ?? "?"}：${pv(d.old)} → ${pv(d.new)}（${via}${since}）`;
+    }
+    case "params_changed":
+      return `${d.count ?? "?"} 個參數一次改變`
+        + (typeof d.not_via_command === "number" && d.not_via_command > 0
+          ? `（其中 ${d.not_via_command} 個不是經由地面站指令服務）` : "")
+        + "——詳情看明細";
+    case "param_baseline":
+      return `第一次記下這台機的 ${d.count ?? "?"} 個參數（之後變了才說得出來）`;
+    case "params_added":
+      return `出現 ${d.count ?? "?"} 個以前沒見過的參數（多半是韌體更新）`;
     case "driver_disagreement": {
       const n = Array.isArray(d.fields) ? (d.fields as unknown[]).length : 0;
       return `機上與地面站對同一份遙測算出不同結果${n ? `（${n} 項）` : ""}`;
@@ -146,6 +168,22 @@ export function evText(
 
 /** 秒數 → 「N 秒」「M 分」「H 小時 M 分」。**不寫小數**（067：「7.4 小時」
  * 要心算，而且小數點看起來像精確量測）。 */
+/** 參數值：整數照整數寫，其餘最多 6 位有效數字。**null 寫「?」**——
+ * NaN 過 JSON 邊界會變 null（lib/jsonsafe），那是「讀到了但不是數字」，
+ * 寫成 0 或空白都是在編一個值。 */
+function pv(v: unknown): string {
+  if (typeof v !== "number") return "?";
+  return Number.isInteger(v) ? String(v) : String(Number(v.toPrecision(6)));
+}
+
+/** ISO 時刻 → 「9/21 15:12」（本地時區）。事件列要短；完整時刻在明細裡。 */
+function shortTime(iso: string): string {
+  const t = new Date(iso);
+  if (Number.isNaN(t.getTime())) return iso;
+  const p = (n: number) => String(n).padStart(2, "0");
+  return `${t.getMonth() + 1}/${t.getDate()} ${p(t.getHours())}:${p(t.getMinutes())}`;
+}
+
 export function durText(s: number): string {
   if (s < 60) return `${Math.round(s)} 秒`;
   if (s < 3600) return `${Math.floor(s / 60)} 分`;
