@@ -16,6 +16,7 @@ import { emph } from "@/lib/emph";
 import { armFix, armNote } from "@/lib/prearm";
 import { useUavStore } from "@/lib/store";
 import { durText } from "@/lib/evtext";
+import { ageText } from "@/lib/staleness";
 
 /** 能力四態（doc/capability-ui-proposal.md，issue 015）：按鈕由每機
  * capabilities descriptor 驅動，前端不寫死機型行為。
@@ -49,6 +50,10 @@ const PHASE_TXT: Record<string, string> = {
   landed: "已降落", upload_failed: "✗ 路徑上傳失敗", prearm_failed: "✗ 起飛檢查未過",
   rejected: "✗ 機端拒絕", rtl: "返航中",
 };
+
+/** 指令服務多久內還收到這台機，算指令通道還通。healthz 每 3 秒問一次，
+ *  所以最壞情況是 8 秒前還聽得到——比遙測的 old 門檻（10 秒）還嚴 */
+const CMD_FRESH_S = 5;
 
 interface DroneHealth {
   age_s: number;
@@ -533,6 +538,11 @@ export default function CommandPanel() {
   // 不該把整個面板鎖掉
   const routerDead = health.ok === false;
   const dh = sid ? health.drones[sid] ?? null : null;
+  // **指令通道自己的死活**（issues/067）。代理把飛控的訊息同時送到後端（遙測）與
+  // 指令服務兩個埠，兩條路**各自會斷**——畫面上的「失聯」是後端收不到遙測，
+  // 不代表指令送不出去。指令服務 CMD_FRESH_S 內還收得到這台機、router 也活著，
+  // 返航／降落就是真的送得到
+  const cmdAlive = !routerDead && dh != null && dh.age_s < CMD_FRESH_S;
   const armed = dh?.armed ?? null;
   // 039 複裁 A：**RC 未連線不得起飛、不得開始執行路徑**。「機在地上失聯只告警」
   // 那格的前提是有人能用遙控器接管——沒有 RC 就沒有人。權威守門在機上代理，
@@ -886,7 +896,11 @@ export default function CommandPanel() {
       {/* 通道斷線但身分還在：**不整片鎖掉**，只保留「把飛機帶回地面」。
           那兩個動作在任何飛行狀態下的意思都一樣，所以問不到守門也不影響判斷；
           其餘的都需要「當下狀態允不允許」，而那正是問不到的東西 */}
-      {open && health.enabled && !routerDead && admOffline && (
+      {/* **遙測也斷了的時候不顯示這一塊**（issues/067，2026-09-22 真畫面翻出）：
+          那時下面的失聯區塊已經把整件事講完（含「機上代理也聯絡不上」），兩塊同時在，
+          一塊說「只剩返航與降落」、一塊說「按了也送不到」——同一個畫面兩種說法。
+          遙測還在時照舊顯示，但按鈕一樣要指令通道真的通（`cmdAlive`）才放 */}
+      {open && health.enabled && !routerDead && admOffline && !linkLost && (
         <div className="cmd-body">
           <div className="cmd-ready lock">
             {/* **一句話講完**（2026-09-07 使用者：字太多）。原本四行在講
@@ -896,14 +910,21 @@ export default function CommandPanel() {
             <b title={"板號與配號都對得上，斷的只是意圖通道；指令走的是另一條路。"
               + "問不到機上守門，所以暫停／續飛／開始執行路徑都擋著——那些需要知道"
               + "「當下狀態允不允許」。實體遙控器不受影響。"}>
-              意圖通道斷了——只剩返航與降落 ⋯
+              {cmdAlive ? "意圖通道斷了——只剩返航與降落" : "意圖通道斷了，指令也送不到這台機"} ⋯
             </b>
           </div>
-          <div className="cmd-row">
-            {btn("RTL", "⌂ 返航", "/mode/rtl", { danger: true, cap: "rtl" })}
-            {btn("降落", "降落", "/mode/land",
-                 { confirm: true, danger: true, cap: "land" })}
-          </div>
+          {cmdAlive ? (
+            <div className="cmd-row">
+              {btn("RTL", "⌂ 返航", "/mode/rtl", { danger: true, cap: "rtl" })}
+              {btn("降落", "降落", "/mode/land",
+                   { confirm: true, danger: true, cap: "land" })}
+            </div>
+          ) : (
+            <div className="hint-line">
+              {dh == null ? "指令服務沒看過這台機。" : `指令服務 ${ageText(dh.age_s)}就沒收到這台機。`}
+              返航與降落按了也送不到，所以不放按鈕——要處置請用實體遙控器。
+            </div>
+          )}
         </div>
       )}
       {open && health.enabled && !routerDead && notAdmitted && (
@@ -1274,13 +1295,19 @@ export default function CommandPanel() {
             </div>
           )}
 
-          {/* 失聯：一句話＋兩顆鈕，其餘全收（使用者裁定 2026-09-07）。
+          {/* 失聯（issues/067，使用者 2026-09-21 推翻 09-07 的「一句話＋兩顆鈕」）：
+              **按了沒有作用的鈕不留**——在最需要確定性的那一刻，它只會製造錯覺。
+              但「失聯」是**後端收不到遙測**，指令走的是另一條路（指令服務自己的埠）：
+              那條還通的時候返航／降落**是真的送得到**，拿掉等於拿走一次有用的 RTL。
+              所以判準是事實（`cmdAlive`），不是「畫面失聯」這四個字。
               **不列未就緒原因**——那些是斷線之前的事，掛在這裡會被讀成現在。 */}
           {linkLost && !observeOnly && !noChannel && (
             <div className="cmd-dead">
               <b title={"畫面上的數值停在最後一次收到的那一刻，不是現在的狀態。"
-                + "指令仍會送出，但送不送得到不知道——實體遙控器不受影響。"}>
-                失聯——只剩返航與降落 ⋯
+                + "實體遙控器不受影響。"}>
+                {cmdAlive
+                  ? `遙測斷了——但指令還送得到（指令服務 ${Math.floor(dh!.age_s)} 秒前還收到這台機）`
+                  : "失聯——指令也送不到這台機"} ⋯
               </b>
               {/* **斷在哪一段**（050 需求 3）。後端只知道「收不到 MAVLink」，
                   機上代理的通道是另一條路——它還通的話說得出是哪一截斷了，
@@ -1300,11 +1327,20 @@ export default function CommandPanel() {
               {agentHere && !agentHere.fresh && (
                 <div className="hint-line">機上代理也聯絡不上——整條 5G 可能都斷了。</div>
               )}
-              <div className="cmd-row">
-                {btn("RTL", "⌂ 返航", "/mode/rtl", { danger: true, cap: "rtl" })}
-                {btn("降落", "降落", "/mode/land",
-                     { confirm: true, danger: true, cap: "land" })}
-              </div>
+              {cmdAlive ? (
+                <div className="cmd-row">
+                  {btn("RTL", "⌂ 返航", "/mode/rtl", { danger: true, cap: "rtl" })}
+                  {btn("降落", "降落", "/mode/land",
+                       { confirm: true, danger: true, cap: "land" })}
+                </div>
+              ) : (
+                <div className="hint-line">
+                  {routerDead ? "指令服務本身停擺了（見上方告示）。"
+                    : dh == null ? "指令服務沒看過這台機。"
+                    : `指令服務也 ${ageText(dh.age_s)}就沒收到這台機。`}
+                  返航與降落按了也送不到，所以不放按鈕——要處置請用實體遙控器。
+                </div>
+              )}
             </div>
           )}
 

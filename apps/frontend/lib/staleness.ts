@@ -28,12 +28,23 @@ export function staleLevel(ageS: number | null | undefined): StaleLevel {
   return "live";
 }
 
-/** 人看的年齡字串。**超過一分鐘就用分鐘**——「185 秒前」要心算才知道多久。 */
+/** 人看的年齡字串。**超過一分鐘就用分鐘**——「185 秒前」要心算才知道多久。
+ *
+ * **超過一小時寫「幾小時幾分」，不寫小數**（issues/067，使用者 2026-09-21）：
+ * 「7.4 小時前」一樣要心算（0.4 小時是幾分鐘？），而且小數點會讓人以為那是個
+ * 精確量測。超過一天改寫「幾天幾小時」——那時分鐘已經沒有意義。
+ * 一律**無條件捨去**：「59.6 分鐘」寫成「60 分鐘前」、下一秒又跳成「1 小時前」很怪 */
 export function ageText(ageS: number | null | undefined): string {
   if (ageS == null) return "從未收到";
-  if (ageS < 60) return `${Math.round(ageS)} 秒前`;
-  if (ageS < 3600) return `${Math.round(ageS / 60)} 分鐘前`;
-  return `${(ageS / 3600).toFixed(1)} 小時前`;
+  const s = Math.max(0, Math.floor(ageS));
+  if (s < 60) return `${s} 秒前`;
+  if (s < 3600) return `${Math.floor(s / 60)} 分鐘前`;
+  if (s < 86400) {
+    const h = Math.floor(s / 3600), m = Math.floor((s % 3600) / 60);
+    return m ? `${h} 小時 ${m} 分前` : `${h} 小時前`;
+  }
+  const d = Math.floor(s / 86400), h = Math.floor((s % 86400) / 3600);
+  return h ? `${d} 天 ${h} 小時前` : `${d} 天前`;
 }
 
 /** 依年齡決定要不要顯示這個數值。`old` 一律回 null（呼叫端顯示「—」）。 */
