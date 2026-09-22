@@ -1,6 +1,6 @@
 # 050 · 飛控串列斷了，代理不知道、不出聲、也不試著救
 
-- 狀態：in-progress（需求 1、2 完成並上機 2026-09-21；**需求 3 程式完成、未部署，暫停中**）
+- 狀態：in-progress（需求 1、2 完成並上機；**需求 3 已部署 2026-09-22**（uav-agent `39273e2`）；上機實測（序列埠被改那則、真的失聯）待做）
 - 嚴重度：**high**（飛安相關：飛控失聯是代理的核心職責）
 - 位置：`uav-agent/agent.py` 的 `_check_port_tamper`／`_check_fc_link`／
   `_maybe_reopen_serial`／`_open_serial_once`；驗證在 `tools/fc-link-watchdog.py`

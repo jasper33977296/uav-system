@@ -1,6 +1,6 @@
 # 069 · uav-agent 沒有一鍵部署腳本：每次都是手動 scp
 
-- 狀態：open
+- 狀態：**closed**（2026-09-22，uav-agent `2d676ad`／`39273e2`，已在真機上部署、回滾、再部署）
 - 嚴重度：medium（還沒出過事，但「Pi 上跑的和 repo 裡的不一樣」已經差點發生過一次）
 - 位置：uav-agent repo（新腳本，建議 `deploy.sh`）；相關 `install-service.sh`、`tools/relocate-to-opt.sh`
 - 建立：2026-09-22
@@ -80,4 +80,38 @@ uav-agent 現有的兩支腳本都不是在做這件事：
 
 ## 解決方式
 
-（closed 時補：實際改法 + commit hash）
+uav-agent `deploy.sh`（開發機上跑），用法寫在 uav-agent README〈部署〉。
+
+### 三個「要決定的」怎麼定的（實作時定，使用者可推翻）
+
+* **unit 有差**：只裝 unit（`sudo install`＋`daemon-reload`，舊的留 `.bak-<時間>`），
+  **不碰 `config.txt`**——那仍是 `install-service.sh` 的事
+* **requirements 有變**：停下來，要 `--pip` 才在 venv 裡裝（機上現場不一定有網路）
+* **驗收失敗不自動回滾**：保留現場，印出 `./deploy.sh --rollback`
+
+另外兩條實作時定的：
+
+* **代理本來就停著時照部署**（使用者 09-22：「不要理另一個操作者」）——沒有橋會被打斷；
+  代理在跑時才需要 `state.json` 新鮮且未解鎖。**不知道就中止**。
+* 只傳 **git 追蹤的檔**、不刪任何東西：機上 `/opt/uav-agent` 裡還有 `state.json`、
+  `.fc_sysid`、venv 與歷次手動部署留下的 `.bak-*`，`--delete` 會一起清掉。
+
+### 機上現在說得出跑的是哪一版
+
+部署寫 `/opt/uav-agent/DEPLOYED`（commit、dirty、時間、誰）。代理開機 log
+「部署版本 …」、狀態列與 hello 帶 `deployed`；讀不到就說「不是經由 deploy.sh 放上來的」。
+
+### 驗證（2026-09-22 真機）
+
+| | 結果 |
+|---|---|
+| 第一次 `--dry-run` | 機上有 **18 個檔與 repo 不同或缺少**（好幾支 `tools/` 從沒部署過），unit 少 `CAP_SYS_PTRACE` 與 `FC_SYSID=1`——**這條 issue 要解的問題本身** |
+| 部署（代理停著）| ✅ 57 個檔 md5 逐一相同、unit 換上、機上回報 `2d676ad` |
+| 部署（代理在跑）| ✅「state.json 5 秒前更新，armed=False → 可以重啟」；驗收四格全 ✓ |
+| 閘門（`UAV_DEST` 指向 Pi 上的假目錄，dry-run）| ✅ 已解鎖、state.json 302 秒沒更新、讀不到 state.json 都中止；工作目錄有未追蹤檔拒絕 |
+| **真的回滾** | ✅ 還原成前一次部署的 `2d676ad`（agent.py md5 與 `git show 2d676ad:agent.py` 相同），DEPLOYED 跟著還原；再部署回 `39273e2` 全 ✓ |
+
+實作時修掉的：第一版驗收看**第一條**狀態列，那時飛控與意圖通道都還沒連上（兩格「…」）。
+改成每秒看最新一條、全部 ✓ 才結束、逾時才照最後一條判。
+
+**限制**：`--rollback` 只退一步（最近那份備份）；這次部署新增的檔案不會被刪掉。

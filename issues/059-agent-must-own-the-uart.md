@@ -1,6 +1,6 @@
 # 059 · uav-agent 必須永遠擁有 UART 的最高優先權
 
-- 狀態：in-progress（A 完成並上機 2026-09-22；**B 程式完成、未部署，暫停中**——見〈解決方式〉的 B 節）
+- 狀態：in-progress（A 完成並上機；**B 已部署 2026-09-22**（uav-agent `39273e2`，經 069 的 deploy.sh），`CAP_SYS_PTRACE` 生效；搶埠的上機實測（T2）待做）
 - 嚴重度：**high**（飛安：橋的一端被別人靜默地搶走，而且很難看出來）
 - 位置：`uav-agent/agent.py` 的 `_open_serial_once`、`onboard/uav-link-node.service`
   （unit 設定）、`/opt/uav-agent/systemd/`
