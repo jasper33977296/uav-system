@@ -88,7 +88,8 @@ GET http://<地面站>:38000/api/v1/ext/missions/{mission_id}/signal
 {
   "mission": {"mission_id": "8f0c…", "name": "…", "external": true,
               "state": "ended", "started_at": "…", "ended_at": "…"},
-  "method": {"max_offset_m": 60.0, "sample_gap_factor": 5.0},
+  "method": {"max_offset_m": 60.0, "sample_gap_factor": 5.0,
+             "hold_stop_ms": 0.3, "hold_near_s": 3.0},   // 停留怎麼量的（§4.2）
   "drones": [{
     "drone_id": "1d2f…", "name": "pi5-sdmodelh7v2-ardu", "sysid": 1,
     "sessions": [{
@@ -102,10 +103,13 @@ GET http://<地面站>:38000/api/v1/ext/missions/{mission_id}/signal
       "route": {"type": "FeatureCollection", "features": [ … ]},   // 與串流的 route 同格式
       "gaps": [{"from": "…", "to": "…", "seconds": 23.4}],         // 遙測失明（§5）
       "sample_gaps": [{"from": "…", "to": "…", "seconds": 22.0}],  // 沒有訊號樣本（§5）
+      "holds": [{"seq": 4, "planned_s": 20, "observed": true,      // 靜止量測（§4.2）
+                 "started_at": "…", "ended_at": "…", "seconds": 19.2,
+                 "samples": 20, "note": null}],
       "samples": [{
         "time": "2026-09-14T04:01:37.120Z",
         "lat": 24.773540, "lon": 121.045880, "alt_rel": 12.3,
-        "phase": "route", "along_m": 41.2, "offset_m": 3.7,
+        "phase": "route", "hold_seq": null, "along_m": 41.2, "offset_m": 3.7,
         "rsrp": -100.0, "rsrq": -11.0, "sinr": 18.0, "cqi": null,
         "pci": 133, "cell_id": 2179073, "band": "n79", "nr_mode": "SA",
         "rtt_ms": 27.0, "jitter_ms": null,
@@ -130,6 +134,7 @@ GET http://<地面站>:38000/api/v1/ext/missions/{mission_id}/signal
 | `lat`／`lon` | 十進位度 | 量到這筆訊號時機在哪裡 |
 | `alt_rel` | m | 離起飛點高度 |
 | `phase` | | **`route`＝在航線上；`transit`＝飛往任務起始點的那一段**（§4.1）。里程只對 `route` 有意義 |
+| `hold_seq` | | **停在第幾個航點上量的**（§4.2）。`null`＝不是停留期間 |
 | `along_m` | m | **沿預計航線走了多遠**（§4）。`null`＝算不出來 |
 | `offset_m` | m | 離預計航線多遠。`null`＝沒有參考路徑 |
 | `rsrp` | dBm | 參考訊號接收功率 |
@@ -189,6 +194,31 @@ GET http://<地面站>:38000/api/v1/ext/missions/{mission_id}/signal
   用了哪個值照樣寫在 `method.max_offset_m` 裡。
 * **`along_m` 只在同一份路徑之間可比。** 兩個任務飛的是不同路徑時，里程不是同一條軸——
   回應裡每一趟都帶 `plan_id`，比較前先確認它們相同。
+
+### 4.2 靜止量測：停在一個點上量的那一段（2026-09-22，issues/062）
+
+航線可以在航點上設**停留秒數**（`NAV_WAYPOINT` 的 param1）。停 30 秒＝那個點上多出
+約 30 筆樣本，`along_m` 全都一樣。**不標出來的話，分不出「機在這裡停了 30 秒」與
+「這裡的樣本特別密」**——後者可能是別的原因造成的。
+
+每一趟的 `holds` 列出**規劃了停留的每一個點**：
+
+| 欄位 | 說明 |
+|---|---|
+| `seq` | 我方航點序號（與 `route` 同一套編號） |
+| `planned_s` | 規劃要停幾秒 |
+| `observed` | **有沒有量到它真的停了**。`false` 時 `note` 說為什麼 |
+| `started_at`／`ended_at`／`seconds` | **量到的**停留時段。解析度是遙測間隔（約 1 秒） |
+| `samples` | 那一段裡有幾筆訊號樣本（＝樣本上 `hold_seq` 等於這個 `seq` 的筆數） |
+| `note` | `null`＝沒什麼要說；否則是「沒收到到點事件」「看不出有停」「不到規劃的一半」之類 |
+
+**時段是量出來的，不是規劃推出來的**：在飛控回報「到點」前後 `method.hold_near_s`
+秒內、地速連續低於 `method.hold_stop_ms` 的那一段。**不拿「到點」事件當起點**——
+ArduCopter 4.7 實測那則事件在**停留結束**時才到（09-21 實飛：地速顯示 15:45:58 起停著，
+事件在 15:46:07），照它當起點會把標記落在機已經在飛的那幾秒上。
+
+比較兩趟時：**要看定點的變異，拿 `hold_seq` 相同的樣本；要看沿線的變化，排除
+`hold_seq != null`**——否則停留點會以幾十筆的權重壓過其他里程。
 
 ---
 

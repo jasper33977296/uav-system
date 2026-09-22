@@ -10,7 +10,7 @@ from datetime import datetime, timedelta, timezone
 
 from fastapi import APIRouter, HTTPException
 
-from . import chainage, db
+from . import chainage, db, holds as holdlib
 from .ext_stream import LINK_KEYS, route_geojson
 
 log = logging.getLogger("ext_history")
@@ -178,6 +178,46 @@ async def _route_of(plan_id: str | None) -> tuple[dict | None, list[dict]]:
     return gj, ref
 
 
+def _parse(iso: str) -> datetime:
+    return datetime.fromisoformat(iso.replace("Z", "+00:00"))
+
+
+async def _holds_of(r) -> list[dict]:
+    """一趟裡規劃了停留的點，實際停了哪一段（issues/062，見 holds.py）。"""
+    if not r["plan_id"]:
+        return []
+    items = []
+    for w in await db.pool.fetch(
+            "SELECT seq, params FROM waypoints WHERE plan_id = $1::uuid ORDER BY seq",
+            r["plan_id"]):
+        pm = w["params"]
+        pm = json.loads(pm) if isinstance(pm, str) else (pm or {})
+        items.append({"seq": w["seq"], "params": pm})
+    if not holdlib.planned(items):
+        return []
+    # **不認得自駕儀就不換算**：未知驅動的 wire_seq 會安靜地回 0 偏移，
+    # 那等於用猜的去對航點序號
+    from .dialect import autopilot_name, get_driver
+    offset = None
+    if autopilot_name(r["autopilot"]) != "unknown":
+        try:
+            offset = get_driver(r["autopilot"]).wire_seq(0)
+        except Exception:
+            log.exception("取不到自駕儀驅動——停留對不上航點序號")
+    reached = []
+    for e in await db.pool.fetch(
+            "SELECT time, detail FROM events WHERE session_id = $1::uuid "
+            "AND type = 'waypoint_reached' ORDER BY time", r["session_id"]):
+        d = e["detail"]
+        d = json.loads(d) if isinstance(d, str) else (d or {})
+        if d.get("seq") is not None:
+            reached.append((e["time"], int(d["seq"])))
+    speeds = [(t["time"], t["ground_speed"]) for t in await db.pool.fetch(
+        "SELECT time, ground_speed FROM telemetry WHERE session_id = $1::uuid ORDER BY time",
+        r["session_id"])]
+    return holdlib.measure(items, offset, reached, speeds)
+
+
 @router.get("/missions/{mission_id}/signal")
 async def mission_signal(mission_id: str):
     """一個任務的完整訊號，依「機 → 架次」分組。一次一個任務。
@@ -196,7 +236,7 @@ async def mission_signal(mission_id: str):
                                   "msg": f"沒有這個任務：{mid}"})
     rows = await db.pool.fetch("""
         SELECT s.id::text AS session_id, s.drone_id::text AS drone_id, d.name AS drone_name,
-               d.mav_sysid, s.plan_id::text AS plan_id,
+               d.mav_sysid, d.autopilot, s.plan_id::text AS plan_id,
                coalesce(p.name, s.plan_name) AS plan_name,
                s.started_at, s.ended_at, s.end_reason
           FROM flight_sessions s
@@ -232,6 +272,13 @@ async def mission_signal(mission_id: str):
         def _phase(ts):
             return "transit" if any(a <= ts <= b for a, b in transits) else "route"
 
+        # **到點停留**（issues/062）：量到的那一段，不是規劃說的那一段
+        hs = await _holds_of(r)
+
+        def _hold(ts):
+            return next((h["seq"] for h in hs if h["observed"]
+                         and h["started_at"] <= ts <= h["ended_at"]), None)
+
         samples = []
         for x in srows:
             along = off = None
@@ -242,6 +289,8 @@ async def mission_signal(mission_id: str):
                             # route＝在航線上；transit＝飛往起始點的那一段。
                             # **里程只對 route 有意義**
                             "phase": _phase(x["time"]),
+                            # 停在哪一個航點上量的（062）。null＝不是停留期間
+                            "hold_seq": _hold(x["time"]),
                             "along_m": round(along, 2) if along is not None else None,
                             "offset_m": round(off, 2) if off is not None else None,
                             **{k: x[k] for k in METRIC_KEYS}})
@@ -267,6 +316,15 @@ async def mission_signal(mission_id: str):
             # `gaps`＝遙測失明（地面站看不到飛機）；`sample_gaps`＝沒有訊號樣本。
             # **兩件事**，畫訊號圖要留白的是後者（issues/053）
             "gaps": gaps, "sample_gaps": _sample_gaps(times, interval),
+            # **靜止量測**（062）：規劃要停多久、實際停了哪一段、那段裡有幾筆
+            "holds": [{"seq": h["seq"], "planned_s": h["planned_s"],
+                       "observed": h["observed"],
+                       "started_at": _iso(h["started_at"]), "ended_at": _iso(h["ended_at"]),
+                       "seconds": h["seconds"],
+                       "samples": (sum(1 for x in samples if x["hold_seq"] == h["seq"]
+                                       and h["started_at"] <= _parse(x["time"]) <= h["ended_at"])
+                                   if h["observed"] else 0),
+                       "note": h["note"]} for h in hs],
             "samples": samples})
     return {"mission": {"mission_id": m["mission_id"], "name": m["name"],
                         "external": m["external"],
@@ -276,5 +334,8 @@ async def mission_signal(mission_id: str):
             # `method` 只留真的是「方法」的東西。取樣間隔不在這裡——它是**量出來的**、
             # 而且每一趟各自不同，所以擺在各趟底下（issues/052）
             "method": {"max_offset_m": chainage.DEFAULT_MAX_OFFSET_M,
-                       "sample_gap_factor": SAMPLE_GAP_FACTOR},
+                       "sample_gap_factor": SAMPLE_GAP_FACTOR,
+                       # 停留是**量出來的**：地速低於這個、而且在「到點」事件前後
+                       # 這幾秒內（見 holds.py 為什麼不拿事件當起點）
+                       "hold_stop_ms": holdlib.STOP_MS, "hold_near_s": holdlib.NEAR_S},
             "drones": list(drones.values())}
