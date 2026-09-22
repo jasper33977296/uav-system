@@ -95,6 +95,8 @@
 | [067](067-link-lost-ui-copy-and-buttons.md) | 失聯呈現兩件：時間不要寫「7.4 小時前」要寫「7 小時 25 分前」；**失聯時那兩顆返航／降落按鈕拿掉**（按了也沒作用，推翻 09-07 裁定）。實作要順便決定：下行斷但上行還通時要不要保留 | low | open | `lib/staleness.ts`＋`CommandPanel.tsx` |
 | [068](068-inflight-param-adjust.md) | **意外情況下即時調整飛控參數**。能力已經在了（09-07 裁定，白名單 20 筆已含 `FENCE_*`），擋住的只有「解鎖中一律 409」那一道。主張：不改成開關，另開更窄的飛行中清單並逼出 `inflight_effect`；**飛行中的範圍檢查是狀態相依的**（降天花板會立刻 breach）；一次一個、要限速；058 是前置 | **high** | needs-decision | `command/main.py:538`＋`params.py`＋`guard.py` |
 | [069](069-agent-one-shot-deploy.md) | **uav-agent 沒有一鍵部署腳本**：每次手動 scp＋手動 md5 核對單一檔；機上說不出跑的是哪個 commit，解鎖中不准重啟也全靠人記得。建議開發機跑的 `deploy.sh`：乾淨工作目錄、看 `state.json` 新鮮度的解鎖閘、rsync 全部執行檔、寫 `DEPLOYED`、重啟後驗收、可回滾 | medium | open | uav-agent（新腳本）|
+| [070](070-agent-start-time-sync.md) | **代理每次啟動前要先做時間同步**（09-22 使用者裁定）：Pi 重開後約 18 分鐘才對上時，代理那 8 分鐘的時間全慢 21 分鐘（057 的 notice 帶 `at_unsynced` 抓到）。擋多久要有上限——沒有橋比時間錯更糟 | medium | open | `uav-agent` unit 前置＋`clock.py` |
+| [071](071-drone-param-config-page.md) | 無人機管理頁的「配置無人機參數」子頁（09-22 使用者提出，方向記錄）：058 抓到 `FS_GCS_ENABLE` 1→0，裁定先不改回、日後在這個子頁改 | medium | open | `app/drones/`＋指令服務 `set_params` |
 
 「✔實測確認」= 2026-08-03 首次實飛（SITL 起飛 → 進干擾區 → RTL）取得的實際資料佐證，
 不只是讀碼推論。詳見 [progress/log/2026-08-03.md](../progress/log/2026-08-03.md)。
