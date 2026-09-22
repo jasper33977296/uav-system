@@ -23,6 +23,7 @@ Polygon fence`——因為我們**不記錄參數**，所以說不出「它變�
 import asyncio
 import logging
 import math
+import re
 from datetime import datetime, timezone
 
 from . import db
@@ -37,6 +38,27 @@ QUIET_S = 2.0
 MANY = 10
 #: 彙總事件裡最多列幾個名字（其餘只給數字）
 LIST_MAX = 100
+
+
+#: **飛控自己維護的參數**：值會變，但不是有人改了設定。2026-09-22 真機第一次
+#: 連上就踩到——`STAT_RUNTIME` 飛控每 31 秒主動廣播一次，每次都被報成一則「不是
+#: 經由指令服務改的」警告；重連那一輪 14 個「變了」裡有 12 個是這一類，**真正被改的
+#: `FS_GCS_ENABLE` 1→0 與 `FENCE_ALT_MAX` 6→18 被埋在「14 個一次改變」裡**。
+#: 照樣存進基準（值是真的），只是不發變更事件。
+#: **名稱是 ArduPilot 的**（ArduCopter 4.7 實測）；PX4 沒實測，漏了會以噪音的形式出現
+SELF_MAINTAINED = [re.compile(x) for x in (
+    r"^STAT_",                    # 開機次數、飛行時間、累計里程、運轉秒數
+    r"^BARO\d*_GND_PRESS$",       # 開機時量的地面氣壓
+    r"^BARO\d*_GND_TEMP$",
+    r"^INS_(GYR|ACC)\d*_CALTEMP$",  # 校正當下的溫度
+    r"^INS_GYR\d*OFFS_[XYZ]$",     # INS_GYR_CAL=1 時每次開機重量的陀螺儀偏移
+    r"^INS_GYROFFS_[XYZ]$",
+    r"^MIS_TOTAL$",               # 航點數：上傳任務時飛控自己改
+)]
+
+
+def self_maintained(name: str) -> bool:
+    return any(r.search(name) for r in SELF_MAINTAINED)
 
 
 def same(a, b) -> bool:
@@ -65,6 +87,8 @@ def diff(known: dict, incoming: dict):
     """
     changed, added = [], []
     for name in sorted(incoming):
+        if self_maintained(name):
+            continue                # 照樣存（見 flush），只是不算「被改了」
         if name not in known:
             added.append(name)
             continue

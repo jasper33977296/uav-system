@@ -11,7 +11,7 @@ import sys
 from datetime import datetime, timedelta, timezone
 
 sys.path.insert(0, "/srv")
-from app.param_watch import attribute, diff, same, written_of  # noqa: E402
+from app.param_watch import attribute, diff, same, self_maintained, written_of  # noqa: E402
 
 ok = True
 
@@ -46,6 +46,24 @@ chk("沒變的不列", "WP_SPD" not in [c[0] for c in ch])
 chk("新參數另外列（沒有舊值可比）", add == ["NEW_PARAM"])
 ch, add = diff(known, {"WP_SPD": 5.0})
 chk("**沒讀到的不算消失**（可能只是還沒收到）", ch == [] and add == [])
+
+print("\n── 飛控自己維護的不算「被改了」（2026-09-22 真機）──────────")
+# 真機重連那一輪報出的 14 個「變了」，原樣重放
+REAL = {"BARO1_GND_PRESS": (101721.27, 99768.34), "BARO2_GND_PRESS": (101698.22, 99762.65),
+        "FENCE_ALT_MAX": (6.0, 18.0), "FS_GCS_ENABLE": (1.0, 0.0),
+        "INS_GYR1_CALTEMP": (42.46, 31.51), "INS_GYROFFS_X": (-0.00127, 0.01097),
+        "INS_GYROFFS_Y": (0.09669, 0.09772), "INS_GYROFFS_Z": (-0.00944, -0.01077),
+        "MIS_TOTAL": (10.0, 4.0), "STAT_BOOTCNT": (99.0, 102.0),
+        "STAT_DISTFLWN": (5477.2, 6353.7), "STAT_FLTCNT": (64.0, 81.0),
+        "STAT_FLTTIME": (6137.0, 6976.0), "STAT_RUNTIME": (2091797.0, 2094753.0)}
+ch, _ = diff({k: (o, T0) for k, (o, _) in REAL.items()}, {k: n for k, (_, n) in REAL.items()})
+chk("**14 個裡只剩真正被改的兩個**", [c[0] for c in ch] == ["FENCE_ALT_MAX", "FS_GCS_ENABLE"],
+    [c[0] for c in ch])
+chk("所以它們各自成一則（≤10），不會被埋進「一次改變」", len(ch) <= 10)
+ch, _ = diff({"STAT_RUNTIME": (2094753.0, T0)}, {"STAT_RUNTIME": 2094784.0})
+chk("**STAT_RUNTIME 每 31 秒的廣播不再是警告**", ch == [])
+chk("加速度計與羅盤偏移仍然算（只有真的校正才會動）",
+    not self_maintained("INS_ACCOFFS_X") and not self_maintained("COMPASS_OFS_X"))
 
 print("\n── 是不是經由指令服務改的 ───────────────────────────────")
 changes = [("FENCE_ALT_MAX", 100.0, 6.0, T0), ("WP_SPD", 5.0, 3.0, T0)]
