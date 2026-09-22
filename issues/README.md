@@ -94,6 +94,7 @@
 | [066](066-plan-table-to-map-editing.md) | 規劃頁：點路徑表格列直接跳到地圖上那條路徑線就地編輯每個參數。**這是 065A／062／063／064 的共同編輯面**——分開做會做出三套不一樣的介面 | medium | open | `app/plans/page.tsx`＋`MapView.tsx` |
 | [067](067-link-lost-ui-copy-and-buttons.md) | 失聯呈現兩件：時間不要寫「7.4 小時前」要寫「7 小時 25 分前」；**失聯時那兩顆返航／降落按鈕拿掉**（按了也沒作用，推翻 09-07 裁定）。實作要順便決定：下行斷但上行還通時要不要保留 | low | open | `lib/staleness.ts`＋`CommandPanel.tsx` |
 | [068](068-inflight-param-adjust.md) | **意外情況下即時調整飛控參數**。能力已經在了（09-07 裁定，白名單 20 筆已含 `FENCE_*`），擋住的只有「解鎖中一律 409」那一道。主張：不改成開關，另開更窄的飛行中清單並逼出 `inflight_effect`；**飛行中的範圍檢查是狀態相依的**（降天花板會立刻 breach）；一次一個、要限速；058 是前置 | **high** | needs-decision | `command/main.py:538`＋`params.py`＋`guard.py` |
+| [069](069-agent-one-shot-deploy.md) | **uav-agent 沒有一鍵部署腳本**：每次手動 scp＋手動 md5 核對單一檔；機上說不出跑的是哪個 commit，解鎖中不准重啟也全靠人記得。建議開發機跑的 `deploy.sh`：乾淨工作目錄、看 `state.json` 新鮮度的解鎖閘、rsync 全部執行檔、寫 `DEPLOYED`、重啟後驗收、可回滾 | medium | open | uav-agent（新腳本）|
 
 「✔實測確認」= 2026-08-03 首次實飛（SITL 起飛 → 進干擾區 → RTL）取得的實際資料佐證，
 不只是讀碼推論。詳見 [progress/log/2026-08-03.md](../progress/log/2026-08-03.md)。
