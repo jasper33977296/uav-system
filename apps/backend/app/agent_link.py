@@ -62,6 +62,11 @@ class AgentLink:
     driver: dict = field(default_factory=dict)
     #: 正在持續中的正規化不一致：欄位 → 第一次看到的時刻（見 crosscheck）
     disagree_since: dict = field(default_factory=dict)
+    #: 代理 `notice` 的去重記帳（issues/057）：哪一個行程、收到第幾則。
+    #: **只記在記憶體**：地面站重啟後會把代理重送的那幾則再收一次——那只會
+    #: 發生在「收到了但回執沒送到」的極短窗口，重複一則比漏掉一則好
+    notice_boot: str | None = None
+    notice_seq: int = 0
 
     def fresh(self) -> bool:
         return (self.connected and self.last_state_at is not None
@@ -174,6 +179,32 @@ def on_state(link: AgentLink, msg: dict) -> None:
     link.state = msg.get("state")
     link.payload = msg
     link.last_state_at = time.monotonic()
+
+
+def on_notice(link: AgentLink, msg: dict) -> tuple[bool, int]:
+    """代理送來一則 `notice`。回傳 (是不是重送的、前面缺了幾則)。
+
+    代理對每則要等回執才從緩衝刪掉，所以回執掉了會重送——**同一行程
+    `seq` 不大於已收到的＝重送**，回執再給一次就好，不要再寫一筆。
+
+    缺號＝代理那邊的緩衝滿過、最舊的被丟了（或這條連線之前的某段沒送到）。
+    **要說出來**：事件流上看不出「這裡少了東西」的話，少掉的就等於沒發生過。
+    換了行程（代理重啟）就從頭算，第一則之前少了什麼地面站無從得知。
+
+    **只判斷、不記帳**：記帳在寫進資料庫之後（`notice_done`）。先記帳的話，
+    寫入失敗 → 不回執 → 代理重送 → 被當成重送吞掉，那一則就兩邊都沒有了。
+    """
+    boot, seq = msg.get("boot"), int(msg.get("seq") or 0)
+    if boot != link.notice_boot:
+        return False, 0
+    if seq <= link.notice_seq:
+        return True, 0
+    return False, seq - link.notice_seq - 1
+
+
+def notice_done(link: AgentLink, msg: dict) -> None:
+    """這則已經寫進去了，之後同號的算重送。"""
+    link.notice_boot, link.notice_seq = msg.get("boot"), int(msg.get("seq") or 0)
 
 
 def on_event(link: AgentLink, msg: dict) -> None:

@@ -130,7 +130,7 @@ export default function InfoEvents({ drones }: { drones: DroneRow[] }) {
           </div>
           <span className="hint-line">來源</span>
           <div className="sess-pills">
-            {([["", "全部"], ["vehicle", "機上"], ["system", "系統"]] as const)
+            {([["", "全部"], ["vehicle", "機上"], ["agent", "代理"], ["system", "系統"]] as const)
               .map(([v, l]) => (
               <button key={v} className={`pill${src === v ? " on" : ""}`}
                 onClick={() => setSrc(v)}>{l}</button>
@@ -214,7 +214,10 @@ export default function InfoEvents({ drones }: { drones: DroneRow[] }) {
                   {/* 已經篩成一種來源／一台機時，那一格就不再逐列重複
                       （空的 auto 欄會自己收掉，不影響其餘欄的對齊） */}
                   <span className="info-evsrc">
-                    {src ? "" : (e.source === "vehicle" ? "機上" : "系統")}
+                    {/* agent＝機上代理（057）。**不能併進「系統」**：那是地面站
+                        推導的，而代理的事是地面站不在時機上自己看到的 */}
+                    {src ? "" : (e.source === "vehicle" ? "機上"
+                      : e.source === "agent" ? "代理" : "系統")}
                   </span>
                   {/* 機名沒有就留白——**不要寫「未知機」**：多數系統事件本來
                       就不屬於任何一台機，替它掛一個「未知」是無中生有 */}

@@ -98,7 +98,7 @@ export function EventsCard() {
   // 混機（≥2 種 autopilot 在線）才在模式句加語意括注（§0.2d 規則 3）
   const mixed = useUavStore((s) => new Set(Object.values(s.fleet)
     .filter((t) => t.connected && t.autopilot).map((t) => t.autopilot)).size >= 2);
-  const [src, setSrc] = useState<"all" | "vehicle" | "system">("all");
+  const [src, setSrc] = useState<"all" | "vehicle" | "agent" | "system">("all");
   // **事件流分機**（使用者指示 2026-08-26）：多機時所有機的事件擠在同一條
   // 時間軸上，要判讀「這台機發生了什麼」得先在腦子裡把別台的濾掉——而事件
   // 流存在的理由就是回答那個問題。
@@ -127,8 +127,11 @@ export function EventsCard() {
   const [foldOn, setFoldOn] = useState(true);
   const openEv = events.find((e) => e.id === openEvId);
   const shown = events.filter((e) => {
+    // 「系統」＝其餘的（舊事件沒有 source 欄）。代理（057）要自己一格：
+    // 併進系統的話，「機上代理在失聯時做了什麼」會混在地面站推導的事件裡
     if (!(src === "all"
-          || (src === "vehicle" ? e.source === "vehicle" : e.source !== "vehicle")))
+          || (src === "vehicle" || src === "agent" ? e.source === src
+            : e.source !== "vehicle" && e.source !== "agent")))
       return false;
     if (!multi || scope === "all" || !focusId) return true;
     // **來源不明的事件不藏**：REST 補歷史那條路徑帶 drone_id、WS 帶名字，
@@ -173,7 +176,7 @@ export function EventsCard() {
           </span>
         )}
         <span className="ev-filter">
-          {([["all", "全部"], ["vehicle", "機上訊息"], ["system", "系統"]] as const)
+          {([["all", "全部"], ["vehicle", "機上訊息"], ["agent", "代理"], ["system", "系統"]] as const)
             .map(([k, label]) => (
               <button key={k} className={src === k ? "on" : ""}
                 onClick={() => setSrc(k)}>{label}</button>

@@ -1,6 +1,7 @@
 import asyncio
 import logging
 import time
+from datetime import datetime, timezone
 from contextlib import asynccontextmanager
 
 from fastapi import FastAPI, WebSocket, WebSocketDisconnect
@@ -410,11 +411,59 @@ async def _replay_pending(link) -> None:
             "state": (ev or {}).get("state")})
 
 
+#: 晚到多久才在事件上標出來。低於這個是正常的傳輸與對時誤差
+#: （地面站↔Pi 實測差 0.58 s 以內，見 uav-agent install-service.sh 對時那段）
+NOTICE_LATE_S = 5.0
+
+
+async def _on_notice(link, msg) -> None:
+    """代理的 `notice`（只有代理知道的事，issues/057）寫進事件流。
+
+    **時間用代理記下的發生時刻**，不是收到的時刻：這些事多半發生在失聯期間，
+    恢復後才一起送到。用收到的時刻，「地面站失聯」會被排在「恢復」之後。
+    晚到超過 `NOTICE_LATE_S` 就把晚了多久寫進 detail——畫面據此說
+    「這則是事後才知道的」。
+
+    寫入失敗往上拋：`ws_agent` 據此不回執，代理會在下一條連線重送。
+    """
+    dup, gap = agent_link.on_notice(link, msg)
+    if dup:
+        return
+    now = datetime.now(timezone.utc)
+    at = None
+    try:
+        at = datetime.fromisoformat(str(msg.get("at")).replace("Z", "+00:00"))
+    except ValueError:
+        pass
+    detail = {"kind": msg.get("kind"), "text": msg.get("text"),
+              "seq": msg.get("seq"), "boot": msg.get("boot")}
+    if at is not None:
+        late = (now - at).total_seconds()
+        if late >= NOTICE_LATE_S:
+            detail["late_s"] = round(late, 1)
+    if msg.get("at_unsynced"):
+        # 機上牆鐘還沒對過：時間照記但要說它不可信，而且不拿它排序
+        detail["at_unsynced"] = True
+        detail["agent_at"] = msg.get("at")
+        at = None
+    if msg.get("throttled"):
+        detail["throttled"] = msg.get("throttled")
+    if gap:
+        detail["gap_before"] = gap
+    level = msg.get("level") if msg.get("level") in ("info", "warning", "critical") \
+        else "info"
+    ev = await db.insert_event(link.drone_id, None, level, "agent_notice",
+                               detail, source="agent", at=at)
+    agent_link.notice_done(link, msg)
+    ev["drone"] = link.drone_name
+    await manager.broadcast({"type": "event", "event": ev})
+
+
 @app.websocket("/ws/agent")
 async def ws_agent(ws: WebSocket):
     """機上代理的意圖通道（doc/agent-intent-protocol.md §2）。
 
-    收 `hello`／`state`／`event`／`ack`，反方向送 `intent`／`decision`／
+    收 `hello`／`state`／`event`／`ack`／`notice`，反方向送 `intent`／`decision`／
     `progress`。不認得的型別**明說未支援，不靜靜丟掉**：機上如果以為送出去
     了、畫面卻是空的，那比報錯更難查。
 
@@ -458,7 +507,8 @@ async def ws_agent(ws: WebSocket):
                 link.ws = ws          # 送 intent 走這條
                 await ws.send_json({"type": "ack", "of": "hello",
                                     "drone_id": link.drone_id,
-                                    "accepts": ["state", "event", "ack"]})
+                                    "accepts": ["state", "event", "ack",
+                                                "notice"]})
                 log.info("意圖通道連上：%s（board_uid=%s，代理 %s）",
                          link.drone_name or "未註冊", uid, link.agent_version)
                 await manager.broadcast({"type": "agent_state",
@@ -509,6 +559,21 @@ async def ws_agent(ws: WebSocket):
                     await manager.broadcast({"type": "event", "event": ev})
                 except Exception:
                     log.exception("意圖事件寫入失敗（不影響指令路徑）")
+            elif t == "notice":
+                if link is None:
+                    await ws.send_json({"type": "error",
+                                        "reason": "第一則必須是 hello"})
+                    continue
+                # **回執要在寫入之後**：代理收到回執就從緩衝刪掉，先回執再寫、
+                # 寫失敗的話那一則就兩邊都沒有了。寫失敗就不回執，代理下一條
+                # 連線會重送；**不讓例外往上走**——那會把整條意圖通道拖斷
+                try:
+                    await _on_notice(link, msg)
+                except Exception:
+                    log.exception("代理 notice 寫入失敗（不回執，等代理重送）")
+                    continue
+                await ws.send_json({"type": "ack", "of": "notice",
+                                    "boot": msg.get("boot"), "seq": msg.get("seq")})
             else:
                 # 明說未支援。**這是協定往下長的接點**：哪天新型別實作了，
                 # 舊版代理送過來也會得到一句看得懂的話，而不是石沉大海

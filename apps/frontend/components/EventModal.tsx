@@ -58,7 +58,8 @@ export default function EventModal({ ev, onClose, mixed = false }: {
   const sev = SEV[normSev(ev.severity)];
   const d = ev.detail ?? {};
   const count = typeof d.count === "number" ? d.count : 0;
-  const srcTxt = ev.source === "vehicle" ? "機上訊息" : "系統事件";
+  const srcTxt = ev.source === "vehicle" ? "機上訊息"
+    : ev.source === "agent" ? "機上代理" : "系統事件";
   // vehicle_event 的解譯欄（metadata 翻譯落地後後端會帶；名稱雙讀）
   const decoded = typeof d.text === "string" ? d.text
     : typeof d.message === "string" ? d.message : null;

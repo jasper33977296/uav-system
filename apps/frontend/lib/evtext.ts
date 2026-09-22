@@ -115,6 +115,18 @@ export function evText(
         ? d.text
         : `飛控回應 ${d.command_name ?? d.command ?? "指令"}`
           + `${d.result_name ? `：${d.result_name}` : ""}`;
+    // 機上代理才知道的事（issues/057）：地面失聯、接管、失聯處置……
+    // text 是代理寫好的整句。**晚到、缺號、時間不可信都要講出來**——
+    // 這些事多半是失聯期間記下、恢復後才送到的，不說的話看起來像即時的
+    case "agent_notice": {
+      const notes: string[] = [];
+      if (typeof d.late_s === "number") notes.push(`晚 ${durText(d.late_s)}才送到`);
+      if (typeof d.gap_before === "number" && d.gap_before > 0)
+        notes.push(`這之前有 ${d.gap_before} 則沒收到`);
+      if (d.at_unsynced === true) notes.push("機上時鐘未對時，時間不可信");
+      const text = typeof d.text === "string" && d.text ? d.text : `代理事件 ${d.kind ?? "?"}`;
+      return notes.length ? `${text}（${notes.join("；")}）` : text;
+    }
     case "driver_disagreement": {
       const n = Array.isArray(d.fields) ? (d.fields as unknown[]).length : 0;
       return `機上與地面站對同一份遙測算出不同結果${n ? `（${n} 項）` : ""}`;
@@ -130,6 +142,16 @@ export function evText(
       return said ? `${e.type}：${said}` : `${e.type} ${JSON.stringify(d)}`;
     }
   }
+}
+
+/** 秒數 → 「N 秒」「M 分」「H 小時 M 分」。**不寫小數**（067：「7.4 小時」
+ * 要心算，而且小數點看起來像精確量測）。 */
+function durText(s: number): string {
+  if (s < 60) return `${Math.round(s)} 秒`;
+  if (s < 3600) return `${Math.floor(s / 60)} 分`;
+  const h = Math.floor(s / 3600);
+  const m = Math.floor((s - h * 3600) / 60);
+  return m ? `${h} 小時 ${m} 分` : `${h} 小時`;
 }
 
 /** 意圖協定的動作 → 人話。**照枚舉列，不猜字串**（與 CommandPanel 的

@@ -1,6 +1,7 @@
 import asyncio
 import json
 import logging
+from datetime import datetime
 
 import asyncpg
 
@@ -1246,14 +1247,20 @@ event_listeners: list = []
 
 async def insert_event(drone_id: str, session_id: str | None,
                        severity: str, type_: str, detail: dict,
-                       source: str = "system") -> dict:
+                       source: str = "system",
+                       at: datetime | None = None) -> dict:
+    """`at`＝事件**發生**的時刻。不給就是現在（寫入時刻）。
+
+    要給的情況是事件晚到：機上代理在失聯期間記下、恢復後才送來的（issues/057）。
+    用寫入時刻會把「失聯那一刻發生的事」排在「恢復之後」，時間軸就說反了。
+    """
     severity = SEVERITY_ALIASES.get(severity, severity)
     row = await pool.fetchrow(
         """
-        INSERT INTO events (drone_id, session_id, severity, type, detail, source)
-        VALUES ($1, $2, $3, $4, $5, $6) RETURNING id, time
+        INSERT INTO events (drone_id, session_id, severity, type, detail, source, time)
+        VALUES ($1, $2, $3, $4, $5, $6, COALESCE($7, now())) RETURNING id, time
         """,
-        drone_id, session_id, severity, type_, jdumps(detail), source,
+        drone_id, session_id, severity, type_, jdumps(detail), source, at,
     )
     for fn in event_listeners:
         try:
