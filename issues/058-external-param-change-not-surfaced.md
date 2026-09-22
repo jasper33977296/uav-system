@@ -125,6 +125,29 @@ PreArm: Fence requires position
 `param_changed`（有變的話）或什麼都沒有，**而不是** `param_baseline`；
 `SELECT count(*) FROM drone_params WHERE drone_id = <那台>` 應為 1244。
 
+### 開發階段（2026-09-22 暫停於此）
+
+| 部分 | 狀態 |
+|---|---|
+| A 程式（`param_watch.py`、`drone_params`、`mavlink_rx` 一行、`evText`）| ✅ 完成、已部署（`2dbb966`）|
+| A 測試（邏輯、對真 DB 的 e2e、借快照、歸因對真紀錄）| ✅ 全過 |
+| `drone_params` 刪機連帶刪除（外鍵 `ON DELETE CASCADE`，刪機回執列出筆數）| ✅ 補上——刪 `uav-s2` 時發現第一版沒掛外鍵 |
+| **A 真機驗證** | ⬜ 等機上代理恢復（被人停掉並 disable，見上）|
+| B、C | ⬜ 未開始 |
+
+### 待驗證項目（真機，代理恢復後逐項做）
+
+- [ ] 代理第一次連上後，事件流**沒有** `param_baseline`（這台機有 9/22 14:49 的架次快照可借）；
+      有變的話是對照那份快照的 `param_changed`，標「對照上一趟 … 解鎖時的快照」
+- [ ] `SELECT count(*) FROM drone_params WHERE drone_id = '1d2f19b1-a979-4f90-ad63-3d50a9ebad11'` ＝ 1244
+- [ ] **`FS_GCS_ENABLE`**：057 的 notice 在 14:46 回報它是 0（033 裁定要開）。代理恢復後
+      若仍是 0，058 應該會把它與快照的差異報出來——**這一格同時是 033 的飛安問題，
+      要問清楚是誰、為什麼改的**
+- [ ] 經由地面站改一個白名單參數（未解鎖、事後改回）→ 出現 info 的 `param_changed`，
+      `via_command` 帶 `command_log` 的 id；改回去那一筆同樣是 info
+- [ ] 用機上的 `set-fc-params.py` 或 QGC 改一個 → warning，說「不是經由地面站指令服務」
+- [ ] 後端重啟（`docker compose up -d uav-backend`）後重讀一輪：沒有變的不發任何事件
+
 ### 還沒做
 
 * **B**（拿 `set-fc-params.py` 的 PLAN 表對帳）與 **C**（預檢字串旁補圍欄脈絡）。

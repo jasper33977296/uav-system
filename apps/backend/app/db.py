@@ -486,6 +486,16 @@ async def migrate() -> None:
         confirmed_at TIMESTAMPTZ NOT NULL,
         changed_at   TIMESTAMPTZ,
         PRIMARY KEY (drone_id, name))""")
+    # **刪機要連帶刪掉**：第一版沒掛外鍵，刪一台機會在這裡留下一千多筆孤兒
+    # （2026-09-22 刪 uav-s2 時發現）。先清掉已經是孤兒的，外鍵才掛得上
+    await pool.execute(
+        "DELETE FROM drone_params p WHERE NOT EXISTS "
+        "(SELECT 1 FROM drones d WHERE d.id = p.drone_id)")
+    await pool.execute("""
+        DO $$ BEGIN
+          ALTER TABLE drone_params ADD CONSTRAINT drone_params_drone_id_fkey
+            FOREIGN KEY (drone_id) REFERENCES drones(id) ON DELETE CASCADE;
+        EXCEPTION WHEN duplicate_object THEN NULL; END $$""")
     # ── issue 023：missions 正名瘦身（路徑快照庫，不是任務庫）──────────────
     # kind 取代 created_by 兼差當判別欄。**加法不減法**：created_by 保留（歷史
     # 事實，留著零成本），只是不再被程式當分類用。

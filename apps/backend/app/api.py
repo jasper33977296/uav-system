@@ -1076,7 +1076,8 @@ async def delete_drone(drone_id: str):
             # 而「刪掉了多少東西」是這個端點唯一的回執
             counts = {}
             for table in ("telemetry", "link_metrics", "events",
-                          "flight_sessions", "blackouts", "captures"):
+                          "flight_sessions", "blackouts", "captures",
+                          "drone_params"):
                 counts[table] = await con.fetchval(
                     f"SELECT count(*) FROM {table} WHERE drone_id = $1::uuid",
                     drone_id)
