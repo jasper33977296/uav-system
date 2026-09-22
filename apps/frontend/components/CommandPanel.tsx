@@ -831,19 +831,21 @@ export default function CommandPanel() {
             原本這顆「↑ 起飛」送的是寫死的 10 m，**而畫面上沒有任何地方寫著
             那個 10**（同 §2.3a 拿掉起飛高度欄位的理由）。返航留著：它是緊急
             出口，收合狀態下也必須按得到。 */}
+        {/* 067：送不到就不放（同失聯區的規則，`cmdAlive`） */}
         {health.enabled && !routerDead && !formation && sid && dh && !observeOnly
-          && airborne && (
+          && airborne && cmdAlive && (
           <span onPointerDown={(e) => e.stopPropagation()}
             onPointerUp={(e) => e.stopPropagation()}>
             {btn("RTL", "⌂ 返航", "/mode/rtl", { danger: true, cap: "rtl" })}
           </span>
         )}
         {/* **緊急原地降落：標題列常駐，永不 disable。**
-            條件只有「有 sysid」——沒有 sysid 就沒有可定址的飛機，那時候
-            畫一顆按得下去的鈕才是假的。其餘每一種擋法（未入列、能力未驗證、
-            指令未啟用）都讓它送出去、由伺服器說是哪一道擋的：**在緊急時，
-            一顆按下去會說話的鈕，勝過一顆看起來就沒救的灰鈕**。 */}
-        {health.enabled && sid && (
+            其餘每一種擋法（未入列、能力未驗證、指令未啟用）都讓它送出去、由伺服器說是
+            哪一道擋的：**在緊急時，一顆按下去會說話的鈕，勝過一顆看起來就沒救的灰鈕**。
+            **唯一的例外是指令根本送不到**（使用者 2026-09-22，比照 067）：指令服務
+            收不到這台機（或自己停擺）時按下去什麼都不會發生——那不是「會說話的鈕」，
+            是在最需要確定性的那一刻製造錯覺。那時失聯區會說「要處置請用實體遙控器」 */}
+        {health.enabled && sid && cmdAlive && (
           <span onPointerDown={(e) => e.stopPropagation()}
             onPointerUp={(e) => e.stopPropagation()}>
             <button className="btn-emerg btn-sm" onClick={emergencyLand}
@@ -922,7 +924,7 @@ export default function CommandPanel() {
           ) : (
             <div className="hint-line">
               {dh == null ? "指令服務沒看過這台機。" : `指令服務 ${ageText(dh.age_s)}就沒收到這台機。`}
-              返航與降落按了也送不到，所以不放按鈕——要處置請用實體遙控器。
+              返航、降落與原地降落按了都送不到，所以不放按鈕——要處置請用實體遙控器。
             </div>
           )}
         </div>
@@ -1338,7 +1340,7 @@ export default function CommandPanel() {
                   {routerDead ? "指令服務本身停擺了（見上方告示）。"
                     : dh == null ? "指令服務沒看過這台機。"
                     : `指令服務也 ${ageText(dh.age_s)}就沒收到這台機。`}
-                  返航與降落按了也送不到，所以不放按鈕——要處置請用實體遙控器。
+                  返航、降落與原地降落按了都送不到，所以不放按鈕——要處置請用實體遙控器。
                 </div>
               )}
             </div>
