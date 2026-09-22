@@ -58,6 +58,23 @@ export interface AgentState {
    * `null` 時守門放行（使用者 2026-09-02 裁定：不知道也要能掌控），
    * **但畫面要說「來源不明」**——操作員有權知道他可能正在接管一台有人在飛的機。 */
   mode_owner?: "us" | "pilot" | null;
+  /** 代理與飛控之間的序列埠（050 需求 3、059 B）。**null＝舊版代理**＝不知道。
+   * 後端收不到 MAVLink 時，這一格分得出斷在哪一段：`ok=false`＝機上序列埠斷了
+   * （指令送不到飛控）、`ok=true`＝飛控好好的、斷的是遙測回地面站那段。 */
+  fc_link?: FcLink | null;
+}
+
+export interface FcLink {
+  ok: boolean | null;          // null＝代理還沒看過飛控
+  lost_s: number | null;       // 失聯多久（ok=false 時才有）
+  port_open: boolean;          // 代理手上有沒有可用的埠
+  reopens: number;
+  tampered: number;
+  exclusive: boolean | null;
+  /** 還有誰開著飛控序列埠。**不是空的＝有人在搶**。 */
+  holders: { pid: number; user: string; cmd: string }[];
+  /** 讀不到開檔的行程數。**不是 0 時 holders 空的不代表沒有人**。 */
+  holders_unreadable: number;
 }
 
 /** 機上錄製回傳的現況（代理每秒推一次）。 */

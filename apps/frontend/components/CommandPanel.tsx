@@ -15,6 +15,7 @@ import { API, CLIENT_HEADERS, COMMAND_API } from "@/lib/signal";
 import { emph } from "@/lib/emph";
 import { armFix, armNote } from "@/lib/prearm";
 import { useUavStore } from "@/lib/store";
+import { durText } from "@/lib/evtext";
 
 /** 能力四態（doc/capability-ui-proposal.md，issue 015）：按鈕由每機
  * capabilities descriptor 驅動，前端不寫死機型行為。
@@ -540,6 +541,10 @@ export default function CommandPanel() {
   // 「沒有 RC」會讓所有還沒升級的機都起飛不了（issues/036 的同一個教訓）
   const agentHere = focusId ? agentsMap[focusId] ?? null : null;
   const rcDown = agentHere?.rc_link === false;
+  // 代理與飛控之間的序列埠（050 需求 3、059 B）。**只信新鮮的**：
+  // 代理自己都斷了的話，這一格是斷線之前的事
+  const fcLink = agentHere?.fresh ? agentHere.fc_link ?? null : null;
+  const holders = fcLink?.holders ?? [];
   // 040 A2：入列沒過就指不動。**`null` 不擋**——那是「還沒問到」，
   // 與「問到了、沒過」是兩件事（同 rc_link 的三態紀律）
   // **通道斷了不等於失去身分**（2026-09-04 裁定）。`admitted_offline` 是
@@ -1244,6 +1249,19 @@ export default function CommandPanel() {
             </div>
           )}
 
+          {/* 059 B：機上有別的程式開著飛控序列埠。**常駐，不只一則事件**——
+              事件會被捲走，而搶埠是持續的狀態；2026-09-21 這個答案要 ssh 上去
+              `fuser` 才拿得到，放在這裡下次五秒就解決。命令列完整的放 tooltip */}
+          {holders.length > 0 && (
+            <div className="cmd-ready lock"
+              title={holders.map((h) => `pid ${h.pid}（${h.user}）${h.cmd}`).join("\n")}>
+              ⚠ 機上有別的程式開著飛控序列埠：
+              {holders.map((h) => `${h.cmd.split(" ")[0].split("/").pop()}（pid ${h.pid}）`)
+                .join("、")}
+              ——兩邊會各拿到隨機片段，校正與參數讀寫會卡住而不報錯。停掉它。
+            </div>
+          )}
+
           {/* 僅觀察（未驗證/不支援機型）：指令區整個換成鎖定橫幅——
               警告色而非紅色（是刻意保護，不是故障）；遙測照常 */}
           {observeOnly && (
@@ -1264,6 +1282,24 @@ export default function CommandPanel() {
                 + "指令仍會送出，但送不送得到不知道——實體遙控器不受影響。"}>
                 失聯——只剩返航與降落 ⋯
               </b>
+              {/* **斷在哪一段**（050 需求 3）。後端只知道「收不到 MAVLink」，
+                  機上代理的通道是另一條路——它還通的話說得出是哪一截斷了，
+                  而兩種的處置完全不同。代理自己也斷了就不猜 */}
+              {fcLink?.ok === false && (
+                <div className="hint-line">
+                  機上代理還連著：斷的是<b>代理與飛控之間的序列埠</b>
+                  {fcLink.lost_s != null && `（已 ${durText(fcLink.lost_s)}）`}
+                  ——指令送不到飛控，返航與降落也一樣。實體遙控器不受影響。
+                </div>
+              )}
+              {fcLink?.ok === true && (
+                <div className="hint-line">
+                  機上代理說飛控正常——斷的是遙測回到地面站的那一段。
+                </div>
+              )}
+              {agentHere && !agentHere.fresh && (
+                <div className="hint-line">機上代理也聯絡不上——整條 5G 可能都斷了。</div>
+              )}
               <div className="cmd-row">
                 {btn("RTL", "⌂ 返航", "/mode/rtl", { danger: true, cap: "rtl" })}
                 {btn("降落", "降落", "/mode/land",

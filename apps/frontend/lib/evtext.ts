@@ -146,7 +146,7 @@ export function evText(
 
 /** 秒數 → 「N 秒」「M 分」「H 小時 M 分」。**不寫小數**（067：「7.4 小時」
  * 要心算，而且小數點看起來像精確量測）。 */
-function durText(s: number): string {
+export function durText(s: number): string {
   if (s < 60) return `${Math.round(s)} 秒`;
   if (s < 3600) return `${Math.floor(s / 60)} 分`;
   const h = Math.floor(s / 3600);

@@ -1,6 +1,6 @@
 # 059 · uav-agent 必須永遠擁有 UART 的最高優先權
 
-- 狀態：in-progress（**A 完成並上機驗證 2026-09-22**，uav-agent `e3500ee`；剩 B，要先有 057）
+- 狀態：in-progress（A 完成並上機 2026-09-22；**B 程式完成、未部署，暫停中**——見〈解決方式〉的 B 節）
 - 嚴重度：**high**（飛安：橋的一端被別人靜默地搶走，而且很難看出來）
 - 位置：`uav-agent/agent.py` 的 `_open_serial_once`、`onboard/uav-link-node.service`
   （unit 設定）、`/opt/uav-agent/systemd/`
@@ -124,3 +124,48 @@ systemd 的 `DeviceAllow`／`PrivateDevices` 能不能讓別的服務根本看�
 
 **A 擋不住的兩種**仍然成立，都是 B 的範圍：root，以及**早於代理開埠的人**
 （09-21 那次 `get-gps.py` 比代理早 7 秒——TIOCEXCL 只擋之後的 `open()`）。
+
+### B（**暫停中**，2026-09-22）——程式與測試完成、**未部署到機上**
+
+> **暫停原因**：部署當下地面站的 5G 斷線約 4 分鐘（13:58 起，連地面站預設閘道
+> `10.141.2.22` 都不通，不是 Pi 的問題），使用者決定先暫停、改做與代理無關的功能。
+> **機上仍是 057 那一版**（`agent.py` md5 `e12bb3b…`），沒有 `holders.py`，unit 沒動——
+> 已上機確認。**repo 比機上新**，恢復時照下面「剩下的」做完即可。
+
+與 050 需求 3 同一批做（兩者共用 `state` 的 `fc_link` 區塊）。
+
+**已完成（commit 訊息開頭「059 B／050 需求 3（未部署）」）：**
+
+* `uav-agent/holders.py`：掃 `/proc/*/fd` 找開著同一裝置的**別的**行程，回傳
+  pid／使用者／命令列；**讀不到 fd 表的行程數另外回報**（`unreadable`）——
+  不是 0 時「沒找到」不等於「沒有」。裝置名先解符號連結（`/dev/serial0`）。
+* `agent.py` `_check_port_holders`：每 5 秒掃一次（開發機實測 9 ms）。
+  名單**變了**才發 `notice`（`fc_port`；有人搶＝critical、走了＝info）；
+  看不完整時說一次「代理看不到所有程式的開檔」。名單本身一直在 `state.fc_link.holders`
+  與狀態列 `port_holders`。
+* unit 加 `AmbientCapabilities=CAP_SYS_PTRACE`：沒有它，root 行程的 fd 表全是
+  `EACCES`，而 root 正是 TIOCEXCL 擋不住的那種。`pi` 本來就有免密碼 sudo，
+  沒有多給權力。
+* 地面站：`agent_link.as_dict` 多轉 `fc_link`（**已部署**；舊代理不送＝null，無影響）；
+  CommandPanel 在代理回報有人搶埠時**常駐**一條警告（事件會被捲走，搶埠是持續狀態），
+  完整命令列在 tooltip。前端**已建置上線**，但機上代理還沒送這一格，所以看不到。
+* `tools/port-holders.py`：另開一個真的行程去開同一個 pty，跑真的
+  `_check_port_holders`——找得到、帶得出命令列、只在名單變時喊、走了也說、
+  別名找得到、非 tty 跳過、看不完整時要說。全過。
+
+**實作時另外發現：059 C 的前提不成立。** C 要文件寫「機上程式一律走 UDP」，
+但代理的 UDP（14540／14541）是送**地面站**的，機上**沒有給本機程式用的
+MAVLink 出口**。照寫就是指一條不存在的路。搶埠的 notice 因此只說「停掉它」，
+不叫人改走哪裡。**C 要先決定要不要做本機出口**（那條路若能上行，等於讓
+機上任何程式對飛控下指令，要一起想守門）。
+
+**剩下的（恢復時）：**
+
+1. 部署到 Pi：`agent.py`、`holders.py`、`tools/port-holders.py`、`tools/fc-link-watchdog.py`；
+   unit 用 `sudo install` 裝上並 `daemon-reload`（**Pi 上的 unit 與 repo 有一處既有差異**：
+   repo 多 `Environment=FC_SYSID=1`，程式預設本來就是 1，無影響）。舊檔先備份。
+2. 確認 `/proc/<pid>/status` 的 `CapAmb` 帶 ptrace、`fc_link.holders_unreadable` 是 0。
+3. 上機實測：`sudo python3 -c` 開著 `/dev/ttyAMA0` **只開不讀**（不會搶走位元組）
+   約 15 秒 → 事件流出現 critical 的 `agent_notice`、CommandPanel 出現警告、
+   關掉後出現「已沒有別的程式」。
+4. 用 `sudo stty -F /dev/ttyAMA0 1500000` 驗「序列埠設定被外部改掉」那則也送得上來。

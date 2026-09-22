@@ -1,6 +1,6 @@
 # 050 · 飛控串列斷了，代理不知道、不出聲、也不試著救
 
-- 狀態：in-progress（**需求 1、2 已完成並上機驗證**，2026-09-21；剩需求 3）
+- 狀態：in-progress（需求 1、2 完成並上機 2026-09-21；**需求 3 程式完成、未部署，暫停中**）
 - 嚴重度：**high**（飛安相關：飛控失聯是代理的核心職責）
 - 位置：`uav-agent/agent.py` 的 `_check_port_tamper`／`_check_fc_link`／
   `_maybe_reopen_serial`／`_open_serial_once`；驗證在 `tools/fc-link-watchdog.py`
@@ -173,6 +173,29 @@ st.ever_connected = True
 以前只有地面那端有欄位，飛控那端要自己去看 `fc_heartbeat_age_s` 是大是小，
 而沒有人會去看）、`port_tampered`／`fc_reopens`／`fc_write_dropped`／`fc_port`
 四個計數，以及長時間失聯每 60 秒重複告警一次（25 分鐘的故障不該只有起點一行）。
+
+### 需求 3（**暫停中**，2026-09-22）——程式與測試完成、**未部署到機上**
+
+與 059 B 同一批；暫停原因與部署步驟見 [059](059-agent-must-own-the-uart.md) 的 B 節。
+**機上仍是 057 那一版。**
+
+**做法（沒有合成任何 MAVLink）**——走代理自己的通道：
+
+* **`notice`**（057 的管道）：飛控心跳失聯（解鎖中＝critical、地上＝warning，
+  說出「代理還連著、指令送不到飛控」）、**失聯期間每 60 秒一則**（已失聯多久、
+  期間重開序列埠幾次）、恢復（中斷多久、期間重開幾次）、序列埠設定被外部改掉
+  （需求 1 當時只有 `log.error`）。
+* **`state` 的 `fc_link`**：`ok`／`lost_s`／`port_open`／`reopens`／`tampered`／
+  `exclusive`／`holders`／`holders_unreadable`。後端鏡像轉出（已部署）。
+* **CommandPanel 失聯區說出斷在哪一段**（已建置上線，等代理送資料）：
+  代理新鮮且 `ok=false` →「斷的是代理與飛控之間的序列埠（已 N 分）——指令送不到
+  飛控，返航與降落也一樣」；`ok=true` →「飛控正常，斷的是遙測回地面站那段」；
+  代理自己也不新鮮 →「機上代理也聯絡不上——整條 5G 可能都斷了」。
+  **按鈕沒動**——那是 067 的事。
+
+**驗證**：`tools/fc-link-watchdog.py` 加了 notice 的斷言（失聯／持續／恢復／
+解鎖中是危急／序列埠被改），全過；uav-agent 其他測試除三支本來就壞的都過。
+**真的讓飛控失聯（拔線或斷電）還沒做**——機上只驗得到「序列埠被改」那一則。
 
 ### 驗證
 
