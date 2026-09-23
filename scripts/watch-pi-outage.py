@@ -10,12 +10,11 @@
 |---|---|---|
 | ICMP（**核心回的**，不需要 userspace） | 立刻消失 | **還會繼續回**，直到看門狗重置 |
 | TCP :22（sshd，userspace） | 立刻消失 | 可能還在聽，但接受不了新連線 |
-| TCP :8554（相機服務，userspace） | 立刻消失 | 同上 |
 
 RPi OS **預設**開著 systemd 的硬體看門狗（`40-rpi-enable-watchdog.conf`，
 `RuntimeWatchdogSec=1m`）：systemd 有 60 秒沒餵狗，硬體就重置，而且不留痕跡。
 所以「日誌死了之後 ICMP 還回了大約一分鐘」＝卡住被看門狗重置；
-「三個探針同時消失」＝供電斷了。
+「兩個探針同時消失」＝供電斷了。
 
 搭配機上的 `tools/power-log.sh`（uav-agent）一起看：那邊有斷掉前最後一刻的
 EXT5V 電壓。兩邊的時戳對起來就說得出是哪一種。
@@ -36,7 +35,10 @@ from datetime import datetime
 
 HOST = os.environ.get("PI_HOST", "10.141.2.32")
 LOG = os.environ.get("OUTAGE_LOG", "/var/tmp/pi-outage.log")
-PORTS = [22, 8554]
+# **只探 22。** 原本連 8554（相機服務）也探，而那會在機上的 uav-camera 日誌裡
+# 每秒留一行「conn opened」，把真正要看的東西洗掉——**診斷工具不該污染被
+# 診斷的對象**。sshd 同樣是 userspace 行程，足以回答「userspace 還活著嗎」。
+PORTS = [22]
 PERIOD = 1.0
 
 

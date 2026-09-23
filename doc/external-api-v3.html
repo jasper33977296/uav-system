@@ -424,6 +424,13 @@ footer.doc-foot{border-top:1px solid var(--line); padding-top:16px; font-size:13
     <p class="ep-sum"><strong>只要有人在看就會一直送。</strong>你和我方前端讀的是<strong>同一條來源</strong>，
       所以機上只會被拉一次、兩邊共用同一條上行——<strong>你接進來不會讓上行變兩倍</strong>。
       最後一個讀者離開之後機上才停止送畫面。</p>
+    <div class="note warn">
+      <p><strong>請用這裡給的網址，不要直接連無人機。</strong>「機上只被拉一次」這個保證
+      <strong>只在大家都走地面站時成立</strong>。若你繞過地面站、直接拉
+      <code>rtsp://&lt;無人機IP&gt;:8554/cam</code>，那是機上的<strong>另一個讀者</strong>——
+      機上會把同一段影像<strong>再送一份</strong>，上行就真的變兩倍。
+      2026-09-23 實測到這件事：當時上行 7.2 Mbps，而單一路串流只有 2.4 Mbps。</p>
+    </div>
     <p class="ep-sum">影像與 5G 量測共用同一條上行，所以<strong>拉著不放會影響那段時間量到的鏈路品質</strong>。
       這件事<strong>不擋、也不記錄</strong>（2026-09-23 裁定）——寫在這裡是讓你知道代價，不是限制你。</p>
   </article>
