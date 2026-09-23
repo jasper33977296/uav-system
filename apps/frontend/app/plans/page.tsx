@@ -1,8 +1,9 @@
 "use client";
 import { useRouter } from "next/navigation";
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 
 import { colorFor } from "@/components/droneLayer";
+import MissionThumb2D, { type Thumb2DPt } from "@/components/MissionThumb2D";
 import MissionThumb3D from "@/components/MissionThumb3D";
 import { errText, getJson } from "@/lib/fetchJson";
 import ConfirmModal from "@/components/ConfirmModal";
@@ -172,7 +173,33 @@ const fmtT = (t: string) =>
   new Date(t).toLocaleString("zh-TW", { month: "2-digit", day: "2-digit",
     hour: "2-digit", minute: "2-digit", hour12: false });
 
-interface WpRow extends PlanPt { frame?: number | null }
+interface WpRow extends PlanPt { frame?: number | null; command?: number | null;
+  hold_s?: number | null }
+
+/** 同一場地的幾條路徑要用**同一個比例**才比得了形狀（issues/064）。
+ *  中心點相距這麼近就算同一場地 */
+const SAME_SITE_M = 1500;
+
+/** 每條路徑 → 這張縮圖要涵蓋的半徑（公尺）。同場地取組內最大的那條 */
+function siteRadii(tracks: Record<string, Thumb2DPt[]>): Record<string, number> {
+  const info = Object.entries(tracks).map(([id, pts]) => {
+    const n = pts.length || 1;
+    const lat = pts.reduce((t, w) => t + w.lat, 0) / n;
+    const lon = pts.reduce((t, w) => t + w.lon, 0) / n;
+    const k = 111320 * Math.cos((lat * Math.PI) / 180);
+    const r = Math.max(...pts.map((w) => Math.hypot(
+      (w.lon - lon) * k, (w.lat - lat) * 110574)), 1);
+    return { id, lat, lon, r };
+  });
+  const out: Record<string, number> = {};
+  for (const a of info) {
+    const k = 111320 * Math.cos((a.lat * Math.PI) / 180);
+    const group = info.filter((b) => Math.hypot(
+      (b.lon - a.lon) * k, (b.lat - a.lat) * 110574) < SAME_SITE_M);
+    out[a.id] = Math.max(...group.map((b) => b.r));
+  }
+  return out;
+}
 
 export default function Plans() {
   const router = useRouter();
@@ -189,6 +216,16 @@ export default function Plans() {
   const [menuId, setMenuId] = useState<string | null>(null);
   const [toDelete, setToDelete] = useState<Plan | null>(null);
   const [thumbs, setThumbs] = useState<Record<string, PlanPt[]>>({});
+  /** 2D 俯視用的地面軌跡（帶停留秒數）。3D 那份走 planPath（含爬升／降落段），
+   *  2D 只要地面形狀——**停留點要標得出來**（062） */
+  const [tracks, setTracks] = useState<Record<string, Thumb2DPt[]>>({});
+  /** 縮圖模式。**預設 2D**（issues/064：列表是拿來比較與辨識的，斜角投影下
+   *  同場地的路徑形狀彼此很像）；3D 留給單一路徑細看。記在瀏覽器裡 */
+  const [thumb2d, setThumb2d] = useState(true);
+  useEffect(() => {
+    try { setThumb2d(localStorage.getItem("plan-thumb") !== "3d"); } catch { /* 私密模式 */ }
+  }, []);
+  const radii = useMemo(() => siteRadii(tracks), [tracks]);
   const [frames, setFrames] = useState<Record<string, number[]>>({});
   const [sort, setSort] = useState<"used" | "new" | "name">("used");
   const [q, setQ] = useState("");
@@ -207,6 +244,11 @@ export default function Plans() {
           // 降落段、缺值高度都在那裡補齊，這裡不留第二份實作——同一份任務
           // 在四個畫面上必須是同一個形狀
           setThumbs((t) => ({ ...t, [m.id]: planPath(wps, m.home) }));
+          setTracks((t) => ({ ...t, [m.id]: wps
+            .filter((w) => w.action !== "do" && (w.lat || w.lon))
+            .map((w) => ({ lat: w.lat, lon: w.lon,
+              // **只有 NAV_WAYPOINT 的 param1 是停留**，其他指令那一格意思不同
+              hold_s: w.command === 16 ? w.hold_s ?? 0 : 0 })) }));
           setFrames((f) => ({ ...f, [m.id]: [...new Set(
             wps.filter((w) => w.action === "waypoint" && w.frame != null)
               .map((w) => w.frame as number))].sort((a, b) => a - b) }));
@@ -318,6 +360,15 @@ export default function Plans() {
         <span className="name">路徑{plans.length ? `（${plans.length}）` : ""}</span>
         <button className="btn-plain btn-sm" disabled={busy}
           onClick={() => fileRef.current?.click()}>＋ 上傳 .plan</button>
+        {/* 縮圖：2D 俯視（預設，北方朝上、同場地同比例）／3D 等距（近似即時頁觀感）*/}
+        <button className="btn-plain btn-sm"
+          title={thumb2d
+            ? "縮圖改用 3D 等距（近似即時頁觀感；可拖曳轉動）"
+            : "縮圖改用 2D 俯視（北方朝上、固定朝向、同場地同比例——形狀才比得了）"}
+          onClick={() => setThumb2d((v) => {
+            try { localStorage.setItem("plan-thumb", v ? "3d" : "2d"); } catch { /* 私密模式 */ }
+            return !v;
+          })}>縮圖：{thumb2d ? "2D" : "3D"}</button>
         {/* 從零產生（issues/048 F2，使用者 2026-09-08：兩個入口都要）*/}
         <a className="btn-plain btn-sm" href="/plans/new/plan"
           title="用地址或座標找到位置，再在地形上一個一個點出航線">＋ 建立路徑</a>
@@ -359,14 +410,21 @@ export default function Plans() {
         const tg = planTarget(m);
         const open = openId === m.id;
         const toggle = () => { setOpenId(open ? null : m.id); setMenuId(null); };
+        // **點一列＝到地圖上編輯這條路徑**（issues/066，使用者 2026-09-21）。
+        // 規劃的實際動作是「看列表 → 決定改哪一條 → 改它的點」，中間那一步
+        // 以前沒有直達的路（要打開 ⋯ 選「離地與速度」）。飛過的紀錄改由 ▸ 展開
+        const edit = () => router.push(`/plans/${m.id}/plan`);
         return (
           <div className="card mitem" key={m.id}>
-            <div className="mrow" role="button" tabIndex={0} onClick={toggle}
+            <div className="mrow" role="button" tabIndex={0} onClick={edit}
+              title="到地圖上編輯這條路徑"
               onKeyDown={(e) => {
-                if (e.key === "Enter" || e.key === " ") { e.preventDefault(); toggle(); }
+                if (e.key === "Enter" || e.key === " ") { e.preventDefault(); edit(); }
               }}>
               <div className="mthumb-box">
-                <MissionThumb3D wps={thumbs[m.id]} onTap={toggle} />
+                {thumb2d
+                  ? <MissionThumb2D wps={tracks[m.id]} radiusM={radii[m.id]} onTap={edit} />
+                  : <MissionThumb3D wps={thumbs[m.id]} onTap={edit} />}
               </div>
               <div className="mmain">
                 <div className="mtitle">
@@ -421,7 +479,8 @@ export default function Plans() {
                   <div className="hint-line">最近 {fmtT(uses[0].started_at)}</div>
                 </>) : <div className="hint-line">還沒飛過</div>}
               </div>
-              <span className="caret">{open ? "▾" : "▸"}</span>
+              <button className="btn-plain btn-sm caret" title={open ? "收起飛行紀錄" : "展開飛行紀錄"}
+                onClick={(e) => { e.stopPropagation(); toggle(); }}>{open ? "▾" : "▸"}</button>
               <button className="btn-plain btn-sm" title="更多"
                 onClick={(e) => {
                   e.stopPropagation();

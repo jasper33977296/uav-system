@@ -780,9 +780,13 @@ function makeRouteLayer(map: maplibregl.Map, dataRef: { current: StageData },
         cone.position.z += ch / 2;          // 幾何的原點在腰上，抬半個高度才貼地
         group.add(cone);
       } else {
+        // **航點永遠畫在最上層**（issues/063）：建物與航線共用深度緩衝，點一旦
+        // 落在建物裡或後面就整顆消失——命中測試是看螢幕距離所以其實點得到，
+        // 但看不到的東西沒有人會去點。航線管照舊做深度測試（看得出穿過建物）
         const sp = new THREE.Mesh(new THREE.SphereGeometry(r, 20, 14),
-          new THREE.MeshBasicMaterial({ color: col }));
+          new THREE.MeshBasicMaterial({ color: col, depthTest: false }));
         sp.position.copy(at);
+        sp.renderOrder = 10;
         group.add(sp);
         if (w.hold) {
           // **停留的點要看得出來**（062：「規劃完看不出來」）。兩圈平躺的細環
@@ -790,8 +794,10 @@ function makeRouteLayer(map: maplibregl.Map, dataRef: { current: StageData },
           for (const k of [3.0, 3.7]) {
             const ring = new THREE.Mesh(
               new THREE.TorusGeometry(r * k, r * 0.12, 6, 40),
-              new THREE.MeshBasicMaterial({ color: col, transparent: true, opacity: 0.85 }));
+              new THREE.MeshBasicMaterial({ color: col, transparent: true, opacity: 0.85,
+                                            depthTest: false }));
             ring.position.copy(at);
+            ring.renderOrder = 10;
             group.add(ring);
           }
         }
@@ -802,8 +808,9 @@ function makeRouteLayer(map: maplibregl.Map, dataRef: { current: StageData },
           new THREE.TorusGeometry(r * 2.3, r * 0.22, 8, 32),
           new THREE.MeshBasicMaterial({
             color: i === sel ? PICK : HOT,
-            transparent: i !== sel, opacity: 0.6 }));
+            transparent: i !== sel, opacity: 0.6, depthTest: false }));
         halo.position.copy(at);
+        halo.renderOrder = 11;
         group.add(halo);
       }
     });

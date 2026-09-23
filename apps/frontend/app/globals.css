@@ -1999,3 +1999,15 @@ details.card summary { cursor: pointer; font-size: 14px; font-weight: 600; }
 .plan-head.newform { gap: 8px; }
 .newform .f.f-num { min-width: 0; }
 .newform .f-num input { width: 60px; }
+
+/* 規劃頁的航點列表（issues/065 A／066）：地圖點不到時不會失敗的那條路 */
+.wp-list { display: flex; flex-direction: column; gap: 6px; margin-bottom: 10px; }
+.wp-list-acts { display: flex; gap: 6px; }
+.wp-list table { width: 100%; border-collapse: collapse; font-size: 13px; }
+.wp-list th { text-align: left; font-weight: 500; color: var(--muted); padding: 2px 4px; }
+.wp-list td { padding: 3px 4px; border-top: 1px solid var(--hairline); }
+.wp-list th.num, .wp-list td.num { text-align: right; font-variant-numeric: tabular-nums; }
+.wp-list tbody tr { cursor: pointer; }
+.wp-list tbody tr:hover { background: var(--surface-2); }
+.wp-list tbody tr.on { box-shadow: inset 3px 0 0 var(--accent); background: var(--surface-2); }
+.plan-rail h2.rail-sub { font-size: 13px; margin-top: 4px; }

@@ -722,6 +722,35 @@ export default function PlanPage() {
     };
   };
 
+  /** **加上回程**（issues/065／066，使用者 2026-09-22：規劃動作，不是路徑屬性）。
+   *  從零模式：直接在點列上接反序的去程點（去掉折返點本身）。**回程點不帶停留**——
+   *  使用者裁定回程停留可分別設定，照抄去程會讓每個點被量兩倍久而不自知。
+   *  既有航線：後端另存一份「（含回程）」再打開它——原本那份與它的簽核不動 */
+  const addReturn = async () => {
+    if (isNew) {
+      setPts((p) => {
+        const land = p.length && p[p.length - 1].kind === "land" ? p[p.length - 1] : null;
+        const body = land ? p.slice(0, -1) : p;
+        if (body.length < 2) return p;
+        const back = body.slice(0, -1).reverse().map((q) => ({
+          lat: q.lat, lon: q.lon, h: q.h, alt_source: q.alt_source, kind: "wp" }));
+        return [...body, ...back, ...(land ? [land] : [])];
+      });
+      return;
+    }
+    setBusy(true);
+    try {
+      const r = await fetch(`${API}/api/plans/${id}/add-return`, { method: "POST" });
+      const j = await r.json().catch(() => null);
+      if (!r.ok) { setErr(`加上回程失敗：${j?.detail ?? r.status}`); return; }
+      window.location.href = `/plans/${j.id}/plan`;
+    } catch (e) {
+      setErr(`加上回程失敗：${e}`);
+    } finally {
+      setBusy(false);
+    }
+  };
+
   const stageWps: StageWp[] = (prof?.points ?? [])
     .filter((p) => p.seq != null && p.plan != null)
     .map((p) => ({ seq: p.seq as number, lat: p.lat ?? 0, lon: p.lon ?? 0,
@@ -1026,10 +1055,69 @@ export default function PlanPage() {
               選項 F）。右欄本來就只在「選到一個航點」時才有內容——讓它蓋住
               一小塊地形，比永久佔掉 264 px 划算。可以收起來看底下那塊。 */}
           <aside className={`plan-rail${railOpen ? "" : " shut"}`}>
-            <h2>{fenceDraw && fence.shape === "polygon" ? "選取的圍欄頂點" : "選取的航點"}
+            <h2>航點
               <button className="rail-toggle" title={railOpen ? "收起" : "展開"}
                 onClick={() => setRailOpen((v) => !v)}>{railOpen ? "▸" : "◂"}</button>
             </h2>
+            {/* **航點列表：不會失敗的那條路**（issues/065 A、063、066）。地圖上點不到
+                的時候——來回路徑的點疊在一起、點在建物後面——這裡永遠點得到。
+                只列操作員放的點（系統補的中繼點會被重算掉，選了也沒用） */}
+            {(() => {
+              const rows = stageWps.map((w, i) => ({ w, i })).filter(({ w }) => !w.auto);
+              if (!rows.length) return null;
+              const homeAmsl = prof?.home_amsl_m ?? null;
+              const kindText = (k?: string) => k === "takeoff" ? "起飛" : k === "land" ? "降落" : "航點";
+              const holdOf = (w: StageWp) => isNew
+                ? (w.srcI != null ? pts[w.srcI]?.hold_s ?? 0 : 0)
+                : (ov[w.seq]?.hold ?? w.hold ?? 0);
+              return (
+                <div className="wp-list">
+                  <div className="wp-list-acts">
+                    <button className="btn-plain btn-sm" disabled={busy}
+                      title={isNew
+                        ? "把去程的航點反序接在後面（回程點不帶停留，之後逐點設）"
+                        : "把去程的航點反序接在後面，**另存成新的一份**（原本那份與它的簽核不動）"}
+                      onClick={addReturn}>↩ 加上回程{isNew ? "" : "（另存一份）"}</button>
+                  </div>
+                  <table>
+                    <thead><tr><th>#</th><th>類型</th>
+                      <th className="num" title="離起飛點（公尺）">高度</th>
+                      <th className="num" title="到點停留（秒）">停留</th>
+                      {isNew && <th />}</tr></thead>
+                    <tbody>
+                      {rows.map(({ w, i }, n) => {
+                        const h = holdOf(w);
+                        const alt = !isNew && ov[w.seq]?.alt != null ? ov[w.seq].alt!
+                          : homeAmsl != null ? Math.round((w.amsl - homeAmsl) * 10) / 10 : null;
+                        return (
+                          <tr key={`${w.seq}-${i}`} className={i === selWp ? "on" : undefined}
+                            onClick={() => {
+                              setSelWp(i); setFenceSel(-1);
+                              if (w.lat && w.lon) setFlyTo({ lat: w.lat, lon: w.lon, n: Date.now() });
+                            }}>
+                            <td className="num">{n + 1}</td>
+                            <td>{kindText(w.kind)}</td>
+                            {/* 降落點的剖面高度是**借前一點的**（為了畫「平飛過去再下降」），
+                                照抄會說「降落點在 3.3 m」——它是降到地面 */}
+                            <td className="num">{w.kind === "land" ? "地面" : alt ?? "—"}</td>
+                            <td className="num">{h ? `${h} s` : ""}</td>
+                            {isNew && (
+                              <td>{w.kind === "wp" && w.srcI != null && (
+                                <button className="btn-plain btn-sm" title="刪除這個航點"
+                                  onClick={(e) => {
+                                    e.stopPropagation();
+                                    const k = w.srcI!;
+                                    setPts((p) => p.filter((_, j) => j !== k)); setSelWp(-1);
+                                  }}>✕</button>)}</td>)}
+                          </tr>
+                        );
+                      })}
+                    </tbody>
+                  </table>
+                </div>
+              );
+            })()}
+            <h2 className="rail-sub">{fenceDraw && fence.shape === "polygon" ? "選取的圍欄頂點" : "選取的航點"}</h2>
             {(() => {
               const fv = fenceDraw && fence.shape === "polygon" ? fence.points[fenceSel] : undefined;
               if (fv) return (

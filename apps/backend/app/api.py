@@ -2247,7 +2247,10 @@ async def mission_waypoints(plan_id: str):
     wps = await db.pool.fetch(
         "SELECT seq, lat, lon, alt, action, "
         "       (params->>'frame')::int   AS frame, "
-        "       (params->>'command')::int AS command "
+        "       (params->>'command')::int AS command, "
+        # 到點停留秒數（issues/062）。**縮圖與列表要標得出停留點**——
+        # 沒有這一格，畫面上「停 30 秒的點」與「飛過去的點」長得一樣（066／064）
+        "       (params->>'p1')::float     AS hold_s "
         "  FROM waypoints WHERE plan_id = $1 ORDER BY seq",
         plan_id)
     if not wps:
@@ -2982,6 +2985,57 @@ async def preview_plan(plan_id: str, body: PreviewIn):
                 row["firmware_type"], row["vehicle_type"], fence, home,
                 row["cruise_speed"], row["hover_speed"], rally)
     return out
+
+
+@router.post("/plans/{plan_id}/add-return")
+async def add_return(plan_id: str):
+    """**加上回程**：把去程的航點反序接在後面，另存成新的一份（issues/065／066）。
+
+    使用者 2026-09-22 裁定「折返」是**規劃動作**（不是路徑屬性）：按下去回程點就真的
+    存在，所見即所得、回程點可以個別改。
+
+    * **另存一份，不改原本那份**：飛過的那一份是紀錄；而且原本那份的簽核綁在它的
+      航點上，不能讓一份多了一倍航點的航線頂著舊簽核
+    * 回程 ＝ 去程 `NAV_WAYPOINT` 去掉最後一個（那是折返點本身）再反序，插在結尾的
+      降落／返航項之前。改速度等指令項不複製——回程沿用最後生效的速度
+    * **回程點不帶停留**（param1＝0）：使用者裁定回程停留**可分別設定**，存好之後在
+      編輯頁逐點設；照抄去程的停留會讓每個點被量兩倍久而不自知
+    """
+    row = await db.pool.fetchrow(
+        "SELECT name, fence, home, firmware_type, vehicle_type, cruise_speed, "
+        "hover_speed, rally FROM plans WHERE id = $1", plan_id)
+    if row is None:
+        raise HTTPException(404, "無此路徑")
+    wps = []
+    for r in await db.pool.fetch(
+            "SELECT seq, lat, lon, alt, action, params FROM waypoints "
+            "WHERE plan_id = $1 ORDER BY seq", plan_id):
+        w = dict(r)
+        pm = w.get("params")
+        pm = json.loads(pm) if isinstance(pm, str) else (pm or {})
+        w.update({k: pm.get(k) for k in ("command", "frame", "p1", "p2", "p3", "p4")})
+        wps.append(w)
+    nav = [w for w in wps if plan_check._cmd(w) == 16 and w.get("lat") and w.get("lon")]
+    if len(nav) < 2:
+        raise HTTPException(422, "至少要有兩個航點才有「回程」可言")
+    tail = len(wps)
+    while tail > 0 and plan_check._cmd(wps[tail - 1]) in (20, 21):   # RTL／LAND
+        tail -= 1
+    back = [{**w, "p1": 0.0} for w in reversed(nav[:-1])]
+    new = wps[:tail] + back + wps[tail:]
+    stored = [{"seq": i, "lat": w.get("lat"), "lon": w.get("lon"), "alt": w.get("alt"),
+               "action": w.get("action") or "waypoint",
+               "command": w.get("command"), "frame": w.get("frame"),
+               **{k: w.get(k) for k in ("p1", "p2", "p3", "p4")}}
+              for i, w in enumerate(new)]
+    def _j(v):
+        return json.loads(v) if isinstance(v, str) else v
+    home = _j(row["home"])
+    saved = await _store_mission(
+        f"{row['name']}（含回程）", "edited", stored, row["firmware_type"],
+        row["vehicle_type"], _j(row["fence"]), home, row["cruise_speed"],
+        row["hover_speed"], _j(row["rally"]))
+    return {"id": saved, "added": len(back), "from": plan_id}
 
 
 class PlanPatch(BaseModel):
