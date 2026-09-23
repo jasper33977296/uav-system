@@ -78,6 +78,11 @@ async def migrate() -> None:
     # **這一行必須留在最前面**（見 _rename_missions_to_plans 的說明）
     await _rename_missions_to_plans()
     await pool.execute("ALTER TABLE drones ADD COLUMN IF NOT EXISTS video_url TEXT")
+    # ── issue 022：相機來源（2026-09-23 使用者裁定走**拉流**）────────────────
+    # 與 `video_url` 是**兩件事，不要混用一欄**（設計 §1）：
+    #   `camera_url` ＝ 地面站要去拉的 `rtsp://<機IP>:8554/...`（給 MediaMTX 當 source）
+    #   `video_url`  ＝ 瀏覽器播放位址（WHEP），設 camera_url 時自動填
+    await pool.execute("ALTER TABLE drones ADD COLUMN IF NOT EXISTS camera_url TEXT")
     # 2026-08-10：模擬場景改為 link_sim 內建常數，拆除模擬器專用表
     await pool.execute("DROP TABLE IF EXISTS interference_zones")
     await pool.execute("DROP TABLE IF EXISTS cells")

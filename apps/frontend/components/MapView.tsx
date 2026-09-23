@@ -3,7 +3,7 @@ import { IconLayer, ScatterplotLayer, TextLayer } from "@deck.gl/layers";
 import { MapboxOverlay } from "@deck.gl/mapbox";
 import maplibregl from "maplibre-gl";
 import "maplibre-gl/dist/maplibre-gl.css";
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 
 import BasemapToggle from "@/components/BasemapToggle";
 import CommandPanel from "@/components/CommandPanel";
@@ -147,7 +147,23 @@ export default function MapView() {
   // PiP 收合態（§2.9：小窗可收合成 📹 鈕）；換機自動展開回小窗
   const [pipHidden, setPipHidden] = useState(false);
   useEffect(() => { setPipHidden(false); }, [selId]);
-  const selUrl = videoList?.find((d) => d.id === selId)?.video_url ?? null;
+  // **存在 DB 的位址可能指著 localhost**（issue 022）：相機來源設好時後端會照
+  // 「呼叫端連過來的主機名」自動填播放位址——從地面站自己設的話就是 localhost，
+  // 而那在別台電腦的瀏覽器上是**它自己**，畫面會說「有影像」卻永遠播不出來。
+  // 播放時換成這個瀏覽器正在用的主機名；外部串流（別的機器）不受影響
+  const selUrl = useMemo(() => {
+    const u = videoList?.find((d) => d.id === selId)?.video_url ?? null;
+    if (!u || typeof window === "undefined") return u;
+    try {
+      const parsed = new URL(u, window.location.origin);
+      if (["localhost", "127.0.0.1", "::1"].includes(parsed.hostname)
+          && parsed.hostname !== window.location.hostname) {
+        parsed.hostname = window.location.hostname;
+        return parsed.toString();
+      }
+    } catch { /* 不是合法 URL 就原樣交出去，由播放器去說它播不動 */ }
+    return u;
+  }, [videoList, selId]);
 
   // §2.9 PiP 自由拖曳（使用者現場反饋）：拖窗身移動、<5px 視為點擊（放大）、
   // 邊界夾限（四邊 8px、上界避開導覽列）、位置記憶（key 獨立於面板）、

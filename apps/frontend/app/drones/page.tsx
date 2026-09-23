@@ -22,6 +22,8 @@ interface Drone {
   /** 槳徑（mm）。**不參與任何判定**——見下方「機體」那一段 */
   prop_diameter_mm?: number | null;
   video_url: string | null;
+  /** 相機來源（issue 022）：**地面站要去拉的** RTSP。與 video_url 是兩件事 */
+  camera_url: string | null;
   autopilot?: string | null;    // "px4"/"ardupilot"/"unknown"；null＝從未見 MAVLink 心跳
   agent?: AgentState | null;    // 意圖通道現況（/api/drones 帶，之後由 WS 更新）
 }
@@ -545,11 +547,23 @@ function DroneWork({ d, sessions, isLive, agent, onboardFiles, dupSysid,
       <section className="dw-sect">
         <h3>這台機</h3>
         <div className="dw-acts">
+          {/* **相機來源與播放位址是兩件事**（issue 022）：前者是地面站要去拉的
+              RTSP，後者是瀏覽器要播的 WHEP。設了相機來源就會自動填播放位址，
+              省得兩邊各填一次又填不一致 */}
           <button className="btn-plain btn-sm"
-            title="地圖點機體時開的串流位址"
+            title="地面站要去拉的相機 RTSP（機上那支 MediaMTX）"
+            onClick={() => onEdit("camera_url", "相機來源", d.camera_url,
+              "**地面站會去拉這個位址**（機上跑一支 MediaMTX，USB 相機由它轉成 RTSP）。"
+              + "例：rtsp://10.141.2.32:8554/cam。\n"
+              + "沒人看、也沒在錄的時候不會去拉——影像與 5G 量測共用上行，"
+              + "一直傳會讓量到的不再是原本那條鏈路的品質。\n留空＝清除。")}>
+            相機來源{d.camera_url ? " ✓" : ""}
+          </button>
+          <button className="btn-plain btn-sm"
+            title="地圖點機體時開的串流位址（設了相機來源會自動填）"
             onClick={() => onEdit("video_url", "影像位址", d.video_url,
-              "地圖點機體時開的串流。瀏覽器不支援 RTSP：機上跑 MediaMTX 轉 WHEP，"
-              + "填 http://<機IP>:8889/<路徑>/whep；MJPEG／MP4 亦可。留空＝清除。")}>
+              "地圖點機體時開的串流。瀏覽器不支援 RTSP——**設了「相機來源」這一欄會自動填好**"
+              + "（地面站的 WHEP 位址）。MJPEG／MP4 亦可。留空＝清除。")}>
             影像位址{d.video_url ? " ✓" : ""}
           </button>
           {d.is_primary

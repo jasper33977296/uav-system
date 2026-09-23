@@ -36,9 +36,31 @@ _stream_ok: dict[int, bool] = {}   # sysid → 上一輪來源是否正常（事
 SYNC_S = 30.0                        # 片段入庫週期（落地後才要看，不必即時）
 
 
-def path_for(sysid: int) -> str:
-    """MediaMTX path 名稱 ↔ 該機 sysid。"""
-    return f"uav-{sysid}"
+def path_for(drone_id: str) -> str:
+    """MediaMTX path 名稱 ↔ **機體身分**（`drones.id`），不是 sysid。
+
+    **sysid 會被重新指派**（issues/040），而錄影是綁在 path 名稱上的。
+    2026-09-08 已經看過一次後果：`uav-1` 的來源指向另一台機的相機，
+    一旦相機通了，這台的架次會錄到**另一台的畫面**，而 `sync_segments` 用
+    時間區間歸屬，會照樣把它記在這台名下——事後幾乎救不回來。
+
+    改名時機（2026-09-23）：`video_segments` 還是 0 列，沒有歷史要搬。
+    """
+    return f"uav-{drone_id}"
+
+
+async def path_of(sysid: int | None) -> str | None:
+    """sysid → path。**每次重查，不快取**：快取一個會被重新指派的號碼，
+    正是上面那個坑的來源。查不到（還沒建檔）回 None，呼叫端就不要動錄影。"""
+    if sysid is None:
+        return None
+    try:
+        row = await db.pool.fetchrow(
+            "SELECT id::text AS id FROM drones WHERE mav_sysid = $1", sysid)
+    except Exception:
+        log.exception("影像：查不到 sysid %s 的機體記錄", sysid)
+        return None
+    return path_for(row["id"]) if row else None
 
 
 # ── HTTP（標準庫；同步函式，呼叫端用 to_thread 包）──────────────────────
@@ -63,10 +85,20 @@ async def set_record(sysid: int, on: bool) -> bool:
     冪等寫法：先 PATCH（path 已存在的情形），404 再 POST add。**API 改動不會
     寫回唯讀設定檔，錄製器一重啟就回到預設 record: no**——所以不能假設設過
     就永久有效，reconcile() 會定期補回（實測踩過：容器重啟後 PATCH 回 404）。
+
+    **開錄同時要關掉 `sourceOnDemand`。** 2026-09-23 實測：只設 `record: yes`
+    而來源是 on-demand 的話，Pi 上根本不會起 ffmpeg，`ready` 一直是 false、
+    `bytesReceived` 是 0——MediaMTX 的 on-demand 只認「有讀者在看」，**錄影不
+    算讀者**。架次開始時通常沒人開著即時頁，於是整趟一段都錄不到。
+    收錄時再設回 on-demand，飛完就不佔上行（與 5G 量測共用一條，見 set_source）。
     """
-    name = path_for(sysid)
+    name = await path_of(sysid)
+    if name is None:
+        log.warning("影像：sysid %s 還沒有機體記錄，不動錄影", sysid)
+        return False
+    body = {"record": on, "sourceOnDemand": not on}
     try:
-        await _api(f"{API}/v3/config/paths/patch/{name}", "PATCH", {"record": on})
+        await _api(f"{API}/v3/config/paths/patch/{name}", "PATCH", body)
         return True
     except urllib.error.HTTPError as e:
         if e.code != 404:
@@ -77,7 +109,42 @@ async def set_record(sysid: int, on: bool) -> bool:
                     type(e).__name__, e)
         return False
     try:                                  # path 尚未宣告 → 新增
-        await _api(f"{API}/v3/config/paths/add/{name}", "POST", {"record": on})
+        await _api(f"{API}/v3/config/paths/add/{name}", "POST", body)
+        return True
+    except Exception as e:
+        log.warning("影像：新增 path %s 失敗（%s）", name, e)
+        return False
+
+
+async def set_source(drone_id: str, camera_url: str | None) -> bool:
+    """把某台機的 path 設成**去拉**它機上的 RTSP（issue 022，2026-09-23 使用者裁定）。
+
+    `sourceOnDemand: yes`＝**沒人看、也沒在錄的時候完全不拉**。這在本專案不是
+    省頻寬而已：影像與 5G 量測共用同一條上行，一直傳等於**量到的不再是原本那條
+    鏈路的品質**（設計 §9）。
+
+    `camera_url` 給 None／空＝把來源拿掉（path 留著，錄影開關仍由架次控制）。
+    失敗只記日誌——影像壞掉不准影響飛行資料。
+
+    **正在錄的時候不把 on-demand 設回來**：飛行中換相機來源（少見但做得到）
+    若順手打開 on-demand，等於當場把錄影的來源關掉（見 `set_record`）。
+    """
+    name = path_for(drone_id)
+    body = {"source": camera_url or "", "sourceOnDemand": bool(camera_url)}
+    if body["sourceOnDemand"] and await _recording(name):
+        body["sourceOnDemand"] = False
+    try:
+        await _api(f"{API}/v3/config/paths/patch/{name}", "PATCH", body)
+        return True
+    except urllib.error.HTTPError as e:
+        if e.code != 404:
+            log.warning("影像：設定 %s 的來源失敗 HTTP %s", name, e.code)
+            return False
+    except Exception as e:
+        log.warning("影像：錄製服務無回應（%s）——來源沒設成", type(e).__name__)
+        return False
+    try:
+        await _api(f"{API}/v3/config/paths/add/{name}", "POST", {**body, "record": False})
         return True
     except Exception as e:
         log.warning("影像：新增 path %s 失敗（%s）", name, e)
@@ -85,12 +152,50 @@ async def set_record(sysid: int, on: bool) -> bool:
 
 
 async def stream_ready(sysid: int) -> bool:
-    """該機此刻有沒有影像流進來（決定 video_mode 是 on 還是 no_source）。"""
+    """該機**此刻**有沒有影像流進來。
+
+    拉流之後這支只代表「現在有沒有在拉」，不代表「有沒有相機」——沒人看又沒在
+    錄的時候本來就是 false（on-demand）。判斷有沒有來源請用 `has_source()`。
+    """
+    name = await path_of(sysid)
+    if name is None:
+        return False
     try:
-        d = await _api(f"{API}/v3/paths/get/{path_for(sysid)}")
+        d = await _api(f"{API}/v3/paths/get/{name}")
         return bool(d and d.get("ready"))
     except Exception:
         return False
+
+
+async def _conf(name: str) -> dict | None:
+    try:
+        return await _api(f"{API}/v3/config/paths/get/{name}")
+    except Exception:
+        return None
+
+
+async def _recording(name: str) -> bool:
+    c = await _conf(name)
+    return bool(c and c.get("record"))
+
+
+async def has_source(sysid: int | None) -> bool:
+    """這台**有沒有影像來源可用**——不是「現在有沒有在傳」。
+
+    2026-09-23 改拉流後這兩件事分家了：on-demand 的 path 平時是 `ready: false`，
+    照舊寫法每一趟開始時都會被判成 `no_source`、整趟不錄。所以先看設定裡有沒有
+    指定來源（拉流），沒有的話才退回看現在有沒有人在推（推流，`source: publisher`）。
+    """
+    if sysid is None:
+        return False
+    name = await path_of(sysid)
+    if name is None:
+        return False
+    c = await _conf(name)
+    src = (c or {}).get("source") or ""
+    if src and src != "publisher":
+        return True                       # 拉流：設定裡有來源就算有
+    return await stream_ready(sysid)      # 推流：只能看現在有沒有東西進來
 
 
 async def decide_video_mode(sysid: int | None) -> str:
@@ -99,7 +204,7 @@ async def decide_video_mode(sysid: int | None) -> str:
     'on'＝預期要錄（事後若零片段就是故障，不是正常）。"""
     if not settings.video_record_enabled:
         return "off"
-    if sysid is None or not await stream_ready(sysid):
+    if not await has_source(sysid):
         return "no_source"
     return "on"
 
@@ -248,7 +353,10 @@ async def _delete_segments(session_id: str, sysid: int) -> int:
     await sync_segments()
     rows = await db.pool.fetch(
         "SELECT started_at FROM video_segments WHERE session_id = $1", session_id)
-    name, n = path_for(sysid), 0
+    name, n = await path_of(sysid), 0
+    if name is None:
+        await db.pool.execute("DELETE FROM video_segments WHERE session_id = $1", session_id)
+        return 0
     for r in rows:
         start = r["started_at"].astimezone(timezone.utc).isoformat().replace("+00:00", "Z")
         try:
@@ -299,7 +407,7 @@ async def sync_segments() -> int:
     n = 0
     for r in rows:
         sysid, drone_id = r["mav_sysid"], r["id"]
-        name = path_for(sysid)
+        name = path_for(drone_id)
         try:
             items = await _api(f"{PLAYBACK}/list?path={name}")
         except Exception:

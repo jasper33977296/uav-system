@@ -103,6 +103,10 @@ async def register_drone(d: DroneIn):
 class DronePatch(BaseModel):
     name: str | None = None
     video_url: str | None = None      # 空字串＝清除
+    #: 相機來源（issue 022）：**地面站要去拉的** `rtsp://<機IP>:8554/...`。
+    #: 與 `video_url`（瀏覽器播放位址）是兩件事；設了這個會自動把 `video_url`
+    #: 填成對應的 WHEP 位址，省得兩邊各填一次又填不一致
+    camera_url: str | None = None     # 空字串＝清除
     airframe_serial: str | None = None   # 空字串＝清除
     model: str | None = None             # 空字串＝清除
     #: 槳徑（mm）。**不參與任何判定**——見 issues/048 第 4 項與
@@ -991,7 +995,7 @@ async def telemetry_backfill(body: BackfillIn):
 
 
 @router.patch("/drones/{drone_id}")
-async def patch_drone(drone_id: str, body: DronePatch):
+async def patch_drone(drone_id: str, body: DronePatch, request: Request):
     """改名／設定影像串流位址（系統端管理機的身分與屬性，不走環境變數）。
     serial_no 保持原值當穩定鍵。"""
     fields = body.model_dump(exclude_unset=True)
@@ -1007,7 +1011,7 @@ async def patch_drone(drone_id: str, body: DronePatch):
         # 0 或負數＝清除。**上限只是防手滑**：最大的多旋翼槳也不到 1 m
         if v is not None and not (0 < int(v) <= 1000):
             fields["prop_diameter_mm"] = None
-    for k in ("video_url", "airframe_serial", "model"):
+    for k in ("video_url", "camera_url", "airframe_serial", "model"):
         if k in fields:
             # 空字串＝清除（存 NULL）。**不要存空字串**——那會讓「沒填」與
             # 「填了又刪掉」在資料上長得不一樣，但意思相同。
@@ -1017,6 +1021,18 @@ async def patch_drone(drone_id: str, body: DronePatch):
         f"UPDATE drones SET {sets} WHERE id = $1", drone_id, *fields.values())
     if r.split()[-1] == "0":
         raise HTTPException(404, "無此無人機")
+    if "camera_url" in fields:
+        from . import video_rec
+        # 相機來源改了 → 告訴錄製器要去哪裡拉（`sourceOnDemand`：沒人看就不拉）。
+        # **播放位址順手填好**：兩個欄位各填一次、填不一致，就會出現「畫面說有
+        # 影像、其實播的是別的東西」
+        cam = fields["camera_url"]
+        await video_rec.set_source(drone_id, cam)
+        if cam:
+            host = (request.headers.get("host") or "").split(":")[0] or "127.0.0.1"
+            await db.pool.execute(
+                "UPDATE drones SET video_url = $2 WHERE id = $1 AND (video_url IS NULL OR video_url = '')",
+                drone_id, f"http://{host}:8889/{video_rec.path_for(drone_id)}/whep")
     if "name" in fields:
         # **執行期是快取，資料庫才是事實來源。** 改完要把快取更新掉並通知畫面
         # ——不然即時頁會一直顯示舊名字，直到 backend 重啟。
