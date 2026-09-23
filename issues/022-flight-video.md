@@ -61,6 +61,79 @@
   自動清理（與量測資料 30 天脫鉤，見上表修訂）。保留天數**不寫死在 UI**：
   後端以中繼資料回傳 `retention_days`，前端空態句動態帶入。
 
+## 2026-09-23：真相機接上了（Phase 3 的前半）
+
+使用者把 **Logitech C920 PRO（046d:08e5）以 USB 接上機上的 Pi 5**，並裁定：
+**拉流**、機上**獨立服務**（不塞進 uav-agent）、之後有機會換成相機模組走 Pi 的
+專用介面。以下是做好並在真機上量過的。
+
+### 機上（uav-agent repo，`camera/`，commit 7eb9563）
+
+| 件 | 說明 |
+|---|---|
+| `uav-camera.service` | MediaMTX v1.21.1（arm64），User=pi、`SupplementaryGroups=video`、**Nice=5**——代理是 -5，相機永遠讓飛控資料先走 |
+| `mediamtx.yml` | 只開 RTSP 8554；`runOnDemand` ＋ `runOnDemandCloseAfter: 10s` |
+| `camera-source.sh` | 先 `v4l2-ctl --list-formats` 探格式：有 H.264 就 `-c copy`，沒有才軟編。`CAM_TEST=1` 給合成畫面，沒相機也能測整條鏈路 |
+
+**MediaMTX 的執行檔不在 git 裡**（arm64 binary），安裝步驟寫在 `camera/README.md`。
+
+**量到的事實**：C920 PRO 只給 `YUYV` 與 `MJPG`，**沒有 H.264**；Pi 5 也**沒有**
+硬體 H.264 編碼器。所以目前走 `libx264 ultrafast`：**一顆核的 54.5%**、約
+**2.7 Mbps**（8 秒 2.76 MB），load 0.08。換成相機模組或自帶 H.264 的 USB 相機時，
+`camera-source.sh` 會自動改走 `-c copy`，這段 CPU 就不見了。
+
+### 地面站（本 repo，commit 9c89ad6）
+
+* **path 改綁機體身分**：`uav-<drones.id>`，不再是 `uav-<sysid>`。sysid 會被重新
+  指派（040），舊寫法一旦相機通了，這台的架次會錄到**另一台的畫面**，而
+  `sync_segments` 用時間區間歸屬會照樣把它記在這台名下——事後幾乎救不回來。
+  改名的時機是 `video_segments` 還是 0 列的時候，沒有歷史要搬。
+  `path_of()` **每次重查不快取**：快取一個會被重新指派的號碼正是那個坑本身。
+* **`drones.camera_url`（新欄）**＝地面站要去拉的 `rtsp://<機IP>:8554/cam`；
+  `video_url` ＝瀏覽器播放位址（WHEP），設前者時自動填。**兩件事不共用一欄。**
+* `set_source()` 把 path 設成 `source: <camera_url>` ＋ `sourceOnDemand: yes`——
+  沒人看也沒在錄的時候**完全不拉**。這不只是省頻寬：影像與 5G 量測共用同一條
+  上行，一直傳等於量到的不再是原本那條鏈路的品質。
+* 無人機管理頁多一顆「相機來源」。
+* MapView：DB 裡的播放位址可能指著 `localhost`（在地面站自己設的），在別台電腦的
+  瀏覽器上那是**它自己**——播放時換成這個瀏覽器正在用的主機名。
+
+### 實作時才發現的坑：**錄影不算讀者**
+
+`sourceOnDemand` 只在「有讀者在看」時才去拉，而**錄影不算讀者**。實測只設
+`record: yes`：Pi 上根本不起 ffmpeg，`ready` 一直是 false、`bytesReceived` 是 0。
+架次開始時通常沒有人開著即時頁，於是**整趟一段都錄不到**。
+
+兩處修掉：
+
+* `set_record(on)` 一併送 `sourceOnDemand: not on`——開錄就長駐拉流，收錄就回到
+  on-demand。`set_source()` 在**正在錄**的時候不把 on-demand 設回來（飛行中換來源
+  等於當場把錄影的來源關掉）。
+* `has_source()` 與 `stream_ready()` 分家：拉流之後「有沒有相機」與「現在有沒有在
+  傳」是兩件事。舊的 `decide_video_mode` 看後者，會把**每一趟**都判成 `no_source`。
+
+### 驗證（2026-09-23，真機 uav-1）
+
+| 項 | 結果 |
+|---|---|
+| 機上 on-demand | ✅ 沒人看時沒有 ffmpeg；有人拉才起、離開 10s 後自己收 |
+| 地面站拉流 | ✅ `ready: true`、`tracks: ['H264']`、8 秒 2.76 MB |
+| **開錄觸發拉流** | ✅ 修正後 **2 秒內** `ready: true`、`bytesReceived` 2.12 MB |
+| 片段入庫 | ✅ playback `/list` 給 `start` ＋ `duration: 8.266`，`sync_segments` 寫進 `video_segments` |
+| 收錄後回復 | ✅ `record: false`、`sourceOnDemand: true` |
+| WHEP | OPTIONS 回 204；**瀏覽器實際播放還沒看過**（見下） |
+
+`.env` 的 `VIDEO_RECORD_ENABLED` 從 false 改回 **true**——那行的註解原本寫的條件
+（「先修 path↔機的綁定，再把這行改回 true」）就是這次做完的事。測試留下的那段
+影像已從檔案與 DB 一併刪掉。
+
+### 還沒做完的（Phase 3 的後半）
+
+* **瀏覽器實際播放沒驗過**：只確認 WHEP 端點回 204。要在即時頁選 uav-1 看畫面。
+* **真的飛一趟時的錄影沒驗過**：上面的開錄是手動呼叫 `set_record`，不是
+  armed 觸發的。要在真架次上確認 `video_mode=on`→整趟有片段→落地停錄。
+* 回放頁的同步播放（Phase 2）本來就還沒做。
+
 ## 修法建議
 
 分三階段：
