@@ -803,9 +803,13 @@ def _airborne(sysid: int) -> tuple[bool | None, str, float | None]:
 
 #: /api/start 進行中的機 → 任務編號。起飛流程每一步要告訴對外串流
 _start_mission: dict[int, str] = {}
+#: 這台機的起飛序列跑到哪一步（`_start_mission` 有值時才有意義）。
+#: **用來回答重試的人「你上一次其實成功了，現在跑到這裡」**——見 `_start`。
+_start_step: dict[int, str] = {}
 
 
 def _note_step(sysid: int, step: str) -> None:
+    _start_step[sysid] = step
     mid = _start_mission.get(sysid)
     if mid:
         guard_client.notify_mission(mid, {"kind": "start_step", "sysid": sysid,
@@ -2083,6 +2087,16 @@ class StartIn(BaseModel):
     store: bool = True               # 保留相容；plan 路徑一律入庫（現版經 mission_fly 需 DB mission，去重不洗版）
     takeoff_alt: float | None = None  # 省略＝跟著任務的 NAV_TAKEOFF（見 FlyIn.takeoff_alt）
     accept_start_distance_m: float | None = None  # 見 FlyIn.accept_start_distance_m
+    #: **等不等這一整套跑完**（上傳→解鎖→起飛→飛到起始點→切 AUTO）。
+    #: 預設 true＝維持原本的同步語意，舊的呼叫端不受影響。
+    #:
+    #: false＝**立刻回 202**，只帶 `mission_id` 與 `stream`，進度與成敗走既有的
+    #: 即時串流（`start_step`／`start_done`／`start_failed`）。
+    #:
+    #: 為什麼要有這個：2026-09-23 實測，這一整套在**起始點就在腳邊**時要 19 秒，
+    #: 而起始點遠一點就是「飛過去並等到位」的時間，沒有上限。外部控制端的 HTTP
+    #: 逾時比它短，於是看到 timeout——**但飛機照飛**。那天外部因此飛了兩趟。
+    wait: bool = True
 
 
 _CODE_OF = {400: "bad_request", 403: "forbidden", 404: "not_found", 409: "conflict",
@@ -2132,6 +2146,32 @@ async def _start(body: StartIn, request: Request) -> dict:
                                   "msg": "plan_id 與 plan 二選一（plan_id＝路徑庫的 id 或名稱，"
                                          "plan＝地面站 missions/ 目錄的 .plan 檔名）"})
     mission_id = ext_missions.parse_id(body.mission_id)
+    # ── 重試防護（2026-09-23）────────────────────────────────────────────
+    # **逾時的呼叫端會重試，而重試會讓飛機再飛一趟。** 那天實測就是這樣：
+    # 08:14 飛了一趟、外部 timeout、08:16 重試又飛了一趟。而且危險窗口就在
+    # 逾時附近——`_inflight_upload_block` 只擋「在空中且模式是 mission」，
+    # 起飛後、切進 mission 前那 7–14 秒機體在 GUIDED，**是放行的**。
+    sysid0 = _resolve_sysid(body.sysid)
+    busy = _start_mission.get(sysid0)
+    if busy:
+        step = _start_step.get(sysid0, "begin")
+        if mission_id and mission_id == busy:
+            # 同一個編號重送＝**這就是剛才那一次**。回報現況，不再飛一次。
+            # 回 202 而不是 409：呼叫端要的是「我那一次到底成功了沒」，
+            # 而答案是「成功了，正在跑」——那不是錯誤
+            return JSONResponse(status_code=202, content={
+                "accepted": True, "already_running": True,
+                "mission_id": busy, "sysid": sysid0, "step": step,
+                "msg": f"這個 mission_id 的起飛序列正在跑（目前在 {step}）——"
+                       "**沒有重新起飛**。進度看 stream",
+                "stream": _stream_of(request, {"id": busy})})
+        raise HTTPException(409, {
+            "code": "start_in_progress",
+            "msg": f"sysid {sysid0} 的起飛序列正在跑（目前在 {step}），"
+                   f"任務 {busy[:8]}——**不會再起飛一次**",
+            "how_to": ["要看進度就連那個任務的串流",
+                       "上一次呼叫逾時的話，帶同一個 mission_id 重送就會拿到現況",
+                       "真的要換一趟：先讓這一趟結束（落地／上鎖），或下 RTL"]})
     if ref:
         m = await _resolve_mission(ref)
         plan_id, name, src, skipped = m["id"], m["name"], "db", []
@@ -2149,7 +2189,7 @@ async def _start(body: StartIn, request: Request) -> dict:
                                        parsed.get("firmware_type"),
                                        parsed.get("vehicle_type"))
         name, src, skipped = path.name, "file", parsed["skipped"]
-    sysid = _resolve_sysid(body.sysid)
+    sysid = sysid0
     drone = await pool.fetchrow(
         "SELECT id::text AS id, name FROM drones WHERE mav_sysid = $1", sysid)
     if drone is None:
@@ -2162,18 +2202,45 @@ async def _start(body: StartIn, request: Request) -> dict:
     note = {"drone_id": drone["id"], "sysid": sysid}
     guard_client.notify_mission(ms["id"], {"kind": "start_begin", "plan_id": plan_id, **note})
     _start_mission[sysid] = ms["id"]
-    try:
-        # 委派現版正確流程（capability gate＋到高度 gating＋逐台 audit＋X-Client 都自動繼承）
-        result = await mission_fly(sysid, FlyIn(plan_id=plan_id, takeoff_alt=body.takeoff_alt,
-                                   accept_start_distance_m=body.accept_start_distance_m))
-    except Exception as e:
-        d = getattr(e, "detail", None)
-        msg = d.get("msg") if isinstance(d, dict) else (d or f"{type(e).__name__}: {e}")
-        guard_client.notify_mission(ms["id"], {"kind": "start_failed", "msg": str(msg), **note})
-        raise
-    finally:
-        _start_mission.pop(sysid, None)
-    guard_client.notify_mission(ms["id"], {"kind": "start_done", **note})
+    _start_step[sysid] = "begin"
+
+    async def _sequence():
+        """上傳→解鎖→起飛→飛到起始點→切 AUTO。同步與非同步共用這一份。"""
+        try:
+            # 委派現版正確流程（capability gate＋到高度 gating＋逐台 audit＋X-Client 都自動繼承）
+            result = await mission_fly(sysid, FlyIn(plan_id=plan_id, takeoff_alt=body.takeoff_alt,
+                                       accept_start_distance_m=body.accept_start_distance_m))
+        except Exception as e:
+            d = getattr(e, "detail", None)
+            msg = d.get("msg") if isinstance(d, dict) else (d or f"{type(e).__name__}: {e}")
+            guard_client.notify_mission(ms["id"], {"kind": "start_failed", "msg": str(msg), **note})
+            raise
+        finally:
+            _start_mission.pop(sysid, None)
+            _start_step.pop(sysid, None)
+        guard_client.notify_mission(ms["id"], {"kind": "start_done", **note})
+        return result
+
+    if not body.wait:
+        # **背景 task 的例外沒有人接**，不自己吞就會變成靜默的
+        # 「Task exception was never retrieved」。失敗已經由 `_sequence`
+        # 送進串流（start_failed），這裡只補一條日誌
+        async def _bg():
+            try:
+                await _sequence()
+            except Exception as e:
+                log.warning("背景起飛序列結束於失敗（sysid %s，任務 %s）：%s",
+                            sysid, ms["id"][:8], e)
+        asyncio.create_task(_bg())
+        return JSONResponse(status_code=202, content={
+            "accepted": True, "source": src, "plan_id": plan_id, "name": name,
+            "sysid": sysid, "mission_id": ms["id"], "mission_name": ms["name"],
+            **({"replaced": ms["replaced"]} if ms.get("replaced") else {}),
+            "msg": "起飛序列已開始——**進度與成敗看 stream**（start_step／"
+                   "start_done／start_failed）。這一支不等它跑完",
+            "stream": _stream_of(request, ms)})
+
+    result = await _sequence()
     return {"source": src, "plan_id": plan_id, "name": name, "sysid": sysid,
             "skipped": skipped, **result,
             "mission_id": ms["id"], "mission_name": ms["name"],

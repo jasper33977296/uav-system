@@ -297,6 +297,12 @@ footer.doc-foot{border-top:1px solid var(--line); padding-top:16px; font-size:13
           <td><span class="st live">已上線</span></td>
         </tr>
         <tr>
+          <td>起飛的回應方式</td>
+          <td class="old">一律等整套跑完才回（實測 19 秒起跳，起始點遠就沒有上限）</td>
+          <td>新增 <code>wait: false</code>：立刻回 <span class="chip">202</span>，進度走串流。預設仍是同步，<strong>舊的呼叫端不受影響</strong>。另加<strong>重試防護</strong>——逾時後重送不會再飛一趟（<a href="#s-start-timeout">§6.2</a>）</td>
+          <td><span class="st live">已上線</span></td>
+        </tr>
+        <tr>
           <td>即時畫面</td>
           <td class="old">v2 §17 明寫<strong>不送影像</strong></td>
           <td><strong>改成給了</strong>：走 <strong>RTSP</strong>，由地面站轉發，網址在 <code>GET /api/v1/ext/drones</code> 每台機的 <code>video</code> 欄位（<a href="#ext-drones">§3</a>）</td>
@@ -505,6 +511,7 @@ footer.doc-foot{border-top:1px solid var(--line); padding-top:16px; font-size:13
         <tr><td><code>takeoff_alt</code></td><td><code>5</code></td><td class="fmt">float · 選填（公尺）<br>省略＝跟著路徑自己的起飛高度</td><td><span class="st live">已上線</span></td></tr>
         <tr><td><code>plan_id</code></td><td><code>"e961b301-…"</code></td><td class="fmt">string · 與 <code>plan</code> 二選一<br><strong>路徑</strong>的 <code>id</code> 或 <code>name</code></td><td><span class="st live">已上線</span></td></tr>
         <tr><td><code>mission_id</code></td><td><code>"8f0c2d1e-…"</code></td><td class="fmt">UUID · 選填<br><strong>任務</strong>編號，也是串流的連線編號。不給就由地面站產生</td><td><span class="st live">已上線</span></td></tr>
+        <tr><td><code>wait</code></td><td><code>false</code></td><td class="fmt">bool · 選填 · 預設 <code>true</code><br><strong><code>false</code>＝不等它跑完</strong>，立刻回 <span class="chip">202</span>＋<code>mission_id</code>＋<code>stream</code>，進度走串流。<strong>建議新的程式都用這個</strong>——見 <a href="#s-start-timeout">§6.2</a></td><td><span class="st live">已上線</span></td></tr>
         <tr><td><code>mission_name</code></td><td><code>"巡檢 A 區"</code></td><td class="fmt">string · 選填<br>不可與既有任務同名。省略＝<code>&lt;路徑名&gt; &lt;MM-DD HH:MM&gt;</code></td><td><span class="st live">已上線</span></td></tr>
       </tbody>
     </table></div>
@@ -541,12 +548,42 @@ footer.doc-foot{border-top:1px solid var(--line); padding-top:16px; font-size:13
         <tr><td><span class="chip bad">422</span></td><td><code>mission_id_invalid</code></td><td><code>mission_id</code> 不是 UUID</td><td>收到的值、要的格式（例如 <code>crypto.randomUUID()</code> 產生的）</td></tr>
         <tr><td><span class="chip bad">409</span></td><td><code>mission_id_used</code></td><td><strong>這個 <code>mission_id</code> 已經用過</strong>——不管那個任務是進行中還是已結束（v3 起兩種情況同一個代碼）</td><td>說明它是進行中還是已結束；要再飛就產生新的 UUID</td></tr>
         <tr><td><span class="chip bad">409</span></td><td><code>mission_busy</code></td><td><strong>只剩競態</strong>：兩個請求同時替同一台機建任務</td><td>那個任務的名稱與編號；重試即可</td></tr>
+        <tr><td><span class="chip bad">409</span></td><td><code>start_in_progress</code></td><td>這台機的起飛序列<strong>正在跑</strong>（多半是上一次呼叫逾時後又送了一次）</td><td>目前跑到哪一步、是哪個任務；<strong>不會再起飛一次</strong>。帶同一個 <code>mission_id</code> 重送會改成拿到現況（<a href="#s-start-timeout">§6.2</a>）</td></tr>
         <tr><td><span class="chip bad">409</span></td><td><code>mission_name_taken</code></td><td><code>mission_name</code> 與既有任務同名（不分大小寫）</td><td>撞名的是哪一個任務</td></tr>
         <tr><td><span class="chip bad">422</span></td><td><code>plan_required</code></td><td><code>plan_id</code> 與 <code>plan</code> 都沒給或都給了</td><td>兩者的差別</td></tr>
         <tr><td><span class="chip bad">409</span></td><td><code>drone_unknown</code></td><td>這個 sysid 在地面站還沒有機體記錄</td><td>等收到心跳再試</td></tr>
       </tbody>
     </table></div>
     <p class="prose"><strong>v3 起：每一次執行都是新的任務</strong>，不再掛進既有的任務——見下面的 §6.1。</p>
+  </article>
+
+  <article class="ep" id="s-start-timeout">
+    <div class="ep-head"><span class="verb get" style="visibility:hidden">·</span><code class="url mono">§6.2　逾時與重試：<strong>回傳失敗不等於沒飛</strong></code><span class="st live">已上線</span></div>
+    <p class="ep-sum">2026-09-23 現場遇到的事，寫在這裡讓你不必再遇到一次。</p>
+    <p class="prose"><code>/api/v1/start</code> 預設<strong>等到整套跑完才回應</strong>：上傳 → 解鎖 → 起飛 → <strong>飛到任務起始點並等到位</strong> → 切 AUTO。實測（起始點就在腳邊）<strong>要 19 秒</strong>；起始點遠一點，那就是飛過去的時間，<strong>沒有上限</strong>。</p>
+    <div class="note warn">
+      <p><strong>那天發生的事</strong>：外部控制端的 HTTP 逾時比 19 秒短，於是畫面顯示 <code>timeout</code>——<strong>但飛機飛完了一整趟</strong>。操作者以為失敗，重試，<strong>於是又飛了第二趟</strong>。</p>
+    </div>
+    <p class="prose"><strong>正確做法：帶 <code>wait: false</code>。</strong>伺服器立刻回 <span class="chip">202</span>，你拿到 <code>mission_id</code> 與 <code>stream</code>，進度與成敗都走串流：</p>
+    <div class="tablewrap"><table>
+      <thead><tr><th>串流訊息</th><th>意思</th></tr></thead>
+      <tbody>
+        <tr><td><code>start_step</code></td><td>跑到哪一步了（<code>upload</code>／<code>takeoff</code>／<code>airborne</code>／<code>transit</code>／<code>mission</code>）</td></tr>
+        <tr><td><code>start_done</code></td><td>整套跑完，機已經在飛任務</td></tr>
+        <tr><td><code>start_failed</code></td><td>卡在某一步，<code>msg</code> 說是哪一步</td></tr>
+      </tbody>
+    </table></div>
+    <p class="prose"><strong>如果你還是要用同步模式</strong>（<code>wait</code> 預設 <code>true</code>）：把 HTTP 逾時設到<strong>比最遠的起始點飛過去還久</strong>，而且<strong>逾時後不要直接重送</strong>——先用 <code>GET /api/v1/ext/drones</code> 或串流看它是不是已經在飛。</p>
+    <p class="lbl">重試防護（v3 新增）</p>
+    <p class="prose">逾時後真的重送了也不會再飛一趟，兩道：</p>
+    <div class="tablewrap"><table>
+      <thead><tr><th>你重送時</th><th>會發生什麼</th></tr></thead>
+      <tbody>
+        <tr><td>帶<strong>同一個</strong> <code>mission_id</code></td><td><span class="chip">202</span> <code>already_running: true</code>＋目前的 <code>step</code>——<strong>「你那一次其實成功了，現在跑到這裡」</strong>。沒有重新起飛</td></tr>
+        <tr><td>帶<strong>別的</strong> <code>mission_id</code>，或<strong>不帶</strong></td><td><span class="chip bad">409</span> <code>start_in_progress</code>，訊息說出它跑到哪一步、是哪個任務</td></tr>
+      </tbody>
+    </table></div>
+    <p class="prose"><strong>所以請固定帶自己產生的 <code>mission_id</code>。</strong>帶了，重試就是冪等的；不帶，重試只會拿到 409——安全，但你得自己去查那一趟怎麼了。</p>
   </article>
 
   <article class="ep" id="s-one-run">
