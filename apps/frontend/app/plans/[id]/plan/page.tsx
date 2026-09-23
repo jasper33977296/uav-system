@@ -436,6 +436,10 @@ export default function PlanPage() {
    *  以前是「最後一個放的點自動變成降落點」，於是每放一個新點，前一個變回航點、
    *  新的那個變成降落，看起來就是「我放的航點被改掉了」，而且它真的被改寫了 */
   const [ending, setEnding] = useState<string | null>(null);
+  /** 同一個位置疊著多個點時跳的小選單（issues/065 B，使用者 2026-09-23）。
+   *  **不替人挑**：來回路徑的去程與回程點座標相同，取最近的那一個等於每次都
+   *  選到同一個，另一個永遠碰不到 */
+  const [ambig, setAmbig] = useState<{ idx: number[]; x: number; y: number } | null>(null);
   /** 有航點查不到地形、悄悄退回「離起飛點」（後端 `fallback`）。
    *  **你選的是「離地面」，而這幾個點算不出來**——決策表拿掉之後這件事變成靜音 */
   const [fellBack, setFellBack] = useState(false);
@@ -784,7 +788,8 @@ export default function PlanPage() {
     };
   };
 
-  /** **加上回程**（issues/065／066，使用者 2026-09-22：規劃動作，不是路徑屬性）。
+  /** **原路返回**（issues/065／066；使用者 2026-09-22 裁定它是規劃動作，不是路徑屬性；
+   *  2026-09-23 從「加上回程」改名）。
    *  從零模式：直接在點列上接反序的去程點（去掉折返點本身）。**回程點不帶停留**——
    *  使用者裁定回程停留可分別設定，照抄去程會讓每個點被量兩倍久而不自知。
    *  既有航線：後端另存一份「（含回程）」再打開它——原本那份與它的簽核不動 */
@@ -804,10 +809,10 @@ export default function PlanPage() {
     try {
       const r = await fetch(`${API}/api/plans/${id}/add-return`, { method: "POST" });
       const j = await r.json().catch(() => null);
-      if (!r.ok) { setErr(`加上回程失敗：${j?.detail ?? r.status}`); return; }
+      if (!r.ok) { setErr(`原路返回失敗：${j?.detail ?? r.status}`); return; }
       window.location.href = `/plans/${j.id}/plan`;
     } catch (e) {
-      setErr(`加上回程失敗：${e}`);
+      setErr(`原路返回失敗：${e}`);
     } finally {
       setBusy(false);
     }
@@ -1057,7 +1062,8 @@ export default function PlanPage() {
       {(stageWps.length > 0 || (isNew && started)) && (
         <div className="plan-work">
           <TerrainStage wps={stageWps} sel={selWp}
-            onSelect={(i) => { setSelWp(i); setFenceSel(-1); }}
+            onSelect={(i) => { setSelWp(i); setFenceSel(-1); setAmbig(null); }}
+            onAmbiguous={(idx, x, y) => setAmbig({ idx, x, y })}
             assumeM={assume} onBuildings={onBlds}
             tipFor={tipFor}
             fence={fenceShape}
@@ -1181,9 +1187,9 @@ export default function PlanPage() {
                   <div className="wp-list-acts">
                     <button className="btn-plain btn-sm" disabled={busy}
                       title={isNew
-                        ? "把去程的航點反序接在後面（回程點不帶停留，之後逐點設）"
-                        : "把去程的航點反序接在後面，**另存成新的一份**（原本那份與它的簽核不動）"}
-                      onClick={addReturn}>↩ 加上回程{isNew ? "" : "（另存一份）"}</button>
+                        ? "把去程的航點反序接在後面，讓它原路飛回來（回程點不帶停留，之後逐點設）"
+                        : "把去程的航點反序接在後面，讓它原路飛回來；**另存成新的一份**（原本那份與它的簽核不動）"}
+                      onClick={addReturn}>↩ 原路返回{isNew ? "" : "（另存一份）"}</button>
                   </div>
                   <table>
                     <thead><tr><th>#</th><th>類型</th>
@@ -1718,6 +1724,29 @@ export default function PlanPage() {
             </div>
           </div>
         </div>
+      )}
+
+      {/* **重疊時問，不要替人挑**（issues/065 B，使用者 2026-09-23）。
+          來回路徑的去程與回程點座標相同，取最近的那一個等於另一個永遠碰不到。
+          畫在最上層（同 ⓘ 的理由）：地圖與右欄都有自己的堆疊脈絡 */}
+      {ambig && (
+        <>
+          <div className="mask mask-clear" onClick={() => setAmbig(null)} />
+          <div className="pick-menu" style={{ left: ambig.x + 6, top: ambig.y + 6 }}>
+            <div className="hint-line">這裡有 {ambig.idx.length} 個點：</div>
+            {ambig.idx.map((i) => {
+              const w = stageWps[i];
+              const kind = w?.kind === "takeoff" ? "起飛" : w?.kind === "land" ? "降落" : "航點";
+              const order = stageWps.filter((x) => !x.auto).indexOf(w) + 1;
+              return (
+                <button key={i} className="btn-plain btn-sm"
+                  onClick={() => { setSelWp(i); setFenceSel(-1); setAmbig(null); }}>
+                  #{order} {kind}{w?.hold ? `・停 ${w.hold} s` : ""}
+                </button>
+              );
+            })}
+          </div>
+        </>
       )}
 
       {naming !== null && (

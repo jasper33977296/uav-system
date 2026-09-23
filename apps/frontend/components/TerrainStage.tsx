@@ -58,13 +58,16 @@ export interface StageHit { kind: "wp" | "leg"; i: number }
  *  規劃頁上，讓這個元件再查一次就會有兩份可能不同步的資料。 */
 export interface StageTip { title: string; rows: [string, string][]; bad?: boolean }
 
-export default function TerrainStage({ wps, sel, onSelect, tipFor, placing,
+export default function TerrainStage({ wps, sel, onSelect, onAmbiguous, tipFor, placing,
                                       onPlace, onMove, center, assumeM = null,
                                       onBuildings, fence = null, flyTo = null,
                                       fenceSel = -1, onFenceSelect, onFenceMove,
                                       editTarget = "route",
                                       exaggeration = 1 }: {
   wps: StageWp[]; sel: number; onSelect: (i: number) => void;
+  /** 同一個位置疊著多個點時（issues/065 B）：候選的索引（由近到遠）與滑鼠的
+   *  視窗座標。**不給就退回舊行為**（取最近的那一個） */
+  onAmbiguous?: (idx: number[], x: number, y: number) => void;
   tipFor?: (h: StageHit) => StageTip | null;
   /** 放點模式：點地形＝加一個航點（maplibre 自己有 3px 的 clickTolerance，
    *  所以拖曳轉視角不會誤放） */
@@ -115,6 +118,8 @@ export default function TerrainStage({ wps, sel, onSelect, tipFor, placing,
   assumeRef.current = assumeM;
   const moveRef = useRef(onMove);
   moveRef.current = onMove;
+  const ambigRef = useRef(onAmbiguous);
+  ambigRef.current = onAmbiguous;
   const dragRef = useRef<number | null>(null);
   const fenceRef = useRef({ onFenceSelect, onFenceMove });
   fenceRef.current = { onFenceSelect, onFenceMove };
@@ -230,6 +235,26 @@ export default function TerrainStage({ wps, sel, onSelect, tipFor, placing,
      *  **連垂線一起算**（見下）：標記畫在航點的高度上，而那根柱子往下延伸到
      *  地面——人眼認定「那個點在哪裡」涵蓋整根柱子，命中也該如此。 */
     const PICK_WP_PX = 30;
+    /** 這一點下面有哪些航點（由近到遠）。**重疊時要問人，不要替他挑**
+     *  （issues/065 B，使用者 2026-09-23）：來回路徑的去程與回程點座標相同，
+     *  取最近的那一個等於每次都選到同一個，另一個永遠碰不到 */
+    const hitsAt = (pt: { x: number; y: number }): number[] => {
+      const ws = dataRef.current.wps;
+      const proj = projRef.current;
+      if (!proj || targetRef.current === "fence") return [];
+      const found: { i: number; d: number }[] = [];
+      for (let i = 0; i < ws.length; i++) {
+        const w = ws[i];
+        if (!w.lat || !w.lon || w.auto) continue;
+        const p = proj(w.lon, w.lat, w.amsl);
+        if (!p) continue;
+        const g = w.ground == null ? null : proj(w.lon, w.lat, w.ground);
+        const d = g ? segDist(pt, p, g) : Math.hypot(p.x - pt.x, p.y - pt.y);
+        if (d < PICK_WP_PX) found.push({ i, d });
+      }
+      return found.sort((a, b) => a.d - b.d).map((x) => x.i);
+    };
+
     const hitTest = (pt: { x: number; y: number }): StageHit | null => {
       if (targetRef.current === "fence") return null;
       const ws = dataRef.current.wps;
@@ -283,6 +308,14 @@ export default function TerrainStage({ wps, sel, onSelect, tipFor, placing,
       const pl = placeRefBox.current?.current;
       const fv = hitFence(e.point);
       if (fv != null) { fenceRef.current.onFenceSelect?.(fv); return; }
+      // **重疊就問**：同一個位置疊著兩個以上可編輯的點時，跳一個小選單
+      // （來回路徑的去程／回程、近距離點、被建物擋住的點都是這一類）
+      const many = hitsAt(e.point);
+      if (many.length > 1 && ambigRef.current) {
+        const oe = e.originalEvent as MouseEvent | undefined;
+        ambigRef.current(many, oe?.clientX ?? 0, oe?.clientY ?? 0);
+        return;
+      }
       const h = hitTest(e.point);
       // **放點模式下也要先看有沒有點到既有航點。** 原本這裡直接放點就 return，
       // 於是點在一個已經在那裡的點上只會在它旁邊再疊一個——那個點永遠選不到，

@@ -2019,3 +2019,12 @@ details.card summary { cursor: pointer; font-size: 14px; font-weight: 600; }
 .wp-list th, .wp-list td { white-space: nowrap; }
 .wp-list th .muted { font-size: 11px; }
 .rail-field .num-note { color: var(--status-warn); }
+
+/* 重疊點的消歧義選單（issues/065 B）：跟 ⓘ 一樣要蓋在所有東西上面 */
+.pick-menu {
+  position: fixed; z-index: 2147482000; display: flex; flex-direction: column; gap: 4px;
+  background: var(--surface-2); border: 1px solid var(--border); border-radius: 8px;
+  padding: 8px; box-shadow: 0 8px 24px rgba(0, 0, 0, 0.45); min-width: 148px;
+}
+.pick-menu button { text-align: left; }
+.mask-clear { background: transparent; }
