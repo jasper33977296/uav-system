@@ -436,6 +436,12 @@ export default function PlanPage() {
    *  以前是「最後一個放的點自動變成降落點」，於是每放一個新點，前一個變回航點、
    *  新的那個變成降落，看起來就是「我放的航點被改掉了」，而且它真的被改寫了 */
   const [ending, setEnding] = useState<string | null>(null);
+  /** 有航點查不到地形、悄悄退回「離起飛點」（後端 `fallback`）。
+   *  **你選的是「離地面」，而這幾個點算不出來**——決策表拿掉之後這件事變成靜音 */
+  const [fellBack, setFellBack] = useState(false);
+  /** 系統補了幾個點（降落前的進場點、為了貼地插的中繼點）。
+   *  它們是**你沒放的航點**；列表不列（重算就換一批），但數量要看得見 */
+  const [autoPts, setAutoPts] = useState(0);
   const [applied, setApplied] = useState<{ note?: string } | null>(null);
   const [sign, setSign] = useState<Sign | null>(null);
   const [blds, setBlds] = useState<BuildingFeat[]>([]);
@@ -606,7 +612,8 @@ export default function PlanPage() {
         });
         const d = await r.json();
         if (r.ok) { setChk(d.check); setProf(d.profile); setDecisions(d.decisions ?? []);
-                    setEnding(d.ending ?? null); }
+                    setEnding(d.ending ?? null); setFellBack(!!d.fallback);
+                    setAutoPts(d.auto_points ?? 0); }
       } finally { setBusy(false); }
     }, 220);
     return () => clearTimeout(t);
@@ -726,7 +733,8 @@ export default function PlanPage() {
       if (!r.ok) return;
       // **後端算完之後把新的狀態拿回來**：政策、點、假設值都可能被改
       setChk(d.check); setProf(d.profile); setDecisions(d.decisions ?? []);
-      setEnding(d.ending ?? null);
+      setEnding(d.ending ?? null); setFellBack(!!d.fallback);
+      setAutoPts(d.auto_points ?? 0);
       setApplied(d.applied ?? null);
       if (d.policy) setPol(d.policy);
       if (d.points) setPts(d.points);
@@ -1210,6 +1218,20 @@ export default function PlanPage() {
                       })}
                     </tbody>
                   </table>
+                  {/* **系統補的點與退回，要看得見**（決策表拿掉之後它們變成靜音）。
+                      列表只列你放的點——補的點重算就換一批，列出來也選不到 */}
+                  {autoPts > 0 && (
+                    <div className="hint-line">系統另外補了 {autoPts} 個點<InfoTip
+                      tip={"**降落前的進場點**：先飛到降落點正上方、還在規劃高度上才下降。\n"
+                        + "**中繼點**（離地面模式）：兩個航點之間隔著土坡時，直線會低於你要的離地高度，"
+                        + "所以中間插點讓整段都夠高。\n這些點每次重算都會換一批，所以列表不列它們。"} /></div>
+                  )}
+                  {fellBack && (
+                    <div className="hint-line"><span className="tag-warn">部分航點退回「離起飛點」</span>
+                      <InfoTip tip={"你選的是「離地面」，但**有航點查不到地形高程**，"
+                        + "那幾個點只能用「離起飛點」算。\n退回本身不危險，默默退回才危險——"
+                        + "那幾段的離地高度實際上沒有被檢查過。"} /></div>
+                  )}
                 </div>
               );
             })()}
@@ -1303,8 +1325,13 @@ export default function PlanPage() {
                           <button key={k}
                             aria-pressed={(mine?.kind ?? "wp") === k}
                             onClick={() => {
+                              // **一條航線只有一個降落點**：後端取最後一個標成降落點的，
+                              // 其餘在航線裡其實是普通航點（飛過去、不降落）——而畫面上
+                              // 它們仍顯示「降落」，說的與做的不一樣（2026-09-23 實測）。
+                              // 標新的就把舊的改回航點
                               setPts((p) => p.map((q, j) =>
-                                j === mi ? { ...q, kind: k } : q));
+                                j === mi ? { ...q, kind: k }
+                                  : k === "land" && q.kind === "land" ? { ...q, kind: "wp" } : q));
                               // 標成降落點就是為了降在那裡。改回航點時若已經
                               // 沒有降落點了，就回到降落在起飛點
                               if (k === "land") setPol((q) => ({ ...q, land_at_home: false }));

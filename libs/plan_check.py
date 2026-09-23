@@ -1354,7 +1354,13 @@ def build_plan(points: list[dict], policy: dict | None = None,
     # `none`＝**沒有結尾**，呼叫端要警告並擋下存檔——不要替操作員挑一個點來降落
     ending = ("home" if (pol["land_at_home"] and home and home.get("lat"))
               else "marked" if marked else "none")
-    return {"waypoints": out, "decisions": decisions, "ending": ending}
+    return {"waypoints": out, "decisions": decisions, "ending": ending,
+            # **有航點查不到地形、退回「離起飛點」**。呼叫端要說出來：
+            # 你選的是「離地面」，而這幾個點算不出來——不知道就要說（issues/066 後續）
+            "fallback": fallback,
+            # 系統補的點：進場點與中繼點。**它們是你沒放的航點**，
+            # 航點列表刻意不列（重算就換一批），但**數量要看得見**
+            "auto_points": sum(1 for w in out if w.get("filled") or w.get("approach"))}
 
 
 _MODE_TEXT = {POLICY_AGL: "離地面", POLICY_HOME: "離起飛點", POLICY_AMSL: "固定海拔"}

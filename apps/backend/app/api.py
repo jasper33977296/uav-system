@@ -3164,6 +3164,7 @@ async def draft_plan(body: DraftIn):
         return {"check": None, "profile": prof, "saved_id": None,
                 "waypoints": solo["waypoints"], "decisions": solo["decisions"],
                 "ending": solo.get("ending"),
+                "fallback": solo.get("fallback"), "auto_points": solo.get("auto_points"),
                 "policy": pol, "points": pts, "assume_m": assume}
     check = plan_check.check_waypoints(
         wps, settings.geofence_radius_m, settings.geofence_alt_m,
@@ -3192,6 +3193,8 @@ async def draft_plan(body: DraftIn):
             "waypoints": wps, "decisions": decisions,
             # 這條航線怎麼結束；`none`＝沒有結尾（畫面要警告並擋下存檔）
             "ending": built.get("ending"),
+            # 有沒有點查不到地形而退回「離起飛點」、系統補了幾個點
+            "fallback": built.get("fallback"), "auto_points": built.get("auto_points"),
             # 套用了什麼、以及套用之後的政策與點——畫面要拿它更新自己的狀態
             "applied": applied, "policy": pol, "points": pts,
             "assume_m": assume}
