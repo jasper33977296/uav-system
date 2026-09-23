@@ -181,6 +181,32 @@ CPU」，**那是錯的**，已更正。另外先前記的「27%」是啟動後 
 片段入庫、收錄後 on-demand 回復 ✅／即時頁小窗播出實景 ✅／最後一個讀者離開後**準時
 10 秒**收掉 rpicam-vid ✅。
 
+**第三個坑：B-frame 讓畫面「只出現一下」**（使用者 2026-09-23 回報）
+
+使用者的兩句描述：「相機一開服務 agent 端就會卡住」「畫面只會出現一下」。量了之後：
+
+* **代理沒有卡住。** 串流 40 秒期間 `msgs_from_fc` 每 10 秒穩定 +1011（與串流前一模一樣）、
+  `fc_heartbeat_age_s` 固定 0.9、`tx_errors`／`fc_reopens` 皆 0、`state.json` 照常更新。
+  代理在串流期間**沒有任何退化**——第一句描述指向的地方是錯的，但**第二句是對的**。
+* 真正的原因在地面站 MediaMTX 的日誌裡，每一次都是同一句：
+
+      [WebRTC] session closed: WebRTC doesn't support H264 streams with B-frames
+
+  連得上、讀得到 H264 軌道，然後**立刻被關掉**。使用者看到的就是「出現一下」。
+
+libx264 預設會產生 B-frame，而 WebRTC 不支援。**USB 那條路沒踩到**，是因為它的 ffmpeg
+指令帶了 `-tune zerolatency`（順便關掉 B-frame）——改寫 CSI 分支時沒有對應的設定，
+於是這個限制在拉流改版時被悄悄丟掉了。
+
+修法：`--libav-video-codec-opts "preset=ultrafast;tune=zerolatency;bf=0"`
+（codec-opts **會覆蓋內建預設**，所以 `preset` 要一起帶上）。
+實測 `has_b_frames` 由 1 變 0，即時頁連續播放 100 秒以上不再被切斷。
+
+**這條要記住的是**：`has_b_frames=0` 是這套系統的**硬性條件**，不是調效能。
+以後換任何編碼路徑（相機模組換掉、改用硬體編碼器、換容器）都要重驗這一項，
+而驗的方法是 `ffprobe -show_entries stream=has_b_frames`，不是「看得到畫面」——
+有 B-frame 時畫面**也會出現一下**，肉眼很容易誤判成成功。
+
 **還沒決定的**：模組的安裝方向。目前畫面是側躺的，裝上機時要用 `--rotation` 或實體轉正。
 
 **注意**：測試期間 Pi 無預警重開三次（見 072）。時間點與串流重疊，但 `get_throttled`
