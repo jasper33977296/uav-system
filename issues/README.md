@@ -98,6 +98,7 @@
 | [070](070-agent-start-time-sync.md) | **代理每次啟動前要先做時間同步**（09-22 使用者裁定）：Pi 重開後約 18 分鐘才對上時，代理那 8 分鐘的時間全慢 21 分鐘（057 的 notice 帶 `at_unsynced` 抓到）。擋多久要有上限——沒有橋比時間錯更糟。**09-22 實作並上機**：ExecStartPre 催 timesyncd，真機 1 秒對上（偏移 +12 分 13 秒）；剩開機時 5G 晚起來那一格 | medium | in-progress | `uav-agent` unit 前置＋`clock.py` |
 | [071](071-drone-param-config-page.md) | 無人機管理頁的「配置無人機參數」子頁（09-22 使用者提出，方向記錄）：058 抓到 `FS_GCS_ENABLE` 1→0，裁定先不改回、日後在這個子頁改 | medium | open | `app/drones/`＋指令服務 `set_params` |
 | [072](072-pi-unexpected-reboots.md) | **機上 Pi 無預警重開**：09-22 八分鐘內兩次、都沒有關機程序（像斷電），第一次同時地面站閘道也斷；原因未明。飛行中發生＝代理、失聯處置、緩衝全部歸零 | **high** | open | Pi 供電／5G 模組 |
+| [073](073-terrain-frame-action-deferred.md) | **「改成地形跟隨」暫緩**（09-23 裁定）：用過 0 次；本場域航線 53–67 m、起伏 1.1–1.5 m，而飛控地形格 100 m、無測距儀——它不改變任何事，卻讓畫面多一套高度語意。收按鈕、留端點與上傳閘門；**重啟條件**：起伏 > 10 m 的場地／裝測距儀／飛控沒圖磚的新場地 | low | deferred | `app/plans/page.tsx`＋`terrain-frame` 端點 |
 
 「✔實測確認」= 2026-08-03 首次實飛（SITL 起飛 → 進干擾區 → RTL）取得的實際資料佐證，
 不只是讀碼推論。詳見 [progress/log/2026-08-03.md](../progress/log/2026-08-03.md)。

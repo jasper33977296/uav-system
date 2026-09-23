@@ -507,22 +507,19 @@ export default function Plans() {
                 <a className="btn-plain btn-sm" href={`/plans/${m.id}/plan`}
                   title="到地圖上編輯這條路徑：航點、高度、速度、停留、圍欄（與點整列同一個去處）"
                   onClick={() => setMenuId(null)}>編輯路徑檔</a>
-                {/* 地形跟隨（issues/047 §1-A）：**存成新的一份**，不就地改寫。
-                    改寫之後高度的意思從「離起飛點」變成「離地面」——那是另一
-                    份航線，該讓人先看到縮圖再決定要不要飛 */}
-                <button className="btn-plain btn-sm"
-                  disabled={busy || fr.terrain}
-                  title={fr.terrain ? "這份已經是地形跟隨了"
-                    : "把每個航點的高度改寫成「離地面多少」（frame 10），"
-                      + "由飛控用自己的地形圖庫跟著地面飛。\n"
-                      + "起飛、降落、返航不改。查不到地形高程就整份不改。\n"
-                      + "會另存一份，原本這份不動。"}
-                  onClick={() => {
-                    setMenuId(null);
-                    call(`/api/plans/${m.id}/terrain-frame`, { method: "POST" });
-                  }}>
-                  改成地形跟隨
-                </button>
+                {/* **「改成地形跟隨」暫緩，按鈕收起來**（issues/073，使用者 2026-09-23 裁定）。
+                    端點 `POST /plans/{id}/terrain-frame`、`plan_check.to_terrain_frame`、
+                    上傳前的地形閘門**都留著**——留的是能力，收的是入口：按下去會產生一份
+                    沒有人會飛、卻會混在列表裡的航線。
+
+                    為什麼現階段沒必要（實測數字記在 issues/073）：這塊場地的航線 53–67 m、
+                    起伏 1.1–1.5 m，而飛控的地形格是 100 m（`TERRAIN_SPACING`），整條航線
+                    落在一兩格裡；機上沒有測距儀（`RNGFND1_TYPE=0`），離地高度是查表不是量的。
+                    重啟條件（三選一）：沿航線起伏 > 10 m 的場地／裝了測距儀／要去飛控沒有
+                    圖磚的新場地（那時要先決定我們供不供圖）。
+
+                    **匯入的 .plan 本來就可能是 frame 10**，所以列上的「地形跟隨」chip
+                    與上傳閘門照舊——收起來的只有「我方把它轉成地形跟隨」這個動作 */}
                 <button className="btn-danger btn-sm" disabled={busy}
                   onClick={() => { setMenuId(null); setToDelete(m); }}>刪除</button>
               </div>
