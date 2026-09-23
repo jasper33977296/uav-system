@@ -362,6 +362,53 @@ function insertVertex(pts: [number, number][], p: [number, number]) {
   return { points: [...pts.slice(0, best + 1), p, ...pts.slice(best + 1)], at: best + 1 };
 }
 
+/** 數字欄位（使用者 2026-09-23：拉條改成輸入）。
+ *
+ *  **打字期間不攔任何東西**：可以清空、可以只打一個 `0`、可以打到一半。
+ *  受控元件直接把 `Number(e.target.value)` 寫回狀態時，「0」會被當成 0 而
+ *  「0.」「-」「空白」會變成 NaN 或 0——使用者打不完一個數字。
+ *
+ *  **離開欄位（或按 Enter）才檢查**：超出範圍就夾住，並且**說出它被改成什麼**
+ *  ——默默夾值等於畫面上的數字不是你填的那個。空白＝不改，退回原值。 */
+function NumField({ label, tip, value, min, max, step = 0.1, unit, onCommit, hint }: {
+  label: React.ReactNode; tip?: string; value: number; min: number; max: number;
+  step?: number; unit?: string; onCommit: (v: number) => void; hint?: React.ReactNode;
+}) {
+  const [draft, setDraft] = useState(String(value));
+  const [note, setNote] = useState<string | null>(null);
+  const seen = useRef(value);
+  // 外面改了值（選了別的點、政策重算）就跟上；**打字期間不要被蓋掉**
+  useEffect(() => {
+    if (seen.current !== value) { seen.current = value; setDraft(String(value)); setNote(null); }
+  }, [value]);
+  const commit = () => {
+    const t = draft.trim();
+    if (t === "") { setDraft(String(value)); setNote(null); return; }   // 空白＝不改
+    const n = Number(t);
+    if (!Number.isFinite(n)) {
+      setDraft(String(value)); setNote("這不是一個數字，維持原值");
+      return;
+    }
+    const c = Math.min(max, Math.max(min, n));
+    setNote(c === n ? null : `${n} 超出 ${min}–${max}${unit ? " " + unit : ""}，已改成 ${c}`);
+    setDraft(String(c));
+    seen.current = c;
+    onCommit(c);
+  };
+  return (
+    <div className="rail-field">
+      <div className="rail-row"><span>{label}{tip && <InfoTip tip={tip} />}</span>
+        <input className="numin" type="number" step={step} value={draft}
+          onChange={(e) => { setDraft(e.target.value); setNote(null); }}
+          onBlur={commit}
+          onKeyDown={(e) => { if (e.key === "Enter") { e.preventDefault(); commit(); } }} />
+      </div>
+      {note && <div className="hint-line num-note">{note}</div>}
+      {hint}
+    </div>
+  );
+}
+
 export default function PlanPage() {
   // Next 15 的 page props `params` 是 Promise；client component 用 useParams 取
   const id = String(useParams()?.id ?? "");
@@ -871,24 +918,26 @@ export default function PlanPage() {
               舊版要人在放第一個點以前就填那兩個數字，順序是反的 */}
           {started && (
             <>
-              <div className="f"><span>高度基準</span>
+              {/* **高度基準只留兩個**（使用者 2026-09-23）：「固定海拔」日常規劃用不到，
+                  而且在這個場地填 3 會變成地面以下。匯入的 .plan 仍可能是絕對高度
+                  （frame 0），那是讀進來的事實，不受這裡影響 */}
+              <div className="f"><span>高度基準<InfoTip
+                tip={"你在右欄填的高度，是從哪裡量起：\n"
+                  + "**離地面**＝離那個點正下方的地面（用地面站的地形資料逐點換算，"
+                  + "兩點之間隔著土坡會自動補中繼點）。\n"
+                  + "**離起飛點**＝離你解鎖的那個位置（地面起伏不管）。\n"
+                  + "兩者算出來的都是規劃時就定死的數字，飛行中不會再變。"} /></span>
                 <div className="seg2">
-                  {(["agl", "home", "amsl"] as const).map((k) => (
+                  {(["agl", "home"] as const).map((k) => (
                     <button key={k} aria-pressed={pol.mode === k}
                       onClick={() => setPol((q) => ({ ...q, mode: k }))}>
                       {MODE_TEXT[k]}</button>
                   ))}
                 </div>
               </div>
-              <label className="f f-num">
-                <span>{MODE_TEXT[pol.mode]} m</span>
-                <input type="number" step="0.5" value={pol.height_m}
-                  onChange={(e) => setPol((q) =>
-                    ({ ...q, height_m: Number(e.target.value) }))} /></label>
-              <label className="f f-num"><span>速度 m/s</span>
-                <input type="number" step="0.1" value={pol.speed_ms}
-                  onChange={(e) => setPol((q) =>
-                    ({ ...q, speed_ms: Number(e.target.value) }))} /></label>
+              {/* **高度與速度的欄位拿掉了**（使用者 2026-09-23：「如果右邊欄位可以調整
+                  高度跟速度了，上面那一排應該就不用有」）。新放的點用預設值
+                  （3 m、1 m/s），要改就選那個點在右欄改——**一個入口，不是兩個** */}
               <div className="f"><span>放點類型</span>
                 <div className="seg2">
                   {[["home", "起飛點"], ["wp", "航點"], ["land", "降落點"]].map(([k, t]) => (
@@ -1070,6 +1119,30 @@ export default function PlanPage() {
               const holdOf = (w: StageWp) => isNew
                 ? (w.srcI != null ? pts[w.srcI]?.hold_s ?? 0 : 0)
                 : (ov[w.seq]?.hold ?? w.hold ?? 0);
+              // **列表與右欄要用同一個基準**（2026-09-23 實測：政策是「離地面 3 m」時，
+              // 右欄寫 3、列表寫 −1.2，同一個點兩個數字——列表寫死成「離起飛點」造成的）
+              const basis = isNew ? MODE_TEXT[pol.mode] : "離起飛點";
+              const altOf = (w: StageWp) => {
+                if (w.kind === "land") return null;            // 降落是降到地面
+                if (isNew) {
+                  if (w.kind === "takeoff") return pol.takeoff_alt_m ?? Math.max(1.5, pol.height_m);
+                  return w.srcI != null ? pts[w.srcI]?.h ?? pol.height_m : pol.height_m;
+                }
+                if (ov[w.seq]?.alt != null) return ov[w.seq].alt!;
+                return homeAmsl != null ? Math.round((w.amsl - homeAmsl) * 10) / 10 : null;
+              };
+              const setHold = (w: StageWp, v: number) => {
+                const hv = Math.max(0, Math.min(3600, Number.isFinite(v) ? v : 0));
+                if (isNew) {
+                  if (w.srcI == null) return;
+                  setPts((p) => p.map((q, j) =>
+                    j === w.srcI ? { ...q, hold_s: hv > 0 ? hv : undefined } : q));
+                } else {
+                  setOv((o) => ({ ...o, [w.seq]: { ...o[w.seq], hold: hv } }));
+                }
+              };
+              const canHoldRow = (w: StageWp) =>
+                w.kind === "wp" && !w.auto && (!isNew || w.srcI != null);
               return (
                 <div className="wp-list">
                   <div className="wp-list-acts">
@@ -1081,14 +1154,14 @@ export default function PlanPage() {
                   </div>
                   <table>
                     <thead><tr><th>#</th><th>類型</th>
-                      <th className="num" title="離起飛點（公尺）">高度</th>
-                      <th className="num" title="到點停留（秒）">停留</th>
+                      <th className="num" title={`高度（${basis}，公尺）——與右欄同一個基準`}>
+                        高度<span className="muted">（{basis}）</span></th>
+                      <th className="num" title="到點停留（秒）：可以直接在這裡改">停留</th>
                       {isNew && <th />}</tr></thead>
                     <tbody>
                       {rows.map(({ w, i }, n) => {
                         const h = holdOf(w);
-                        const alt = !isNew && ov[w.seq]?.alt != null ? ov[w.seq].alt!
-                          : homeAmsl != null ? Math.round((w.amsl - homeAmsl) * 10) / 10 : null;
+                        const alt = altOf(w);
                         return (
                           <tr key={`${w.seq}-${i}`} className={i === selWp ? "on" : undefined}
                             onClick={() => {
@@ -1097,10 +1170,22 @@ export default function PlanPage() {
                             }}>
                             <td className="num">{n + 1}</td>
                             <td>{kindText(w.kind)}</td>
-                            {/* 降落點的剖面高度是**借前一點的**（為了畫「平飛過去再下降」），
-                                照抄會說「降落點在 3.3 m」——它是降到地面 */}
+                            {/* 降落點是降到地面，不是它在剖面圖上借來的那個高度 */}
                             <td className="num">{w.kind === "land" ? "地面" : alt ?? "—"}</td>
-                            <td className="num">{h ? `${h} s` : ""}</td>
+                            {/* **停留可以直接在列上改**（使用者 2026-09-23：「沒有按鈕或其他
+                                操作方法讓我設定點位停留時間」——原本只有右欄最底下那一欄，
+                                要先選點、還要捲到看得見）。離開欄位才套用 */}
+                            <td className="num">
+                              {canHoldRow(w)
+                                ? <input className="numin numin-cell" type="number" min={0}
+                                    max={3600} step={1} defaultValue={h || ""} placeholder="0"
+                                    onClick={(e) => e.stopPropagation()}
+                                    onBlur={(e) => setHold(w, Number(e.target.value))}
+                                    onKeyDown={(e) => {
+                                      if (e.key === "Enter") (e.target as HTMLInputElement).blur();
+                                    }} />
+                                : h ? `${h} s` : ""}
+                            </td>
                             {isNew && (
                               <td>{w.kind === "wp" && w.srcI != null && (
                                 <button className="btn-plain btn-sm" title="刪除這個航點"
@@ -1171,7 +1256,16 @@ export default function PlanPage() {
                   // 起飛點的高度 → 政策的 takeoff_alt_m（**不是某個航點的 h**）
                   if (k === "alt" && w.kind === "takeoff")
                     setPol((q) => ({ ...q, takeoff_alt_m: v }));
-                  if (k === "speed") setPol((q) => ({ ...q, speed_ms: v }));
+                  // **速度改的是「這個點之後那一段」**（使用者 2026-09-23 拿掉
+                  // 工具列那一欄之後，這裡就是唯一的入口）。起飛點沒有自己的
+                  // 點物件，它那一段仍然是政策速度
+                  if (k === "speed") {
+                    if (mi >= 0) {
+                      setPts((p) => p.map((q, j) => j === mi ? { ...q, speed_ms: v } : q));
+                    } else {
+                      setPol((q) => ({ ...q, speed_ms: v }));
+                    }
+                  }
                   return;
                 }
                 setOv((o) => ({ ...o, [w.seq]: { ...o[w.seq], [k]: v } }));
@@ -1237,7 +1331,7 @@ export default function PlanPage() {
                           p.filter((_, j) => j !== mi)); setSelWp(-1); }}>
                         刪除這個點</button>
                       <div className="hint-line">3D 上拖曳航點只移動位置；
-                        高度用下面的滑桿或數字。</div>
+                        高度、速度、停留在下面填。</div>
                     </>
                   )}
                   {isEx && (
@@ -1253,44 +1347,32 @@ export default function PlanPage() {
                   {/* **起飛點的高度不是航點的高度。** 它是「飛機會先爬到
                       這裡才往第一個航點飛」，而且天生是離起飛點的
                       （使用者 2026-09-09）。標錯的話它會被讀成又一個航點高度 */}
-                  <label className="rail-field">
-                    <div className="rail-row"><span>{
-                      w.kind === "takeoff" ? <>起飛高度（離起飛點）<InfoTip
-                        tip={"飛機會**先爬到這個高度**才往第一個航點飛。"
-                          + "不填就跟著政策算——用比政策低的高度起飛，"
-                          + "第一段會在地面爬升處貼地；填了就是你定的，改政策不會動它。"} /></>
-                        : isNew
-                          ? `高度（${MODE_TEXT[pol.mode]}）${isEx ? "" : "・跟著政策"}`
-                          : "高度（離起飛點）"}</span>
-                      <input className="numin" type="number" step={0.1} value={alt}
-                        onChange={(e) => set("alt", Number(e.target.value))} /></div>
-                    <input type="range" min={0} max={30} step={0.1} value={alt}
-                      onChange={(e) => set("alt", Number(e.target.value))} />
-                  </label>
+                  <NumField
+                    label={w.kind === "takeoff" ? "起飛高度（離起飛點）"
+                      : `高度（${isNew ? MODE_TEXT[pol.mode] : "離起飛點"}）`}
+                    tip={w.kind === "takeoff"
+                      ? "飛機會**先爬到這個高度**才往第一個航點飛。"
+                        + "用比其他點低的高度起飛，第一段會在地面爬升處貼地。"
+                      : isNew && pol.mode === "agl"
+                        ? "離**這個點正下方的地面**多高（用地面站的地形資料逐點換算）。"
+                          + "改這一個點不會動到別的點。"
+                        : "離**起飛點**多高。改這一個點不會動到別的點。"}
+                    value={alt} min={-50} max={120} step={0.1} unit="m"
+                    onCommit={(v) => set("alt", v)} />
                   {out && (
-                    <label className="rail-field">
-                      <div className="rail-row"><span>下一段速度</span>
-                        <input className="numin" type="number" step={0.1}
-                          value={spdNow ?? 1}
-                          onChange={(e) => set("speed", Number(e.target.value))} /></div>
-                      <input type="range" min={0.2} max={8} step={0.1}
-                        value={spdNow ?? 1}
-                        onChange={(e) => set("speed", Number(e.target.value))} />
-                    </label>
+                    <NumField label="下一段速度" unit="m/s"
+                      tip={"從這個點飛往下一個點的速度（寫成航線裡的 DO_CHANGE_SPEED）。"
+                        + "**它只從被執行到的那一項之後才生效**，所以擺在這個點之前。"}
+                      value={spdNow ?? 1} min={0.2} max={15} step={0.1}
+                      onCommit={(v) => set("speed", v)} />
                   )}
                   {canHold && (
-                    <label className="rail-field">
-                      <div className="rail-row"><span>到點停留（秒）<InfoTip
-                        tip={"飛到這一點後**停在原地**這麼久，再飛往下一點（寫進航點的 param1）。"
-                          + "定點量測用：飛過去只有一兩筆樣本，停 30 秒就是約 30 筆。"
-                          + "停留期間的樣本在任務歷史裡會標成靜止量測。0＝不停。"} /></span>
-                        <input className="numin" type="number" min={0} max={3600} step={1}
-                          value={holdNow}
-                          onChange={(e) => set("hold", Number(e.target.value))} /></div>
-                      <input type="range" min={0} max={120} step={1}
-                        value={Math.min(holdNow, 120)}
-                        onChange={(e) => set("hold", Number(e.target.value))} />
-                    </label>
+                    <NumField label="到點停留（秒）" unit="秒"
+                      tip={"飛到這一點後**停在原地**這麼久，再飛往下一點（寫進航點的 param1）。"
+                        + "定點量測用：飛過去只有一兩筆樣本，停 30 秒就是約 30 筆。"
+                        + "停留期間的樣本在任務歷史裡會標成靜止量測。0＝不停。"}
+                      value={holdNow} min={0} max={3600} step={1}
+                      onCommit={(v) => set("hold", v)} />
                   )}
                   {out && (() => {
                     // **穿地與低空帶速是兩條不同的規則。** 只看 `low_fast`
@@ -1357,7 +1439,7 @@ export default function PlanPage() {
                   ? `已放 ${pts.length} 個點——${busy ? "試算中…" : "還沒存"}`
                   : Object.keys(ov).length
                     ? `已改 ${Object.keys(ov).length} 個航點——${busy ? "試算中…" : "只在畫面上，還沒存"}`
-                    : "拖滑桿試算；原本這份不會被動到"}
+                    : "改數字就會試算；原本這份不會被動到"}
               </div>
               {!isNew && Object.keys(ov).length > 0 && (
                 <>
@@ -1381,123 +1463,9 @@ export default function PlanPage() {
           </aside>
         </div>
       )}
-      {/* **系統替你決定了什麼。** 起飛項、frame、改速度項的位置、降落方式
-          都是系統補的——那些正是 QGC 要求操作員自己先知道的東西。
-          補了卻不說，等於換一個地方要求先備知識（redesign §3 動作 3） */}
-      {decisions.length > 0 && (
-        <details className="plan-decisions" open>
-          <summary>系統替你決定了 {decisions.length} 件事</summary>
-          <table className="plan-legs">
-            <thead><tr><th>項目</th><th>值</th><th>為什麼</th></tr></thead>
-            <tbody>
-              {decisions.map((d, i) => (
-                <tr key={i}>
-                  <td>{emph(d.what)}{d.seq != null && <span className="muted"> · seq {d.seq}</span>}</td>
-                  <td>{emph(d.value)}</td>
-                  <td className="why">{emph(d.why)}</td>
-                </tr>
-              ))}
-            </tbody>
-          </table>
-        </details>
-      )}
-
-      {prof && <Profile p={prof}
-        ceilM={fence.shape === "none" ? null : fence.alt_max_m} />}
-      {/* **畫面上只留事實，解釋住 ⓘ**（使用者定案 2026-09-07、2026-09-09）。
-          原本這裡是一整段講三種畫法與返航帶子的字——每一句都對，但那是
-          設計備忘錄，讀第一次有用，讀第五十次只是把圖往下擠 */}
-      <div className="hint-line">
-        地面線來源：SRTM　建築物來源：OSM
-        {/* **「沒檢查」要說得出口。** 表頭那顆晶片砍掉之後，讀不到
-            `RTL_ALT_M` 就完全沒有痕跡了——而圖上少一條線讀起來像沒事 */}
-        {prof?.rtl_alt_m == null && <>　<span className="tag-warn">返航沒有檢查</span></>}
-        <InfoTip tip={"地面線是 SRTM（水平約 30 m）——被格子抹平的表面，樹冠與屋頂混在裡面，但畫不出任何一棟樓。"
-          + "建物是另一份（OSM 輪廓），三種畫法對應三種出處："
-          + "實心灰塊標「樓層數推算」＝樓層數 × 3.5 m 猜的；"
-          + "虛線橘塊標「假設 N m」＝用右欄那個旋鈕，改它判定就會變；"
-          + "沒有頂的橘色柱子＝現在不假設，那棟樓沒有人量過。三種都不是實測，實測要等光達。"
-          + "輪廓只取外環，中庭當成實心（多禁不會少禁）。"
-          + "X 軸下面那條帶子是返航：從那個位置失聯，飛機會爬到返航高度直線飛回起飛點，紅色代表那條線會撞地——那不是你按的，是它自己會做的事。"} />
-      </div>
-
-      {/* **發現變成選擇，不是報告。** 抬多少、降到多少都由後端算——
-          寫在這裡就會有兩份規則，改了門檻按鈕做的事不會跟著變（§6）。
-          「繞開」還沒做（要 §7-6 的規劃器），沒做的就不要放一個按鈕 */}
-      {isNew && chk && (fixes.length > 0) && (
-        <div className="plan-fixes">
-          <span className="muted">要我改嗎：</span>
-          {fixes.map((f) => (
-            <button key={f.name + f.seq} className="btn-plain btn-sm"
-              disabled={busy} title={f.hint}
-              onClick={() => act(f.name, f.seq)}>{f.label}</button>
-          ))}
-          {applied?.note && (
-            <span className="hint-line">剛才：{emph(applied.note)}</span>
-          )}
-        </div>
-      )}
-
-      {(chk?.problems?.length || chk?.warnings?.length) ? (
-        <div className="plan-findings">
-          {/* 後端文案用 `**` 當強調記號，而畫面不解析 Markdown（ui-spec §0.3c）*/}
-          {chk.problems.map((p, i) => (
-            <div key={i} className="form-err">
-              ✕ {emph(p)}
-              {!isNew && (
-                <label className="ackbox">
-                  <input type="checkbox" checked={ack.has(p)}
-                    onChange={(e) => setAck((prev) => {
-                      const n = new Set(prev);
-                      if (e.target.checked) n.add(p); else n.delete(p);
-                      return n;
-                    })} />
-                  我知道，照飛
-                </label>
-              )}
-            </div>
-          ))}
-          {chk.warnings.map((w, i) => <div key={i} className="hint-line">⚠ {emph(w)}</div>)}
-        </div>
-      ) : chk ? <div className="hint-line">這份航線沒有發現。</div> : null}
-
-      {/* **上傳前要有人看過。** 沒有這一步，上傳那道門分不出「沒人看過」
-          與「看過、按了照飛」，所以它只能全擋或全不擋（§7）。
-
-          回饋要**就在按鈕旁邊**：這顆鈕改的狀態原本只顯示在畫面最上方那顆
-          晶片上，離按鈕八百像素——使用者按了看不到任何反應，回報「按鈕無效」。
-          按了之後真正該回答的是「現在還擋不擋」，不是「存好了」 */}
-      {!isNew && chk && (() => {
-        const left = (chk.problems ?? []).filter((p) => !ack.has(p)).length;
-        const fresh = sign?.signed && !sign.stale;
-        return (
-          <div className="plan-fixes">
-            <button className="btn-accent btn-sm" disabled={busy}
-              onClick={async () => {
-                setBusy(true);
-                try {
-                  const r = await fetch(`${API}/api/plans/${id}/sign`, {
-                    method: "POST", headers: { "Content-Type": "application/json" },
-                    body: JSON.stringify({
-                      acknowledged: [...ack], assume_m: assume,
-                      wp_spd: spdRef.current.wp, wp_radius: spdRef.current.rad,
-                      rtl_alt_m: spdRef.current.rtl }),
-                  });
-                  if (r.ok) setSign(await getJson<Sign>(`${API}/api/plans/${id}/sign`));
-                } finally { setBusy(false); }
-              }}>
-              {fresh ? "重新審查" : "人工審查"}
-            </button>
-            <span className={left && fresh ? "tag-warn" : "hint-line"}>
-              {!fresh
-                ? (sign?.stale ? "航點改過，之前那次不算數" : "還沒審查——上傳會擋")
-                : left
-                  ? `已審查 ${(sign?.checked_at ?? "").slice(11, 16)}・還有 ${left} 條沒勾「照飛」，上傳仍會擋`
-                  : `已審查 ${(sign?.checked_at ?? "").slice(11, 16)}・可以上傳`}
-            </span>
-          </div>
-        );
-      })()}
+      {/* **「系統替你決定了 N 件事」那張表拿掉了**（使用者 2026-09-23：「這解釋多餘了」）。
+          它列的是起飛項、改速度項的位置、進場點、降落方式——每次重算都原樣再說一次，
+          佔掉地圖下方一整塊。`decisions` 仍由後端回、仍存在狀態裡，要回復只要把表接回來 */}
 
       {blds.length > 0 && (
         <details className="plan-decisions" open>

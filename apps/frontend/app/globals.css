@@ -2011,3 +2011,10 @@ details.card summary { cursor: pointer; font-size: 14px; font-weight: 600; }
 .wp-list tbody tr:hover { background: var(--surface-2); }
 .wp-list tbody tr.on { box-shadow: inset 3px 0 0 var(--accent); background: var(--surface-2); }
 .plan-rail h2.rail-sub { font-size: 13px; margin-top: 4px; }
+
+/* 航點列表裡就地改停留（issues/062／066）；與右欄的數字欄位同一種視覺 */
+.numin-cell { width: 46px; text-align: right; font-size: 12px; padding: 1px 3px; }
+/* 欄位不換行：多了停留輸入框之後「航點」會被擠成兩行 */
+.wp-list th, .wp-list td { white-space: nowrap; }
+.wp-list th .muted { font-size: 11px; }
+.rail-field .num-note { color: var(--status-warn); }
