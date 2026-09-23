@@ -571,7 +571,7 @@ a:focus-visible, button:focus-visible, input:focus-visible, select:focus-visible
 .modal-head .name { font-size: 14px; font-weight: 700; }
 .modal-head .meta { font-size: 12px; color: var(--muted); }
 .modal-head .spacer { flex: 1; }
-.modal-body { background: #000; }
+.modal-body { background: #000; position: relative; }
 .modal-body video, .modal-body img {
   display: block; width: 100%; max-height: 70vh; object-fit: contain;
 }
@@ -606,6 +606,26 @@ a:focus-visible, button:focus-visible, input:focus-visible, select:focus-visible
   grid-template-columns: repeat(auto-fit, minmax(300px, 1fr));
   max-height: 78vh; overflow-y: auto;
 }
+
+/* 串流連線中的遮罩（issues/022）：第一個影格到達前是一片黑，而**黑畫面與
+   壞掉了長得一模一樣**。拉流設計下機上相機只在有人看時才開，所以每次開啟
+   都要等幾秒——把這件事說出來，不要讓使用者自己猜。 */
+.video-connecting {
+  position: absolute; inset: 0; z-index: 1; pointer-events: none;
+  display: flex; flex-direction: column; align-items: center;
+  justify-content: center; gap: 8px; background: #000;
+  color: var(--ink-2); font-size: 13px; text-align: center; padding: 0 16px;
+}
+.video-connecting .hint-line { font-size: 11px; color: var(--muted); }
+.video-connecting .spin {
+  width: 18px; height: 18px; border-radius: 50%;
+  border: 2px solid var(--hairline); border-top-color: var(--ink-2);
+  animation: video-spin 0.9s linear infinite;
+}
+@keyframes video-spin { to { transform: rotate(360deg); } }
+.video-pip .video-connecting { font-size: 12px; }
+.video-pip .video-connecting .hint-line { display: none; }  /* 小窗放不下 */
+
 .video-tile { position: relative; background: #000; border-radius: 6px; overflow: hidden; }
 .video-tile video, .video-tile img { display: block; width: 100%; aspect-ratio: 16/9; object-fit: contain; }
 .video-tile .video-empty { aspect-ratio: 16/9; padding: 0 16px; }

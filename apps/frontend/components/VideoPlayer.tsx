@@ -37,6 +37,12 @@ export default function VideoPlayer({ url, controls = true }: {
   const [mode, setMode] = useState<Mode>(
     /\/whep\b/i.test(url) ? "whep" : /mjpe?g/i.test(url) ? "mjpeg" : "video");
   const [err, setErr] = useState<string | null>(null);
+  // 第一個影格到達前是一片黑。**黑畫面與「壞掉了」長得一模一樣**，而這裡
+  // 的等待是正常的：機上相機只在有人看的時候才開（issues/022 的拉流設計），
+  // 所以每次開啟／展開小窗都要等「地面站去拉 → 機上開相機 → libcamera
+  // 初始化 → 第一個關鍵影格」，實測約 8 秒。不說的話使用者只會看到壞掉。
+  const [live, setLive] = useState(false);
+  const [waited, setWaited] = useState(0);
   const videoRef = useRef<HTMLVideoElement>(null);
 
   useEffect(() => {
@@ -49,6 +55,16 @@ export default function VideoPlayer({ url, controls = true }: {
     return () => pc.close();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [url]);
+
+  // 等待秒數：**只用來換句話說，不用來宣告失敗**。等久了不等於連不上
+  // （機上可能正在開相機），所以超時只是把「已經等了多久」講出來。
+  useEffect(() => {
+    if (live || mode === "error" || mode === "mjpeg") return;
+    const t = setInterval(() => setWaited((n) => n + 1), 1000);
+    return () => clearInterval(t);
+  }, [live, mode]);
+
+  useEffect(() => { setLive(false); setWaited(0); }, [url]);
 
   if (mode === "error") {
     return (
@@ -66,11 +82,24 @@ export default function VideoPlayer({ url, controls = true }: {
     );
   }
   return (
-    <video
-      ref={videoRef}
-      src={mode === "video" ? url : undefined}
-      autoPlay muted playsInline controls={controls}
-      onError={() => { setMode("error"); setErr("video 元素無法播放此來源"); }}
-    />
+    <>
+      <video
+        ref={videoRef}
+        src={mode === "video" ? url : undefined}
+        autoPlay muted playsInline controls={controls}
+        onLoadedData={() => setLive(true)}
+        onPlaying={() => setLive(true)}
+        onError={() => { setMode("error"); setErr("video 元素無法播放此來源"); }}
+      />
+      {!live && (
+        <div className="video-connecting">
+          <span className="spin" />
+          <p>連線中…{waited >= 5 && `（已等 ${waited} 秒）`}</p>
+          {waited >= 12 && (
+            <p className="hint-line">機上相機只在有人看的時候才開，開機要幾秒</p>
+          )}
+        </div>
+      )}
+    </>
   );
 }
