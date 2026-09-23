@@ -1982,7 +1982,7 @@ async def ext_drones(request: Request):
     `/api/admission/{sysid}` 逐台問可不可以指揮），而那兩支都是**內部端點**
     ——它們回的模式編號、板號、能力四態是給我方 UI 與排查用的，形狀也會
     隨內部演進而變。這一支只回外部真正要用的四件事，並且把兩個問題合成一次
-    往返（見 `doc/external-api-v2.html#ext-drones`）。
+    往返（見 `doc/external-api-v3.html#ext-drones`）。
 
     `controllable` 為 true 才可以下指令；為 false 時 `reason` 一定說得出
     是什麼擋住了（沿用 `admission.why_blocked`，與指令被擋時的說法同一份）。

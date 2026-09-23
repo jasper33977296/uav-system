@@ -1,4 +1,4 @@
-<title>無人機管理系統 API v2</title>
+<title>無人機管理系統 API v3</title>
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=IBM+Plex+Sans:wght@400;500;600&family=IBM+Plex+Mono:wght@400;500&family=Noto+Sans+TC:wght@400;500;700&display=swap">
 <style>
@@ -216,7 +216,7 @@ footer.doc-foot{border-top:1px solid var(--line); padding-top:16px; font-size:13
 <header class="masthead">
   <div class="masthead-in">
     <div class="titleblock">
-      <h1>無人機管理系統 API <span class="ver">v2 · 2026-09-16</span></h1>
+      <h1>無人機管理系統 API <span class="ver">v3 · 2026-09-23</span></h1>
       <div class="legend">
         <span><span class="st live">已上線</span>現在就能呼叫</span>
       </div>
@@ -279,24 +279,45 @@ footer.doc-foot{border-top:1px solid var(--line); padding-top:16px; font-size:13
 <section id="s-changes">
   <h2><span class="n">00</span>這一版改了什麼</h2>
   <hr class="rule">
-  <p>v1（2026-09-07）之後改了幾件事。<strong>「已上線」的那兩列是 v1 文件已經跟實作對不上的地方</strong>，照 v1 寫的程式現在就會失敗。</p>
+  <p>v2（2026-09-16）之後改了三件事，<strong>三件都是契約變更</strong>——照 v2 寫的程式有兩處會遇到新的行為。</p>
   <div class="tablewrap">
     <table>
-      <thead><tr><th>項目</th><th>v1</th><th>v2</th><th>狀態</th></tr></thead>
+      <thead><tr><th>項目</th><th>v2</th><th>v3</th><th>狀態</th></tr></thead>
       <tbody>
-        <tr><td>上傳路徑的欄位</td><td class="old"><code>mission_id</code></td><td><code>plan_id</code>——09-08 改名後服務端只收這個名字</td><td><span class="st live">已上線</span></td></tr>
-        <tr><td><code>/api/v1/start</code> 的回應</td><td class="old">範例寫 <code>mission_id</code></td><td>實際回 <code>plan_id</code>、<code>name</code>、<code>steps</code>（<a href="#s-start">§6</a>）</td><td><span class="st live">已上線</span></td></tr>
-        <tr><td>名詞</td><td class="old">「任務」同時指航線</td><td>分成<strong>路徑</strong>、<strong>任務</strong>、<strong>架次</strong>三個（<a href="#s-terms">§1</a>）</td><td>—</td></tr>
-        <tr><td>起飛參數</td><td class="old"><code>mission</code>（其實是路徑）</td><td><code>plan_id</code>（路徑）＋ <code>mission_id</code>（任務 UUID）；<code>mission</code> 暫留為別名</td><td><span class="st live">已上線</span></td></tr>
-        <tr><td>即時資料</td><td class="old">輪詢 <code>/api/ext/live</code></td><td>WebSocket 串流，從起飛開始每 0.5 秒推送（<a href="#s-stream">§8</a>）。快照的欄位全部併進串流的 <code>state</code>（<a href="#s-snapshot-map">對照表</a>），<strong>快照 <code>/api/ext/live</code> 在實飛驗收後移除</strong>——取代它的不是「不給輪詢」，是<strong>綁任務</strong>的輪詢（下一列）</td><td><span class="st live">已上線</span></td></tr>
-        <tr><td>路徑版本</td><td class="old">只有串流帶 <code>v1</code></td><td><strong>每一支對外端點都帶</strong>：<code>/api/v1/…</code>、<code>/ws/v1/…</code>。舊的無版本路徑保留為別名（<a href="#s-terms">§1</a>）</td><td><span class="st live">已上線</span></td></tr>
-        <tr><td>即時資料的傳法</td><td class="old">只有 WebSocket 串流</td><td><strong>串流與輪詢都給</strong>，訊息逐字相同：<code>GET /api/v1/ext/missions/{id}/live</code>（<a href="#s-stream">§8</a>）。長連線不方便就用輪詢</td><td><span class="st live">已上線</span></td></tr>
-        <tr><td>任務歷史</td><td class="old">沒有</td><td>兩支唯讀端點：歷史任務清單與<strong>一個任務的完整訊號</strong>，每一筆帶沿航線里程 <code>along_m</code> 與偏離 <code>offset_m</code>——兩趟才有共同的 X 軸（<a href="#s-history">§14</a>）</td><td><span class="st live">已上線</span></td></tr>
-        <tr><td>任務歷史的誠實度</td><td class="old">—</td><td>09-21 五項修正：清單帶 <code>state</code>（不必從時間戳推）與 <code>total</code>／<code>has_more</code>；<code>sample_interval_s</code> 改成<strong>每趟量出來</strong>；新增 <code>sample_gaps</code>（與遙測失明的 <code>gaps</code> 分開）；<code>max_offset_m</code> 不再吃 query（<a href="#s-history">§14</a>）</td><td><span class="st live">已上線</span></td></tr>
-        <tr><td>錯誤回應</td><td class="old">只保證 <code>detail.msg</code></td><td><code>/api/v1/start</code> 與群飛執行一律 <code>code</code>＋<code>msg</code>，能自己排除的再附 <code>how_to</code>（<a href="#s-errors">§15</a>）</td><td><span class="st live">已上線</span></td></tr>
+        <tr>
+          <td>重複執行同一條路徑</td>
+          <td class="old">帶同一個 <code>mission_id</code> 就掛進那個任務</td>
+          <td><strong>每一次執行都是新的任務</strong>。<code>mission_id</code> 用過就 <span class="chip bad">409</span> <code>mission_id_used</code>（進行中、已結束都一樣）；沒帶 <code>mission_id</code> 而這台機還在別的任務裡，會<strong>建立新任務並把舊的結束掉</strong>，被結束的列在 <code>replaced</code> 裡（<a href="#s-one-run">§6.1</a>）</td>
+          <td><span class="st live">已上線</span></td>
+        </tr>
+        <tr>
+          <td>任務與路徑的關係</td>
+          <td class="old">沒有明說</td>
+          <td><strong>一個任務綁定一條路徑</strong>。同一條路徑飛三趟是<strong>三件事</strong>，不是一件事飛三次——這正是「比較兩趟訊號」要成立的前提（<a href="#s-one-run">§6.1</a>）</td>
+          <td><span class="st live">已上線</span></td>
+        </tr>
+        <tr>
+          <td>即時畫面</td>
+          <td class="old">v2 §17 明寫<strong>不送影像</strong></td>
+          <td><strong>改成給了</strong>：走 <strong>RTSP</strong>，由地面站轉發，網址在 <code>GET /api/v1/ext/drones</code> 每台機的 <code>video</code> 欄位（<a href="#ext-drones">§3</a>）</td>
+          <td><span class="st live">已上線</span></td>
+        </tr>
+        <tr>
+          <td>任務歷史：停留</td>
+          <td class="old">沒有</td>
+          <td>每一趟多一組 <code>holds</code>：規劃的停留點<strong>實際站了多久是量出來的</strong>，不是照抄規劃值；樣本多一個 <code>hold_seq</code>，分得出「在停留點量的」與「飛行中量的」（<a href="#s-history">§14</a>）</td>
+          <td><span class="st live">已上線</span></td>
+        </tr>
+        <tr>
+          <td><code>/api/ext/live</code></td>
+          <td class="old">標為「實飛驗收後移除」</td>
+          <td><strong>仍在，仍然標為要移除</strong>。新的程式請用綁任務的 <a href="#s-stream">§8</a>——它與串流是同一份訊息</td>
+          <td><span class="st plan">待移除</span></td>
+        </tr>
       </tbody>
     </table>
   </div>
+  <p class="prose"><strong>照 v2 寫的程式要檢查的兩處</strong>：① 有沒有重用 <code>mission_id</code>（以前會被接受，現在 409）；② 有沒有假設「同一台機連續兩次起飛會在同一個任務底下」（現在是兩個任務，第二次的回應會帶 <code>replaced</code>）。其餘端點的形狀沒有變。</p>
 </section>
 
 <!-- ══════════ 1 ══════════ -->
@@ -370,10 +391,35 @@ footer.doc-foot{border-top:1px solid var(--line); padding-top:16px; font-size:13
     "online": true,                 // 心跳還在
     "age_s": 0.1,                   // 距最後一則心跳的秒數
     "armed": false,
-    "controllable": true            // false 時會多一個 reason，說明是什麼擋住
+    "controllable": true,           // false 時會多一個 reason，說明是什麼擋住
+    "video": {                      // 即時畫面在哪裡拉（2026-09-23 新增）
+      "state": "ready",             // ready / no_camera / offline
+      "rtsp": "rtsp://10.141.2.21:8554/uav-1d2f19b1-…",
+      "note": "來源已設定且這台有連線；機上相機是否正在運作要拉了才知道"
+    }
   }]
 }</pre>
     </div>
+
+    <p class="lbl">video：即時畫面</p>
+    <p class="ep-sum">畫面由<strong>地面站轉發</strong>，走 <strong>RTSP</strong>。
+      <code>rtsp</code> 的主機名取自你這次請求的 <code>Host</code>——<strong>你連得到這支端點，就連得到那條串流</strong>。</p>
+    <div class="tablewrap"><table>
+      <thead><tr><th>state</th><th>意思</th><th>有 rtsp 嗎</th></tr></thead>
+      <tbody>
+        <tr><td><code>ready</code></td><td>來源已設定，而且這台現在有連線</td><td>✅</td></tr>
+        <tr><td><code>no_camera</code></td><td>這台沒有設定相機來源</td><td>❌ 改給 <code>reason</code></td></tr>
+        <tr><td><code>offline</code></td><td>有相機，但這台現在沒連線</td><td>❌ 改給 <code>reason</code></td></tr>
+      </tbody>
+    </table></div>
+    <p class="ep-sum"><strong><code>ready</code> 不保證此刻拉得到。</strong>地面站知道的是「來源設好了」與
+      「MAVLink 還在通」；機上的相機服務有沒有在跑，在真的去拉之前無從得知——串流是
+      <strong>on-demand</strong> 的，沒人看的時候機上根本不開相機。所以請把「拉不到」當成正常的可能結果。</p>
+    <p class="ep-sum"><strong>只要有人在看就會一直送。</strong>你和我方前端讀的是<strong>同一條來源</strong>，
+      所以機上只會被拉一次、兩邊共用同一條上行——<strong>你接進來不會讓上行變兩倍</strong>。
+      最後一個讀者離開之後機上才停止送畫面。</p>
+    <p class="ep-sum">影像與 5G 量測共用同一條上行，所以<strong>拉著不放會影響那段時間量到的鏈路品質</strong>。
+      這件事<strong>不擋、也不記錄</strong>（2026-09-23 裁定）——寫在這裡是讓你知道代價，不是限制你。</p>
   </article>
 </section>
 
@@ -493,14 +539,45 @@ footer.doc-foot{border-top:1px solid var(--line); padding-top:16px; font-size:13
       <thead><tr><th>HTTP</th><th><code>code</code></th><th>什麼時候</th><th><code>msg</code> 說明什麼</th></tr></thead>
       <tbody>
         <tr><td><span class="chip bad">422</span></td><td><code>mission_id_invalid</code></td><td><code>mission_id</code> 不是 UUID</td><td>收到的值、要的格式（例如 <code>crypto.randomUUID()</code> 產生的）</td></tr>
-        <tr><td><span class="chip bad">409</span></td><td><code>mission_ended</code></td><td>這個任務已經結束</td><td>任務名稱與結束時間；要再飛就產生新的 UUID</td></tr>
-        <tr><td><span class="chip bad">409</span></td><td><code>mission_busy</code></td><td>這台機已經在<strong>另一個</strong>進行中的任務裡</td><td>那個任務的名稱與編號</td></tr>
+        <tr><td><span class="chip bad">409</span></td><td><code>mission_id_used</code></td><td><strong>這個 <code>mission_id</code> 已經用過</strong>——不管那個任務是進行中還是已結束（v3 起兩種情況同一個代碼）</td><td>說明它是進行中還是已結束；要再飛就產生新的 UUID</td></tr>
+        <tr><td><span class="chip bad">409</span></td><td><code>mission_busy</code></td><td><strong>只剩競態</strong>：兩個請求同時替同一台機建任務</td><td>那個任務的名稱與編號；重試即可</td></tr>
         <tr><td><span class="chip bad">409</span></td><td><code>mission_name_taken</code></td><td><code>mission_name</code> 與既有任務同名（不分大小寫）</td><td>撞名的是哪一個任務</td></tr>
         <tr><td><span class="chip bad">422</span></td><td><code>plan_required</code></td><td><code>plan_id</code> 與 <code>plan</code> 都沒給或都給了</td><td>兩者的差別</td></tr>
         <tr><td><span class="chip bad">409</span></td><td><code>drone_unknown</code></td><td>這個 sysid 在地面站還沒有機體記錄</td><td>等收到心跳再試</td></tr>
       </tbody>
     </table></div>
-    <p class="prose"><code>mission_id</code> 對到一個<strong>進行中</strong>的任務時，這次起飛就掛到那個任務底下（例如群飛裡補飛一台）。不帶 <code>mission_id</code> 而這台機已經在某個進行中的任務裡，也直接掛進那個任務。</p>
+    <p class="prose"><strong>v3 起：每一次執行都是新的任務</strong>，不再掛進既有的任務——見下面的 §6.1。</p>
+  </article>
+
+  <article class="ep" id="s-one-run">
+    <div class="ep-head"><span class="verb get" style="visibility:hidden">·</span><code class="url mono">§6.1　一次執行＝一個任務</code><span class="st live">已上線</span></div>
+    <p class="ep-sum">2026-09-23 的契約變更。<strong>同一條路徑飛三趟是三件事，不是一件事飛三次。</strong></p>
+    <p class="prose">系統裡<strong>路徑（plan）／任務（mission）／架次（session）</strong>是三個不同的東西（<a href="#s-terms">§1</a>）。本系統的主要用途是「同一條路徑飛多趟、比較訊號」——三趟若共用一個任務編號，資料就疊在同一個任務底下，<a href="#s-history">§14</a> 的比較功能拿不出「這趟 vs 那趟」。所以：</p>
+    <div class="tablewrap"><table>
+      <thead><tr><th>你送的</th><th>v2</th><th>v3</th></tr></thead>
+      <tbody>
+        <tr><td><code>mission_id</code> 對到<strong>進行中</strong>的任務</td><td class="old">掛進去</td><td><span class="chip bad">409</span> <code>mission_id_used</code></td></tr>
+        <tr><td><code>mission_id</code> 對到<strong>已結束</strong>的任務</td><td class="old"><span class="chip bad">409</span> <code>mission_ended</code></td><td><span class="chip bad">409</span> <code>mission_id_used</code>（同一個代碼）</td></tr>
+        <tr><td><strong>沒帶</strong> <code>mission_id</code>，而這台機還在別的任務裡</td><td class="old">沿用那個任務</td><td><strong>建立新任務</strong>，把舊的結束掉，並在回應的 <code>replaced</code> 裡說出來</td></tr>
+        <tr><td><code>mission_id</code> 是<strong>沒用過</strong>的 UUID</td><td>採用</td><td>採用（讓你對得上自己的請求）</td></tr>
+        <tr><td><strong>沒帶</strong> <code>mission_id</code>，這台機也不在任何任務裡</td><td>自動建立</td><td>自動建立</td></tr>
+      </tbody>
+    </table></div>
+    <p class="prose"><strong><code>replaced</code> 一定會說出來。</strong>資料庫的不變式是「一台機一次只能在一個任務」，所以新任務成立就代表舊的被結束了——<strong>默默結束別人的任務是不行的</strong>：</p>
+    <div class="panel">
+      <div class="panel-bar"><span>200</span><button class="copy" type="button">複製</button></div>
+<pre class="json">{
+  "mission_id": "8f0c…",              // 這一趟的任務（你給的，或自動產生的）
+  "name": "0914-square-test-v5 09-23 15:41",
+  "replaced": [                       // 為了建立這個任務而被結束掉的任務
+    {"id": "2b71…", "name": "0914-square-test-v5 09-23 15:12", "drone": "pi5-…"}
+  ],
+  "plan_id": "e961b301-…",
+  "steps": [ … ]
+}</pre>
+    </div>
+    <p class="prose"><strong>任務名稱不必你想。</strong>不給 <code>mission_name</code> 時自動產生「<code>&lt;路徑名&gt; MM-DD HH:MM</code>」（地面站時鐘）；同一分鐘撞名加秒數，再撞加 <code>#2</code>。</p>
+    <p class="prose"><strong>一個任務綁定一條路徑。</strong>設計上一個任務可以含多條路徑，但目前<strong>不管從我們的畫面還是從外部控制，都是一個任務一條路徑</strong>。任務一旦綁了路徑就不會被改掉——不讓第二趟不同路徑的架次悄悄改掉任務的路徑。</p>
   </article>
 
   <article class="ep">
@@ -1008,9 +1085,13 @@ footer.doc-foot{border-top:1px solid var(--line); padding-top:16px; font-size:13
       "route": { … },                  // 與串流的 route 同格式（§9）
       "gaps": [{"from": "…", "to": "…", "seconds": 23.4}],        // 遙測失明
       "sample_gaps": [{"from": "…", "to": "…", "seconds": 22.0}], // 沒有訊號樣本
+      "holds": [{"seq": 4, "planned_s": 20, "observed": true,     // 停留（v3 新增）
+                 "started_at": "…", "ended_at": "…", "seconds": 19.2,
+                 "samples": 20, "note": null}],
       "samples": [{
         "time": "2026-09-14T04:01:37.120Z",
         "lat": 24.773540, "lon": 121.045880, "alt_rel": 12.3,
+        "phase": "route", "hold_seq": null,   // route／transit；停留點的樣本帶 seq
         "along_m": 41.2, "offset_m": 3.7,
         "rsrp": -100.0, "rsrq": -11.0, "sinr": 18.0, "cqi": null,
         "pci": 133, "cell_id": 2179073, "band": "n79", "nr_mode": "SA",
@@ -1032,6 +1113,8 @@ footer.doc-foot{border-top:1px solid var(--line); padding-top:16px; font-size:13
     <li><strong><code>along_m</code> 只在同一份路徑之間可比。</strong>每一趟都帶 <code>plan_id</code>，比較前先確認相同。</li>
     <li><strong><code>sample_interval_s</code> 是量出來的，不是設定值</strong>：那一趟相鄰樣本時間差的中位數。取樣率由機上的旗標決定，地面站沒有管道知道它設成多少（2026-09-07 實測過設定 1.0 s、實際 2.61 s），所以只回報量到的。不足兩筆時是 <code>null</code>。</li>
     <li><strong><code>gaps</code> 與 <code>sample_gaps</code> 是兩件事。</strong><code>gaps</code> ＝<strong>遙測失明</strong>（那段地面站看不到飛機，超過 10 秒沒遙測）；<code>sample_gaps</code> ＝<strong>那段沒有訊號樣本</strong>（相鄰樣本差超過取樣間隔的 <code>sample_gap_factor</code> 倍）。真機上樣本走機上代理、每 10 秒一批而且<strong>允許補傳</strong>，與遙測是兩條路——遙測斷了樣本可能是齊的，樣本斷了遙測可能照常。<strong>畫訊號圖要留白的是 <code>sample_gaps</code></strong>，不要把兩端連成一條線；<code>gaps</code> 另外標成「失聯」。算不出取樣間隔時 <code>sample_gaps</code> 是 <code>null</code> 而不是 <code>[]</code>——空陣列的意思是「沒有缺口」，而那時我們其實是「不知道」。</li>
+    <li><strong><code>holds</code>：停留點站了多久是<strong>量出來的</strong>，不是照抄規劃值</strong>（v3 新增）。一條航線上規劃了停留的點各一筆：<code>planned_s</code> 是規劃值，<code>seconds</code> 是<strong>從地速實際量到的靜止時長</strong>，<code>observed</code> 說這一筆到底有沒有量到。<code>observed: false</code> 時 <code>seconds</code> 是 <code>null</code> 而不是 0——<strong>「沒量到」與「站了 0 秒」是兩件事</strong>，理由寫在 <code>note</code>。怎麼量的寫在 <code>method.hold_stop_ms</code>（地速門檻）與 <code>method.hold_near_s</code>（抵達事件附近的時間窗），與 <code>max_offset_m</code> 一樣<strong>不給外部調</strong>。</li>
+    <li><strong><code>phase</code> 與 <code>hold_seq</code></strong>（v3 新增）：<code>phase</code> 是 <code>route</code>（在航線上）或 <code>transit</code>（飛往任務起始點那一段）——<strong>里程只對 <code>route</code> 有意義</strong>。<code>hold_seq</code> 有值代表這一筆是在那個停留點站著時量的，<strong>分得出「站著量的」與「飛行中量的」</strong>：比較兩趟訊號時，停留點的樣本是同一個地點的重複量測，飛行中的不是。</li>
     <li><strong>任務是哪一態看 <code>state</code></strong>：<code>planned</code>（建了還沒飛）／<code>flying</code>（進行中）／<code>ended</code>。<strong>不要自己從時間戳推</strong>——<code>started_at</code> 在還沒飛時是 <code>null</code>，而舊的「<code>ended_at</code> 是 null ＝進行中」會把從沒飛過的任務判成正在飛。</li>
   </ul>
 
@@ -1166,11 +1249,12 @@ poll();</pre>
     <li><strong>不送圍欄。</strong>控制端只拿預計航線與實際軌跡。</li>
     <li><strong>歷史不做伺服器端的比較結論</strong>（勝負、改善多少）：地面站給樣本與共同的 X 軸，怎麼比是控制端的事。也不做 CSV、不降採樣。</li>
     <li><strong>不再提供全機隊的輪詢快照</strong> <code>/api/ext/live</code>（v1 §5 的那一支，實飛驗收後移除）：要輪詢即時資料請用<strong>綁任務</strong>的 <code>/api/v1/ext/missions/{id}/live</code>（<a href="#s-stream">§8</a>），它與串流是同一份訊息。<strong>不是不給輪詢，是輪詢也要綁任務</strong>。</li>
-    <li>不送影像、不送原始 MAVLink、不送 IMU 或驅動診斷這類內部欄位。</li>
+    <li><strong>影像改成給了</strong>（2026-09-23）：走 <strong>RTSP</strong>，網址在 <code>GET :38001/api/v1/ext/drones</code> 每台機的 <code>video</code> 欄位裡（<a href="#ext-drones">§3</a>）。<strong>不在即時串流的訊息裡</strong>——那份訊息是 WS 與輪詢共用、逐字相同的，而網址的主機名要看呼叫端自己連進來的位址。</li>
+    <li>仍然不送原始 MAVLink、不送 IMU 或驅動診斷這類內部欄位。</li>
     <li>逐則訊息只補送 60 秒；更早的完整資料走 <code>GET :38000/api/v1/sessions/{session_id}/export</code>。</li>
   </ul>
   <footer class="doc-foot">
-    v2 · 2026-09-16。舊版保留為 <code>external-api-v1.html</code>（2026-09-07）。
+    v3 · 2026-09-23。舊版保留為 <code>external-api-v2.html</code>（2026-09-16）與 <code>external-api-v1.html</code>（2026-09-07）——<strong>舊版不再更動</strong>，有變更一律開新版。
   </footer>
 </section>
 
