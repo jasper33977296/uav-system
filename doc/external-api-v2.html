@@ -370,10 +370,35 @@ footer.doc-foot{border-top:1px solid var(--line); padding-top:16px; font-size:13
     "online": true,                 // 心跳還在
     "age_s": 0.1,                   // 距最後一則心跳的秒數
     "armed": false,
-    "controllable": true            // false 時會多一個 reason，說明是什麼擋住
+    "controllable": true,           // false 時會多一個 reason，說明是什麼擋住
+    "video": {                      // 即時畫面在哪裡拉（2026-09-23 新增）
+      "state": "ready",             // ready / no_camera / offline
+      "rtsp": "rtsp://10.141.2.21:8554/uav-1d2f19b1-…",
+      "note": "來源已設定且這台有連線；機上相機是否正在運作要拉了才知道"
+    }
   }]
 }</pre>
     </div>
+
+    <p class="lbl">video：即時畫面</p>
+    <p class="ep-sum">畫面由<strong>地面站轉發</strong>，走 <strong>RTSP</strong>。
+      <code>rtsp</code> 的主機名取自你這次請求的 <code>Host</code>——<strong>你連得到這支端點，就連得到那條串流</strong>。</p>
+    <div class="tablewrap"><table>
+      <thead><tr><th>state</th><th>意思</th><th>有 rtsp 嗎</th></tr></thead>
+      <tbody>
+        <tr><td><code>ready</code></td><td>來源已設定，而且這台現在有連線</td><td>✅</td></tr>
+        <tr><td><code>no_camera</code></td><td>這台沒有設定相機來源</td><td>❌ 改給 <code>reason</code></td></tr>
+        <tr><td><code>offline</code></td><td>有相機，但這台現在沒連線</td><td>❌ 改給 <code>reason</code></td></tr>
+      </tbody>
+    </table></div>
+    <p class="ep-sum"><strong><code>ready</code> 不保證此刻拉得到。</strong>地面站知道的是「來源設好了」與
+      「MAVLink 還在通」；機上的相機服務有沒有在跑，在真的去拉之前無從得知——串流是
+      <strong>on-demand</strong> 的，沒人看的時候機上根本不開相機。所以請把「拉不到」當成正常的可能結果。</p>
+    <p class="ep-sum"><strong>只要有人在看就會一直送。</strong>你和我方前端讀的是<strong>同一條來源</strong>，
+      所以機上只會被拉一次、兩邊共用同一條上行——<strong>你接進來不會讓上行變兩倍</strong>。
+      最後一個讀者離開之後機上才停止送畫面。</p>
+    <p class="ep-sum">影像與 5G 量測共用同一條上行，所以<strong>拉著不放會影響那段時間量到的鏈路品質</strong>。
+      這件事<strong>不擋、也不記錄</strong>（2026-09-23 裁定）——寫在這裡是讓你知道代價，不是限制你。</p>
   </article>
 </section>
 
@@ -1166,7 +1191,8 @@ poll();</pre>
     <li><strong>不送圍欄。</strong>控制端只拿預計航線與實際軌跡。</li>
     <li><strong>歷史不做伺服器端的比較結論</strong>（勝負、改善多少）：地面站給樣本與共同的 X 軸，怎麼比是控制端的事。也不做 CSV、不降採樣。</li>
     <li><strong>不再提供全機隊的輪詢快照</strong> <code>/api/ext/live</code>（v1 §5 的那一支，實飛驗收後移除）：要輪詢即時資料請用<strong>綁任務</strong>的 <code>/api/v1/ext/missions/{id}/live</code>（<a href="#s-stream">§8</a>），它與串流是同一份訊息。<strong>不是不給輪詢，是輪詢也要綁任務</strong>。</li>
-    <li>不送影像、不送原始 MAVLink、不送 IMU 或驅動診斷這類內部欄位。</li>
+    <li><strong>影像改成給了</strong>（2026-09-23）：走 <strong>RTSP</strong>，網址在 <code>GET :38001/api/v1/ext/drones</code> 每台機的 <code>video</code> 欄位裡（<a href="#ext-drones">§4</a>）。<strong>不在即時串流的訊息裡</strong>——那份訊息是 WS 與輪詢共用、逐字相同的，而網址的主機名要看呼叫端自己連進來的位址。</li>
+    <li>仍然不送原始 MAVLink、不送 IMU 或驅動診斷這類內部欄位。</li>
     <li>逐則訊息只補送 60 秒；更早的完整資料走 <code>GET :38000/api/v1/sessions/{session_id}/export</code>。</li>
   </ul>
   <footer class="doc-foot">

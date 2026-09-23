@@ -24,6 +24,8 @@ import urllib.error
 import urllib.request
 from datetime import datetime, timezone
 
+import video_stream                  # libs/ 的共用實作（PYTHONPATH=/srv/libs）
+
 from . import db
 from .config import settings
 
@@ -36,17 +38,15 @@ _stream_ok: dict[int, bool] = {}   # sysid → 上一輪來源是否正常（事
 SYNC_S = 30.0                        # 片段入庫週期（落地後才要看，不必即時）
 
 
-def path_for(drone_id: str) -> str:
-    """MediaMTX path 名稱 ↔ **機體身分**（`drones.id`），不是 sysid。
-
-    **sysid 會被重新指派**（issues/040），而錄影是綁在 path 名稱上的。
-    2026-09-08 已經看過一次後果：`uav-1` 的來源指向另一台機的相機，
-    一旦相機通了，這台的架次會錄到**另一台的畫面**，而 `sync_segments` 用
-    時間區間歸屬，會照樣把它記在這台名下——事後幾乎救不回來。
-
-    改名時機（2026-09-23）：`video_segments` 還是 0 列，沒有歷史要搬。
-    """
-    return f"uav-{drone_id}"
+# path 名稱的規則在 `libs/video_stream.py`——**只能有一份**。command 服務的
+# 對外端點也要算出同一個名字，抄第二份的下場是兩邊不一致，而錄影綁在名字上。
+#
+# 為什麼綁 `drones.id` 不綁 sysid：**sysid 會被重新指派**（issues/040）。
+# 2026-09-08 已經看過一次後果：`uav-1` 的來源指向另一台機的相機，一旦相機通了，
+# 這台的架次會錄到**另一台的畫面**，而 `sync_segments` 用時間區間歸屬，會照樣
+# 把它記在這台名下——事後幾乎救不回來。
+# 改名時機（2026-09-23）：`video_segments` 還是 0 列，沒有歷史要搬。
+path_for = video_stream.path_for
 
 
 async def path_of(sysid: int | None) -> str | None:

@@ -37,6 +37,7 @@ _client_var: contextvars.ContextVar = contextvars.ContextVar("client", default=N
 from . import capabilities as caps
 import plan_check          # libs/ 的共用實作（PYTHONPATH=/srv/libs）
 import terrain             # 地形圖磚（issues/047 §1-B）
+import video_stream       # libs/ 的共用實作：串流 path 名稱與對外三態
 
 from . import admission, group_exec, guard_client, mav, missions as ext_missions, params as fcparams, plans
 from .config import settings
@@ -1974,7 +1975,7 @@ async def _store_plan(name: str, wps: list[dict],
 
 
 @app.get("/api/ext/drones", tags=["任務"], summary="外部：現在有哪些無人機、可不可以指揮")
-async def ext_drones():
+async def ext_drones(request: Request):
     """**對外**的機隊清單：一次回答「有哪些機、哪些現在指得動」。
 
     外部系統原本要打兩支（本服務的 `/healthz` 拿在線清單、backend 的
@@ -1985,17 +1986,37 @@ async def ext_drones():
 
     `controllable` 為 true 才可以下指令；為 false 時 `reason` 一定說得出
     是什麼擋住了（沿用 `admission.why_blocked`，與指令被擋時的說法同一份）。
+
+    **`video`（2026-09-23 新增）**：這台的即時畫面在哪裡拉。使用者裁定外部走
+    **RTSP**、**不限制也不記錄**。三態見 `libs/video_stream.ext_video`——
+    重點是 `ready` 只代表「來源設好了而且這台有連線」，**不保證此刻拉得到**。
+    網址的主機名取自這次請求的 `Host`，所以你連得到這支端點就連得到那條串流。
     """
     snap = router.snapshot() if router is not None else {}
+    # 相機來源與機體身分一次查完（**每次重查、不快取**：sysid 會被重新指派，
+    # 快取一個會變的號碼正是 issues/040 那個坑）
+    cams: dict[int, asyncpg.Record] = {}
+    if pool is not None:
+        try:
+            cams = {r["mav_sysid"]: r for r in await pool.fetch(
+                "SELECT id::text AS id, mav_sysid, camera_url FROM drones "
+                "WHERE mav_sysid IS NOT NULL")}
+        except Exception:
+            log.exception("外部機隊清單：查相機來源失敗——影像欄位會說不知道")
+    host = (request.headers.get("host") or "").split(":")[0] or "127.0.0.1"
     out = []
     for key in sorted(snap, key=int):
         sysid, d = int(key), snap[key]
         online = d["age_s"] <= STALE_S
         info = await admission.state_of(sysid)
         ok = online and info.get("state") in admission.COMMANDABLE
+        cam = cams.get(sysid)
         row = {"sysid": sysid, "name": info.get("drone"),
                "online": online, "age_s": d["age_s"], "armed": d.get("armed"),
-               "controllable": bool(ok and settings.enable_commands)}
+               "controllable": bool(ok and settings.enable_commands),
+               "video": video_stream.ext_video(
+                   cam["id"] if cam else None,
+                   cam["camera_url"] if cam else None, online, host)}
         if not row["controllable"]:
             # **擋下的理由要說得出下一步**：三種擋法各自的話不一樣，
             # 混成一句「不可用」等於什麼都沒說
