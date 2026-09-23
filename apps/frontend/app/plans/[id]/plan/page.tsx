@@ -1492,6 +1492,103 @@ export default function PlanPage() {
           它列的是起飛項、改速度項的位置、進場點、降落方式——每次重算都原樣再說一次，
           佔掉地圖下方一整塊。`decisions` 仍由後端回、仍存在狀態裡，要回復只要把表接回來 */}
 
+      {prof && <Profile p={prof}
+        ceilM={fence.shape === "none" ? null : fence.alt_max_m} />}
+      {/* **畫面上只留事實，解釋住 ⓘ**（使用者定案 2026-09-07、2026-09-09）。
+          原本這裡是一整段講三種畫法與返航帶子的字——每一句都對，但那是
+          設計備忘錄，讀第一次有用，讀第五十次只是把圖往下擠 */}
+      <div className="hint-line">
+        地面線來源：SRTM　建築物來源：OSM
+        {/* **「沒檢查」要說得出口。** 表頭那顆晶片砍掉之後，讀不到
+            `RTL_ALT_M` 就完全沒有痕跡了——而圖上少一條線讀起來像沒事 */}
+        {prof?.rtl_alt_m == null && <>　<span className="tag-warn">返航沒有檢查</span></>}
+        <InfoTip tip={"地面線是 SRTM（水平約 30 m）——被格子抹平的表面，樹冠與屋頂混在裡面，但畫不出任何一棟樓。"
+          + "建物是另一份（OSM 輪廓），三種畫法對應三種出處："
+          + "實心灰塊標「樓層數推算」＝樓層數 × 3.5 m 猜的；"
+          + "虛線橘塊標「假設 N m」＝用右欄那個旋鈕，改它判定就會變；"
+          + "沒有頂的橘色柱子＝現在不假設，那棟樓沒有人量過。三種都不是實測，實測要等光達。"
+          + "輪廓只取外環，中庭當成實心（多禁不會少禁）。"
+          + "X 軸下面那條帶子是返航：從那個位置失聯，飛機會爬到返航高度直線飛回起飛點，紅色代表那條線會撞地——那不是你按的，是它自己會做的事。"} />
+      </div>
+
+      {/* **發現變成選擇，不是報告。** 抬多少、降到多少都由後端算——
+          寫在這裡就會有兩份規則，改了門檻按鈕做的事不會跟著變（§6）。
+          「繞開」還沒做（要 §7-6 的規劃器），沒做的就不要放一個按鈕 */}
+      {isNew && chk && (fixes.length > 0) && (
+        <div className="plan-fixes">
+          <span className="muted">要我改嗎：</span>
+          {fixes.map((f) => (
+            <button key={f.name + f.seq} className="btn-plain btn-sm"
+              disabled={busy} title={f.hint}
+              onClick={() => act(f.name, f.seq)}>{f.label}</button>
+          ))}
+          {applied?.note && (
+            <span className="hint-line">剛才：{emph(applied.note)}</span>
+          )}
+        </div>
+      )}
+
+      {(chk?.problems?.length || chk?.warnings?.length) ? (
+        <div className="plan-findings">
+          {/* 後端文案用 `**` 當強調記號，而畫面不解析 Markdown（ui-spec §0.3c）*/}
+          {chk.problems.map((p, i) => (
+            <div key={i} className="form-err">
+              ✕ {emph(p)}
+              {!isNew && (
+                <label className="ackbox">
+                  <input type="checkbox" checked={ack.has(p)}
+                    onChange={(e) => setAck((prev) => {
+                      const n = new Set(prev);
+                      if (e.target.checked) n.add(p); else n.delete(p);
+                      return n;
+                    })} />
+                  我知道，照飛
+                </label>
+              )}
+            </div>
+          ))}
+          {chk.warnings.map((w, i) => <div key={i} className="hint-line">⚠ {emph(w)}</div>)}
+        </div>
+      ) : chk ? <div className="hint-line">這份航線沒有發現。</div> : null}
+
+      {/* **上傳前要有人看過。** 沒有這一步，上傳那道門分不出「沒人看過」
+          與「看過、按了照飛」，所以它只能全擋或全不擋（§7）。
+
+          回饋要**就在按鈕旁邊**：這顆鈕改的狀態原本只顯示在畫面最上方那顆
+          晶片上，離按鈕八百像素——使用者按了看不到任何反應，回報「按鈕無效」。
+          按了之後真正該回答的是「現在還擋不擋」，不是「存好了」 */}
+      {!isNew && chk && (() => {
+        const left = (chk.problems ?? []).filter((p) => !ack.has(p)).length;
+        const fresh = sign?.signed && !sign.stale;
+        return (
+          <div className="plan-fixes">
+            <button className="btn-accent btn-sm" disabled={busy}
+              onClick={async () => {
+                setBusy(true);
+                try {
+                  const r = await fetch(`${API}/api/plans/${id}/sign`, {
+                    method: "POST", headers: { "Content-Type": "application/json" },
+                    body: JSON.stringify({
+                      acknowledged: [...ack], assume_m: assume,
+                      wp_spd: spdRef.current.wp, wp_radius: spdRef.current.rad,
+                      rtl_alt_m: spdRef.current.rtl }),
+                  });
+                  if (r.ok) setSign(await getJson<Sign>(`${API}/api/plans/${id}/sign`));
+                } finally { setBusy(false); }
+              }}>
+              {fresh ? "重新審查" : "人工審查"}
+            </button>
+            <span className={left && fresh ? "tag-warn" : "hint-line"}>
+              {!fresh
+                ? (sign?.stale ? "航點改過，之前那次不算數" : "還沒審查——上傳會擋")
+                : left
+                  ? `已審查 ${(sign?.checked_at ?? "").slice(11, 16)}・還有 ${left} 條沒勾「照飛」，上傳仍會擋`
+                  : `已審查 ${(sign?.checked_at ?? "").slice(11, 16)}・可以上傳`}
+            </span>
+          </div>
+        );
+      })()}
+
       {blds.length > 0 && (
         <details className="plan-decisions" open>
           <summary>航線 30 m 內的建物 {blds.length} 棟</summary>
