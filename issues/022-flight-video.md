@@ -121,18 +121,25 @@
 | **開錄觸發拉流** | ✅ 修正後 **2 秒內** `ready: true`、`bytesReceived` 2.12 MB |
 | 片段入庫 | ✅ playback `/list` 給 `start` ＋ `duration: 8.266`，`sync_segments` 寫進 `video_segments` |
 | 收錄後回復 | ✅ `record: false`、`sourceOnDemand: true` |
-| WHEP | OPTIONS 回 204；**瀏覽器實際播放還沒看過**（見下） |
+| WHEP | ✅ headless Chrome 實測：`POST 201`→`ice=connected`→`ontrack video`，1280×720、**30 fps**、407 幀已解碼，codec `profile-level-id=42e01f`（H.264 baseline） |
+| **即時頁實際看到畫面** | ✅ 即時頁右下小窗播出機上相機的實景（`readyState: 4`、`currentTime` 持續前進、1280×720）——不是黑畫面，是真的那顆鏡頭拍到的東西 |
 
 `.env` 的 `VIDEO_RECORD_ENABLED` 從 false 改回 **true**——那行的註解原本寫的條件
 （「先修 path↔機的綁定，再把這行改回 true」）就是這次做完的事。測試留下的那段
 影像已從檔案與 DB 一併刪掉。
 
+**驗證時順手踩到的**：從 `file://` 開的測試頁 WHEP 會 `Failed to fetch`（Origin 是
+`null`），改成用 http 供這個頁就通了。**不是服務的問題**，MediaMTX 的
+`Access-Control-Allow-Origin` 本來就是 `*`；記在這裡是免得下次又懷疑錯對象。
+
 ### 還沒做完的（Phase 3 的後半）
 
-* **瀏覽器實際播放沒驗過**：只確認 WHEP 端點回 204。要在即時頁選 uav-1 看畫面。
 * **真的飛一趟時的錄影沒驗過**：上面的開錄是手動呼叫 `set_record`，不是
-  armed 觸發的。要在真架次上確認 `video_mode=on`→整趟有片段→落地停錄。
+  armed 觸發的。要在真架次上確認 `video_mode=on`→整趟有片段→落地停錄→
+  未離地的那一趟會被刪掉。
 * 回放頁的同步播放（Phase 2）本來就還沒做。
+* **上行的代價還沒在飛行中量**：2.7 Mbps 與 5G 量測共用一條上行，`sourceOnDemand`
+  是為此設計的，但「開著即時頁飛」對量測的實際影響還沒量過。
 
 ## 修法建議
 
