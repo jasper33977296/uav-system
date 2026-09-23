@@ -245,7 +245,8 @@ export default function Drones() {
       <Squads drones={drones.map((d) => ({ id: d.id, name: d.name }))} />
 
       <div className="drone-head" style={{ marginTop: 14 }}>
-        <span className="name">機隊{drones.length ? `（${drones.length}）` : ""}</span>
+        {/* 「機隊」→「無人機」（使用者 2026-09-23 改名）：這一頁管的是一台一台的機體 */}
+        <span className="name">無人機{drones.length ? `（${drones.length}）` : ""}</span>
         <span className="spacer" />
         <InfoTip tip="需要注意的排前面，不照註冊順序：飛行中 → 在線 → 有待回傳 → 未連線。副行的「上次飛行」說得出這台機最後一趟是什麼時候，沒有值就是還沒飛過。點一列展開那台機的架次與設定。" />
       </div>

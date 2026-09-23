@@ -175,8 +175,7 @@ export default function CommandPanel() {
   // 緊急原地降落的送出中旗標。**宣告在這裡不是風格問題**：這個元件在
   // `health === null`／`"off"` 時會提早 return，而 hooks 必須每次渲染都
   // 無條件跑到——放在早退之後，指令服務一連上就是 React #310（渲染的
-  // hook 數量變了），整頁白掉。見 emergencyLand()
-  const [landing, setLanding] = useState(false);
+  // hook 數量變了），整頁白掉
   // draft 失效＝連伺服器端一起清（07260a6 的 DELETE，限 draft；409 不理）——
   // 使用者反覆調整不在 DB 堆孤兒群組
   const discardDraft = (reason = "?") => {
@@ -744,42 +743,11 @@ export default function CommandPanel() {
 
   const inFlight = busy !== null || groupBusy;
 
-  // ── 緊急原地降落 ───────────────────────────────────────────
-  // **這一顆不歸上面那條規則管**（使用者指示 2026-09-07：整個系統優先權
-  // 最高的指令，出意外時用）。三件事讓它真的「隨時按得下去」：
-  //
-  //  1. **不共用 `busy`**：共用就等於被別人的等待綁住，而它存在的理由
-  //     正是「其他東西卡住的時候它還要能按」。自己的 `landing` 只用來
-  //     顯示送出中，**不拿來 disable**——連按兩次的結果是再送一次 LAND，
-  //     那是冪等的，比按不下去好。
-  //  2. **不做兩段式確認**：緊急時多一步是風險不是保護（同 RTL 的既有裁定）。
-  //  3. **住在標題列**：面板收合著也在，不必先展開才找得到。
-  //
-  // 它送的是專屬端點 `/emergency/land`——與 `/mode/land` 做同一件事，但
-  // 不問機上守門，而且在 command_log 裡有自己的名字（見指令服務的 docstring）。
-  async function emergencyLand() {
-    if (!sid) return;
-    setLanding(true);
-    setResult(null);
-    try {
-      const res = await fetch(
-        `${COMMAND_API}/api/command/${sid}/emergency/land`,
-        { method: "POST", headers: { ...CLIENT_HEADERS } });
-      const body = await res.json().catch(() => ({}));
-      if (!res.ok) {
-        const text = failText("原地降落", res.status, body?.detail);
-        setResult({ ok: false, text });
-        // 被擋下也要浮到 HUD：面板收著的人才看得到理由
-        useUavStore.getState().noticeDenied("原地降落", text);
-      } else {
-        setResult({ ok: true, text: "原地降落已下達——正在下降" });
-      }
-    } catch (e) {
-      setResult({ ok: false, text: `原地降落送不出去：${e}` });
-    }
-    setLanding(false);
-  }
-
+  // **緊急原地降落整顆拿掉了**（使用者 2026-09-23）。它從 2026-09-07 起住在標題列，
+  // 理由是「系統內優先權最高、隨時按得下去」；2026-09-22 先收成「指令送得到才顯示」
+  // （067：按了沒作用的鈕只會製造錯覺），這次整個移除——緊急降落的入口是實體遙控器。
+  // **指令服務的 `/emergency/land` 端點留著**（它在 command_log 裡有自己的名字），
+  // 要放回來只要接一顆鈕。
   const btn = (action: string, label: string, path: string,
                opts: { confirm?: boolean; danger?: boolean; disabled?: boolean;
                        body?: Record<string, unknown>; cap?: CapKey;
@@ -839,21 +807,10 @@ export default function CommandPanel() {
             {btn("RTL", "⌂ 返航", "/mode/rtl", { danger: true, cap: "rtl" })}
           </span>
         )}
-        {/* **緊急原地降落：標題列常駐，永不 disable。**
-            其餘每一種擋法（未入列、能力未驗證、指令未啟用）都讓它送出去、由伺服器說是
-            哪一道擋的：**在緊急時，一顆按下去會說話的鈕，勝過一顆看起來就沒救的灰鈕**。
-            **唯一的例外是指令根本送不到**（使用者 2026-09-22，比照 067）：指令服務
-            收不到這台機（或自己停擺）時按下去什麼都不會發生——那不是「會說話的鈕」，
-            是在最需要確定性的那一刻製造錯覺。那時失聯區會說「要處置請用實體遙控器」 */}
-        {health.enabled && sid && cmdAlive && (
-          <span onPointerDown={(e) => e.stopPropagation()}
-            onPointerUp={(e) => e.stopPropagation()}>
-            <button className="btn-emerg btn-sm" onClick={emergencyLand}
-              title="緊急原地降落——不受其他規則限制，隨時可按">
-              {landing ? "⋯" : "⏷ 原地降落"}
-            </button>
-          </span>
-        )}
+        {/* **「原地降落」拿掉了**（使用者 2026-09-23）。緊急降落的入口回到實體遙控器；
+            09-07 那次把它放在標題列的理由（系統內最高優先、隨時按得下去）不再成立——
+            2026-09-22 已經先收成「指令送得到才顯示」，這次整顆移除。
+            指令服務的 `/emergency/land` 端點留著，要放回來只要接一顆鈕 */}
         {/* 箭頭指的是**按下去會往哪走**，不是現在是什麼狀態（使用者裁定
             2026-09-07）：收合時 ▾＝「點我往下展開」、展開時 ▴＝「點我收上去」。
             這顆箭頭在同一個標題列上，而那一列的唯一互動就是收合／展開——

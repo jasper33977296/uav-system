@@ -1103,6 +1103,20 @@ export default function PlanPage() {
             }}
             onMove={(i, l) => {
               if (isNew) {
+                // **拖走降落點＝不要回起飛點降落了，降落在這裡**（使用者 2026-09-23：
+                // 「原路返回沒功能，想拿掉時應該可以直接拖動降落點位到其他位置」）。
+                // 「回起飛點降落」的降落點是從起飛點生出來的，**沒有對應到任何一個
+                // 放下的點**，所以原本拖它什麼都不會發生
+                if (stageWps[i]?.kind === "land" && stageWps[i]?.srcI == null) {
+                  setPol((q) => ({ ...q, land_at_home: false }));
+                  setPts((p) => {
+                    const k = p.findIndex((q) => q.kind === "land");
+                    return k >= 0
+                      ? p.map((q, j) => j === k ? { ...q, lat: l.lat, lon: l.lng } : q)
+                      : [...p, { lat: l.lat, lon: l.lng, kind: "land" }];
+                  });
+                  return;
+                }
                 if (stageWps[i]?.kind === "takeoff") {
                   setHome({ lat: String(l.lat.toFixed(7)),
                             lon: String(l.lng.toFixed(7)) });
@@ -1311,6 +1325,19 @@ export default function PlanPage() {
                     <div className="rail-row"><span>位置</span>
                       <b className="num">{Number(home.lat).toFixed(6)}, {Number(home.lon).toFixed(6)}</b></div>
                   )}
+                  {/* **回起飛點降落時，降落點疊在起飛點上**——拖那個位置會變成拖起飛點
+                      （草稿模式下起飛點也拖得動），所以拖曳在這一格表達不了「把降落點
+                      移開」。給一條沒有歧義的路（使用者 2026-09-23）：按一下，再在地圖上
+                      點要降落的位置。你自己標的降落點照樣拖得動 */}
+                  {isNew && w.kind === "land" && w.srcI == null && (
+                    <>
+                      <button className="btn-plain btn-sm" onClick={() => {
+                        setPol((q) => ({ ...q, land_at_home: false }));
+                        setPlaceKind("land");
+                      }}>改成降落在別的位置</button>
+                      <div className="hint-line">按了之後，在地圖上點一下要降落的地方。</div>
+                    </>
+                  )}
                   {isNew && w.kind === "takeoff" && (
                     // 刪掉之後回到「放起飛點」：航點留著，重新放一個起飛點就接回去
                     <button className="btn-plain btn-sm" onClick={() => {
@@ -1500,12 +1527,14 @@ export default function PlanPage() {
                   </div>
                 </div>
               )}
+              {/* 新增路徑檔只有「儲存」一顆（使用者 2026-09-23）——**還沒有「原本那份」
+                  可以另存**。既有航線才是「另存新檔」（改過的是另一份，原本那份不動）*/}
               <button className="btn-accent btn-sm"
                 disabled={busy || noEnding
                   || (isNew ? pts.length < 1 : !Object.keys(ov).length)}
                 onClick={() => setNaming(isNew
                   ? `新航線 ${new Date().toISOString().slice(5, 16).replace("T", " ")}`
-                  : `${name}（調整）`)}>另存新檔</button>
+                  : `${name}（調整）`)}>{isNew ? "儲存" : "另存新檔"}</button>
               {saved && saved !== id && (
                 <div className="hint-line">
                   已另存 · <a href={`/plans/${saved}/plan`}>打開新的那一份</a>
@@ -1694,8 +1723,9 @@ export default function PlanPage() {
       {naming !== null && (
         <div className="mask" onClick={() => setNaming(null)}>
           <div className="modal" onClick={(e) => e.stopPropagation()}>
-            <h3>另存新檔</h3>
-            <div className="hint-line">原本那份不會被動到。</div>
+            <h3>{isNew ? "儲存路徑檔" : "另存新檔"}</h3>
+            <div className="hint-line">
+              {isNew ? "存好之後會直接打開它，可以接著編輯。" : "原本那份不會被動到。"}</div>
             <input value={naming} autoFocus
               onChange={(e) => setNaming(e.target.value)} />
             <div className="modal-row">
@@ -1724,6 +1754,9 @@ export default function PlanPage() {
                     const d = await r.json();
                     if (r.ok && d.saved_id) {
                       setSaved(d.saved_id); setOv({}); setNaming(null);
+                      // **新增的存完就跳過去繼續編輯**（使用者 2026-09-23）：
+                      // 留在 /plans/new 上的話，再按一次存會變成第二份
+                      if (isNew) window.location.href = `/plans/${d.saved_id}/plan`;
                     }
                   } finally { setBusy(false); }
                 }}>存檔</button>
