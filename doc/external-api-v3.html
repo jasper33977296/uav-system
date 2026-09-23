@@ -305,7 +305,7 @@ footer.doc-foot{border-top:1px solid var(--line); padding-top:16px; font-size:13
         <tr>
           <td>即時畫面</td>
           <td class="old">v2 §17 明寫<strong>不送影像</strong></td>
-          <td><strong>改成給了</strong>：走 <strong>RTSP</strong>，由地面站轉發，網址在 <code>GET /api/v1/ext/drones</code> 每台機的 <code>video</code> 欄位（<a href="#ext-drones">§3</a>）</td>
+          <td><strong>改成給了</strong>：走 <strong>HLS over HTTP</strong>，由地面站轉發，網址在 <code>GET /api/v1/ext/drones</code> 每台機的 <code>video</code> 欄位（<a href="#ext-drones">§3</a>）。延遲 2–6 秒</td>
           <td><span class="st live">已上線</span></td>
         </tr>
         <tr>
@@ -400,18 +400,24 @@ footer.doc-foot{border-top:1px solid var(--line); padding-top:16px; font-size:13
     "controllable": true,           // false 時會多一個 reason，說明是什麼擋住
     "video": {                      // 即時畫面在哪裡拉（2026-09-23 新增）
       "state": "ready",             // ready / no_camera / offline
-      "rtsp": "rtsp://10.141.2.21:8554/uav-1d2f19b1-…",
-      "note": "來源已設定且這台有連線；機上相機是否正在運作要拉了才知道"
+      "hls": "http://10.141.2.21:8888/uav-1d2f19b1-…/index.m3u8",
+      "note": "來源已設定且這台有連線；機上相機是否正在運作要拉了才知道。HLS 延遲 2–6 秒，不是「現在」"
     }
   }]
 }</pre>
     </div>
 
     <p class="lbl">video：即時畫面</p>
-    <p class="ep-sum">畫面由<strong>地面站轉發</strong>，走 <strong>RTSP</strong>。
-      <code>rtsp</code> 的主機名取自你這次請求的 <code>Host</code>——<strong>你連得到這支端點，就連得到那條串流</strong>。</p>
+    <p class="ep-sum">畫面由<strong>地面站轉發</strong>，走 <strong>HLS over HTTP</strong>（純 HTTP，瀏覽器、VLC、ffmpeg 都能直接吃）。
+      <code>hls</code> 的主機名取自你這次請求的 <code>Host</code>——<strong>你連得到這支端點，就連得到那條串流</strong>。
+      這個網址<strong>會 302 轉向</strong>到實際的播放清單，客戶端要跟著轉向（ffmpeg／VLC／瀏覽器預設都會）。</p>
+    <div class="note">
+      <p><strong>HLS 的延遲是 2–6 秒，不是「現在」。</strong>它把畫面切成小段再送，這是它能走純 HTTP、
+      到處都播得動的代價。要拿畫面對照遙測的某個時刻時記得扣掉這段——我方即時頁走的是另一條
+      （WebRTC，約 0.2 秒），<strong>兩邊看到的不是同一刻</strong>。</p>
+    </div>
     <div class="tablewrap"><table>
-      <thead><tr><th>state</th><th>意思</th><th>有 rtsp 嗎</th></tr></thead>
+      <thead><tr><th>state</th><th>意思</th><th>有 hls 嗎</th></tr></thead>
       <tbody>
         <tr><td><code>ready</code></td><td>來源已設定，而且這台現在有連線</td><td>✅</td></tr>
         <tr><td><code>no_camera</code></td><td>這台沒有設定相機來源</td><td>❌ 改給 <code>reason</code></td></tr>
@@ -1293,7 +1299,7 @@ poll();</pre>
     <li><strong>不送圍欄。</strong>控制端只拿預計航線與實際軌跡。</li>
     <li><strong>歷史不做伺服器端的比較結論</strong>（勝負、改善多少）：地面站給樣本與共同的 X 軸，怎麼比是控制端的事。也不做 CSV、不降採樣。</li>
     <li><strong>不再提供全機隊的輪詢快照</strong> <code>/api/ext/live</code>（v1 §5 的那一支，實飛驗收後移除）：要輪詢即時資料請用<strong>綁任務</strong>的 <code>/api/v1/ext/missions/{id}/live</code>（<a href="#s-stream">§8</a>），它與串流是同一份訊息。<strong>不是不給輪詢，是輪詢也要綁任務</strong>。</li>
-    <li><strong>影像改成給了</strong>（2026-09-23）：走 <strong>RTSP</strong>，網址在 <code>GET :38001/api/v1/ext/drones</code> 每台機的 <code>video</code> 欄位裡（<a href="#ext-drones">§3</a>）。<strong>不在即時串流的訊息裡</strong>——那份訊息是 WS 與輪詢共用、逐字相同的，而網址的主機名要看呼叫端自己連進來的位址。</li>
+    <li><strong>影像改成給了</strong>（2026-09-23）：走 <strong>HLS over HTTP</strong>，網址在 <code>GET :38001/api/v1/ext/drones</code> 每台機的 <code>video</code> 欄位裡（<a href="#ext-drones">§3</a>）。<strong>不在即時串流的訊息裡</strong>——那份訊息是 WS 與輪詢共用、逐字相同的，而網址的主機名要看呼叫端自己連進來的位址。</li>
     <li>仍然不送原始 MAVLink、不送 IMU 或驅動診斷這類內部欄位。</li>
     <li>逐則訊息只補送 60 秒；更早的完整資料走 <code>GET :38000/api/v1/sessions/{session_id}/export</code>。</li>
   </ul>

@@ -453,6 +453,33 @@ async def prune_segments() -> int:
     return n
 
 
+async def ensure_sources() -> None:
+    """確保每台有相機的機，錄製器那邊的「去哪裡拉」還在。
+
+    **MediaMTX 的 API 改動不寫回唯讀設定檔**——這件事 `set_record` 的註解裡
+    早就寫過，但當時只補了 `record`。2026-09-23 開 HLS 重啟 uav-video 時發現
+    **連來源也一起消失了**：path 直接 404，而畫面只會安靜地變成「沒有影像」，
+    沒有任何東西說「我不知道要去哪裡拉」。
+
+    以資料庫為事實源定期補回。`set_source` 自己會處理「正在錄的時候不要把
+    on-demand 設回來」，這裡不必重複那個判斷。
+    """
+    try:
+        rows = await db.pool.fetch(
+            "SELECT id::text AS id, camera_url FROM drones "
+            "WHERE camera_url IS NOT NULL AND camera_url <> ''")
+    except Exception:
+        log.exception("影像：查相機來源失敗（不影響飛行資料）")
+        return
+    for r in rows:
+        name = path_for(r["id"])
+        c = await _conf(name)
+        src = (c or {}).get("source") or ""
+        if c is None or not src.strip() or src == "publisher":
+            if await set_source(r["id"], r["camera_url"]):
+                log.info("影像：補回 %s 的來源——錄製器重啟過，設定沒留下來", name)
+
+
 async def reconcile() -> None:
     """確保「正在飛的機」確實在錄。
 
@@ -488,9 +515,16 @@ async def reconcile() -> None:
 async def loop() -> None:
     """週期任務：片段入庫＋錄製狀態校正。整段包例外——影像的問題不准
     影響其他迴圈（同 _broadcast_loop 的紀律）。"""
+    # **開機先補一次**，不要等 30 秒：地面站重啟時常常是連著 uav-video 一起
+    # 重啟的，而那正是來源會消失的時機
+    try:
+        await ensure_sources()
+    except Exception:
+        log.exception("影像：開機補來源失敗（不影響飛行資料）")
     while True:
         await asyncio.sleep(SYNC_S)
         try:
+            await ensure_sources()
             await reconcile()
             await sync_segments()
             await prune_segments()   # 列與檔案同步消失，不留幽靈涵蓋帶

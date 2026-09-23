@@ -6,12 +6,23 @@
 
 ## 外部控制拿得到什麼（2026-09-23 使用者裁定）
 
-裁定三件事：**RTSP**、**不限制也不記錄外部拉流**、以及
+裁定：**HLS over HTTP**、**不限制也不記錄外部拉流**、以及
 「只要系統在、代理有連線，外部要求或前端打開時就持續送，直到兩邊都斷」。
 
+**同一天先定 RTSP、後改 HLS**（使用者：「不想要用 rtsp 的方式傳 改成 hls http」）。
+改的**只有地面站→外部**這一段：機上→地面站仍是 RTSP（那一段跑在 5G 上行，
+HLS 的切片與重傳會多吃頻寬又加延遲，而那條上行正是要量測的對象），
+我們自己的即時頁仍是 WHEP（延遲 ~0.2 秒）。
+
+**HLS 的延遲是 2–6 秒**，與即時頁不是同一個時刻——這件事要寫進契約，
+不能讓對方拿它當「現在」。
+
 最後那句在現在的架構下是自然成立的，不必另外實作：前端的 WHEP 讀者與外部的
-RTSP 讀者**讀同一條 path**，所以機上只被拉一次、兩邊共用同一條上行；
+HLS 讀者**讀同一條 path**，所以機上只被拉一次、兩邊共用同一條上行；
 最後一個讀者離開之後才收（`sourceOnDemand`）。**外部接進來不會讓上行變兩倍。**
+
+但這個保證**只在大家都走地面站時成立**：繞過地面站直接連無人機
+（`rtsp://<機IP>:8554/cam`）是機上的另一個讀者，機上會再送一份，上行真的變兩倍。
 
 ## 為什麼不是直接給一條網址就好
 
@@ -30,7 +41,7 @@ RTSP 讀者**讀同一條 path**，所以機上只被拉一次、兩邊共用同
 「可以去拉」，不是「一定有畫面」——拉不到請當成正常的可能結果處理。
 """
 
-RTSP_PORT = 8554
+HLS_PORT = 8888
 
 
 def path_for(drone_id: str) -> str:
@@ -42,12 +53,14 @@ def path_for(drone_id: str) -> str:
     return f"uav-{drone_id}"
 
 
-def rtsp_url(drone_id: str, host: str, port: int = RTSP_PORT) -> str:
-    return f"rtsp://{host}:{port}/{path_for(drone_id)}"
+def hls_url(drone_id: str, host: str, port: int = HLS_PORT) -> str:
+    """**會 302 轉向**（MediaMTX 把 index.m3u8 導到實際的清單），
+    所以客戶端要跟著轉向——ffmpeg／VLC／瀏覽器預設都會。"""
+    return f"http://{host}:{port}/{path_for(drone_id)}/index.m3u8"
 
 
 def ext_video(drone_id: str | None, camera_url: str | None, connected: bool,
-              host: str, port: int = RTSP_PORT) -> dict:
+              host: str, port: int = HLS_PORT) -> dict:
     """外部控制的 `video` 欄位。**三態分明，不給可能是死的網址。**
 
     `connected` 傳進來而不是在這裡算——「有沒有連線」各個呼叫端的判準不同
@@ -55,15 +68,16 @@ def ext_video(drone_id: str | None, camera_url: str | None, connected: bool,
     在這裡再定義一次只會多出第三種說法。
     """
     if drone_id is None:
-        return {"state": "no_camera", "rtsp": None,
+        return {"state": "no_camera", "hls": None,
                 "reason": "這台還沒有機體記錄，沒有可以綁定的影像路徑"}
     if not (camera_url or "").strip():
-        return {"state": "no_camera", "rtsp": None,
+        return {"state": "no_camera", "hls": None,
                 "reason": "這台沒有設定相機來源（在無人機管理頁的「相機來源」填）"}
     if not connected:
-        return {"state": "offline", "rtsp": None,
+        return {"state": "offline", "hls": None,
                 "reason": "這台現在沒有連線，拉了也不會有畫面"}
-    return {"state": "ready", "rtsp": rtsp_url(drone_id, host, port),
+    return {"state": "ready", "hls": hls_url(drone_id, host, port),
             # **這句是契約的一部分**，不是客套話：我們沒有辦法在不去拉的情況下
             # 知道機上相機此刻好不好，所以不能讓對方把 ready 讀成保證
-            "note": "來源已設定且這台有連線；機上相機是否正在運作要拉了才知道"}
+            "note": "來源已設定且這台有連線；機上相機是否正在運作要拉了才知道。"
+                    "HLS 延遲 2–6 秒，不是「現在」"}

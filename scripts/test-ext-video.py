@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""外部控制的影像欄位（issues/022；2026-09-23 使用者裁定走 RTSP）。
+"""外部控制的影像欄位（issues/022；2026-09-23 使用者裁定走 HLS over HTTP）。
 
 兩段，**第二段連不到服務時會說出來並跳過，不會假裝通過**：
 
@@ -36,25 +36,25 @@ def check(name, cond, detail=""):
 print("── 1. 純邏輯：三態 ──")
 r = V.ext_video(DID, "rtsp://10.141.2.32:8554/cam", True, "10.141.2.21")
 check("有相機＋有連線 → ready", r["state"] == "ready", r)
-check("ready 給得出網址", r["rtsp"] == f"rtsp://10.141.2.21:8554/uav-{DID}", r)
+check("ready 給得出網址", r["hls"] == f"http://10.141.2.21:8888/uav-{DID}/index.m3u8", r)
 check("ready 帶上『不保證拉得到』那句", "拉了才知道" in r.get("note", ""), r)
 
 r = V.ext_video(DID, "rtsp://10.141.2.32:8554/cam", False, "10.141.2.21")
 check("有相機＋沒連線 → offline", r["state"] == "offline", r)
-check("offline 不給網址", r["rtsp"] is None, r)
+check("offline 不給網址", r["hls"] is None, r)
 check("offline 說得出原因", "沒有連線" in r.get("reason", ""), r)
 
 for cam in (None, "", "   "):
     r = V.ext_video(DID, cam, True, "10.141.2.21")
     check(f"沒設相機來源（{cam!r}）→ no_camera", r["state"] == "no_camera", r)
-    check("  且不給網址", r["rtsp"] is None, r)
+    check("  且不給網址", r["hls"] is None, r)
 
 r = V.ext_video(None, None, True, "10.141.2.21")
 check("沒有機體記錄 → no_camera 而不是丟例外", r["state"] == "no_camera", r)
 
 check("path 名稱綁機體身分、不是 sysid", V.path_for(DID) == f"uav-{DID}")
 check("自訂埠會被帶進網址",
-      V.rtsp_url(DID, "h", 9999) == f"rtsp://h:9999/uav-{DID}")
+      V.hls_url(DID, "h", 9999) == f"http://h:9999/uav-{DID}/index.m3u8")
 
 print("\n── 2. 打正在跑的 command 服務 ──")
 try:
@@ -77,13 +77,13 @@ for d in drones:
     check(f"{tag}：state 是三態之一",
           v.get("state") in ("ready", "no_camera", "offline"), v)
     if v.get("state") == "ready":
-        check(f"{tag}：ready 有 rtsp", bool(v.get("rtsp")), v)
+        check(f"{tag}：ready 有 hls", bool(v.get("hls")), v)
         check(f"{tag}：主機名跟著請求的 Host",
-              (v.get("rtsp") or "").startswith(f"rtsp://{HOST.split(':')[0]}:"), v)
+              (v.get("hls") or "").startswith(f"http://{HOST.split(':')[0]}:"), v)
         # **不保證拉得到**：這裡只驗契約有把話說出來，不驗真的拉得到畫面
         check(f"{tag}：有說明 ready 不等於一定有畫面", bool(v.get("note")), v)
     else:
-        check(f"{tag}：非 ready 就不給網址", v.get("rtsp") is None, v)
+        check(f"{tag}：非 ready 就不給網址", v.get("hls") is None, v)
         check(f"{tag}：非 ready 說得出原因", bool(v.get("reason")), v)
     # online 與 video.state 不能自相矛盾
     if d.get("online") is False:
