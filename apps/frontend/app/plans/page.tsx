@@ -412,7 +412,7 @@ export default function Plans() {
         const toggle = () => { setOpenId(open ? null : m.id); setMenuId(null); };
         // **點一列＝到地圖上編輯這條路徑**（issues/066，使用者 2026-09-21）。
         // 規劃的實際動作是「看列表 → 決定改哪一條 → 改它的點」，中間那一步
-        // 以前沒有直達的路（要打開 ⋯ 選「離地與速度」）。飛過的紀錄改由 ▸ 展開
+        // 以前沒有直達的路（要打開 ⋯ 選那一項）。飛過的紀錄改由 ▸ 展開
         const edit = () => router.push(`/plans/${m.id}/plan`);
         return (
           <div className="card mitem" key={m.id}>
@@ -501,9 +501,12 @@ export default function Plans() {
                 </button>
                 {/* 規劃子頁（issues/048）。**放在這一頁底下，不另開頂層頁**
                     ——使用者 2026-09-08：「管理本身包含規劃」 */}
+                {/* **「編輯路徑檔」**（使用者 2026-09-23 改名）：那一頁早就不只是
+                    看離地與速度了——航點列表、停留秒數、位置、圍欄、加回程都在那裡，
+                    舊名字只講了其中兩欄。與點整列是同一個去處 */}
                 <a className="btn-plain btn-sm" href={`/plans/${m.id}/plan`}
-                  title="剖面圖（地面高程 vs 規劃高度）與逐段的離地／速度"
-                  onClick={() => setMenuId(null)}>離地與速度</a>
+                  title="到地圖上編輯這條路徑：航點、高度、速度、停留、圍欄（與點整列同一個去處）"
+                  onClick={() => setMenuId(null)}>編輯路徑檔</a>
                 {/* 地形跟隨（issues/047 §1-A）：**存成新的一份**，不就地改寫。
                     改寫之後高度的意思從「離起飛點」變成「離地面」——那是另一
                     份航線，該讓人先看到縮圖再決定要不要飛 */}
