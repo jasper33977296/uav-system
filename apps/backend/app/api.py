@@ -3163,6 +3163,7 @@ async def draft_plan(body: DraftIn):
         prof["policy"] = pol
         return {"check": None, "profile": prof, "saved_id": None,
                 "waypoints": solo["waypoints"], "decisions": solo["decisions"],
+                "ending": solo.get("ending"),
                 "policy": pol, "points": pts, "assume_m": assume}
     check = plan_check.check_waypoints(
         wps, settings.geofence_radius_m, settings.geofence_alt_m,
@@ -3172,6 +3173,14 @@ async def draft_plan(body: DraftIn):
     profile = plan_check.route_profile(wps, h, dem=terrain.shared(),
                                        assume_m=assume,
                                        rtl_alt_m=body.rtl_alt_m)
+    # **沒有結尾就不給存**（issues/066 後續，2026-09-23 使用者裁定）。
+    # 畫面也會擋，但擋在這裡才是真的擋——要結尾有兩條明路，訊息說出來
+    if body.save_as and built.get("ending") == "none":
+        raise HTTPException(422, {
+            "code": "no_ending",
+            "msg": "這條航線沒有結尾：沒有標降落點，也沒有選「回起飛點降落」",
+            "how_to": ["把最後要降落的那個點標成『降落點』",
+                       "或在結尾那一格選『回起飛點降落』"]})
     saved = None
     if body.save_as:
         saved = await _store_mission(body.save_as.strip() or "新航線", "drawn",
@@ -3181,6 +3190,8 @@ async def draft_plan(body: DraftIn):
         profile["policy"] = pol
     return {"check": check, "profile": profile, "saved_id": saved,
             "waypoints": wps, "decisions": decisions,
+            # 這條航線怎麼結束；`none`＝沒有結尾（畫面要警告並擋下存檔）
+            "ending": built.get("ending"),
             # 套用了什麼、以及套用之後的政策與點——畫面要拿它更新自己的狀態
             "applied": applied, "policy": pol, "points": pts,
             "assume_m": assume}

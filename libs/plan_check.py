@@ -1200,7 +1200,9 @@ def build_plan(points: list[dict], policy: dict | None = None,
                home_amsl: float | None = None) -> dict:
     """把「一串點 ＋ 一個政策」組成一份飛得起來的航線。
 
-    回 `{"waypoints": [...], "decisions": [...]}`。**`decisions` 不是裝飾**：
+    回 `{"waypoints": [...], "decisions": [...], "ending": ...}`。
+    `ending` ＝這條航線怎麼結束（`home`／`marked`／**`none`＝沒有結尾**）。
+    **`decisions` 不是裝飾**：
     起飛項、`frame`、改速度項、降落項都是系統替操作員決定的，
     而那些決定必須逐條看得見（doc/route-planning-redesign.md §3 動作 3）。
 
@@ -1256,9 +1258,11 @@ def build_plan(points: list[dict], policy: dict | None = None,
     elif marked:
         lz = marked[-1]
         decide("降落地點", "標成降落點的那一個", "航線上有標降落點")
-    elif points:
-        lz = points[-1]
-        decide("降落地點", "最後一個航點", "沒有標降落點，也沒有指定回起飛點")
+    # **沒有標降落點就不補**（使用者 2026-09-23 裁定：警告並擋下存檔）。
+    # 原本這裡是「拿最後一個放的點當降落點」——畫線時每放一個新點，前一個變回
+    # 航點、新的那個變成降落，看起來就是「我放的航點被系統改掉了」。而它不只是
+    # 顯示：那個點真的被改寫成降落序列（進場點＋LAND），航線就在那裡結束。
+    # 要結尾有兩條明路：把某個點標成降落點，或政策選「回起飛點降落」
 
     # **每個航點要記得自己是操作員的第幾個點。** 畫面上拖一個點回來要改的
     # 是那一個——而系統補的中繼點也在航點序列裡，用位置去數會數錯（拖 A
@@ -1345,7 +1349,12 @@ def build_plan(points: list[dict], policy: dict | None = None,
     if fallback:
         decide("**退回離起飛點**", "部分航點",
                "那些點查不到地形高程，離地面算不出來")
-    return {"waypoints": out, "decisions": decisions}
+    # **這條航線有沒有結尾**（issues/066 後續，2026-09-23）：
+    # `home`＝回起飛點降落；`marked`＝降落在標成降落點的那一個；
+    # `none`＝**沒有結尾**，呼叫端要警告並擋下存檔——不要替操作員挑一個點來降落
+    ending = ("home" if (pol["land_at_home"] and home and home.get("lat"))
+              else "marked" if marked else "none")
+    return {"waypoints": out, "decisions": decisions, "ending": ending}
 
 
 _MODE_TEXT = {POLICY_AGL: "離地面", POLICY_HOME: "離起飛點", POLICY_AMSL: "固定海拔"}

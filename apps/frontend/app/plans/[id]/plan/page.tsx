@@ -431,6 +431,11 @@ export default function PlanPage() {
       /** 到點停留秒數（062）。沒有＝飛過去 */
       hold_s?: number }[]>([]);
   const [decisions, setDecisions] = useState<Decision[]>([]);
+  /** 這條航線怎麼結束（後端 `build_plan` 給）：`home`／`marked`／**`none`＝沒有結尾**。
+   *  沒有結尾就警告並擋下存檔（使用者 2026-09-23）——**不替操作員挑一個點來降落**：
+   *  以前是「最後一個放的點自動變成降落點」，於是每放一個新點，前一個變回航點、
+   *  新的那個變成降落，看起來就是「我放的航點被改掉了」，而且它真的被改寫了 */
+  const [ending, setEnding] = useState<string | null>(null);
   const [applied, setApplied] = useState<{ note?: string } | null>(null);
   const [sign, setSign] = useState<Sign | null>(null);
   const [blds, setBlds] = useState<BuildingFeat[]>([]);
@@ -600,7 +605,8 @@ export default function PlanPage() {
             assume_m: assumeRef.current, fence: fenceBody() }),
         });
         const d = await r.json();
-        if (r.ok) { setChk(d.check); setProf(d.profile); setDecisions(d.decisions ?? []); }
+        if (r.ok) { setChk(d.check); setProf(d.profile); setDecisions(d.decisions ?? []);
+                    setEnding(d.ending ?? null); }
       } finally { setBusy(false); }
     }, 220);
     return () => clearTimeout(t);
@@ -720,6 +726,7 @@ export default function PlanPage() {
       if (!r.ok) return;
       // **後端算完之後把新的狀態拿回來**：政策、點、假設值都可能被改
       setChk(d.check); setProf(d.profile); setDecisions(d.decisions ?? []);
+      setEnding(d.ending ?? null);
       setApplied(d.applied ?? null);
       if (d.policy) setPol(d.policy);
       if (d.points) setPts(d.points);
@@ -797,6 +804,10 @@ export default function PlanPage() {
       setBusy(false);
     }
   };
+
+  /** 從零畫的航線還沒有結尾——存檔要擋（使用者 2026-09-23）。
+   *  既有航線不在此列：它本來就有自己的結尾項 */
+  const noEnding = isNew && pts.length > 0 && ending === "none";
 
   const stageWps: StageWp[] = (prof?.points ?? [])
     .filter((p) => p.seq != null && p.plan != null)
@@ -1449,8 +1460,22 @@ export default function PlanPage() {
                     onClick={() => setOverwrite(true)}>儲存到這一份</button>
                 </>
               )}
+              {/* **沒有結尾就不給存**（使用者 2026-09-23）。警告就在按鈕上面，
+                  而且把兩條出路放在手邊：標一個降落點，或回起飛點降落 */}
+              {noEnding && (
+                <div className="cmd-ready lock">
+                  {emph("這條航線**沒有結尾**：沒有標降落點，也沒有選「回起飛點降落」。")}
+                  <div className="rail-row" style={{ marginTop: 6 }}>
+                    <button className="btn-plain btn-sm"
+                      onClick={() => setPol((q) => ({ ...q, land_at_home: true }))}>
+                      回起飛點降落</button>
+                    <span className="hint-line">或在右欄把某個點改成「降落點」</span>
+                  </div>
+                </div>
+              )}
               <button className="btn-accent btn-sm"
-                disabled={busy || (isNew ? pts.length < 1 : !Object.keys(ov).length)}
+                disabled={busy || noEnding
+                  || (isNew ? pts.length < 1 : !Object.keys(ov).length)}
                 onClick={() => setNaming(isNew
                   ? `新航線 ${new Date().toISOString().slice(5, 16).replace("T", " ")}`
                   : `${name}（調整）`)}>另存新檔</button>
