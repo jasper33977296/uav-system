@@ -30,8 +30,12 @@ hlsAddress: :8888
 # 一種，相容性比延遲重要。代價是延遲約 2–6 秒——對外契約要寫出來，不要讓
 # 對方以為它和我們即時頁看到的是同一個時刻。
 hlsVariant: fmp4
-hlsSegmentCount: 7
-hlsSegmentDuration: 1s
+# **這兩個值就是對外延遲。** 播放器照 HLS 慣例從倒數第 3 片起播，所以
+# 延遲 ≈ 3 × 切片長度。2026-09-23 實測：切片 1s、關鍵影格 1s 時，
+# MediaMTX 實際切出 2–3 秒的片（切片只能切在關鍵影格上，湊不到就等下一個），
+# 對外落後 6–8 秒。機上關鍵影格改成半秒後，這裡才跟得上。
+hlsSegmentCount: 4
+hlsSegmentDuration: 500ms
 # **不要一直重切。** yes 會讓每條 path 無論有沒有人看都持續產生切片，等於把
 # sourceOnDemand 架空——機上會被一直拉著，上行永遠有影像在跑。
 hlsAlwaysRemux: no
