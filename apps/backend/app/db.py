@@ -153,6 +153,15 @@ async def migrate() -> None:
     # 畫面建立的任務照舊由操作員結束
     await pool.execute(
         "ALTER TABLE missions ADD COLUMN IF NOT EXISTS external BOOLEAN NOT NULL DEFAULT false")
+    # ── issues/061：一個任務綁定一條路徑（2026-09-23 使用者裁定）───────────────
+    # 設計上一個任務可以含多條路徑，但現階段前端與外部都是一趟一條——**把它記下來**，
+    # 畫面與 API 才說得出「這個任務飛的是哪一條」，而不是只能從架次回推
+    await pool.execute("ALTER TABLE missions ADD COLUMN IF NOT EXISTS plan_id UUID")
+    await pool.execute("""
+        DO $$ BEGIN
+          ALTER TABLE missions ADD CONSTRAINT missions_plan_id_fkey
+            FOREIGN KEY (plan_id) REFERENCES plans(id) ON DELETE SET NULL;
+        EXCEPTION WHEN duplicate_object THEN NULL; END $$""")
     # §4.5 曾經限制「同時只能有一個進行中的任務」，**§4.6 拿掉了**——使用者的
     # 目標是多組同時跑多個任務。改用「一台機同時只能執行一個任務」，那條窄得多
     await pool.execute("DROP INDEX IF EXISTS idx_missions_one_active")

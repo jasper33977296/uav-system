@@ -1,4 +1,12 @@
-"""外部起飛時的任務：用呼叫端給的 UUID 建立，或掛進進行中的那一個（doc/external-live-api.md §2.3）。
+"""外部起飛時的任務（doc/external-live-api.md §2.3）。
+
+**每一次請求都是新的任務**（issues/061，使用者 2026-09-23 裁定）：
+「同一條路徑飛三趟」是三件事，不是一件事飛三次；疊在一個任務底下，
+`ext/missions/{id}` 的「比較這趟與那趟」就拿不出來。
+
+現階段**一個任務綁定一條路徑**（前端與外部都一樣）——設計上一個任務可以含多條路徑，
+但那還沒有被任何流程用到，先把它綁死並且記在 `missions.plan_id` 上，
+畫面與 API 才說得出「這個任務飛的是哪一條」。
 
 錯誤一律帶 `code`＋`msg`（＋`how_to`）：這是對外端點，只給代碼的話呼叫端得來問是什麼意思。
 """
@@ -57,52 +65,51 @@ async def _pick_name(con, name: str | None, plan_name: str) -> str:
 
 
 async def ensure(pool, mission_id: str | None, name: str | None,
-                 drones: list[tuple[str, str]], plan_name: str) -> dict:
+                 drones: list[tuple[str, str]], plan_name: str,
+                 plan_id: str | None = None) -> dict:
     """drones＝[(drone_id, 顯示名)] → {id, name, created}。
 
-    * `mission_id` 對到進行中的任務：這幾台掛進去
-    * `mission_id` 對到已結束的任務：409 `mission_ended`
-    * 沒給 `mission_id`、而這幾台都已經在同一個進行中的任務：直接用那個任務
-    * 其他情況建立新任務，標成外部建立（最後一台上鎖 3 秒後自動結束）
+    **一律建立新任務**（061）：
+
+    * `mission_id` 給了而且**沒被用過**：拿它當新任務的編號（外部要對得上自己的請求）
+    * `mission_id` 已經存在（不論進行中或已結束）：409 `mission_id_used`
+      ——這一趟是新的一件事，要用新的 UUID
+    * 這幾台機還開著的任務**會被結束掉**（資料庫的不變式：一台機一次只能在一個任務），
+      並在回傳的 `replaced` 裡列出來——**默默結束別人的任務是不行的**
     """
     try:
         async with pool.acquire() as con:
             async with con.transaction():
-                row = None
                 if mission_id:
                     row = await con.fetchrow(
                         "SELECT id::text AS id, name, ended_at FROM missions WHERE id = $1::uuid",
                         mission_id)
-                    if row is not None and row["ended_at"] is not None:
+                    if row is not None:
+                        when = (f"已在 {row['ended_at'].astimezone(TW):%m-%d %H:%M:%S} 結束"
+                                if row["ended_at"] else "還在進行中")
                         raise MissionError(
-                            409, "mission_ended",
-                            f"任務「{row['name']}」已在 {row['ended_at'].astimezone(TW):%m-%d %H:%M:%S} 結束",
-                            ["要再飛就產生新的 UUID 當 mission_id"])
-                busy = {}
+                            409, "mission_id_used",
+                            f"mission_id {mission_id} 已經是任務「{row['name']}」（{when}）。"
+                            "每一次執行都是新的一個任務——同一條路徑飛多趟，那是多件事",
+                            ["用新的 UUID（crypto.randomUUID()／uuid.uuid4()）再送一次",
+                             "或不給 mission_id，讓地面站產生"])
+                # **先把還開著的任務結束掉**：資料庫的不變式是「一台機一次只能在一個
+                # 任務」，而這一趟是新的一件事。結束了誰要說出來（回傳的 replaced）
+                replaced = []
                 for did, dname in drones:
                     b = await con.fetchrow(_ACTIVE_OF, did)
-                    if b is not None and b["id"] != mission_id:
-                        busy[did] = (dname, b)
-                if busy:
-                    others = {b["id"] for _, b in busy.values()}
-                    if mission_id is None and len(others) == 1 and len(busy) == len(drones):
-                        b = next(iter(busy.values()))[1]
-                        return {"id": b["id"], "name": b["name"], "created": False}
-                    dname, b = next(iter(busy.values()))
-                    raise MissionError(
-                        409, "mission_busy",
-                        f"這台機（{dname}）已經在進行中的任務「{b['name']}」（{b['id']}）裡，"
-                        "一台機同一時間只能在一個任務",
-                        ["等那個任務結束再起飛",
-                         f"或改用 mission_id {b['id']} 起飛，把這一趟掛進那個任務"])
-                if row is None:
-                    mission_id = mission_id or str(uuid.uuid4())
-                    final = await _pick_name(con, name, plan_name)
+                    if b is None:
+                        continue
                     await con.execute(
-                        "INSERT INTO missions (id, name, external) VALUES ($1::uuid, $2, true)",
-                        mission_id, final)
-                else:
-                    final = row["name"]
+                        "UPDATE missions SET ended_at = now() "
+                        "WHERE id = $1::uuid AND ended_at IS NULL", b["id"])
+                    replaced.append({"id": b["id"], "name": b["name"], "drone": dname})
+                mission_id = mission_id or str(uuid.uuid4())
+                final = await _pick_name(con, name, plan_name)
+                await con.execute(
+                    "INSERT INTO missions (id, name, external, plan_id) "
+                    "VALUES ($1::uuid, $2, true, $3::uuid)",
+                    mission_id, final, plan_id)
                 for did, _ in drones:
                     await con.execute(
                         "INSERT INTO mission_drones (mission_id, drone_id) "
@@ -111,4 +118,5 @@ async def ensure(pool, mission_id: str | None, name: str | None,
         # 檢查與寫入之間別人搶先了：觸發器或名稱索引丟出來的訊息本身說得出撞到什麼
         code = "mission_busy" if "一台機一次只能執行一個任務" in str(e) else "mission_name_taken"
         raise MissionError(409, code, str(e))
-    return {"id": mission_id, "name": final, "created": row is None}
+    return {"id": mission_id, "name": final, "created": True,
+            **({"replaced": replaced} if replaced else {})}

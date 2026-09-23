@@ -2136,7 +2136,8 @@ async def _start(body: StartIn, request: Request) -> dict:
                                   "msg": f"sysid {sysid} 在地面站還沒有機體記錄，建不了任務",
                                   "how_to": ["等地面站收到這台機的心跳（通常幾秒內）再試"]})
     ms = await ext_missions.ensure(pool, mission_id, body.mission_name,
-                                   [(drone["id"], drone["name"])], name)
+                                   [(drone["id"], drone["name"])], name,
+                                   plan_id=plan_id)
     note = {"drone_id": drone["id"], "sysid": sysid}
     guard_client.notify_mission(ms["id"], {"kind": "start_begin", "plan_id": plan_id, **note})
     _start_mission[sysid] = ms["id"]
@@ -2155,4 +2156,7 @@ async def _start(body: StartIn, request: Request) -> dict:
     return {"source": src, "plan_id": plan_id, "name": name, "sysid": sysid,
             "skipped": skipped, **result,
             "mission_id": ms["id"], "mission_name": ms["name"],
+            # 這一趟結束了哪一個還開著的任務（issues/061）。**默默結束別人的任務
+            # 是不行的**——呼叫端要看得到自己剛剛讓什麼收了尾
+            **({"replaced": ms["replaced"]} if ms.get("replaced") else {}),
             "stream": _stream_of(request, ms)}

@@ -24,6 +24,15 @@ import { useUavStore } from "@/lib/store";
 interface Mission { id: string; name: string; external?: boolean }
 interface Squad { id: string; name: string; members: { drone_id: string }[] }
 
+/** 任務名稱的預設值。**與外部起飛的自動命名同一個形狀**（`missions._pick_name`）：
+ *  `<路徑名> MM-DD HH:MM`；不知道路徑就用「任務」。撞名時後端會說，改一下就好。 */
+function autoName(plan: string | null): string {
+  const d = new Date();
+  const p = (n: number) => String(n).padStart(2, "0");
+  return `${plan || "任務"} ${p(d.getMonth() + 1)}-${p(d.getDate())} `
+    + `${p(d.getHours())}:${p(d.getMinutes())}`;
+}
+
 export default function MissionPrompt() {
   const live = useUavStore((s) => s.live);
   const fleet = useUavStore((s) => s.fleet);
@@ -37,6 +46,13 @@ export default function MissionPrompt() {
   const [busy, setBusy] = useState(false);
   // 誰要跑這個任務（§4.6）。**可以綁小隊，也可以綁單台**——綁小隊是活的連結
   const [squads, setSquads] = useState<Squad[]>([]);
+  /** 畫面上正在顯示的那條路徑的名字，拿來當任務名稱的預設值 */
+  const planName = useRef<string | null>(null);
+  useEffect(() => {
+    getJson<{ name?: string }>(`${API}/api/plans/active`)
+      .then((p) => { planName.current = p?.name ?? null; })
+      .catch(() => { planName.current = null; });   // 問不到就退回「任務 MM-DD HH:MM」
+  }, [sessionId]);
   const [squadId, setSquadId] = useState<string>("");
   const [crew, setCrew] = useState<string[]>([]);
 
@@ -62,7 +78,11 @@ export default function MissionPrompt() {
       activeOf(droneId).then((m) => {
         setActive(m);
         if (!m) {
-          setName(""); setErr(null); setSquadId("");
+          // **名稱預先填好**（issues/061，使用者 2026-09-23）：外部起飛不給名稱時
+          // 用「<路徑名> MM-DD HH:MM」，畫面這條路以前一律空白要人自己想——
+          // 同一件事兩個入口產生的任務長得不一樣。直接按確定就與外部一致，
+          // 要取名字也還可以改
+          setName(autoName(planName.current)); setErr(null); setSquadId("");
           // 預設帶**當下連線中的機**——那是「這次誰要飛」最可能的答案
           setCrew(Object.entries(fleet)
             .filter(([, t]) => t.connected).map(([id]) => id));

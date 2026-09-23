@@ -1533,6 +1533,13 @@ async def patch_session(session_id: str, body: SessionPatch):
             if name is None:
                 raise HTTPException(404, "無此任務")
             sets.append(f"mission_id = {arg(mid)}, mission_name = {arg(name)}")
+            # **一個任務綁定一條路徑**（issues/061）：畫面建立任務時還不知道路徑，
+            # 這一刻才知道（架次上有 plan_id）。已經綁了就不動——**不要讓第二趟
+            # 不同路徑的架次悄悄改掉任務的路徑**，那會讓任務說出它沒飛過的東西
+            await db.pool.execute(
+                "UPDATE missions m SET plan_id = s.plan_id FROM flight_sessions s "
+                "WHERE m.id = $1::uuid AND s.id = $2::uuid "
+                "  AND m.plan_id IS NULL AND s.plan_id IS NOT NULL", mid, session_id)
     if not sets:
         raise HTTPException(422, "沒有要改的欄位")
     row = await db.pool.fetchrow(
