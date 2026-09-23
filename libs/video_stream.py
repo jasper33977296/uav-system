@@ -6,19 +6,22 @@
 
 ## 外部控制拿得到什麼（2026-09-23 使用者裁定）
 
-裁定：**HLS over HTTP**、**不限制也不記錄外部拉流**、以及
+裁定：**MJPEG over HTTP**、**不限制也不記錄外部拉流**、以及
 「只要系統在、代理有連線，外部要求或前端打開時就持續送，直到兩邊都斷」。
 
-**同一天先定 RTSP、後改 HLS**（使用者：「不想要用 rtsp 的方式傳 改成 hls http」）。
-改的**只有地面站→外部**這一段：機上→地面站仍是 RTSP（那一段跑在 5G 上行，
-HLS 的切片與重傳會多吃頻寬又加延遲，而那條上行正是要量測的對象），
-我們自己的即時頁仍是 WHEP（延遲 ~0.2 秒）。
+**同一天走過三版**：先 RTSP → 改 HLS →（實測對外落後 3.5 秒）**改 MJPEG**。
+使用者要的是低延遲，而 HLS 的延遲來自切片與緩衝，降畫質救不了。
 
-**HLS 的延遲是 2–6 秒**，與即時頁不是同一個時刻——這件事要寫進契約，
-不能讓對方拿它當「現在」。
+改的**只有地面站→外部**這一段：
+
+    機上 ── H.264 約 2 Mbps（5G 上行，不變）──→ 地面站 ── MJPEG ──→ 外部
+
+**MJPEG 不上 5G**：720p30 的 MJPEG 約 10–20 Mbps，會吃垮正在被量測的上行。
+轉碼在地面站做，對外那一段是本地網路（實測 5.2 Mbps）。
+我們自己的即時頁仍是 WHEP（~0.2 秒，比 MJPEG 還低）。
 
 最後那句在現在的架構下是自然成立的，不必另外實作：前端的 WHEP 讀者與外部的
-HLS 讀者**讀同一條 path**，所以機上只被拉一次、兩邊共用同一條上行；
+MJPEG 轉碼**讀同一條 path**，所以機上只被拉一次、兩邊共用同一條上行；
 最後一個讀者離開之後才收（`sourceOnDemand`）。**外部接進來不會讓上行變兩倍。**
 
 但這個保證**只在大家都走地面站時成立**：繞過地面站直接連無人機
@@ -41,7 +44,8 @@ HLS 讀者**讀同一條 path**，所以機上只被拉一次、兩邊共用同�
 「可以去拉」，不是「一定有畫面」——拉不到請當成正常的可能結果處理。
 """
 
-HLS_PORT = 8888
+#: 地面站 backend 的埠——MJPEG 端點在那裡（轉碼需要 ffmpeg，而 ffmpeg 在 backend）
+BACKEND_PORT = 38000
 
 
 def path_for(drone_id: str) -> str:
@@ -53,14 +57,18 @@ def path_for(drone_id: str) -> str:
     return f"uav-{drone_id}"
 
 
-def hls_url(drone_id: str, host: str, port: int = HLS_PORT) -> str:
-    """**會 302 轉向**（MediaMTX 把 index.m3u8 導到實際的清單），
-    所以客戶端要跟著轉向——ffmpeg／VLC／瀏覽器預設都會。"""
-    return f"http://{host}:{port}/{path_for(drone_id)}/index.m3u8"
+def mjpeg_url(drone_id: str, host: str, port: int = BACKEND_PORT) -> str:
+    """`multipart/x-mixed-replace`，`<img src=...>` 直接吃得下。"""
+    return f"http://{host}:{port}/api/drones/{drone_id}/camera/stream.mjpg"
+
+
+def snapshot_url(drone_id: str, host: str, port: int = BACKEND_PORT) -> str:
+    """要一張就好時用這個——**不必為了看一眼而開一路串流**。"""
+    return f"http://{host}:{port}/api/drones/{drone_id}/camera/snapshot.jpg"
 
 
 def ext_video(drone_id: str | None, camera_url: str | None, connected: bool,
-              host: str, port: int = HLS_PORT) -> dict:
+              host: str, port: int = BACKEND_PORT) -> dict:
     """外部控制的 `video` 欄位。**三態分明，不給可能是死的網址。**
 
     `connected` 傳進來而不是在這裡算——「有沒有連線」各個呼叫端的判準不同
@@ -68,16 +76,17 @@ def ext_video(drone_id: str | None, camera_url: str | None, connected: bool,
     在這裡再定義一次只會多出第三種說法。
     """
     if drone_id is None:
-        return {"state": "no_camera", "hls": None,
+        return {"state": "no_camera", "mjpeg": None, "snapshot": None,
                 "reason": "這台還沒有機體記錄，沒有可以綁定的影像路徑"}
     if not (camera_url or "").strip():
-        return {"state": "no_camera", "hls": None,
+        return {"state": "no_camera", "mjpeg": None, "snapshot": None,
                 "reason": "這台沒有設定相機來源（在無人機管理頁的「相機來源」填）"}
     if not connected:
-        return {"state": "offline", "hls": None,
+        return {"state": "offline", "mjpeg": None, "snapshot": None,
                 "reason": "這台現在沒有連線，拉了也不會有畫面"}
-    return {"state": "ready", "hls": hls_url(drone_id, host, port),
+    return {"state": "ready",
+            "mjpeg": mjpeg_url(drone_id, host, port),
+            "snapshot": snapshot_url(drone_id, host, port),
             # **這句是契約的一部分**，不是客套話：我們沒有辦法在不去拉的情況下
             # 知道機上相機此刻好不好，所以不能讓對方把 ready 讀成保證
-            "note": "來源已設定且這台有連線；機上相機是否正在運作要拉了才知道。"
-                    "HLS 延遲 2–6 秒，不是「現在」"}
+            "note": "來源已設定且這台有連線；機上相機是否正在運作要拉了才知道"}

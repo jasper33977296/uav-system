@@ -26,7 +26,7 @@ import plan_check
 import terrain
 
 from . import (agent_link, captures, chainage, db, groups, logindex,
-               mavlink_rx, modem_raw, signing)
+               mavlink_rx, mjpeg, modem_raw, signing)
 from .config import settings
 from .ws import manager
 
@@ -3564,3 +3564,76 @@ async def geocode(q: str):
                     "results": res}
     return {"query": q, "used": None, "fallback": False, "source": "osm",
             "results": []}
+
+
+# ── 對外即時畫面：MJPEG（issue 022，2026-09-23 使用者裁定）────────────────
+# 做法照 UE agent 的鏡頭模組（狀態／單張／串流三支），轉碼在地面站做。
+# 為什麼不是 HLS：實測對外落後 3.5 秒，而那是切片與緩衝造成的，降畫質沒用。
+async def _cam_stream(drone_id: str):
+    """取得（或建立）這台機的轉碼器。機體不存在就 404，**不要默默開一個**。"""
+    row = await db.pool.fetchrow(
+        "SELECT camera_url FROM drones WHERE id = $1", UUID(drone_id))
+    if row is None:
+        raise HTTPException(404, "無此無人機")
+    if not (row["camera_url"] or "").strip():
+        raise HTTPException(409, {
+            "code": "no_camera",
+            "msg": "這台沒有設定相機來源（在無人機管理頁的「相機來源」填）"})
+    t = mjpeg.get(drone_id)
+    await t.ensure()
+    return t
+
+
+@router.get("/drones/{drone_id}/camera", tags=["影像"])
+async def camera_status(drone_id: str):
+    """這台的即時畫面現在是什麼狀況。**不會因為問就把轉碼打開。**"""
+    return mjpeg.get(drone_id).status()
+
+
+@router.get("/drones/{drone_id}/camera/snapshot.jpg", tags=["影像"])
+async def camera_snapshot(drone_id: str):
+    t = await _cam_stream(drone_id)
+    got = await mjpeg.next_frame(t, t.seq, timeout=8.0)
+    if got is None:
+        # **說得出是「還沒來」還是「壞了」**：兩者的下一步不一樣
+        raise HTTPException(503, {
+            "code": "no_frame",
+            "msg": f"拿不到畫面：{t.last_error or '等了 8 秒還沒有第一張'}"})
+    seq, frame = got
+    return Response(frame, media_type="image/jpeg", headers={
+        "Cache-Control": "no-store", "X-Frame-Seq": str(seq)})
+
+
+@router.get("/drones/{drone_id}/camera/stream.mjpg", tags=["影像"])
+async def camera_mjpeg(drone_id: str, request: Request):
+    """`multipart/x-mixed-replace` 的 MJPEG，`<img src=...>` 直接吃得下。"""
+    t = await _cam_stream(drone_id)
+    if not t.add_viewer():
+        raise HTTPException(429, {
+            "code": "too_many_viewers",
+            "msg": f"這台已經有 {t.viewers} 個人在看（上限 "
+                   f"{settings.mjpeg_max_viewers}）——每一路都要地面站多轉一次碼"})
+    first = await mjpeg.next_frame(t, t.seq, timeout=10.0)
+    if first is None:
+        t.remove_viewer()
+        raise HTTPException(503, {
+            "code": "no_frame",
+            "msg": f"拿不到畫面：{t.last_error or '等了 10 秒還沒有第一張'}"})
+
+    async def body():
+        seq, frame = first
+        try:
+            while True:
+                yield (b"--frame\r\nContent-Type: image/jpeg\r\nContent-Length: "
+                       + str(len(frame)).encode() + b"\r\n\r\n" + frame + b"\r\n")
+                got = await mjpeg.next_frame(t, seq, timeout=10.0)
+                if got is None or await request.is_disconnected():
+                    return
+                seq, frame = got
+        finally:
+            # **一定要減回去**：不減的話人數上限會在幾次連線後把自己鎖死
+            t.remove_viewer()
+
+    return StreamingResponse(
+        body(), media_type="multipart/x-mixed-replace; boundary=frame",
+        headers={"Cache-Control": "no-store"})

@@ -2018,9 +2018,11 @@ async def ext_drones(request: Request):
         row = {"sysid": sysid, "name": info.get("drone"),
                "online": online, "age_s": d["age_s"], "armed": d.get("armed"),
                "controllable": bool(ok and settings.enable_commands),
+               # 影像端點在 backend（轉碼要 ffmpeg，而 ffmpeg 裝在那個映像裡）
                "video": video_stream.ext_video(
                    cam["id"] if cam else None,
-                   cam["camera_url"] if cam else None, online, host)}
+                   cam["camera_url"] if cam else None, online, host,
+                   settings.backend_public_port)}
         if not row["controllable"]:
             # **擋下的理由要說得出下一步**：三種擋法各自的話不一樣，
             # 混成一句「不可用」等於什麼都沒說

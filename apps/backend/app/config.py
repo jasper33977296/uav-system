@@ -53,6 +53,19 @@ class Settings(BaseSettings):
     #: 落地後多久停止錄影（flight-video-design §8c）。**不是零**：落地彈跳或
     #: 重心轉移時飛控可能短暫跳回 in_air，而多錄 10 秒的成本遠低於少錄那 10 秒
     video_landed_stop_s: float = 10.0
+    # ── 對外的 MJPEG 即時畫面（2026-09-23 使用者裁定）───────────────────
+    # 對外原本走 HLS，實測落後 3.5 秒（切片與緩衝造成，不是位元率）。
+    # MJPEG 沒有 GOP 也沒有切片，一張就是一張。**轉碼在地面站做**——
+    # 機上直接送 MJPEG 約 10–20 Mbps，會吃垮正在被量測的 5G 上行。
+    mjpeg_size: str = "1280x720"     # 空字串＝不縮放，照來源
+    mjpeg_fps: int = 15              # 0＝照來源。給人看的畫面不必 30
+    mjpeg_quality: int = 6           # ffmpeg -q:v，2（最好）–31（最差）
+    #: 沒人看多久就把轉碼收掉。**連帶讓地面站對機上的拉流也停掉**，
+    #: 上行就真的不再有影像——這才是要有這個逾時的主因，不只是省 CPU
+    mjpeg_idle_s: float = 10.0
+    #: 同時幾個人看。每多一路只多吃地面站的 CPU（上行是共用的同一份），
+    #: 上限是為了擋住失控的用法，不是為了省頻寬
+    mjpeg_max_viewers: int = 4
     # 鏈路狀態門檻（ok / degraded / lost 三態，見 app/main.py:_link_transition）
     sinr_degraded_db: float = 5.0    # 低於此值進入 degraded
     sinr_lost_db: float = -2.0       # 低於此值進入 lost
