@@ -1009,6 +1009,23 @@ footer.doc-foot{border-top:1px solid var(--line); padding-top:16px; font-size:13
     </tbody>
   </table></div>
 
+  <h3>錯過了 <code>ended</code> 怎麼辦</h3>
+  <div class="note warn">
+    <p><strong><code>ended</code> 是一次性的推送，不是可以事後查的紀錄。</strong>
+    任務結束後那條串流<strong>只再保留 30 秒</strong>：這段時間內重連或輪詢還補得到；
+    超過就回 <span class="chip bad">410</span> <code>mission_gone</code>。</p>
+    <p><strong>但資料一點都沒少。</strong>那只是通知過期了，不是系統沒記。改用這兩支：</p>
+    <ul class="prose">
+      <li><code>GET /api/v1/ext/missions</code>——每一筆帶 <code>state</code>：
+        <code>planned</code>（建了沒飛）／<code>flying</code>（飛過還沒結束）／<code>ended</code>（做完了）。
+        <strong>這支可以隨時重複查</strong>，是「到底做完了沒」的正式答案。</li>
+      <li><code>GET /api/v1/ext/missions/{id}/signal</code>——那一趟的完整結果：
+        每個架次的 <code>end_reason</code>、訊號樣本、沿航線里程、停留量測。</li>
+    </ul>
+    <p><strong>不要把「收不到 <code>ended</code>」讀成「系統沒通知我」</strong>——
+    控制端斷線、重啟、或根本沒接串流都會走到這一格，而那都是正常的。</p>
+  </div>
+
   <h3>不會結束的情況</h3>
   <ul class="prose">
     <li><strong>著地了但一直沒上鎖</strong>（例如手飛落地、油門沒拉到底）：繼續送，該機 <code>landed: "on_ground"</code>、<code>armed: true</code>。</li>

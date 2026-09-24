@@ -1,7 +1,1977 @@
 {
   "components": {
     "schemas": {
-      "ChangeRouteIn": {
+      "backend.AgentHello": {
+        "description": "機上代理上線時自報。**註冊是收到它的副作用**（issues/038、協定 §4.1）。\n\n只收**機器問得到**的東西。機架序號與型號不在這裡——代理知道的是板子，\n不是機架，那兩項只能由人維護。",
+        "properties": {
+          "agent_uid": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Agent Uid"
+          },
+          "agent_version": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Agent Version"
+          },
+          "autopilot": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Autopilot"
+          },
+          "board_uid": {
+            "title": "Board Uid",
+            "type": "string"
+          },
+          "fw": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Fw"
+          },
+          "signing_fp": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Signing Fp"
+          },
+          "sysid": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Sysid"
+          },
+          "vehicle_type": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Vehicle Type"
+          }
+        },
+        "required": [
+          "board_uid"
+        ],
+        "title": "AgentHello",
+        "type": "object"
+      },
+      "backend.BackfillIn": {
+        "description": "C 層：代理把 5G 斷線期間的取樣補傳上來。",
+        "properties": {
+          "board_uid": {
+            "title": "Board Uid",
+            "type": "string"
+          },
+          "samples": {
+            "items": {
+              "$ref": "#/components/schemas/backend.BackfillSample"
+            },
+            "maxItems": 5000,
+            "minItems": 1,
+            "title": "Samples",
+            "type": "array"
+          },
+          "stayed_armed": {
+            "anyOf": [
+              {
+                "type": "boolean"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Stayed Armed"
+          }
+        },
+        "required": [
+          "board_uid",
+          "samples"
+        ],
+        "title": "BackfillIn",
+        "type": "object"
+      },
+      "backend.BackfillSample": {
+        "description": "機上緩衝的一筆取樣。**欄位刻意等同 telemetry 表**——補傳不是另一種\n資料，它就是那段時間我們本來該收到的資料。",
+        "properties": {
+          "alt_msl": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Alt Msl"
+          },
+          "alt_rel": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Alt Rel"
+          },
+          "armed": {
+            "anyOf": [
+              {
+                "type": "boolean"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Armed"
+          },
+          "battery_pct": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Battery Pct"
+          },
+          "battery_voltage": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Battery Voltage"
+          },
+          "flight_mode": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Flight Mode"
+          },
+          "gps_fix": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Gps Fix"
+          },
+          "ground_speed": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Ground Speed"
+          },
+          "heading": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Heading"
+          },
+          "lat": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Lat"
+          },
+          "lon": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Lon"
+          },
+          "satellites": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Satellites"
+          },
+          "t": {
+            "title": "T",
+            "type": "number"
+          }
+        },
+        "required": [
+          "t"
+        ],
+        "title": "BackfillSample",
+        "type": "object"
+      },
+      "backend.DraftIn": {
+        "description": "從零產生：一串點 ＋ 一個政策。**先畫線，數字後到**（§3 動作 1）。",
+        "properties": {
+          "action": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/backend.ResolveIn"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "assume_m": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Assume M"
+          },
+          "fence": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/backend.FenceIn"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "home": {
+            "items": {
+              "type": "number"
+            },
+            "maxItems": 3,
+            "minItems": 2,
+            "title": "Home",
+            "type": "array"
+          },
+          "points": {
+            "items": {
+              "$ref": "#/components/schemas/backend.DraftPoint"
+            },
+            "maxItems": 500,
+            "title": "Points",
+            "type": "array"
+          },
+          "policy": {
+            "$ref": "#/components/schemas/backend.PolicyIn"
+          },
+          "rtl_alt_m": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Rtl Alt M"
+          },
+          "save_as": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Save As"
+          },
+          "wp_radius": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Wp Radius"
+          },
+          "wp_spd": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Wp Spd"
+          }
+        },
+        "required": [
+          "home"
+        ],
+        "title": "DraftIn",
+        "type": "object"
+      },
+      "backend.DraftPoint": {
+        "properties": {
+          "alt": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Alt"
+          },
+          "alt_source": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Alt Source"
+          },
+          "h": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "H"
+          },
+          "hold_s": {
+            "anyOf": [
+              {
+                "maximum": 3600.0,
+                "minimum": 0.0,
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Hold S"
+          },
+          "kind": {
+            "default": "wp",
+            "title": "Kind",
+            "type": "string"
+          },
+          "lat": {
+            "title": "Lat",
+            "type": "number"
+          },
+          "lon": {
+            "title": "Lon",
+            "type": "number"
+          },
+          "speed_ms": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Speed Ms"
+          }
+        },
+        "required": [
+          "lat",
+          "lon"
+        ],
+        "title": "DraftPoint",
+        "type": "object"
+      },
+      "backend.DroneIn": {
+        "properties": {
+          "airframe_serial": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Airframe Serial"
+          },
+          "connection_url": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Connection Url"
+          },
+          "model": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Model"
+          },
+          "name": {
+            "title": "Name",
+            "type": "string"
+          },
+          "note": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Note"
+          }
+        },
+        "required": [
+          "name"
+        ],
+        "title": "DroneIn",
+        "type": "object"
+      },
+      "backend.DronePatch": {
+        "properties": {
+          "airframe_serial": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Airframe Serial"
+          },
+          "camera_url": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Camera Url"
+          },
+          "model": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Model"
+          },
+          "name": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Name"
+          },
+          "prop_diameter_mm": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Prop Diameter Mm"
+          },
+          "video_url": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Video Url"
+          }
+        },
+        "title": "DronePatch",
+        "type": "object"
+      },
+      "backend.FenceIn": {
+        "description": "畫面上畫的圍欄。**規劃端的約束，飛控不會照它擋**（見 `check_fence`）。",
+        "properties": {
+          "alt_max_m": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Alt Max M"
+          },
+          "points": {
+            "items": {
+              "items": {
+                "type": "number"
+              },
+              "type": "array"
+            },
+            "maxItems": 200,
+            "title": "Points",
+            "type": "array"
+          },
+          "radius_m": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Radius M"
+          },
+          "shape": {
+            "default": "none",
+            "title": "Shape",
+            "type": "string"
+          }
+        },
+        "title": "FenceIn",
+        "type": "object"
+      },
+      "backend.GroupDroneIn": {
+        "properties": {
+          "drone_id": {
+            "title": "Drone Id",
+            "type": "string"
+          },
+          "layer_index": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Layer Index"
+          },
+          "plan_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Plan Id"
+          }
+        },
+        "required": [
+          "drone_id"
+        ],
+        "title": "GroupDroneIn",
+        "type": "object"
+      },
+      "backend.GroupIn": {
+        "properties": {
+          "base_plan_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Base Plan Id"
+          },
+          "drones": {
+            "items": {
+              "$ref": "#/components/schemas/backend.GroupDroneIn"
+            },
+            "maxItems": 8,
+            "title": "Drones",
+            "type": "array"
+          },
+          "mode": {
+            "default": "unified",
+            "title": "Mode",
+            "type": "string"
+          },
+          "name": {
+            "title": "Name",
+            "type": "string"
+          },
+          "params": {
+            "anyOf": [
+              {
+                "additionalProperties": true,
+                "type": "object"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Params"
+          },
+          "squad_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Squad Id"
+          }
+        },
+        "required": [
+          "name"
+        ],
+        "title": "GroupIn",
+        "type": "object"
+      },
+      "backend.GuardIn": {
+        "description": "指令服務執行飛行操作前，先問機上守門（協定 §5.2、丙案分工）。",
+        "properties": {
+          "action": {
+            "title": "Action",
+            "type": "string"
+          },
+          "board_uid": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Board Uid"
+          },
+          "drone_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Drone Id"
+          },
+          "intent_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Intent Id"
+          },
+          "kind": {
+            "default": "intent",
+            "title": "Kind",
+            "type": "string"
+          },
+          "params": {
+            "anyOf": [
+              {
+                "additionalProperties": true,
+                "type": "object"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Params"
+          }
+        },
+        "required": [
+          "action"
+        ],
+        "title": "GuardIn",
+        "type": "object"
+      },
+      "backend.HTTPValidationError": {
+        "properties": {
+          "detail": {
+            "items": {
+              "$ref": "#/components/schemas/backend.ValidationError"
+            },
+            "title": "Detail",
+            "type": "array"
+          }
+        },
+        "title": "HTTPValidationError",
+        "type": "object"
+      },
+      "backend.LinkBatch": {
+        "properties": {
+          "drone_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Drone Id"
+          },
+          "samples": {
+            "items": {
+              "$ref": "#/components/schemas/backend.LinkSample"
+            },
+            "maxItems": 1000,
+            "minItems": 1,
+            "title": "Samples",
+            "type": "array"
+          }
+        },
+        "required": [
+          "samples"
+        ],
+        "title": "LinkBatch",
+        "type": "object"
+      },
+      "backend.LinkSample": {
+        "description": "機上一次採樣的完整結果。欄位對應 RM500Q-GL 的 AT+QENG 回應。",
+        "properties": {
+          "alt_rel": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Alt Rel"
+          },
+          "band": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Band"
+          },
+          "cell_id": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Cell Id"
+          },
+          "clock_synced": {
+            "anyOf": [
+              {
+                "type": "boolean"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Clock Synced"
+          },
+          "cqi": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Cqi"
+          },
+          "drone_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Drone Id"
+          },
+          "in_interference_zone": {
+            "anyOf": [
+              {
+                "type": "boolean"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "In Interference Zone"
+          },
+          "jitter_ms": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Jitter Ms"
+          },
+          "lat": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Lat"
+          },
+          "lon": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Lon"
+          },
+          "nr_mode": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Nr Mode"
+          },
+          "packet_loss_pct": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Packet Loss Pct"
+          },
+          "pci": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Pci"
+          },
+          "raw": {
+            "anyOf": [
+              {
+                "additionalProperties": true,
+                "type": "object"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Raw"
+          },
+          "rsrp": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Rsrp"
+          },
+          "rsrq": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Rsrq"
+          },
+          "rtt_ms": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Rtt Ms"
+          },
+          "seq": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Seq"
+          },
+          "sinr": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Sinr"
+          },
+          "throughput_down_kbps": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Throughput Down Kbps"
+          },
+          "throughput_up_kbps": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Throughput Up Kbps"
+          },
+          "time": {
+            "format": "date-time",
+            "title": "Time",
+            "type": "string"
+          }
+        },
+        "required": [
+          "time"
+        ],
+        "title": "LinkSample",
+        "type": "object"
+      },
+      "backend.MissionIn": {
+        "properties": {
+          "drones": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Drones",
+            "type": "array"
+          },
+          "ended": {
+            "default": false,
+            "title": "Ended",
+            "type": "boolean"
+          },
+          "name": {
+            "title": "Name",
+            "type": "string"
+          },
+          "note": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Note"
+          },
+          "squad_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Squad Id"
+          }
+        },
+        "required": [
+          "name"
+        ],
+        "title": "MissionIn",
+        "type": "object"
+      },
+      "backend.MissionPatch": {
+        "properties": {
+          "drones": {
+            "anyOf": [
+              {
+                "items": {
+                  "type": "string"
+                },
+                "type": "array"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Drones"
+          },
+          "ended": {
+            "anyOf": [
+              {
+                "type": "boolean"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Ended"
+          },
+          "name": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Name"
+          },
+          "note": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Note"
+          },
+          "squad_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Squad Id"
+          }
+        },
+        "title": "MissionPatch",
+        "type": "object"
+      },
+      "backend.NearIn": {
+        "description": "航線沿線的建物。**範圍跟著線走，不是一個固定方框。**",
+        "properties": {
+          "buffer_m": {
+            "default": 30.0,
+            "maximum": 500.0,
+            "minimum": 1.0,
+            "title": "Buffer M",
+            "type": "number"
+          },
+          "points": {
+            "items": {
+              "items": {
+                "type": "number"
+              },
+              "type": "array"
+            },
+            "maxItems": 2000,
+            "title": "Points",
+            "type": "array"
+          }
+        },
+        "title": "NearIn",
+        "type": "object"
+      },
+      "backend.OnboardAbandoned": {
+        "description": "機上把一份從來沒有回傳成功的錄製滾動刪掉了。",
+        "properties": {
+          "at": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "At"
+          },
+          "board_uid": {
+            "title": "Board Uid",
+            "type": "string"
+          },
+          "bytes": {
+            "default": 0,
+            "title": "Bytes",
+            "type": "integer"
+          },
+          "name": {
+            "title": "Name",
+            "type": "string"
+          }
+        },
+        "required": [
+          "board_uid",
+          "name"
+        ],
+        "title": "OnboardAbandoned",
+        "type": "object"
+      },
+      "backend.OnboardOffer": {
+        "description": "機上宣告「我有這個檔案要回傳」。",
+        "properties": {
+          "board_uid": {
+            "title": "Board Uid",
+            "type": "string"
+          },
+          "bytes": {
+            "exclusiveMinimum": 0.0,
+            "title": "Bytes",
+            "type": "integer"
+          },
+          "name": {
+            "title": "Name",
+            "type": "string"
+          },
+          "sha256": {
+            "title": "Sha256",
+            "type": "string"
+          }
+        },
+        "required": [
+          "board_uid",
+          "name",
+          "bytes",
+          "sha256"
+        ],
+        "title": "OnboardOffer",
+        "type": "object"
+      },
+      "backend.PlanIn": {
+        "properties": {
+          "cruise_speed": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Cruise Speed"
+          },
+          "fence": {
+            "anyOf": [
+              {
+                "additionalProperties": true,
+                "type": "object"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Fence"
+          },
+          "firmware_type": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Firmware Type"
+          },
+          "home": {
+            "anyOf": [
+              {
+                "items": {
+                  "anyOf": [
+                    {
+                      "type": "number"
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ]
+                },
+                "type": "array"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Home"
+          },
+          "hover_speed": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Hover Speed"
+          },
+          "name": {
+            "title": "Name",
+            "type": "string"
+          },
+          "rally": {
+            "anyOf": [
+              {
+                "items": {
+                  "items": {
+                    "anyOf": [
+                      {
+                        "type": "number"
+                      },
+                      {
+                        "type": "null"
+                      }
+                    ]
+                  },
+                  "type": "array"
+                },
+                "type": "array"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Rally"
+          },
+          "source": {
+            "default": "plan-file",
+            "title": "Source",
+            "type": "string"
+          },
+          "vehicle_type": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Vehicle Type"
+          },
+          "waypoints": {
+            "items": {
+              "$ref": "#/components/schemas/backend.WaypointIn"
+            },
+            "maxItems": 500,
+            "minItems": 2,
+            "title": "Waypoints",
+            "type": "array"
+          }
+        },
+        "required": [
+          "name",
+          "waypoints"
+        ],
+        "title": "PlanIn",
+        "type": "object"
+      },
+      "backend.PlanOverride": {
+        "description": "把某一個航點的高度或速度換掉（試算用）。`speed` 改的是**那個航點之後**\n的 `DO_CHANGE_SPEED`——與飛控的語意一致（見 `plan_check.leg_profile`）。",
+        "properties": {
+          "alt": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Alt"
+          },
+          "hold": {
+            "anyOf": [
+              {
+                "maximum": 3600.0,
+                "minimum": 0.0,
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Hold"
+          },
+          "lat": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Lat"
+          },
+          "lon": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Lon"
+          },
+          "seq": {
+            "title": "Seq",
+            "type": "integer"
+          },
+          "speed": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Speed"
+          }
+        },
+        "required": [
+          "seq"
+        ],
+        "title": "PlanOverride",
+        "type": "object"
+      },
+      "backend.PlanPatch": {
+        "properties": {
+          "name": {
+            "title": "Name",
+            "type": "string"
+          }
+        },
+        "required": [
+          "name"
+        ],
+        "title": "PlanPatch",
+        "type": "object"
+      },
+      "backend.PolicyIn": {
+        "description": "高度與速度的**政策**——操作員的意圖。逐點的 `alt` 是它解出來的結果。",
+        "properties": {
+          "height_m": {
+            "default": 3.0,
+            "title": "Height M",
+            "type": "number"
+          },
+          "land_at_home": {
+            "default": false,
+            "title": "Land At Home",
+            "type": "boolean"
+          },
+          "land_mode": {
+            "default": "vert",
+            "title": "Land Mode",
+            "type": "string"
+          },
+          "mode": {
+            "default": "agl",
+            "title": "Mode",
+            "type": "string"
+          },
+          "speed_ms": {
+            "default": 1.0,
+            "title": "Speed Ms",
+            "type": "number"
+          },
+          "takeoff_alt_m": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Takeoff Alt M"
+          }
+        },
+        "title": "PolicyIn",
+        "type": "object"
+      },
+      "backend.PreviewIn": {
+        "properties": {
+          "assume_m": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Assume M"
+          },
+          "fence": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/backend.FenceIn"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "overrides": {
+            "items": {
+              "$ref": "#/components/schemas/backend.PlanOverride"
+            },
+            "maxItems": 500,
+            "title": "Overrides",
+            "type": "array"
+          },
+          "rtl_alt_m": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Rtl Alt M"
+          },
+          "save": {
+            "default": false,
+            "title": "Save",
+            "type": "boolean"
+          },
+          "save_as": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Save As"
+          },
+          "wp_radius": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Wp Radius"
+          },
+          "wp_spd": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Wp Spd"
+          }
+        },
+        "title": "PreviewIn",
+        "type": "object"
+      },
+      "backend.ResolveIn": {
+        "description": "把一條發現變成一個具體的改動（redesign §6）。**規則在後端**。",
+        "properties": {
+          "name": {
+            "title": "Name",
+            "type": "string"
+          },
+          "seq": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Seq"
+          }
+        },
+        "required": [
+          "name"
+        ],
+        "title": "ResolveIn",
+        "type": "object"
+      },
+      "backend.SessionPatch": {
+        "properties": {
+          "mission_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Mission Id"
+          },
+          "note": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Note"
+          }
+        },
+        "title": "SessionPatch",
+        "type": "object"
+      },
+      "backend.SignIn": {
+        "description": "「我看過了」。**逐條列出你決定照飛的是哪幾條**，不是一個總開關。",
+        "properties": {
+          "acknowledged": {
+            "items": {
+              "type": "string"
+            },
+            "maxItems": 200,
+            "title": "Acknowledged",
+            "type": "array"
+          },
+          "assume_m": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Assume M"
+          },
+          "rtl_alt_m": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Rtl Alt M"
+          },
+          "signed_by": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Signed By"
+          },
+          "wp_radius": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Wp Radius"
+          },
+          "wp_spd": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Wp Spd"
+          }
+        },
+        "title": "SignIn",
+        "type": "object"
+      },
+      "backend.SquadIn": {
+        "properties": {
+          "members": {
+            "items": {
+              "type": "string"
+            },
+            "minItems": 1,
+            "title": "Members",
+            "type": "array"
+          },
+          "name": {
+            "title": "Name",
+            "type": "string"
+          },
+          "note": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Note"
+          }
+        },
+        "required": [
+          "name",
+          "members"
+        ],
+        "title": "SquadIn",
+        "type": "object"
+      },
+      "backend.SquadPatch": {
+        "properties": {
+          "members": {
+            "anyOf": [
+              {
+                "items": {
+                  "type": "string"
+                },
+                "type": "array"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Members"
+          },
+          "name": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Name"
+          },
+          "note": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Note"
+          }
+        },
+        "title": "SquadPatch",
+        "type": "object"
+      },
+      "backend.ValidationError": {
+        "properties": {
+          "ctx": {
+            "title": "Context",
+            "type": "object"
+          },
+          "input": {
+            "title": "Input"
+          },
+          "loc": {
+            "items": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "integer"
+                }
+              ]
+            },
+            "title": "Location",
+            "type": "array"
+          },
+          "msg": {
+            "title": "Message",
+            "type": "string"
+          },
+          "type": {
+            "title": "Error Type",
+            "type": "string"
+          }
+        },
+        "required": [
+          "loc",
+          "msg",
+          "type"
+        ],
+        "title": "ValidationError",
+        "type": "object"
+      },
+      "backend.WaypointIn": {
+        "properties": {
+          "action": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": "waypoint",
+            "title": "Action"
+          },
+          "alt": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Alt"
+          },
+          "command": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Command"
+          },
+          "frame": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Frame"
+          },
+          "lat": {
+            "title": "Lat",
+            "type": "number"
+          },
+          "lon": {
+            "title": "Lon",
+            "type": "number"
+          },
+          "p1": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "P1"
+          },
+          "p2": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "P2"
+          },
+          "p3": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "P3"
+          },
+          "p4": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "P4"
+          },
+          "seq": {
+            "title": "Seq",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "seq",
+          "lat",
+          "lon"
+        ],
+        "title": "WaypointIn",
+        "type": "object"
+      },
+      "command.ChangeRouteIn": {
         "properties": {
           "hold_alt": {
             "anyOf": [
@@ -25,8 +1995,8 @@
             ],
             "title": "Intent Id"
           },
-          "mission_id": {
-            "title": "Mission Id",
+          "plan_id": {
+            "title": "Plan Id",
             "type": "string"
           },
           "proposal": {
@@ -43,19 +2013,30 @@
           }
         },
         "required": [
-          "mission_id"
+          "plan_id"
         ],
         "title": "ChangeRouteIn",
         "type": "object"
       },
-      "FlyIn": {
+      "command.FlyIn": {
         "properties": {
+          "accept_start_distance_m": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Accept Start Distance M"
+          },
           "alt_timeout_s": {
             "default": 60.0,
             "title": "Alt Timeout S",
             "type": "number"
           },
-          "mission_id": {
+          "plan_id": {
             "anyOf": [
               {
                 "type": "string"
@@ -64,18 +2045,24 @@
                 "type": "null"
               }
             ],
-            "title": "Mission Id"
+            "title": "Plan Id"
           },
           "takeoff_alt": {
-            "default": 10.0,
-            "title": "Takeoff Alt",
-            "type": "number"
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Takeoff Alt"
           }
         },
         "title": "FlyIn",
         "type": "object"
       },
-      "GotoIn": {
+      "command.GotoIn": {
         "properties": {
           "index": {
             "title": "Index",
@@ -88,11 +2075,39 @@
         "title": "GotoIn",
         "type": "object"
       },
-      "HTTPValidationError": {
+      "command.GroupExecIn": {
+        "properties": {
+          "mission_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Mission Id"
+          },
+          "mission_name": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Mission Name"
+          }
+        },
+        "title": "GroupExecIn",
+        "type": "object"
+      },
+      "command.HTTPValidationError": {
         "properties": {
           "detail": {
             "items": {
-              "$ref": "#/components/schemas/ValidationError"
+              "$ref": "#/components/schemas/command.ValidationError"
             },
             "title": "Detail",
             "type": "array"
@@ -101,8 +2116,57 @@
         "title": "HTTPValidationError",
         "type": "object"
       },
-      "StartIn": {
+      "command.MissionStartIn": {
         "properties": {
+          "accept_start_distance_m": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Accept Start Distance M"
+          },
+          "resume": {
+            "default": false,
+            "title": "Resume",
+            "type": "boolean"
+          }
+        },
+        "title": "MissionStartIn",
+        "type": "object"
+      },
+      "command.ParamWrite": {
+        "properties": {
+          "params": {
+            "additionalProperties": {
+              "type": "number"
+            },
+            "title": "Params",
+            "type": "object"
+          }
+        },
+        "required": [
+          "params"
+        ],
+        "title": "ParamWrite",
+        "type": "object"
+      },
+      "command.StartIn": {
+        "properties": {
+          "accept_start_distance_m": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Accept Start Distance M"
+          },
           "mission": {
             "anyOf": [
               {
@@ -114,6 +2178,28 @@
             ],
             "title": "Mission"
           },
+          "mission_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Mission Id"
+          },
+          "mission_name": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Mission Name"
+          },
           "plan": {
             "anyOf": [
               {
@@ -124,6 +2210,17 @@
               }
             ],
             "title": "Plan"
+          },
+          "plan_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Plan Id"
           },
           "store": {
             "default": true,
@@ -142,15 +2239,26 @@
             "title": "Sysid"
           },
           "takeoff_alt": {
-            "default": 10.0,
-            "title": "Takeoff Alt",
-            "type": "number"
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Takeoff Alt"
+          },
+          "wait": {
+            "default": true,
+            "title": "Wait",
+            "type": "boolean"
           }
         },
         "title": "StartIn",
         "type": "object"
       },
-      "TakeoffIn": {
+      "command.TakeoffIn": {
         "properties": {
           "alt": {
             "default": 10.0,
@@ -161,20 +2269,20 @@
         "title": "TakeoffIn",
         "type": "object"
       },
-      "UploadIn": {
+      "command.UploadIn": {
         "properties": {
-          "mission_id": {
-            "title": "Mission Id",
+          "plan_id": {
+            "title": "Plan Id",
             "type": "string"
           }
         },
         "required": [
-          "mission_id"
+          "plan_id"
         ],
         "title": "UploadIn",
         "type": "object"
       },
-      "ValidationError": {
+      "command.ValidationError": {
         "properties": {
           "ctx": {
             "title": "Context",
@@ -217,509 +2325,12 @@
     }
   },
   "info": {
-    "description": "無人機指令服務。**外部整合請看「任務」那一組的三個端點。**\n\n> 匯出 OpenAPI：`python3 scripts/export-openapi.py`",
-    "title": "UAV Command Service",
-    "version": "0.1.0"
+    "description": "無人機管理系統的**對外介面**。人看的版本在 `doc/external-api-v3.html`\n（含範例、錯誤碼與每個欄位的意思），這份是給機器讀的。\n\n**認證：沒有。**（2026-09-14 定案）任何連得到這兩個埠的人都能看資料、也能\n指揮飛機。安全靠網段隔離——這件事寫在這裡，不能靠「大家都知道」。\n\n## WebSocket（OpenAPI 表達不了，寫在這裡）\n\n    ws://10.141.2.21:38000/ws/v1/missions/{mission_id}\n\n起飛後每 0.5 秒推一則。訊息與 `GET /api/v1/ext/missions/{id}/live` 的\n`messages` **逐字相同、同一組序號**——兩者可以混用，斷線期間用輪詢頂著，\n回來再用 `?after_seq=` 接上。\n\n訊息類型：`hello`／`route`（整條規劃航線，一次給完）／`track`（實際軌跡，\n全量）／`state`（每 0.5 秒：位置、電量、`mission_progress`）／\n`start_step`（起飛序列跑到哪一步）／`ended`。\n\n## 三件最容易踩到的事\n\n1. **`/api/v1/start` 預設會等整套跑完才回應**（上傳→解鎖→起飛→**飛到任務\n   起始點**→切 AUTO）。起點遠就是幾分鐘。**請帶 `wait: false`**：立刻回 202，\n   進度走串流。用同步模式而逾時的話，**飛機仍在飛**——不要直接重送。\n2. **固定帶自己產生的 `mission_id`。** 帶了，逾時後重送是冪等的（回 202\n   `already_running`＋目前步驟）；不帶，重送只會拿到 409 `start_in_progress`。\n3. **`ended` 是一次性推送，不是可以事後查的紀錄。** 任務結束後只再保留 30 秒，\n   之後重連回 410 `mission_gone`。**資料一點都沒少**——改用\n   `GET /api/v1/ext/missions`（看 `state`）與 `.../signal`（拿結果）。\n\n## 路徑前綴\n\n每一支都吃 `/api/v1/…`。舊的無版本寫法保留為別名。\n",
+    "title": "無人機管理系統：對外介面",
+    "version": "v3"
   },
   "openapi": "3.1.0",
   "paths": {
-    "/api/command/group/{group_id}/abort": {
-      "post": {
-        "description": "操作員主動全撤（緊急全撤鈕）。冪等、依當前 phase 自動選動作：\n起飛前→disarm 已解鎖者；已起飛→RTL。與序列偵測失敗自動全撤同終態。",
-        "operationId": "group_abort_api_command_group__group_id__abort_post",
-        "parameters": [
-          {
-            "in": "path",
-            "name": "group_id",
-            "required": true,
-            "schema": {
-              "title": "Group Id",
-              "type": "string"
-            }
-          }
-        ],
-        "responses": {
-          "200": {
-            "content": {
-              "application/json": {
-                "schema": {}
-              }
-            },
-            "description": "Successful Response"
-          },
-          "422": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/HTTPValidationError"
-                }
-              }
-            },
-            "description": "Validation Error"
-          }
-        },
-        "summary": "Group Abort"
-      }
-    },
-    "/api/command/group/{group_id}/execute": {
-      "post": {
-        "description": "兩階段提交（§3）。**非同步啟動**：嚴格 gate 通過→立即回 202＋群組 handle，\n背景序列跑逐台 upload→arm→start，即時態逐步寫 DB（前端輪詢 backend GET）。\ngate 失敗→同步 409＋逐台原因（未啟動序列）。中止只能透過 abort，不是斷 HTTP。",
-        "operationId": "group_execute_api_command_group__group_id__execute_post",
-        "parameters": [
-          {
-            "in": "path",
-            "name": "group_id",
-            "required": true,
-            "schema": {
-              "title": "Group Id",
-              "type": "string"
-            }
-          }
-        ],
-        "responses": {
-          "202": {
-            "content": {
-              "application/json": {
-                "schema": {}
-              }
-            },
-            "description": "Successful Response"
-          },
-          "422": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/HTTPValidationError"
-                }
-              }
-            },
-            "description": "Validation Error"
-          }
-        },
-        "summary": "Group Execute"
-      }
-    },
-    "/api/command/group/{group_id}/rtl": {
-      "post": {
-        "description": "群組 RTL-all（空中緊急）。冪等。",
-        "operationId": "group_rtl_api_command_group__group_id__rtl_post",
-        "parameters": [
-          {
-            "in": "path",
-            "name": "group_id",
-            "required": true,
-            "schema": {
-              "title": "Group Id",
-              "type": "string"
-            }
-          }
-        ],
-        "responses": {
-          "200": {
-            "content": {
-              "application/json": {
-                "schema": {}
-              }
-            },
-            "description": "Successful Response"
-          },
-          "422": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/HTTPValidationError"
-                }
-              }
-            },
-            "description": "Validation Error"
-          }
-        },
-        "summary": "Group Rtl"
-      }
-    },
-    "/api/command/{sysid}/arm": {
-      "post": {
-        "operationId": "arm_api_command__sysid__arm_post",
-        "parameters": [
-          {
-            "in": "path",
-            "name": "sysid",
-            "required": true,
-            "schema": {
-              "title": "Sysid",
-              "type": "integer"
-            }
-          },
-          {
-            "in": "query",
-            "name": "intent",
-            "required": false,
-            "schema": {
-              "anyOf": [
-                {
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "title": "Intent"
-            }
-          }
-        ],
-        "responses": {
-          "200": {
-            "content": {
-              "application/json": {
-                "schema": {}
-              }
-            },
-            "description": "Successful Response"
-          },
-          "422": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/HTTPValidationError"
-                }
-              }
-            },
-            "description": "Validation Error"
-          }
-        },
-        "summary": "Arm",
-        "tags": [
-          "操作"
-        ]
-      }
-    },
-    "/api/command/{sysid}/disarm": {
-      "post": {
-        "operationId": "disarm_api_command__sysid__disarm_post",
-        "parameters": [
-          {
-            "in": "path",
-            "name": "sysid",
-            "required": true,
-            "schema": {
-              "title": "Sysid",
-              "type": "integer"
-            }
-          }
-        ],
-        "responses": {
-          "200": {
-            "content": {
-              "application/json": {
-                "schema": {}
-              }
-            },
-            "description": "Successful Response"
-          },
-          "422": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/HTTPValidationError"
-                }
-              }
-            },
-            "description": "Validation Error"
-          }
-        },
-        "summary": "Disarm",
-        "tags": [
-          "操作"
-        ]
-      }
-    },
-    "/api/command/{sysid}/mission/change-route": {
-      "post": {
-        "description": "**第二步：執行三步序列。** 每一步都讀回機端確認，任何一步沒過就停在\n安全狀態（懸停），不會繼續往一個沒人確認過的方向飛。\n\n**執行當下重算提案**（協定 §5.1）：人確認的是**那一份**提案，而飛機在\n人看提案的那段時間裡一直在動。續飛航點換了、或距離變化超過門檻，就中止\n並回新的提案要人重看——不照著過期的提案做。",
-        "operationId": "change_route_exec_api_command__sysid__mission_change_route_post",
-        "parameters": [
-          {
-            "in": "path",
-            "name": "sysid",
-            "required": true,
-            "schema": {
-              "title": "Sysid",
-              "type": "integer"
-            }
-          }
-        ],
-        "requestBody": {
-          "content": {
-            "application/json": {
-              "schema": {
-                "$ref": "#/components/schemas/ChangeRouteIn"
-              }
-            }
-          },
-          "required": true
-        },
-        "responses": {
-          "200": {
-            "content": {
-              "application/json": {
-                "schema": {}
-              }
-            },
-            "description": "Successful Response"
-          },
-          "422": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/HTTPValidationError"
-                }
-              }
-            },
-            "description": "Validation Error"
-          }
-        },
-        "summary": "Change Route Exec"
-      }
-    },
-    "/api/command/{sysid}/mission/change-route/proposal": {
-      "post": {
-        "description": "**飛行中改航線的第一步：提案。這個端點不動飛機。**\n\n回傳「會怎麼調整」——狀態機文件 §6.3 要求確認畫面不得只問「確定嗎？」，\n因為那種確認框沒有資訊，人只會照按。所以這裡算得出：續飛到哪一點、\n離現在多遠、往哪個方向、會不會先爬升或下降、以及這是可中止的三步序列。\n\n**在地上不需要走這條路**：地面上傳是存檔，直接用 mission/upload。\n確認要保持稀有才有意義——每次上傳都跳確認框，會訓練人閉著眼睛按，\n然後空中那次也照按（§6.3 明文禁止把它做成 upload 的預設行為）。",
-        "operationId": "change_route_proposal_api_command__sysid__mission_change_route_proposal_post",
-        "parameters": [
-          {
-            "in": "path",
-            "name": "sysid",
-            "required": true,
-            "schema": {
-              "title": "Sysid",
-              "type": "integer"
-            }
-          }
-        ],
-        "requestBody": {
-          "content": {
-            "application/json": {
-              "schema": {
-                "$ref": "#/components/schemas/ChangeRouteIn"
-              }
-            }
-          },
-          "required": true
-        },
-        "responses": {
-          "200": {
-            "content": {
-              "application/json": {
-                "schema": {}
-              }
-            },
-            "description": "Successful Response"
-          },
-          "422": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/HTTPValidationError"
-                }
-              }
-            },
-            "description": "Validation Error"
-          }
-        },
-        "summary": "Change Route Proposal"
-      }
-    },
-    "/api/command/{sysid}/mission/fly": {
-      "post": {
-        "description": "起飛→任務自動序列（實戰教訓 2026-08-11：地面直接 MISSION_START\n在實機上會失敗，須先到高度）：\n\n  （上傳＋回讀比對）→ 解鎖 → NAV_TAKEOFF → **等實際到達目標高度**\n  → 切 AUTO.MISSION（已在空中，PX4 跳過任務內的 takeoff 項續飛）\n\n高度沒到就不切任務——序列在任何一步失敗都停在安全狀態\n（PX4 起飛後自動懸停），並回報卡在哪一步。",
-        "operationId": "mission_fly_api_command__sysid__mission_fly_post",
-        "parameters": [
-          {
-            "in": "path",
-            "name": "sysid",
-            "required": true,
-            "schema": {
-              "title": "Sysid",
-              "type": "integer"
-            }
-          }
-        ],
-        "requestBody": {
-          "content": {
-            "application/json": {
-              "schema": {
-                "$ref": "#/components/schemas/FlyIn"
-              }
-            }
-          },
-          "required": true
-        },
-        "responses": {
-          "200": {
-            "content": {
-              "application/json": {
-                "schema": {}
-              }
-            },
-            "description": "Successful Response"
-          },
-          "422": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/HTTPValidationError"
-                }
-              }
-            },
-            "description": "Validation Error"
-          }
-        },
-        "summary": "Mission Fly",
-        "tags": [
-          "一鍵"
-        ]
-      }
-    },
-    "/api/command/{sysid}/mission/goto": {
-      "post": {
-        "description": "從指定的航點續飛（issues/039 的「續飛」）。\n\n參數是**我方索引**而不是機端 seq：機端 seq 的慣例因廠牌而異\n（ArduPilot 的 home 佔 0），讓呼叫端算＝把方言洩漏到每一個呼叫點。",
-        "operationId": "mission_goto_api_command__sysid__mission_goto_post",
-        "parameters": [
-          {
-            "in": "path",
-            "name": "sysid",
-            "required": true,
-            "schema": {
-              "title": "Sysid",
-              "type": "integer"
-            }
-          }
-        ],
-        "requestBody": {
-          "content": {
-            "application/json": {
-              "schema": {
-                "$ref": "#/components/schemas/GotoIn"
-              }
-            }
-          },
-          "required": true
-        },
-        "responses": {
-          "200": {
-            "content": {
-              "application/json": {
-                "schema": {}
-              }
-            },
-            "description": "Successful Response"
-          },
-          "422": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/HTTPValidationError"
-                }
-              }
-            },
-            "description": "Validation Error"
-          }
-        },
-        "summary": "Mission Goto"
-      }
-    },
-    "/api/command/{sysid}/mission/start": {
-      "post": {
-        "description": "讓飛控開始執行**它機上現有**的那份任務（不帶任務內容——那是上一步的事）。\n\n**機必須已經解鎖並在空中**：對停在地面的機切自動任務模式，等於叫它自己起飛。\n要從地面一路到飛，用 `/api/command/{sysid}/mission/fly` 或 `/api/start`。",
-        "operationId": "mission_start_api_command__sysid__mission_start_post",
-        "parameters": [
-          {
-            "in": "path",
-            "name": "sysid",
-            "required": true,
-            "schema": {
-              "title": "Sysid",
-              "type": "integer"
-            }
-          }
-        ],
-        "responses": {
-          "200": {
-            "content": {
-              "application/json": {
-                "schema": {}
-              }
-            },
-            "description": "Successful Response"
-          },
-          "422": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/HTTPValidationError"
-                }
-              }
-            },
-            "description": "Validation Error"
-          }
-        },
-        "summary": "③ 開始執行機上的任務",
-        "tags": [
-          "任務"
-        ]
-      }
-    },
-    "/api/command/{sysid}/mission/upload": {
-      "post": {
-        "description": "把任務庫的一份航線寫進飛控，**並逐項讀回比對**——ACK 是「我收到了」，\n不是「我做到了」。\n\n⚠ **上傳在地面是存檔，在空中是立即生效的航線變更**：飛控收到新任務的那一刻\n就會照它飛。飛行中要換航線請走 `change-route`（暫停→上傳→從最近的航點續飛，\n每步讀回確認），不要直接呼叫本端點。",
-        "operationId": "mission_upload_api_command__sysid__mission_upload_post",
-        "parameters": [
-          {
-            "in": "path",
-            "name": "sysid",
-            "required": true,
-            "schema": {
-              "title": "Sysid",
-              "type": "integer"
-            }
-          }
-        ],
-        "requestBody": {
-          "content": {
-            "application/json": {
-              "schema": {
-                "$ref": "#/components/schemas/UploadIn"
-              }
-            }
-          },
-          "required": true
-        },
-        "responses": {
-          "200": {
-            "content": {
-              "application/json": {
-                "schema": {}
-              }
-            },
-            "description": "Successful Response"
-          },
-          "422": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/HTTPValidationError"
-                }
-              }
-            },
-            "description": "Validation Error"
-          }
-        },
-        "summary": "② 上傳任務到無人機（會逐項讀回比對）",
-        "tags": [
-          "任務"
-        ]
-      }
-    },
     "/api/command/{sysid}/mode/{mode}": {
       "post": {
         "operationId": "set_mode_api_command__sysid__mode__mode__post",
@@ -766,7 +2377,7 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/HTTPValidationError"
+                  "$ref": "#/components/schemas/command.HTTPValidationError"
                 }
               }
             },
@@ -777,33 +2388,29 @@
         "tags": [
           "操作"
         ]
-      }
+      },
+      "servers": [
+        {
+          "description": "指揮面",
+          "url": "http://10.141.2.21:38001"
+        }
+      ]
     },
-    "/api/command/{sysid}/takeoff": {
-      "post": {
-        "description": "監督式起飛：解鎖＋爬升到指定高度後自動懸停（PX4 自主執行）。\n取代「用 RC 手動飛到高度」的操作——連續操縱仍是 RC 的職權。",
-        "operationId": "takeoff_api_command__sysid__takeoff_post",
+    "/api/drones/{drone_id}/camera": {
+      "get": {
+        "description": "這台的即時畫面現在是什麼狀況。**不會因為問就把轉碼打開。**",
+        "operationId": "camera_status_api_drones__drone_id__camera_get",
         "parameters": [
           {
             "in": "path",
-            "name": "sysid",
+            "name": "drone_id",
             "required": true,
             "schema": {
-              "title": "Sysid",
-              "type": "integer"
+              "title": "Drone Id",
+              "type": "string"
             }
           }
         ],
-        "requestBody": {
-          "content": {
-            "application/json": {
-              "schema": {
-                "$ref": "#/components/schemas/TakeoffIn"
-              }
-            }
-          },
-          "required": true
-        },
         "responses": {
           "200": {
             "content": {
@@ -817,18 +2424,423 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/HTTPValidationError"
+                  "$ref": "#/components/schemas/backend.HTTPValidationError"
                 }
               }
             },
             "description": "Validation Error"
           }
         },
-        "summary": "Takeoff",
+        "summary": "Camera Status",
         "tags": [
-          "操作"
+          "影像"
         ]
-      }
+      },
+      "servers": [
+        {
+          "description": "資料面與影像",
+          "url": "http://10.141.2.21:38000"
+        }
+      ]
+    },
+    "/api/drones/{drone_id}/camera/snapshot.jpg": {
+      "get": {
+        "operationId": "camera_snapshot_api_drones__drone_id__camera_snapshot_jpg_get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "drone_id",
+            "required": true,
+            "schema": {
+              "title": "Drone Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/backend.HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Camera Snapshot",
+        "tags": [
+          "影像"
+        ]
+      },
+      "servers": [
+        {
+          "description": "資料面與影像",
+          "url": "http://10.141.2.21:38000"
+        }
+      ]
+    },
+    "/api/drones/{drone_id}/camera/stream.mjpg": {
+      "get": {
+        "description": "`multipart/x-mixed-replace` 的 MJPEG，`<img src=...>` 直接吃得下。",
+        "operationId": "camera_mjpeg_api_drones__drone_id__camera_stream_mjpg_get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "drone_id",
+            "required": true,
+            "schema": {
+              "title": "Drone Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/backend.HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Camera Mjpeg",
+        "tags": [
+          "影像"
+        ]
+      },
+      "servers": [
+        {
+          "description": "資料面與影像",
+          "url": "http://10.141.2.21:38000"
+        }
+      ]
+    },
+    "/api/ext/drones": {
+      "get": {
+        "description": "**對外**的機隊清單：一次回答「有哪些機、哪些現在指得動」。\n\n外部系統原本要打兩支（本服務的 `/healthz` 拿在線清單、backend 的\n`/api/admission/{sysid}` 逐台問可不可以指揮），而那兩支都是**內部端點**\n——它們回的模式編號、板號、能力四態是給我方 UI 與排查用的，形狀也會\n隨內部演進而變。這一支只回外部真正要用的四件事，並且把兩個問題合成一次\n往返（見 `doc/external-api-v3.html#ext-drones`）。\n\n`controllable` 為 true 才可以下指令；為 false 時 `reason` 一定說得出\n是什麼擋住了（沿用 `admission.why_blocked`，與指令被擋時的說法同一份）。\n\n**`video`（2026-09-23 新增）**：這台的即時畫面在哪裡拉。使用者裁定外部走\n**RTSP**、**不限制也不記錄**。三態見 `libs/video_stream.ext_video`——\n重點是 `ready` 只代表「來源設好了而且這台有連線」，**不保證此刻拉得到**。\n網址的主機名取自這次請求的 `Host`，所以你連得到這支端點就連得到那條串流。",
+        "operationId": "ext_drones_api_ext_drones_get",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            },
+            "description": "Successful Response"
+          }
+        },
+        "summary": "外部：現在有哪些無人機、可不可以指揮",
+        "tags": [
+          "任務"
+        ]
+      },
+      "servers": [
+        {
+          "description": "指揮面",
+          "url": "http://10.141.2.21:38001"
+        }
+      ]
+    },
+    "/api/ext/live": {
+      "get": {
+        "description": "**對外**的即時快照：位置、高度、速度、5G 鏈路指標。\n\n與 `/api/live` 同一份資料，但只回上面白名單裡的欄位——外部系統不需要\n知道 EKF、預檢、板號、任務索引這些內部狀態，而它們本來就會隨我方演進而變。\n\n`sysid` 省略＝主機；指定就回那一台（`/api/live` 只回主機，多機時外部\n無從指定，那正是這個參數存在的理由）。",
+        "operationId": "ext_live_api_ext_live_get",
+        "parameters": [
+          {
+            "in": "query",
+            "name": "sysid",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "integer"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Sysid"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/backend.HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Ext Live"
+      },
+      "servers": [
+        {
+          "description": "資料面與影像",
+          "url": "http://10.141.2.21:38000"
+        }
+      ]
+    },
+    "/api/ext/missions": {
+      "get": {
+        "description": "歷史任務清單。要比較的兩個任務通常用 `plan_id` 挑——同一份路徑飛的兩趟里程才對得起來。\n\n統計（架次數、樣本數、第一趟起飛時間）都是查詢時算的，**不存欄位**：\n存下來就要維護一致性，而那是第二個家。",
+        "operationId": "list_missions_api_ext_missions_get",
+        "parameters": [
+          {
+            "in": "query",
+            "name": "since",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Since"
+            }
+          },
+          {
+            "in": "query",
+            "name": "until",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Until"
+            }
+          },
+          {
+            "in": "query",
+            "name": "plan_id",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Plan Id"
+            }
+          },
+          {
+            "in": "query",
+            "name": "external",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "boolean"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "External"
+            }
+          },
+          {
+            "in": "query",
+            "name": "drone_id",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Drone Id"
+            }
+          },
+          {
+            "in": "query",
+            "name": "limit",
+            "required": false,
+            "schema": {
+              "default": 50,
+              "title": "Limit",
+              "type": "integer"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/backend.HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "List Missions"
+      },
+      "servers": [
+        {
+          "description": "資料面與影像",
+          "url": "http://10.141.2.21:38000"
+        }
+      ]
+    },
+    "/api/ext/missions/{mission_id}/live": {
+      "get": {
+        "description": "即時資料的**輪詢版**：與 `/ws/v1/missions/{id}` 同一份訊息、同一組序號。\n\n一推一拉，但 `messages` 裡的每一則與 WS 送出去的**逐字相同**——\n控制端換一種傳法不必改訊息處理，兩種也可以混用（WS 斷線期間先用輪詢頂著）。\n\n* **不帶 `after_seq`＝快照**：現在的 `route`、`track` 與最新一則 `state`\n  （結束了就再附 `ended`）。第一次呼叫用這個，不必等下一個 tick。\n* **帶 `after_seq`＝補送**：那之後的每一則，語意同 WS 的 `?after_seq=`。\n  回應的 `seq` 就是下一次要帶的值；緩衝只留 60 秒，斷太久就會有 `gap`。\n\n**輪詢不會讓任務活得比較久**：結束條件與 WS 完全一樣（最後一台上鎖\n3 秒後），這支端點只是把同一份訊息換個方式交出去。",
+        "operationId": "live_api_ext_missions__mission_id__live_get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "mission_id",
+            "required": true,
+            "schema": {
+              "title": "Mission Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "after_seq",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "integer"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "After Seq"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/backend.HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Live"
+      },
+      "servers": [
+        {
+          "description": "資料面與影像",
+          "url": "http://10.141.2.21:38000"
+        }
+      ]
+    },
+    "/api/ext/missions/{mission_id}/signal": {
+      "get": {
+        "description": "一個任務的完整訊號，依「機 → 架次」分組。一次一個任務。\n\n每一筆樣本帶 `along_m`（沿預計航線走了多遠）與 `offset_m`（偏離多少）——\n兩趟的速度不同，時間對不齊，里程才是共同的 X 軸（doc/external-history-api.md §4）。\n\n偏離上限**不給外部調**（issues/054）：它是「偏離多遠就不該再談里程」的方法判斷，\n不是查詢條件；可調的話同一趟資料在不同呼叫下會給出不同的 `along_m`。",
+        "operationId": "mission_signal_api_ext_missions__mission_id__signal_get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "mission_id",
+            "required": true,
+            "schema": {
+              "title": "Mission Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/backend.HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Mission Signal"
+      },
+      "servers": [
+        {
+          "description": "資料面與影像",
+          "url": "http://10.141.2.21:38000"
+        }
+      ]
     },
     "/api/missions": {
       "get": {
@@ -848,45 +2860,13 @@
         "tags": [
           "任務"
         ]
-      }
-    },
-    "/api/missions/{ref}": {
-      "get": {
-        "description": "外部：單一航線內容（保真航點）＋幾何預檢。ref＝id 或名稱。",
-        "operationId": "ext_get_mission_api_missions__ref__get",
-        "parameters": [
-          {
-            "in": "path",
-            "name": "ref",
-            "required": true,
-            "schema": {
-              "title": "Ref",
-              "type": "string"
-            }
-          }
-        ],
-        "responses": {
-          "200": {
-            "content": {
-              "application/json": {
-                "schema": {}
-              }
-            },
-            "description": "Successful Response"
-          },
-          "422": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/HTTPValidationError"
-                }
-              }
-            },
-            "description": "Validation Error"
-          }
-        },
-        "summary": "Ext Get Mission"
-      }
+      },
+      "servers": [
+        {
+          "description": "指揮面",
+          "url": "http://10.141.2.21:38001"
+        }
+      ]
     },
     "/api/plans": {
       "get": {
@@ -903,65 +2883,23 @@
           }
         },
         "summary": "Ext List Plans"
-      }
-    },
-    "/api/plans/{name}": {
-      "get": {
-        "description": "外部：單一 .plan——預設回解析航點＋預檢；raw=true 回 QGC 原始 JSON。",
-        "operationId": "ext_get_plan_api_plans__name__get",
-        "parameters": [
-          {
-            "in": "path",
-            "name": "name",
-            "required": true,
-            "schema": {
-              "title": "Name",
-              "type": "string"
-            }
-          },
-          {
-            "in": "query",
-            "name": "raw",
-            "required": false,
-            "schema": {
-              "default": false,
-              "title": "Raw",
-              "type": "boolean"
-            }
-          }
-        ],
-        "responses": {
-          "200": {
-            "content": {
-              "application/json": {
-                "schema": {}
-              }
-            },
-            "description": "Successful Response"
-          },
-          "422": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/HTTPValidationError"
-                }
-              }
-            },
-            "description": "Validation Error"
-          }
-        },
-        "summary": "Ext Get Plan"
-      }
+      },
+      "servers": [
+        {
+          "description": "指揮面",
+          "url": "http://10.141.2.21:38001"
+        }
+      ]
     },
     "/api/start": {
       "post": {
-        "description": "**一鍵起飛**：取航線（任務庫 id/名稱 或 .plan 檔）→ 幾何預檢 → 委派 mission/fly\n（上傳回讀→arm→起飛→到高度→AUTO.MISSION）。航線來源二選一：\n  {\"mission\": \"<id 或名稱>\"}   任務庫（主要）\n  {\"plan\": \"xxx.plan\"}         missions/ 目錄（會先入庫再飛）\n失敗帶 mission/fly 的 step 與 PX4 原因。成功回 {source, mission_id, name, sysid, ok, steps}。",
+        "description": "**一鍵起飛**：取航線（路徑庫 id/名稱 或 .plan 檔）→ 幾何預檢 → 建立或掛上任務 →\n委派 mission/fly（上傳回讀→arm→起飛→到高度→AUTO.MISSION）。航線來源二選一：\n  {\"plan_id\": \"<id 或名稱>\"}   路徑庫（主要；舊名 mission）\n  {\"plan\": \"xxx.plan\"}         missions/ 目錄（會先入庫再飛）\n`mission_id`（UUID）給了就用它建立或掛進那個任務，沒給由地面站產生；回應的\n`stream` 是對外即時串流的網址（doc/external-live-api.md）。錯誤一律 {code, msg}。",
         "operationId": "start_api_start_post",
         "requestBody": {
           "content": {
             "application/json": {
               "schema": {
-                "$ref": "#/components/schemas/StartIn"
+                "$ref": "#/components/schemas/command.StartIn"
               }
             }
           },
@@ -980,7 +2918,7 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/HTTPValidationError"
+                  "$ref": "#/components/schemas/command.HTTPValidationError"
                 }
               }
             },
@@ -991,49 +2929,23 @@
         "tags": [
           "一鍵"
         ]
-      }
-    },
-    "/healthz": {
-      "get": {
-        "description": "服務與各機連線狀態。**`ok` 講的是「還能不能指揮飛機」**，不是\n「HTTP 層還活著」——issue 034：2026-08-11 router 執行緒被網路瞬斷殺死後，\n心跳停發、指令全逾時，而這裡照回 `{\"ok\": true}`，於是沒有任何人與腳本\n看得出異常，拖了近一小時才發現。失效不得冒充合法狀態（ui-spec §0.2e）。\n\n**2026-08-31 語意變窄了**：GCS 心跳已搬到獨立行程（issues/033 §4.2.1），\n所以 router 卡住**不再等於心跳停發**。`ok` 仍然是 false（指令送不出去仍然\n是「指不動飛機」），但下面的 detail 不能再說「GCS 心跳已停發」——\n那句話現在是假的，而**一句假的診斷會把人帶去查錯的地方**。",
-        "operationId": "healthz_healthz_get",
-        "responses": {
-          "200": {
-            "content": {
-              "application/json": {
-                "schema": {}
-              }
-            },
-            "description": "Successful Response"
-          }
-        },
-        "summary": "Healthz",
-        "tags": [
-          "健康"
-        ]
-      }
+      },
+      "servers": [
+        {
+          "description": "指揮面",
+          "url": "http://10.141.2.21:38001"
+        }
+      ]
     }
   },
-  "tags": [
+  "servers": [
     {
-      "description": "**外部呼叫端只需要這三個**：選任務 → 上傳到無人機 → 開始執行。\n\n每一步都會先過三道門，被擋下時回的是 4xx 與**說得出下一步的理由**：\n1. **入列**（403 `not_admitted`）——這台機是不是我們的。沒有機上代理的機**看得到但指不動**。\n2. **能力**（501）——這個廠牌的這個動作驗過了沒。\n3. **機上守門**（409 `guard_refused`）——當下這個狀態允不允許。理由一定說得出「那現在能做什麼」。",
-      "name": "任務"
+      "description": "指揮面",
+      "url": "http://10.141.2.21:38001"
     },
     {
-      "description": "把三步併成一次呼叫（上傳→解鎖→起飛→切任務），每步讀回確認。**適合自動化流程**；互動操作建議走三步，因為中途出錯時看得出停在哪一步。",
-      "name": "一鍵"
-    },
-    {
-      "description": "解鎖／模式／起飛等操作層動作。",
-      "name": "操作"
-    },
-    {
-      "description": "編隊執行。",
-      "name": "群組"
-    },
-    {
-      "description": "服務與各機連線狀態。",
-      "name": "健康"
+      "description": "資料面與影像",
+      "url": "http://10.141.2.21:38000"
     }
   ]
 }
