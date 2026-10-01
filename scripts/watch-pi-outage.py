@@ -26,6 +26,7 @@ EXT5V 電壓。兩邊的時戳對起來就說得出是哪一種。
 輸出：`/var/tmp/pi-outage.log`（每行都 flush＋fsync——**地面站自己被關掉時
 也不能丟掉最後那幾行**），另外每段中斷結束時印一行判讀。
 """
+import json
 import os
 import socket
 import subprocess
@@ -33,13 +34,36 @@ import sys
 import time
 from datetime import datetime
 
-HOST = os.environ.get("PI_HOST", "10.141.2.32")
+#: 寫死就會失效——2026-10-01 的教訓：這支從 9/24 起一直盯著一個不存在的
+#: 位址，整週的紀錄都是「斷線中」，而它正是為了查 Pi 無預警重開而裝的
+#: （issues/072／075）。預設改成**跟著地面站學到的對端走**。
+HOST = os.environ.get("PI_HOST") or ""
 LOG = os.environ.get("OUTAGE_LOG", "/var/tmp/pi-outage.log")
 # **只探 22。** 原本連 8554（相機服務）也探，而那會在機上的 uav-camera 日誌裡
 # 每秒留一行「conn opened」，把真正要看的東西洗掉——**診斷工具不該污染被
 # 診斷的對象**。sshd 同樣是 userspace 行程，足以回答「userspace 還活著嗎」。
 PORTS = [22]
 PERIOD = 1.0
+
+
+def learn_host() -> str | None:
+    """機上現在的位址——取自指令服務學到的對端（實際封包的來源）。
+
+    **這支要盯的是「那台 Pi」，不是「某個 IP」。** 位址會變（換網段、5G 重新
+    配址），寫死的話它會安靜地盯著一個不存在的位址，而「一直不通」與「真的
+    掛了」在紀錄裡長得一模一樣。
+    """
+    try:
+        out = subprocess.run(
+            ["docker", "exec", "uav-command", "cat", "/state/peers.json"],
+            capture_output=True, timeout=5).stdout
+        peers = (json.loads(out).get("peers") or {}) if out else {}
+    except Exception:
+        return None
+    for v in peers.values():
+        if v.get("ip"):
+            return v["ip"]
+    return None
 
 
 def ping(host: str, timeout: float = 0.8) -> bool:
@@ -60,7 +84,12 @@ def tcp(host: str, port: int, timeout: float = 0.8) -> bool:
         return False
 
 
+#: 多久重新確認一次機上位址（秒）。**位址變了要跟上**，但也不必每秒問
+HOST_REFRESH_S = 60.0
+
+
 def main() -> None:
+    global HOST
     f = open(LOG, "a", buffering=1)
 
     def emit(line: str) -> None:
@@ -68,7 +97,14 @@ def main() -> None:
         f.flush()
         os.fsync(f.fileno())          # **斷電也要留得住**
 
+    if not HOST:
+        HOST = learn_host() or ""
+        if not HOST:
+            emit(f"# {datetime.now():%F %T} **問不到機上位址**"
+                 "（指令服務沒有學到對端？）——設 PI_HOST 指定")
+            sys.exit(2)
     emit(f"# {datetime.now():%F %T} 開始盯 {HOST}（ICMP＋TCP {PORTS}）")
+    host_at = time.monotonic()
     # 一段中斷的記錄：什麼時候各個探針最後一次成功
     last_ok = {"icmp": None, **{f"tcp{p}": None for p in PORTS}}
     down_since = None
@@ -76,6 +112,16 @@ def main() -> None:
     while True:
         t0 = time.monotonic()
         now = datetime.now()
+        # 位址跟著走。**換位址要寫進紀錄**——不然事後看到的「中斷」會分不出
+        # 是機器掛了還是它搬家了
+        if not os.environ.get("PI_HOST") and t0 - host_at > HOST_REFRESH_S:
+            host_at = t0
+            found = learn_host()
+            if found and found != HOST:
+                emit(f"# {now:%F %T} **機上位址換了**：{HOST} → {found}")
+                HOST = found
+                last_ok = {k: None for k in last_ok}
+                down_since = None
         res = {"icmp": ping(HOST)}
         for p in PORTS:
             res[f"tcp{p}"] = tcp(HOST, p)
