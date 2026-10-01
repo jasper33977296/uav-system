@@ -2048,3 +2048,15 @@ details.card summary { cursor: pointer; font-size: 14px; font-weight: 600; }
 }
 .pick-menu button { text-align: left; }
 .mask-clear { background: transparent; }
+
+/* 回放頁：有影像但沒有訊號樣本時的退路（issues/075）。**不沿用 .replay-vid**
+   ——那個 class 帶著同步窗的定位，借來用會疊到右邊欄上。 */
+.rp-vid-fallback {
+  max-width: 720px; margin: 0 auto; padding: 20px;
+  color: var(--ink-2); font-size: 13px; line-height: 1.8;
+}
+.rp-vid-fallback strong { color: var(--ink); }
+.rp-vid-fallback video {
+  width: 100%; margin-top: 10px; border-radius: 6px;
+  background: #000; display: block;
+}

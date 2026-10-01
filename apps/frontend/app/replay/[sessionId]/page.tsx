@@ -554,6 +554,23 @@ export default function Replay() {
             {loadErr ? "軌跡載入失敗"
               : loaded ? "這趟沒有訊號量測" : "載入軌跡中…"}</div>
         )}
+        {/* 有影像但**沒有訊號樣本**時的退路（2026-10-01）。
+            同步播放的時鐘源是回放 transport，而 transport 是訊號樣本建的——
+            沒有樣本就沒有時間軸，於是原本連影像元件都不渲染。
+            **但影像是存在的**：使用者看到的是「什麼都沒有」，而不是「這趟有
+            影像、只是不能同步」——那是把我們的限制說成資料不存在。
+            2026-10-01 真的發生：機上時鐘歪了 7 天，當天 11 趟全部沒有樣本
+            （issues/075），於是 10 段錄影全部看不到。 */}
+        {video && video.segments.length > 0 && rows.length <= 1 && (
+          <div className="rp-vid-fallback">
+            <p><strong>這趟有影像，但沒有訊號樣本</strong>——影像無法與時間軸同步播放。
+              以下是原始片段，可以直接播或下載。</p>
+            {video.segments.map((g) => (
+              <video key={g.id} controls preload="metadata"
+                src={g.url.startsWith("http") ? g.url : `${API}${g.url}`} />
+            ))}
+          </div>
+        )}
         {/* 這一刻的機況：模式／高度／訊號（原本只在時間軸右邊擠成一行） */}
         {rows.length > 0 && (
           <div className="rp-chips">
