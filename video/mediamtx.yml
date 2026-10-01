@@ -47,7 +47,7 @@ pathDefaults:
   # 保留天數**由 compose 的 MTX_PATHDEFAULTS_RECORDDELETEAFTER 覆寫**（單一事實源＝
   # .env 的 VIDEO_RETENTION_DAYS，同時餵 backend 的 retention_days）。這裡的值只是
   # 沒帶 env 時的後備，改這裡不會改到前端顯示的天數——要改請改 .env。
-  recordDeleteAfter: 168h       # 後備：7 天（使用者定案，影像與量測資料 30 天脫鉤）
+  recordDeleteAfter: 0s         # 後備：**不自動刪除**（2026-10-01 使用者裁定）
 
 paths:
   # ⚠ **path 名稱是 `uav-<sysid>`，而 sysid 會被重新指派**（issues/040）。

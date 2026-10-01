@@ -438,11 +438,18 @@ async def sync_segments() -> int:
 async def prune_segments() -> int:
     """清掉過保留期的片段列——**必須與檔案同步消失**。
 
-    錄製器自己會依 `recordDeleteAfter` 刪檔（同一個 .env 的保留天數），但它不
-    知道 DB。只刪檔不刪列的話，回放頁會畫出一條**指向已刪檔的涵蓋帶**——點了
-    沒反應，等於騙人（UI/UX 定案：不留幽靈輪廓，`expired` 一句話講清楚就好）。
-    兩邊用同一個 retention 設定，所以刪除時機自然對齊。
+    **保留天數 0＝不自動刪除**（2026-10-01 使用者裁定：把過七天刪除拿掉）。
+    那時這支什麼都不做，而錄製器那邊也關著（`recordDeleteAfter: 0`，同一個
+    .env 變數餵的）——**兩邊要一起關**，只關一邊的下場是檔案被刪了而資料庫
+    還留著列，回放頁會畫出一條指向已刪檔的涵蓋帶，點了沒反應。
+
+    錄製器自己會依 `recordDeleteAfter` 刪檔，但它不知道 DB。只刪檔不刪列的話，
+    回放頁會畫出**指向已刪檔的涵蓋帶**——點了沒反應，等於騙人（UI/UX 定案：
+    不留幽靈輪廓，`expired` 一句話講清楚就好）。兩邊用同一個 retention 設定，
+    所以刪除時機自然對齊。
     """
+    if settings.video_retention_days <= 0:
+        return 0                      # 不刪：見上面
     r = await db.pool.execute(
         "DELETE FROM video_segments WHERE started_at < now() - ($1 || ' days')::interval",
         str(settings.video_retention_days))
@@ -451,33 +458,6 @@ async def prune_segments() -> int:
         log.info("影像：清掉 %d 段過保留期（%d 天）的片段列", n,
                  settings.video_retention_days)
     return n
-
-
-async def ensure_sources() -> None:
-    """確保每台有相機的機，錄製器那邊的「去哪裡拉」還在。
-
-    **MediaMTX 的 API 改動不寫回唯讀設定檔**——這件事 `set_record` 的註解裡
-    早就寫過，但當時只補了 `record`。2026-09-23 開 HLS 重啟 uav-video 時發現
-    **連來源也一起消失了**：path 直接 404，而畫面只會安靜地變成「沒有影像」，
-    沒有任何東西說「我不知道要去哪裡拉」。
-
-    以資料庫為事實源定期補回。`set_source` 自己會處理「正在錄的時候不要把
-    on-demand 設回來」，這裡不必重複那個判斷。
-    """
-    try:
-        rows = await db.pool.fetch(
-            "SELECT id::text AS id, camera_url FROM drones "
-            "WHERE camera_url IS NOT NULL AND camera_url <> ''")
-    except Exception:
-        log.exception("影像：查相機來源失敗（不影響飛行資料）")
-        return
-    for r in rows:
-        name = path_for(r["id"])
-        c = await _conf(name)
-        src = (c or {}).get("source") or ""
-        if c is None or not src.strip() or src == "publisher":
-            if await set_source(r["id"], r["camera_url"]):
-                log.info("影像：補回 %s 的來源——錄製器重啟過，設定沒留下來", name)
 
 
 async def reconcile() -> None:
@@ -559,7 +539,10 @@ async def session_video(session_id: str) -> dict:
         # （該錄卻整趟沒收到流）。兩者對研究的意義相反，不能混為一談。
         end = s["ended_at"] or s["started_at"]
         age_days = (datetime.now(timezone.utc) - end).total_seconds() / 86400.0
-        status = "expired" if age_days > settings.video_retention_days else "missing"
+        # 保留期關掉時**永遠不會是 expired**——沒有東西會過期。零片段就只剩
+        # 一種意思：該錄卻沒錄到，那是故障
+        status = ("expired" if settings.video_retention_days > 0
+                  and age_days > settings.video_retention_days else "missing")
     return {
         "retention_days": settings.video_retention_days,
         "video_status": status,

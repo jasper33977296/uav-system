@@ -100,7 +100,8 @@ services:
       # 影像（022）：**與 uav-video 用同一個 .env 變數**——錄製器據此清檔、
       # backend 據此回 retention_days 給前端顯示。少傳這行兩邊就會漂移
       # （UI 說 7 天、實際清 14 天），這正是要消滅的假話。
-      VIDEO_RETENTION_DAYS: ${VIDEO_RETENTION_DAYS:-7}
+      # **0＝不自動刪除**（2026-10-01 使用者裁定），預設值也改成 0
+      VIDEO_RETENTION_DAYS: ${VIDEO_RETENTION_DAYS:-0}
       VIDEO_RECORD_ENABLED: ${VIDEO_RECORD_ENABLED:-true}
       VIDEO_REC_DIR: ${VIDEO_REC_DIR:-/rec}
     depends_on:
@@ -214,7 +215,9 @@ services:
       # **保留天數的單一事實源**＝這個 .env 變數：同時餵給錄製器（清檔）與
       # backend（API 回 retention_days 給前端顯示空態句）。分成兩處寫死就會漂移
       # ——UI 顯示「7 天」而實際清 14 天這種假話，正是要避免的。
-      MTX_PATHDEFAULTS_RECORDDELETEAFTER: ${VIDEO_RETENTION_DAYS:-7}d
+      # **0d＝不自動刪除**（MediaMTX 的 recordDeleteAfter 以 0 為停用）。
+      # 2026-10-01 使用者裁定把過七天刪除拿掉，所以預設是 0。
+      MTX_PATHDEFAULTS_RECORDDELETEAFTER: ${VIDEO_RETENTION_DAYS:-0}d
     logging:
       driver: json-file
       options: { max-size: "50m", max-file: "3" }
