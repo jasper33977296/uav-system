@@ -460,6 +460,66 @@ async def prune_segments() -> int:
     return n
 
 
+def _live_ip(drone_id: str) -> str | None:
+    """這台機**現在**的位址——取自 MAVLink 封包的來源，不是設定檔。
+
+    `mavlink_rx` 本來就為每個 sysid 記著 `addr`（而且已經有處理位址變動的
+    邏輯）。拿它當相機位址的事實源，機換 IP 時影像就會自己跟上。
+    """
+    from . import mavlink_rx
+    rx = mavlink_rx.rx
+    if rx is None:
+        return None
+    sysid = rx.by_drone.get(drone_id)
+    ent = rx.sysids.get(sysid) if sysid is not None else None
+    addr = (ent or {}).get("addr")
+    return addr[0] if addr else None
+
+
+async def ensure_sources() -> None:
+    """讓錄製器那邊的「去哪裡拉」永遠對得上現況。兩件事：
+
+    **① 位址跟著無人機走**（2026-10-01 使用者裁定：相機來源不要人手動設）。
+    手填的下場當天就看到了：地面站與機上都換了 IP，遙測自己接回來，而相機
+    來源還指著舊位址，對外卻照樣回 `ready`——**那是一句假話**。
+    **只覆寫長得像自動產生的那種**（`video_stream.is_onboard_rtsp`）；
+    人特地填的別種來源（例如別台裝置的串流）不要動。
+
+    **② 補回被重啟清掉的設定**。MediaMTX 的 API 改動不寫回唯讀設定檔——
+    這件事 `set_record` 的註解早就寫過，但當時只補了 `record`。2026-09-23
+    重啟 uav-video 時發現連來源也一起消失（path 直接 404），而畫面只會安靜
+    地變成「沒有影像」，沒有任何東西說「我不知道要去哪裡拉」。
+    """
+    try:
+        rows = await db.pool.fetch("SELECT id::text AS id, camera_url FROM drones")
+    except Exception:
+        log.exception("影像：查相機來源失敗（不影響飛行資料）")
+        return
+    for r in rows:
+        stored = (r["camera_url"] or "").strip()
+        ip = _live_ip(r["id"])
+        if ip and (not stored or video_stream.is_onboard_rtsp(stored)):
+            want = video_stream.onboard_rtsp(ip)
+            if want != stored:
+                try:
+                    await db.pool.execute(
+                        "UPDATE drones SET camera_url = $2 WHERE id = $1::uuid",
+                        r["id"], want)
+                    log.info("影像：%s 的相機來源跟著機體位址更新（%s → %s）",
+                             r["id"][:8], stored or "（空）", want)
+                    stored = want
+                except Exception:
+                    log.exception("影像：更新相機來源失敗（不影響飛行資料）")
+        if not stored:
+            continue                  # 沒位址、也沒人填＝這台沒有影像來源
+        name = path_for(r["id"])
+        c = await _conf(name)
+        src = ((c or {}).get("source") or "").strip()
+        if c is None or src != stored:
+            if await set_source(r["id"], stored):
+                log.info("影像：%s 的來源設成 %s", name, stored)
+
+
 async def reconcile() -> None:
     """確保「正在飛的機」確實在錄。
 

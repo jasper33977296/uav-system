@@ -47,6 +47,34 @@ MJPEG 轉碼**讀同一條 path**，所以機上只被拉一次、兩邊共用�
 #: 地面站 backend 的埠——MJPEG 端點在那裡（轉碼需要 ffmpeg，而 ffmpeg 在 backend）
 BACKEND_PORT = 38000
 
+#: 機上相機服務（uav-camera／MediaMTX）聽的埠與 path。兩者由機上的
+#: `camera/mediamtx.yml` 決定，**這裡是地面站對它的唯一假設**。
+ONBOARD_RTSP_PORT = 8554
+ONBOARD_RTSP_PATH = "cam"
+
+
+def onboard_rtsp(ip: str) -> str:
+    """這台機的相機在哪裡拉。**位址跟著無人機走，不是人填的**
+    （2026-10-01 使用者裁定：相機來源不要人手動設）。
+
+    位址的來源是 MAVLink 封包的來源位址——機換了 IP（5G 重新配址、換網段），
+    下一輪 `ensure_sources` 就會跟著改。手填的下場看過了：2026-10-01 地面站與
+    機上都換了 IP，遙測自己接回來了，而相機來源還指著舊位址，`video.state`
+    照樣回 `ready`——**那是一句假話**。
+    """
+    return f"rtsp://{ip}:{ONBOARD_RTSP_PORT}/{ONBOARD_RTSP_PATH}"
+
+
+def is_onboard_rtsp(url: str | None) -> bool:
+    """這條位址是不是我們自己推出來的（而不是人特地填的別的來源）。
+
+    **用來決定「可不可以覆寫」**：長得像自動產生的就跟著 IP 更新；
+    不像的（例如別台裝置的串流）就不要動它——那是人刻意設的。
+    """
+    import re
+    return bool(url and re.fullmatch(
+        rf"rtsp://[^/:]+:{ONBOARD_RTSP_PORT}/{ONBOARD_RTSP_PATH}", url.strip()))
+
 
 def path_for(drone_id: str) -> str:
     """MediaMTX path 名稱 ↔ **機體身分**（`drones.id`），不是 sysid。
