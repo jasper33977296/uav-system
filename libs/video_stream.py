@@ -95,6 +95,20 @@ def snapshot_url(drone_id: str, host: str, port: int = BACKEND_PORT) -> str:
     return f"http://{host}:{port}/api/drones/{drone_id}/camera/snapshot.jpg"
 
 
+def is_auto_play_url(url: str | None) -> bool:
+    """這條「瀏覽器播放位址」是不是我們自己產生的。
+
+    **用來決定可不可以覆寫**（同 `is_onboard_rtsp` 的理由）：自己產生的就跟著
+    走，人特地填的別種來源不要動。兩種都算自己產生的——
+    `/camera/stream.mjpg`（現行）與 `:8889/<path>/whep`（2026-10-01 之前），
+    **舊的也要認得**，否則換法之後舊資料會被當成人工設定而永遠卡在那裡。
+    """
+    import re
+    u = (url or "").strip()
+    return bool(re.search(r"/api/drones/[0-9a-f-]+/camera/stream\.mjpg$", u)
+                or re.search(r":8889/uav-[0-9a-f-]+/whep$", u))
+
+
 def ext_video(drone_id: str | None, camera_url: str | None, connected: bool,
               host: str, port: int = BACKEND_PORT) -> dict:
     """外部控制的 `video` 欄位。**三態分明，不給可能是死的網址。**

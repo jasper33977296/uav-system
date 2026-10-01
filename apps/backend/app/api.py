@@ -24,6 +24,7 @@ import buildings
 import mission_time        # libs/ 的共用實作（PYTHONPATH=/srv/libs）
 import plan_check
 import terrain
+import video_stream
 
 from . import (agent_link, captures, chainage, db, groups, logindex,
                mavlink_rx, mjpeg, modem_raw, signing)
@@ -1032,7 +1033,7 @@ async def patch_drone(drone_id: str, body: DronePatch, request: Request):
             host = (request.headers.get("host") or "").split(":")[0] or "127.0.0.1"
             await db.pool.execute(
                 "UPDATE drones SET video_url = $2 WHERE id = $1 AND (video_url IS NULL OR video_url = '')",
-                drone_id, f"http://{host}:8889/{video_rec.path_for(drone_id)}/whep")
+                drone_id, video_stream.mjpeg_url(drone_id, host))
     if "name" in fields:
         # **執行期是快取，資料庫才是事實來源。** 改完要把快取更新掉並通知畫面
         # ——不然即時頁會一直顯示舊名字，直到 backend 重啟。

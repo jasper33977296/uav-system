@@ -491,7 +491,8 @@ async def ensure_sources() -> None:
     地變成「沒有影像」，沒有任何東西說「我不知道要去哪裡拉」。
     """
     try:
-        rows = await db.pool.fetch("SELECT id::text AS id, camera_url FROM drones")
+        rows = await db.pool.fetch(
+            "SELECT id::text AS id, camera_url, video_url FROM drones")
     except Exception:
         log.exception("影像：查相機來源失敗（不影響飛行資料）")
         return
@@ -510,6 +511,22 @@ async def ensure_sources() -> None:
                     stored = want
                 except Exception:
                     log.exception("影像：更新相機來源失敗（不影響飛行資料）")
+        # 播放位址（給瀏覽器的）同樣自動維護。**2026-10-01 改成 MJPEG**：
+        # 即時頁原本走 WHEP，而 WebRTC 把 H.264 原封送進瀏覽器——上游破一個
+        # NAL 就整個解不出來，畫面一片黑。MJPEG 在地面站先解碼再重編，破影格
+        # 會變成「有花但看得到」。使用者裁定兩邊都用這條。
+        # host 固定寫 localhost，由前端換成它自己連進來的主機名（見 MapView）。
+        if stored and (not (r["video_url"] or "").strip()
+                       or video_stream.is_auto_play_url(r["video_url"])):
+            play = video_stream.mjpeg_url(r["id"], "localhost")
+            if play != (r["video_url"] or "").strip():
+                try:
+                    await db.pool.execute(
+                        "UPDATE drones SET video_url = $2 WHERE id = $1::uuid",
+                        r["id"], play)
+                    log.info("影像：%s 的播放位址更新為 MJPEG", r["id"][:8])
+                except Exception:
+                    log.exception("影像：更新播放位址失敗（不影響飛行資料）")
         if not stored:
             continue                  # 沒位址、也沒人填＝這台沒有影像來源
         name = path_for(r["id"])

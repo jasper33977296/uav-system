@@ -1,6 +1,12 @@
 "use client";
 /** 單一影像串流播放器（可複用：單機 modal 與多機影像牆共用）。
- * 依 URL 型態選播放器：/whep → WebRTC、mjpeg → <img>、其他 → <video>。 */
+ * 依 URL 型態選播放器：mjpeg → <img>、/whep → WebRTC、其他 → <video>。
+ *
+ * **即時頁現在走 MJPEG**（2026-10-01 使用者裁定）。原本是 WHEP，而 WebRTC 把
+ * H.264 原封送進瀏覽器——上游破一個 NAL 就整個解不出來，畫面一片黑（當天
+ * 5G 換網段後就是這樣）。MJPEG 在地面站先解碼再重編，破影格會變成「有花但
+ * 看得到」。延遲多約 0.1–0.3 秒，換到的是壞掉時會降級而不是消失。
+ * WHEP 的分支留著：有人把播放位址手動填成 whep 時仍然播得動。 */
 import { useEffect, useRef, useState } from "react";
 
 type Mode = "whep" | "mjpeg" | "video" | "error";
@@ -59,7 +65,7 @@ export default function VideoPlayer({ url, controls = true }: {
   // 等待秒數：**只用來換句話說，不用來宣告失敗**。等久了不等於連不上
   // （機上可能正在開相機），所以超時只是把「已經等了多久」講出來。
   useEffect(() => {
-    if (live || mode === "error" || mode === "mjpeg") return;
+    if (live || mode === "error") return;
     const t = setInterval(() => setWaited((n) => n + 1), 1000);
     return () => clearInterval(t);
   }, [live, mode]);
@@ -76,9 +82,21 @@ export default function VideoPlayer({ url, controls = true }: {
   }
   if (mode === "mjpeg") {
     return (
-      /* eslint-disable-next-line @next/next/no-img-element */
-      <img src={url} alt="即時畫面（MJPEG）"
-        onError={() => { setMode("error"); setErr("MJPEG 串流無法載入"); }} />
+      <>
+        {/* eslint-disable-next-line @next/next/no-img-element */}
+        <img src={url} alt="即時畫面（MJPEG）"
+          onLoad={() => setLive(true)}
+          onError={() => { setMode("error"); setErr("MJPEG 串流無法載入"); }} />
+        {!live && (
+          <div className="video-connecting">
+            <span className="spin" />
+            <p>連線中…{waited >= 5 && `（已等 ${waited} 秒）`}</p>
+            {waited >= 12 && (
+              <p className="hint-line">機上相機只在有人看的時候才開，開機要幾秒</p>
+            )}
+          </div>
+        )}
+      </>
     );
   }
   return (
