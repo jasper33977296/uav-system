@@ -8,7 +8,12 @@ import { API, classifySinr } from "@/lib/signal";
  * 單一時鐘源＝回放 transport（rows/idx）：影片永遠跟隨時間軸，seek 依
  * 每段絕對時間錨（segment.started_at＝影片第 0 秒的絕對時刻）。
  * 誠實三空態嚴格分句：缺口「此時段無影像（錄製中斷）」／expired
- * 「影像已過保留期（N 天），已清除」／missing＝warn 卡（錄製故障）。
+ * 「影像已過保留期，已清除」／missing＝warn 卡（錄製故障）。
+ *
+ * **不顯示保留天數**（2026-10-01 使用者裁定把過七天刪除拿掉）：自動清除關掉
+ * 之後那個數字是 0，寫出來只會變成「已過保留期（0 天）」這種假話。
+ * expired 這個分支**保留著**——保留期是可以再打開的設定，而分支沒了的話
+ * expired 會掉到 available 去，替一個已刪檔的影像畫出播放器。
  * 底緣 SINR 色帶＝播放器 UI 疊層（絕不燒進影片檔）；畫質劣化＝研究證據。
  */
 
@@ -22,7 +27,7 @@ export interface VideoSeg {
   bytes?: number | null;
 }
 export interface SessionVideo {
-  retention_days: number;
+  // retention_days 後端照樣回（它是設定的事實），**但畫面不顯示**——見檔頭
   video_status: "available" | "off" | "no_source" | "expired" | "missing";
   segments: VideoSeg[];
 }
@@ -136,7 +141,7 @@ export default function ReplayVideo({ video, rows, tCurMs, playing, speed,
   if (video.video_status === "expired") {
     return (
       <div className="replay-vid vid-empty-state">
-        影像已過保留期（{video.retention_days} 天），已清除
+        影像已過保留期，已清除
       </div>
     );
   }
