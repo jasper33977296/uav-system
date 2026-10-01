@@ -2017,6 +2017,10 @@ async def ext_drones(request: Request):
         cam = cams.get(sysid)
         row = {"sysid": sysid, "name": info.get("drone"),
                "online": online, "age_s": d["age_s"], "armed": d.get("armed"),
+               # 電量與 GPS（2026-10-01）。**不在線時不給**——那是最後一次
+               # 聽到的值，標著「現在」交出去就是假話；要看歷史請用串流
+               "battery": d.get("battery") if online else None,
+               "gps": d.get("gps") if online else None,
                "controllable": bool(ok and settings.enable_commands),
                # 影像端點在 backend（轉碼要 ffmpeg，而 ffmpeg 裝在那個映像裡）
                "video": video_stream.ext_video(

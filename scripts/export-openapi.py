@@ -11,7 +11,7 @@ diff**——那是口頭約定做不到的事。
 
 **為什麼要過濾**：兩個服務的 `/openapi.json` 裡大部分是**內部端點**——給我們
 自己的畫面用的，形狀會隨內部演進而變。把它們一起交出去，外部就會開始依賴
-我們沒有承諾過的東西。這裡只放 `doc/external-api-v3.html` 講好的那一組。
+我們沒有承諾過的東西。這裡只放 `doc/external-api-v4.html` 講好的那一組。
 
 **WebSocket 不在 OpenAPI 裡**（規格不支援），所以寫進頂層 description。
 
@@ -21,6 +21,8 @@ diff**——那是口頭約定做不到的事。
 """
 import argparse
 import json
+import os
+import socket
 import pathlib
 import sys
 import urllib.request
@@ -46,13 +48,28 @@ EXTERNAL = {
     "/api/drones/{drone_id}/camera/stream.mjpg": "backend",
 }
 
+#: 規格裡印出來的位址。**寫死會過期**——地面站換過兩次 IP（2026-10-01），
+#: 而這份是要交給外部的文件。用環境變數覆寫，預設取本機當下的對外位址。
+def _gs_host() -> str:
+    env = os.environ.get("GS_HOST")
+    if env:
+        return env
+    try:
+        with socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as sk:
+            sk.connect(("10.255.255.255", 1))     # 不會真的送出，只為了查路由
+            return sk.getsockname()[0]
+    except OSError:
+        return "127.0.0.1"
+
+
+GS = _gs_host()
 SERVERS = {
-    "command": {"url": "http://10.141.2.21:38001", "description": "指揮面"},
-    "backend": {"url": "http://10.141.2.21:38000", "description": "資料面與影像"},
+    "command": {"url": f"http://{GS}:38001", "description": "指揮面"},
+    "backend": {"url": f"http://{GS}:38000", "description": "資料面與影像"},
 }
 
 DESCRIPTION = """\
-無人機管理系統的**對外介面**。人看的版本在 `doc/external-api-v3.html`
+無人機管理系統的**對外介面**。人看的版本在 `doc/external-api-v4.html`
 （含範例、錯誤碼與每個欄位的意思），這份是給機器讀的。
 
 **認證：沒有。**（2026-09-14 定案）任何連得到這兩個埠的人都能看資料、也能
@@ -60,7 +77,7 @@ DESCRIPTION = """\
 
 ## WebSocket（OpenAPI 表達不了，寫在這裡）
 
-    ws://10.141.2.21:38000/ws/v1/missions/{mission_id}
+    ws://<地面站>:38000/ws/v1/missions/{mission_id}
 
 起飛後每 0.5 秒推一則。訊息與 `GET /api/v1/ext/missions/{id}/live` 的
 `messages` **逐字相同、同一組序號**——兩者可以混用，斷線期間用輪詢頂著，
@@ -84,6 +101,12 @@ DESCRIPTION = """\
 ## 路徑前綴
 
 每一支都吃 `/api/v1/…`。舊的無版本寫法保留為別名。
+
+## servers 裡的位址只是範例
+
+地面站有多個網段，這份匯出取的是它當下的對外位址。**真正的規則是「你用哪個
+位址連進來，回給你的網址就用哪個」**——影像網址是照請求的 `Host` 組的。
+位址對不上時用你自己連得到的那個，不要照抄。
 """
 
 
@@ -110,7 +133,7 @@ for name, url in (("command", a.command_url), ("backend", a.backend_url)):
 
 merged = {
     "openapi": "3.1.0",
-    "info": {"title": "無人機管理系統：對外介面", "version": "v3",
+    "info": {"title": "無人機管理系統：對外介面", "version": "v4",
              "description": DESCRIPTION},
     "servers": list(SERVERS.values()),
     "paths": {},

@@ -166,6 +166,13 @@ class MavRouter(threading.Thread):
                 "lat": d.get("lat"), "lon": d.get("lon"),
                 "capabilities": cap,                   # 伺服器端 gating 唯一真相
                 "capability_reasons": reasons,
+                # 電量與 GPS（2026-10-01 使用者裁定：對外的即時資訊也要有）。
+                # **拿不到就是 null**，不是 0——「沒回報」與「真的是 0」對
+                # 操作決定的意義相反
+                "battery": {"pct": d.get("batt_pct"), "voltage": d.get("batt_v")},
+                # 形狀與即時串流的 `gps` **逐欄相同**（fix 是原始整數，
+                # 0/1＝沒定位、3＝3D）——對外同一件事不要有兩種長相
+                "gps": {"fix": d.get("gps_fix"), "sats": d.get("gps_sats")},
             }
         return out
 
@@ -277,6 +284,22 @@ class MavRouter(threading.Thread):
                     # 掉頭」。沒有它那句警告就永遠不會出現——**而不是不會發生**
                     if msg.hdg != 65535:          # 65535＝不知道
                         d["heading"] = msg.hdg / 100.0
+                elif msg.get_type() == "SYS_STATUS":
+                    # 電量（2026-10-01：對外的即時資訊要帶電量與 GPS）。
+                    # **哨兵值要變成 null，不要變成數字**：MAVLink 用
+                    # battery_remaining = -1、voltage_battery = 65535 表示
+                    # 「不知道」。照收的話對外會變成「電量 -1%」「電壓 65 V」
+                    # ——兩個看起來很具體的假數字。
+                    d["batt_pct"] = (msg.battery_remaining
+                                     if msg.battery_remaining >= 0 else None)
+                    d["batt_v"] = (round(msg.voltage_battery / 1000.0, 3)
+                                   if msg.voltage_battery not in (0, 65535) else None)
+                elif msg.get_type() == "GPS_RAW_INT":
+                    # GPS 定位品質。fix_type 的字彙與 backend 同一份語意
+                    # （0/1＝沒定位），**衛星數 255＝不知道**，同樣轉成 null
+                    d["gps_fix"] = msg.fix_type
+                    d["gps_sats"] = (msg.satellites_visible
+                                     if msg.satellites_visible != 255 else None)
                 elif msg.get_type() == "EXTENDED_SYS_STATE":
                     # **「機真的離地了沒」的唯一可信來源。**「等到高度才切
                     # AUTO」原本只看 alt_rel，而 alt_rel 在沒有 GPS 定位時是
