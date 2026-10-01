@@ -37,6 +37,13 @@ playback: yes
 playbackAddress: :9996
 
 pathDefaults:
+  # **去機上拉流一律走 TCP**（2026-10-01）。預設是 automatic＝先試 UDP，
+  # 而這一段跑在 5G 上：換網段之後 RTP 掉包變明顯，錄製器每秒十幾則
+  # `invalid FU-A packet`／`discarding frame since a RTP packet is missing`，
+  # 影格是破的 → **WebRTC 完全解不出來，即時頁一片黑**（MJPEG 反而還能擠出
+  # 幾張，因為 ffmpeg 會硬解——所以「snapshot 有畫面」不能用來判斷這條好不好）。
+  # TCP 會重傳，代價是延遲多一點點，但畫面是完整的。
+  rtspTransport: tcp
   # 預設不錄——由 backend 依架次生命週期經 API 逐台打開（見設計 §3、§6b）。
   # 這樣「沒錄」是明確的設定狀態，不是碰巧沒錄到。
   record: no
