@@ -3446,12 +3446,19 @@ async def link_metrics_batch(batch: LinkBatch):
     _require_modem_mode()
     drone_id = _resolve_drone(batch.drone_id)
     accepted, stored, duplicate, outside = [], 0, 0, 0
+    unsynced = 0
+    skew_s = None
 
     for s in batch.samples:
         _require_aware(s.time)
         # 這裡不能用 mode="json"：time 要保持 datetime 才能寫進 TIMESTAMPTZ
         m = s.model_dump(exclude_none=False)
-        m.pop("clock_synced", None)
+        if m.pop("clock_synced", None) is False:
+            unsynced += 1
+        # 機上時戳與收到的時刻差多少。**這個數字是唯一能當場識破時鐘跑掉的
+        # 證據**：樣本是靠時間歸給架次的，時鐘歪了就全部對不到而被丟掉
+        d = abs((datetime.now(timezone.utc) - s.time).total_seconds())
+        skew_s = d if skew_s is None else max(skew_s, d)
         m["source"] = "modem"
         modem_raw.drop_sentinels(m)  # 同 live 那條路（見 modem_raw.py）
         modem_raw.enrich(m)
@@ -3465,8 +3472,60 @@ async def link_metrics_batch(batch: LinkBatch):
         if s.seq is not None:
             accepted.append(s.seq)
 
+    # ── 整批都落在架次外＝**研究資料正在被丟掉**，要出聲 ─────────────────
+    # 2026-10-01 的教訓：地面站換 IP → 機上對時指著舊位址 → 時鐘停在 7 天前
+    # → 每一筆樣本都對不到架次 → 整批丟棄。當天 11 趟飛行的採樣一筆都沒進
+    # 資料庫，而**地面站這邊完全無聲**——這個端點只把數字回給機上，自己不留
+    # 任何痕跡。機上的日誌有寫，但沒有人會去看一台飛機的 journal。
+    #
+    # 只在「全丟」時出聲：邊界上掉幾筆是正常的（架次起訖與緩衝刷新不同步）。
+    if outside and not stored:
+        await _warn_samples_dropped(drone_id, outside, unsynced, skew_s)
     return {"accepted_seq": accepted, "stored": stored,
             "duplicate": duplicate, "outside_session": outside}
+
+
+def _human_gap(sec: float) -> str:
+    """秒數講成人話。**7 天不要寫成「10080 分鐘」**——那個數字沒有人讀得動，
+    而這句話的目的正是讓看到的人當場知道發生什麼事。"""
+    if sec < 120:
+        return f"{sec:.0f} 秒"
+    if sec < 7200:
+        return f"{sec / 60:.0f} 分鐘"
+    if sec < 172800:
+        return f"{sec / 3600:.1f} 小時"
+    return f"{sec / 86400:.1f} 天"
+
+
+#: 同一台機多久才再出一次聲（秒）。記錄通道每 10 秒一批，不節流會淹掉事件流
+_DROP_WARN_GAP_S = 300.0
+_drop_warned: dict[str, float] = {}
+
+
+async def _warn_samples_dropped(drone_id: str, outside: int,
+                                unsynced: int, skew_s: float | None) -> None:
+    """整批樣本進不了資料庫時發一則事件。**說得出最可能的原因。**"""
+    now = time.monotonic()
+    if now - _drop_warned.get(drone_id, 0.0) < _DROP_WARN_GAP_S:
+        return
+    _drop_warned[drone_id] = now
+    # **先講時鐘**：它是最常見也最容易被忽略的那一個，而且說得出具體數字
+    if unsynced or (skew_s is not None and skew_s > 120):
+        why = (f"機上時鐘沒對上（樣本時戳與現在差 {_human_gap(skew_s)}）"
+               if skew_s and skew_s > 120 else "機上回報時鐘未同步")
+        how = "檢查機上 timesyncd 的 NTP 位址是不是還指著舊的地面站 IP"
+    else:
+        why = "樣本的時間沒有落在任何一趟架次裡"
+        how = "確認那段時間飛機是否真的解鎖飛行，以及架次有沒有被刪掉"
+    try:
+        ev = await db.insert_event(
+            drone_id, None, "warning", "link_samples_dropped",
+            {"reason": f"**{outside} 筆訊號樣本沒有入庫**——{why}",
+             "how_to": how, "outside": outside, "skew_s": skew_s})
+        from .ws import manager
+        await manager.broadcast({"type": "event", "event": ev})
+    except Exception:
+        log.exception("訊號樣本丟棄的告警送不出去（不影響其他資料）")
 
 # ── 地址定位（使用者裁定 2026-09-11 選 B）──────────────────────────────
 # **查不到門牌就往上退一層，並說出退到哪。** OSM 的台灣門牌很稀疏（實測
