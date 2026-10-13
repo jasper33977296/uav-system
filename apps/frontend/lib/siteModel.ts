@@ -22,10 +22,17 @@
  */
 import { M_LAT, mLon } from "@/lib/geo";
 
-/** 使用者給的兩點（2026-10-13）。兩點相距約 20.7 m。 */
-export const SITE_POINTS: { id: string; name: string; lat: number; lon: number }[] = [
-  { id: "a", name: "A", lat: 24.774047, lon: 121.045195 },
-  { id: "b", name: "B", lat: 24.774073, lon: 121.045398 },
+/** 兩座設備。座標是使用者 2026-10-13 給的，`place` 是同一天後來給的**擺放
+ *  描述**——「一個接近建築物的邊邊，一個接近建築物中心」。
+ *
+ *  **描述蓋過座標**，因為使用者同時裁定「座標和輪廓的落差先不管，之後再量」：
+ *  原始兩點只差 20.7 m 而且都落在輪廓外；照描述擺之後相距 33.1 m。挪了多少
+ *  仍然記在 `shift_m` 裡，之後量到真座標可以對回去。 */
+export const SITE_POINTS: {
+  id: string; name: string; lat: number; lon: number; place: "edge" | "center";
+}[] = [
+  { id: "a", name: "A", lat: 24.774047, lon: 121.045195, place: "edge" },
+  { id: "b", name: "B", lat: 24.774073, lon: 121.045398, place: "center" },
 ];
 
 const MAST_M = 6;        // 桿高（屋頂面往上）
@@ -35,14 +42,13 @@ const PANEL_W = 0.45;    // 面板寬
 const PANEL_T = 0.22;    // 面板厚
 const PANEL_R = 1.0;     // 面板離桿心的距離
 const PANEL_TOP_DROP = 0.6;   // 面板頂距桿頂
-/** 挪進輪廓後再往內讓多少。
+/** `place: "edge"` 的那一支往輪廓內讓多少。
  *
- * 原本 1.5 m，只夠讓它「不在輪廓外」——但 1.5 m 在屋簷線上，傾斜視角下看
- * 起來仍然像掛在邊緣外（使用者 2026-10-13 第二次回報「還是飄在 3D 建築物
- * 外」，並指示「貼齊到 3D 建模的建築物中」）。改成 6 m：目視就在屋頂面上。
- * **這是顯示用的位置，不是量到的位置**——座標與輪廓的落差使用者裁定
- * 「先不管，之後再量」，`shift_m` 仍然記著一共挪了多少。 */
-const INSET_M = 6;
+ * 改過兩次：1.5 m 只夠「不在輪廓外」，但那是屋簷線上，傾斜視角看起來仍像
+ * 掛在邊緣（使用者回報「還是飄在 3D 建築物外」）；6 m 站得穩，但使用者接著
+ * 指定這一支要「接近建築物的邊邊」——所以收回 2 m：既在屋頂面上，也確實
+ * 靠邊。另一支改用建築物中心（見 `placeOnRoof`）。 */
+const INSET_M = 2;
 /** 超過這個距離就不算「同一棟樓的屋頂」——寧可不畫，也不要硬接。 */
 const MAX_SNAP_M = 25;
 
@@ -86,11 +92,34 @@ function nearestOnSeg(px: number, py: number, ax: number, ay: number,
 
 interface Placed { lat: number; lon: number; roof: number; shift: number }
 
-/** 把一個點放到腳下那棟樓的屋頂上。放不上去就回 null。 */
+/** 多邊形的面積形心（公尺平面）。 */
+function polyCentroid(ring: [number, number][]): [number, number] {
+  let a2 = 0, cx = 0, cy = 0;
+  for (let i = 0; i < ring.length; i++) {
+    const [x1, y1] = ring[i], [x2, y2] = ring[(i + 1) % ring.length];
+    const cr = x1 * y2 - x2 * y1;
+    a2 += cr; cx += (x1 + x2) * cr; cy += (y1 + y2) * cr;
+  }
+  if (a2 === 0) return [0, 0];
+  return [cx / (3 * a2), cy / (3 * a2)];
+}
+
+/** 把一個點放到腳下那棟樓的屋頂上。放不上去就回 null。
+ *
+ * `mode` 是使用者 2026-10-13 給的擺放描述：
+ *   `edge`   ＝ 接近建築物的邊邊——挪進輪廓 `INSET_M`（2 m）就停。
+ *   `center` ＝ 接近建築物中心——用那棟樓的**面積形心**。形心落在輪廓外時
+ *               （L 形、弧形的樓常常如此）退回 `edge` 的做法，不硬放。
+ *
+ * **這是顯示用的位置。** 使用者裁定座標與輪廓的落差「先不管，之後再量」，
+ * 所以這裡照描述擺，`shift` 記下一共離原座標多遠。 */
 function placeOnRoof(lat: number, lon: number,
-                     buildings: GeoJSON.FeatureCollection): Placed | null {
+                     buildings: GeoJSON.FeatureCollection,
+                     mode: "edge" | "center" = "edge"): Placed | null {
   const ml = mLon(lat);
-  let best: { d: number; q: { x: number; y: number }; roof: number } | null = null;
+  let best: { d: number; q: { x: number; y: number }; roof: number;
+              ring: [number, number][] } | null = null;
+  let inside: { roof: number; ring: [number, number][] } | null = null;
   for (const f of buildings.features) {
     const g = f.geometry;
     if (!g || g.type !== "Polygon") continue;
@@ -99,19 +128,31 @@ function placeOnRoof(lat: number, lon: number,
     if (h == null) continue;
     const ring: [number, number][] = (g.coordinates[0] as number[][]).map(
       ([lo, la]) => [(lo - lon) * ml, (la - lat) * M_LAT]);
-    if (inRing(0, 0, ring)) return { lat, lon, roof: h, shift: 0 };
+    if (inRing(0, 0, ring)) { inside = { roof: h, ring }; break; }
     for (let i = 0; i < ring.length - 1; i++) {
       const n = nearestOnSeg(0, 0, ring[i][0], ring[i][1],
                              ring[i + 1][0], ring[i + 1][1]);
-      if (!best || n.d < best.d) best = { d: n.d, q: { x: n.x, y: n.y }, roof: h };
+      if (!best || n.d < best.d) {
+        best = { d: n.d, q: { x: n.x, y: n.y }, roof: h, ring };
+      }
     }
   }
-  if (!best || best.d > MAX_SNAP_M) return null;
-  // 沿「點 → 輪廓最近點」的方向再走 INSET_M，就是往輪廓內
-  const len = Math.hypot(best.q.x, best.q.y) || 1;
-  const x = best.q.x + (best.q.x / len) * INSET_M;
-  const y = best.q.y + (best.q.y / len) * INSET_M;
-  return { lat: lat + y / M_LAT, lon: lon + x / ml, roof: best.roof,
+  const home = inside ?? (best && best.d <= MAX_SNAP_M
+    ? { roof: best.roof, ring: best.ring } : null);
+  if (!home) return null;
+  if (mode === "center") {
+    const [cxm, cym] = polyCentroid(home.ring);
+    // 形心在輪廓內才用——弧形／L 形的樓，形心可能根本不在樓上
+    if (inRing(cxm, cym, home.ring)) {
+      return { lat: lat + cym / M_LAT, lon: lon + cxm / ml, roof: home.roof,
+               shift: Math.hypot(cxm, cym) };
+    }
+  }
+  if (inside) return { lat, lon, roof: inside.roof, shift: 0 };
+  const len = Math.hypot(best!.q.x, best!.q.y) || 1;
+  const x = best!.q.x + (best!.q.x / len) * INSET_M;
+  const y = best!.q.y + (best!.q.y / len) * INSET_M;
+  return { lat: lat + y / M_LAT, lon: lon + x / ml, roof: best!.roof,
            shift: Math.hypot(x, y) };
 }
 
@@ -143,24 +184,41 @@ export const CELL_R_M = 250;
  * 青與洋紅在這張圖上都還沒有人用。 */
 export const CELL_COLORS: Record<string, string> = { a: "#22d3ee", b: "#e879f6" };
 
-/** 扇形的指向（度，正北為 0、順時針）。
+/** 扇形的指向（度，正北為 0、順時針）——**兩支平行、同一個值**。
  *
- * **這是使用者指定要投射的方向，不是量到的天線方位**（2026-10-13：「直接以
- * 扇形投射到草皮區域，兩個 CELL 會在三角路徑的最遠點前面形成覆蓋區」）。
- * 數字是各站朝現行三角路徑**最遠那個航點**（距兩站中點 139.9 m）的方位：
- * A 130.7°、B 138.3°，取整。
+ * 2026-10-13 使用者的兩個條件把這件事定死了：
+ *   1.「在三角形的兩側不在干擾區覆蓋範圍」
+ *   2.「兩個 CELL 會在三角路徑的最遠點前面形成覆蓋區」
  *
- * **它不會跟著航線轉**——天線不會自己轉向，讓畫面上的波束追著航線跑是一句
- * 假話。航線換到別的方位時，這兩個數字要跟著重訂（或等實地量到真方位）。 */
-export const CELL_AIM_DEG: Record<string, number> = { a: 131, b: 138 };
+ * 原本兩支各自瞄最遠航點（131°／138°，會聚），那時**脊線（起飛→wp1）永遠
+ * 100% 落在重疊裡**——張角再怎麼縮都滿足不了條件 1，因為兩個扇形在近處就
+ * 交疊了。改成平行指向之後，兩束在 ≈ 間距/(2·tan(張角/2)) 之前完全不相交，
+ * 重疊因此被推到遠處才成形。
+ *
+ * 136.6° ＝ 兩支中點朝最遠航點 wp1 的方位。
+ *
+ * **仍然是指定的投射方向，不是量到的天線方位**，而且不會跟著航線轉。 */
+export const CELL_AIM_DEG = 136.6;
 
 /** 干擾區的顏色。**鮮紅，而且與 SINR「瀕斷」的深紅 #a01818 分得開**——
  *  那條是量出來的軌跡分級，這塊是推出來的範圍，不能看起來像同一件事。 */
 export const ZONE_COLOR = "#ff3b30";
 
-/** 扇形張角（度）。三扇區基站的常見值；整條三角路徑從兩站看過去只佔 21°，
- *  所以會整個落在覆蓋裡。**同樣是假設**：真值要看天線型號與實際設定。 */
-export const CELL_BEAM_DEG = 65;
+/** 扇形張角（度）。**由使用者的條件解出來的，不是天線規格。**
+ *
+ * 兩支相距 33.1 m、平行指向，重疊從 ≈ 16/tan(張角/2) 公尺處開始：
+ *
+ *     張角   重疊起始   起飛→wp1   wp1→wp2   wp2→起飛
+ *     12°    155 m      0%         0%        0%
+ *     14°    133 m      29%        6%        0%
+ *     20°     94 m      100%       25%       5%
+ *
+ * 最遠航點 wp1 在 140／150 m，所以 12° 時干擾區正好成形在**它前面**，三角形
+ * 三條邊全部落在重疊之外——使用者的兩個條件同時成立，再寬一度就不成立。
+ *
+ * **12° 不是一般扇區天線的張角**（那是 65° 上下）。這是照指定的畫面效果解
+ * 出來的值，不是量到的、也不是型錄上的。 */
+export const CELL_BEAM_DEG = 12;
 
 /** 立體扇形切成幾段。fill-extrusion 的每一塊只有一個高度，所以「從天線往外
  *  下斜」是用多段階梯逼近的——段數只影響平不平滑，不影響它是推估這件事。 */
@@ -177,7 +235,7 @@ export function siteModelFC(buildings: GeoJSON.FeatureCollection | null)
   if (!buildings) return EMPTY;
   const feats: GeoJSON.Feature[] = [];
   for (const s of SITE_POINTS) {
-    const p = placeOnRoof(s.lat, s.lon, buildings);
+    const p = placeOnRoof(s.lat, s.lon, buildings, s.place);
     if (!p) continue;                 // 腳下沒有（高度已知的）樓：不畫
     const props = { site: s.id, name: s.name, shift_m: Math.round(p.shift * 10) / 10 };
     feats.push({
@@ -235,21 +293,19 @@ export function siteCellsFC(buildings: GeoJSON.FeatureCollection | null)
   if (!buildings) return EMPTY;
   const feats: GeoJSON.Feature[] = [];
   for (const s of SITE_POINTS) {
-    const p = placeOnRoof(s.lat, s.lon, buildings);
+    const p = placeOnRoof(s.lat, s.lon, buildings, s.place);
     if (!p) continue;
     feats.push({
       type: "Feature",
       properties: { site: s.id, name: s.name, radius_m: CELL_R_M,
                     color: CELL_COLORS[s.id] ?? "#3f7f8c" },
       geometry: { type: "Polygon", coordinates: [sectorRing(
-        p.lat, p.lon, 0, CELL_R_M, aim(s.id) - CELL_BEAM_DEG / 2,
-        aim(s.id) + CELL_BEAM_DEG / 2)] },
+        p.lat, p.lon, 0, CELL_R_M, CELL_AIM_DEG - CELL_BEAM_DEG / 2,
+        CELL_AIM_DEG + CELL_BEAM_DEG / 2)] },
     });
   }
   return feats.length ? { type: "FeatureCollection", features: feats } : EMPTY;
 }
-
-const aim = (id: string) => CELL_AIM_DEG[id] ?? 0;
 
 // ── 干擾區＝兩個扇形的重疊（2026-10-13 使用者裁定）──────────────────────
 // 系統裡沒有場地干擾區的定義（真表 interference_zones 2026-08-10 砍掉，只剩
@@ -328,7 +384,7 @@ interface Site { lat: number; lon: number; roof: number; id: string }
 function placedSites(buildings: GeoJSON.FeatureCollection): Site[] {
   const out: Site[] = [];
   for (const s of SITE_POINTS) {
-    const p = placeOnRoof(s.lat, s.lon, buildings);
+    const p = placeOnRoof(s.lat, s.lon, buildings, s.place);
     if (p) out.push({ lat: p.lat, lon: p.lon, roof: p.roof, id: s.id });
   }
   return out;
@@ -352,14 +408,14 @@ export function interferenceZoneFC(buildings: GeoJSON.FeatureCollection | null)
     return Math.max(0, hAnt(s) * (1 - d / CELL_R_M));
   };
   const sectorB = sectorXY(bxy[0], bxy[1], 0, CELL_R_M,
-                           aim(B.id) - CELL_BEAM_DEG / 2,
-                           aim(B.id) + CELL_BEAM_DEG / 2);
+                           CELL_AIM_DEG - CELL_BEAM_DEG / 2,
+                           CELL_AIM_DEG + CELL_BEAM_DEG / 2);
   const feats: GeoJSON.Feature[] = [];
   for (let k = 0; k < CELL_BANDS; k++) {
     const r0 = (CELL_R_M * k) / CELL_BANDS;
     const r1 = (CELL_R_M * (k + 1)) / CELL_BANDS;
-    const bandA = sectorXY(0, 0, r0, r1, aim(A.id) - CELL_BEAM_DEG / 2,
-                           aim(A.id) + CELL_BEAM_DEG / 2);
+    const bandA = sectorXY(0, 0, r0, r1, CELL_AIM_DEG - CELL_BEAM_DEG / 2,
+                           CELL_AIM_DEG + CELL_BEAM_DEG / 2);
     const hit = clipConvex(bandA, sectorB);
     if (hit.length < 3) continue;
     const c = centroid(hit);
@@ -385,10 +441,10 @@ export function interferenceFootprintFC(buildings: GeoJSON.FeatureCollection | n
   const lat0 = A.lat, lon0 = A.lon;
   const bxy = toXY(B.lat, B.lon, lat0, lon0);
   const hit = clipConvex(
-    sectorXY(0, 0, 0, CELL_R_M, aim(A.id) - CELL_BEAM_DEG / 2,
-             aim(A.id) + CELL_BEAM_DEG / 2),
-    sectorXY(bxy[0], bxy[1], 0, CELL_R_M, aim(B.id) - CELL_BEAM_DEG / 2,
-             aim(B.id) + CELL_BEAM_DEG / 2));
+    sectorXY(0, 0, 0, CELL_R_M, CELL_AIM_DEG - CELL_BEAM_DEG / 2,
+             CELL_AIM_DEG + CELL_BEAM_DEG / 2),
+    sectorXY(bxy[0], bxy[1], 0, CELL_R_M, CELL_AIM_DEG - CELL_BEAM_DEG / 2,
+             CELL_AIM_DEG + CELL_BEAM_DEG / 2));
   if (hit.length < 3) return EMPTY;
   const ring = hit.map((p) => toLL(p, lat0, lon0));
   return { type: "FeatureCollection", features: [{
@@ -410,12 +466,12 @@ export function siteCellVolFC(buildings: GeoJSON.FeatureCollection | null)
   if (!buildings) return EMPTY;
   const feats: GeoJSON.Feature[] = [];
   for (const s of SITE_POINTS) {
-    const p = placeOnRoof(s.lat, s.lon, buildings);
+    const p = placeOnRoof(s.lat, s.lon, buildings, s.place);
     if (!p) continue;
     // 天線面板的中心高度：屋頂 ＋ 桿高 − 面板頂距桿頂 − 半個面板
     const hAnt = p.roof + MAST_M - PANEL_TOP_DROP - PANEL_H / 2;
-    const a0 = aim(s.id) - CELL_BEAM_DEG / 2;
-    const a1 = aim(s.id) + CELL_BEAM_DEG / 2;
+    const a0 = CELL_AIM_DEG - CELL_BEAM_DEG / 2;
+    const a1 = CELL_AIM_DEG + CELL_BEAM_DEG / 2;
     for (let k = 0; k < CELL_BANDS; k++) {
       const r0 = (CELL_R_M * k) / CELL_BANDS;
       const r1 = (CELL_R_M * (k + 1)) / CELL_BANDS;
@@ -440,7 +496,7 @@ export function sitePointsFC(buildings: GeoJSON.FeatureCollection | null)
   if (!buildings) return EMPTY;
   const feats: GeoJSON.Feature[] = [];
   for (const s of SITE_POINTS) {
-    const p = placeOnRoof(s.lat, s.lon, buildings);
+    const p = placeOnRoof(s.lat, s.lon, buildings, s.place);
     if (!p) continue;
     feats.push({
       type: "Feature",
