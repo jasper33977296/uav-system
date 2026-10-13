@@ -134,6 +134,12 @@ export function pathsLayer(id: string, data: RouteRun[], pickable = false) {
       getWidth: (d: RouteRun) => (d.width ?? 3) + 1,
       widthMinPixels: PATH_BASE.widthMinPixels + HALO_PX,
       widthMaxPixels: PATH_BASE.widthMaxPixels + HALO_PX,
+      // **描邊不寫深度**（2026-10-13）。兩層是同一條路徑、幾何完全重合，
+      // 都寫深度的話每個像素由深度緩衝隨機挑一個贏——畫面上就是**成片的黑
+      // 配上碎掉的彩色**，使用者回報「路徑訊號有很多黑色」。
+      // 不寫深度之後：描邊仍然會被建物／地形正確遮住（它還是**測試**深度），
+      // 但不再跟畫在它上面的彩色線打架，彩色線永遠贏。
+      parameters: { depthWriteEnabled: false },
     }),
     new PathLayer<RouteRun>({ ...PATH_BASE, id, data, billboard: true, pickable }),
   ];
