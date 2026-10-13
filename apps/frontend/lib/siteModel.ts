@@ -220,6 +220,24 @@ export const ZONE_COLOR = "#ff3b30";
  * 出來的值，不是量到的、也不是型錄上的。 */
 export const CELL_BEAM_DEG = 12;
 
+/** 光束的厚度（公尺）。**不是實心楔形，是一片有厚度的斜板。**
+ *
+ * 2026-10-13 使用者回報「目前的訊號會把建築物建模吃掉，建築物的顯示優先權
+ * 大於訊號」。原因是原本的楔形從地面實心填到斜頂——天線那端有 32 m 高，
+ * 等於在樓前面豎了一道牆。fill-extrusion 之間會互相做深度測試，牆在相機與
+ * 樓之間時，**後畫的樓也贏不了**（深度測試先把它刷掉）。
+ *
+ * 改成薄板之後，光束在螢幕上只佔一條帶，遮不住樓；而且它本來就比較像一束
+ * 投射，不像一塊果凍。 */
+const BEAM_SLAB_M = 4;
+
+/** 光束往前推多少才開始畫（公尺）——**跨過腳下那棟樓**。
+ *
+ * 同一個回報的另一半：兩支都站在 52館 上，光束的頭幾公尺就埋在那棟樓裡。
+ * 實測掃描：邊緣支 2.0 m、中心支 22.0 m 之後才離開 52館 的輪廓，而光束
+ * ±6° 內沒有別的 3D 樓。這裡按需求動態量（`clearRadius`），不寫死。 */
+const BEAM_CLEAR_PAD_M = 2;
+
 /** 立體扇形切成幾段。fill-extrusion 的每一塊只有一個高度，所以「從天線往外
  *  下斜」是用多段階梯逼近的——段數只影響平不平滑，不影響它是推估這件事。 */
 const CELL_BANDS = 14;
@@ -424,7 +442,11 @@ export function interferenceZoneFC(buildings: GeoJSON.FeatureCollection | null)
     const ring = hit.map((p) => toLL(p, lat0, lon0));
     feats.push({
       type: "Feature",
-      properties: { band: k, top: h },
+      // **比 cell 的薄板上下各多 0.4 m**：兩者在重疊處的面本來完全重合，
+      // 深度測試分不出先後會閃爍（z-fighting），看起來就是「分不出哪邊是
+      // 重疊、哪邊是單一 cell」。讓紅色那片整個包住它，先後就定了。
+      properties: { band: k, top: h + 0.4,
+                    base: Math.max(0, h - BEAM_SLAB_M - 0.4) },
       geometry: { type: "Polygon", coordinates: [[...ring, ring[0]]] },
     });
   }
@@ -452,7 +474,34 @@ export function interferenceFootprintFC(buildings: GeoJSON.FeatureCollection | n
     geometry: { type: "Polygon", coordinates: [[...ring, ring[0]]] } }] };
 }
 
-/** 兩個 CELL 的**立體**扇形：從天線往外、往下斜到地面的那個楔形。
+/** 這一支的光束要從多遠開始畫，才不會埋在腳下那棟樓裡。
+ *
+ * 沿光束取樣（7 條射線 × 1 m），找最遠一個仍落在**高度已知**（＝會被畫成
+ * 3D）的樓輪廓內的點。高度未知的樓只畫地面輪廓、不會擋住誰，所以不算。 */
+function clearRadius(lat: number, lon: number,
+                     buildings: GeoJSON.FeatureCollection): number {
+  const ml = mLon(lat);
+  const rings: [number, number][][] = [];
+  for (const f of buildings.features) {
+    const g = f.geometry;
+    if (!g || g.type !== "Polygon") continue;
+    if ((f.properties as { height_m?: number | null } | null)?.height_m == null) continue;
+    rings.push((g.coordinates[0] as number[][]).map(
+      ([lo, la]) => [(lo - lon) * ml, (la - lat) * M_LAT]));
+  }
+  let worst = 0;
+  for (let k = 0; k < 7; k++) {
+    const a = CELL_AIM_DEG - CELL_BEAM_DEG / 2 + (CELL_BEAM_DEG * k) / 6;
+    const t = ((90 - a) * Math.PI) / 180;
+    for (let d = 1; d <= 80; d += 1) {
+      const x = d * Math.cos(t), y = d * Math.sin(t);
+      if (rings.some((r) => inRing(x, y, r))) worst = Math.max(worst, d);
+    }
+  }
+  return worst > 0 ? worst + BEAM_CLEAR_PAD_M : 0;
+}
+
+/** 兩個 CELL 的**立體**扇形：從天線往外、往下斜到地面的那一片斜板。
  *
  * 使用者 2026-10-13：「把 CELL 畫成立體的，不要只有平面圓，然後直接以扇形
  * 投射到草皮區域」。做法是把扇形切成 `CELL_BANDS` 段同心環，每段的頂高從
@@ -472,13 +521,16 @@ export function siteCellVolFC(buildings: GeoJSON.FeatureCollection | null)
     const hAnt = p.roof + MAST_M - PANEL_TOP_DROP - PANEL_H / 2;
     const a0 = CELL_AIM_DEG - CELL_BEAM_DEG / 2;
     const a1 = CELL_AIM_DEG + CELL_BEAM_DEG / 2;
+    const rc = clearRadius(p.lat, p.lon, buildings);
     for (let k = 0; k < CELL_BANDS; k++) {
-      const r0 = (CELL_R_M * k) / CELL_BANDS;
-      const r1 = (CELL_R_M * (k + 1)) / CELL_BANDS;
+      const r0 = rc + ((CELL_R_M - rc) * k) / CELL_BANDS;
+      const r1 = rc + ((CELL_R_M - rc) * (k + 1)) / CELL_BANDS;
       const top = hAnt * (1 - (r0 + r1) / 2 / CELL_R_M);
       feats.push({
         type: "Feature",
         properties: { site: s.id, name: s.name, band: k, top,
+                      // 薄板：底 ＝ 頂減厚度，不是從地面實心填上來
+                      base: Math.max(0, top - BEAM_SLAB_M),
                       color: CELL_COLORS[s.id] ?? "#3f7f8c" },
         geometry: { type: "Polygon",
                     coordinates: [sectorRing(p.lat, p.lon, r0, r1, a0, a1)] },

@@ -379,7 +379,9 @@ export default function MapView() {
       map.addSource("cells", { type: "geojson", data: EMPTY });
       map.addLayer({
         id: "cell-fill", type: "fill", source: "cells",
-        paint: { "fill-color": ["get", "color"], "fill-opacity": 0.07 },
+        // 透明度全面調高（2026-10-13 使用者：「現在看不出來哪邊有重疊
+        // 哪邊是單一 cell 訊號」）。地面足跡 0.07→0.16
+        paint: { "fill-color": ["get", "color"], "fill-opacity": 0.16 },
       }, "plan3d");
       // 立體的那一份：從天線往外往下斜到地面的楔形（使用者 2026-10-13
       // 「把 CELL 畫成立體的，不要只有平面圓」）。**不是波束形狀**——沒有
@@ -388,9 +390,13 @@ export default function MapView() {
       map.addLayer({
         id: "cell-vol", type: "fill-extrusion", source: "cell-vol",
         paint: { "fill-extrusion-color": ["get", "color"],
-                 "fill-extrusion-base": 0,
+                 // **薄板**：底從 feature 來，不是 0。原本從地面實心填到斜頂，
+                 // 天線那端 32 m 高，等於在樓前面豎一道牆——fill-extrusion 之間
+                 // 會互相深度測試，牆擋在相機與樓之間時後畫的樓也贏不了，
+                 // 使用者回報「訊號會把建築物建模吃掉」
+                 "fill-extrusion-base": ["get", "base"],
                  "fill-extrusion-height": ["get", "top"],
-                 "fill-extrusion-opacity": 0.17 },
+                 "fill-extrusion-opacity": 0.32 },
       }, "plan3d");
       // 干擾區＝兩個扇形的重疊（2026-10-13 使用者裁定）。**與兩個扇形同一
       // 組幾何，所以繼承它們的每一個假設**——半徑來自假設的衰減指數、方位
@@ -402,7 +408,7 @@ export default function MapView() {
       map.addSource("zone-foot", { type: "geojson", data: EMPTY });
       map.addLayer({
         id: "zone-fill", type: "fill", source: "zone-foot",
-        paint: { "fill-color": ZONE_COLOR, "fill-opacity": 0.14 },
+        paint: { "fill-color": ZONE_COLOR, "fill-opacity": 0.32 },
       }, "plan3d");
       map.addLayer({
         id: "zone-edge", type: "line", source: "zone-foot",
@@ -411,9 +417,10 @@ export default function MapView() {
       }, "plan3d");
       map.addLayer({
         id: "zone-vol", type: "fill-extrusion", source: "zone",
-        paint: { "fill-extrusion-color": ZONE_COLOR, "fill-extrusion-base": 0,
+        paint: { "fill-extrusion-color": ZONE_COLOR,
+                 "fill-extrusion-base": ["get", "base"],
                  "fill-extrusion-height": ["get", "top"],
-                 "fill-extrusion-opacity": 0.3 },
+                 "fill-extrusion-opacity": 0.6 },
       }, "plan3d");
       map.addLayer({
         id: "cell-edge", type: "line", source: "cells",
@@ -1072,7 +1079,8 @@ export default function MapView() {
             方位（兩支平行 136.6°）是指定要投射的方向，不是量到的天線方位，
             也不會跟著航線轉；張角 12° 是照「三角形兩側不在干擾區內、覆蓋區成形在
             最遠點前面」這兩個條件解出來的，不是天線規格（一般扇區天線約 65°）。
-            立體的楔形是投射示意，沒有算垂直張角、下傾，也沒有算被樓擋住。
+            立體的那片斜板是投射示意，沒有算垂直張角、下傾，也沒有算被樓擋住；
+            它從建物輪廓外才開始畫，**建築物的顯示優先於訊號**。
             **干擾區＝兩個扇形的重疊**（使用者定義），所以它是算出來的幾何，
             不是量出來的區域——上面那些假設改一個，這塊紅色就跟著變。
             實測資料裡沒有任何一筆標記過干擾區。" />
