@@ -36,9 +36,10 @@ export function useBasemap() {
 
   /** 在 map 的 load 事件內呼叫：建圖層（預設隱藏）並掛偵測。
    *
-   * `dim`＝蓋在影像上的暗化濃度（0＝不暗化）。**預設維持 0.8**，見下方那段
-   * CVD 的理由；即時頁 2026-10-13 起傳 0，因為使用者要它與規劃頁一致，
-   * 而分級色改用深色描邊保住辨識度（見 `deckRoute.pathsLayer`）。
+   * `dim`＝蓋在影像上的暗化濃度（0＝不暗化）、`rasterOpacity`＝影像本身的
+   * 不透明度。**預設 0 與 0.9——與規劃頁（TerrainStage 的 ortho 層）同值**
+   * （2026-10-13 使用者裁定：即時頁與回放頁都要和規劃頁一樣）。
+   * 參數留著是為了讓「要不要暗化」仍然是改得動的一個數字，不是寫死。
    */
   const install = useCallback((map: maplibregl.Map, beforeId?: string,
                                opts?: { dim?: number; rasterOpacity?: number }) => {
@@ -51,11 +52,11 @@ export function useBasemap() {
       layout: { visibility: "none" },
       // 0.9＝與規劃頁（TerrainStage 的 ortho 層）同一個值。兩頁的底圖
       // 看起來要一樣，**而「一樣」是指同一個數字，不是憑感覺調到像**
-      paint: { "raster-opacity": opts?.rasterOpacity ?? 1 } }, beforeId);
+      paint: { "raster-opacity": opts?.rasterOpacity ?? 0.9 } }, beforeId);
     // 暗化：分級色必須在最亮地物（水泥/屋頂）上仍可辨。
-    // **2026-10-13：即時頁改成 0（使用者要與規劃頁一致）。** 下面那段量測
-    // 仍然成立——所以分級色改用深色描邊來保住辨識度，而不是假裝問題不存在
-    // （見 `deckRoute.pathsLayer` 的 halo）。回放頁沒有改，仍是 0.8。
+    // **2026-10-13：預設改成 0（使用者要兩頁都與規劃頁一致）。** 下面那段
+    // 量測仍然成立——所以分級色改用深色描邊來保住辨識度，而不是假裝問題
+    // 不存在（見 `deckRoute.pathsLayer` 的 halo）。兩個頁面都吃這個預設。
     // 80% 為 CVD 重驗定案值（設計師 2026-08-12，取樣 NLSC 台北 z17 實影像）：
     // 50% 時最亮地物上四色**全部 <3:1**（良好 1.49／尚可 2.73／劣化 1.38／
     // 瀕斷 1.59）——影像亮處會把整套分級色吃掉；80% 後只剩瀕斷 #a01818
@@ -65,7 +66,7 @@ export function useBasemap() {
     map.addLayer({ id: "basemap-dim", type: "background",
       layout: { visibility: "none" },
       paint: { "background-color": CANVAS,
-               "background-opacity": opts?.dim ?? 0.8 } }, beforeId);
+               "background-opacity": opts?.dim ?? 0 } }, beforeId);
     map.on("error", (e) => {
       if ((e as unknown as { sourceId?: string }).sourceId === "nlsc") setOffline(true);
     });

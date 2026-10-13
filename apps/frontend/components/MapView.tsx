@@ -245,9 +245,9 @@ export default function MapView() {
     }
 
     map.on("load", async () => {
-      // 底圖與規劃頁同亮度（2026-10-13 使用者裁定）：不暗化、raster 0.9。
-      // 分級色的辨識度改由深色描邊保住（deckRoute.pathsLayer）
-      base.install(map, undefined, { dim: 0, rasterOpacity: 0.9 });
+      // 亮度與規劃頁一致是 useBasemap 的預設（2026-10-13），兩頁共用同一組
+      // 數字——這裡不再各自傳一份，免得哪天只改了一邊
+      base.install(map);
 
       // 地面基準：網格 50m 一格 + 起飛點雙圈錨點
       // 網格/起飛點錨在**實際**出生點：先建空 source，收到第一筆座標再填
