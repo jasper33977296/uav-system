@@ -131,8 +131,27 @@ function placeOnRoof(lat: number, lon: number,
  * 畫成正圓也是示意：兩個 cell 的天線方位我們沒有資料，畫成扇形等於編方向。 */
 export const CELL_R_M = 250;
 
-/** CELL 的顏色。兩個圓幾乎同心（天線只差 20.7 m），靠色相分辨。 */
+/** CELL 的顏色。兩座天線只差 20.7 m，兩個扇形幾乎重疊，靠色相分辨。 */
 export const CELL_COLORS: Record<string, string> = { a: "#3f7f8c", b: "#8a6b9e" };
+
+/** 扇形的指向（度，正北為 0、順時針）。
+ *
+ * **這是使用者指定要投射的方向，不是量到的天線方位**（2026-10-13：「直接以
+ * 扇形投射到草皮區域，兩個 CELL 會在三角路徑的最遠點前面形成覆蓋區」）。
+ * 數字是各站朝現行三角路徑**最遠那個航點**（距兩站中點 139.9 m）的方位：
+ * A 130.7°、B 138.3°，取整。
+ *
+ * **它不會跟著航線轉**——天線不會自己轉向，讓畫面上的波束追著航線跑是一句
+ * 假話。航線換到別的方位時，這兩個數字要跟著重訂（或等實地量到真方位）。 */
+export const CELL_AIM_DEG: Record<string, number> = { a: 131, b: 138 };
+
+/** 扇形張角（度）。三扇區基站的常見值；整條三角路徑從兩站看過去只佔 21°，
+ *  所以會整個落在覆蓋裡。**同樣是假設**：真值要看天線型號與實際設定。 */
+export const CELL_BEAM_DEG = 65;
+
+/** 立體扇形切成幾段。fill-extrusion 的每一塊只有一個高度，所以「從天線往外
+ *  下斜」是用多段階梯逼近的——段數只影響平不平滑，不影響它是推估這件事。 */
+const CELL_BANDS = 14;
 
 const EMPTY: GeoJSON.FeatureCollection = { type: "FeatureCollection", features: [] };
 
@@ -171,21 +190,33 @@ export function siteModelFC(buildings: GeoJSON.FeatureCollection | null)
   return { type: "FeatureCollection", features: feats };
 }
 
-/** 以 (lat, lon) 為心、半徑 r 公尺的圓（96 邊形近似——地圖上看不出差別）。 */
-function circleRing(lat: number, lon: number, r: number): [number, number][] {
+/** 以 (lat, lon) 為心的環狀扇形（r0→r1、方位 a0→a1 度）的外環。
+ *  r0 = 0 時退化成一般扇形（圓心是一個點）。 */
+function sectorRing(lat: number, lon: number, r0: number, r1: number,
+                    a0: number, a1: number): [number, number][] {
   const ml = mLon(lat);
+  const N = 36;
+  // 方位角是「正北 0、順時針」，而三角函數是「正東 0、逆時針」
+  const pt = (r: number, degN: number): [number, number] => {
+    const t = ((90 - degN) * Math.PI) / 180;
+    return [lon + (r * Math.cos(t)) / ml, lat + (r * Math.sin(t)) / M_LAT];
+  };
   const ring: [number, number][] = [];
-  for (let i = 0; i <= 96; i++) {
-    const a = (i / 96) * 2 * Math.PI;
-    ring.push([lon + (r * Math.cos(a)) / ml, lat + (r * Math.sin(a)) / M_LAT]);
+  for (let i = 0; i <= N; i++) ring.push(pt(r1, a0 + ((a1 - a0) * i) / N));
+  if (r0 > 0) {
+    for (let i = N; i >= 0; i--) ring.push(pt(r0, a0 + ((a1 - a0) * i) / N));
+  } else {
+    ring.push(pt(0, a0));
   }
+  ring.push(ring[0]);
   return ring;
 }
 
-/** 兩個 CELL 的示意範圍（地面上的半透明圓）。
+/** 兩個 CELL 落在地面上的扇形（給淡填色與虛線邊界用）。
  *
- * 圓心跟著模型實際站的位置走，**不是另外一組座標**：畫面上只能有一個
- * 「它在哪裡」。半徑見 `CELL_R_M` 的說明——量到的是錨點，外推的斜率是假設。 */
+ * 扇心跟著模型實際站的位置走，**不是另外一組座標**：畫面上只能有一個
+ * 「它在哪裡」。半徑見 `CELL_R_M`、方位見 `CELL_AIM_DEG`——量到的只有錨點，
+ * 往外的斜率、方位、張角全是假設。 */
 export function siteCellsFC(buildings: GeoJSON.FeatureCollection | null)
     : GeoJSON.FeatureCollection {
   if (!buildings) return EMPTY;
@@ -197,8 +228,48 @@ export function siteCellsFC(buildings: GeoJSON.FeatureCollection | null)
       type: "Feature",
       properties: { site: s.id, name: s.name, radius_m: CELL_R_M,
                     color: CELL_COLORS[s.id] ?? "#3f7f8c" },
-      geometry: { type: "Polygon", coordinates: [circleRing(p.lat, p.lon, CELL_R_M)] },
+      geometry: { type: "Polygon", coordinates: [sectorRing(
+        p.lat, p.lon, 0, CELL_R_M, aim(s.id) - CELL_BEAM_DEG / 2,
+        aim(s.id) + CELL_BEAM_DEG / 2)] },
     });
+  }
+  return feats.length ? { type: "FeatureCollection", features: feats } : EMPTY;
+}
+
+const aim = (id: string) => CELL_AIM_DEG[id] ?? 0;
+
+/** 兩個 CELL 的**立體**扇形：從天線往外、往下斜到地面的那個楔形。
+ *
+ * 使用者 2026-10-13：「把 CELL 畫成立體的，不要只有平面圓，然後直接以扇形
+ * 投射到草皮區域」。做法是把扇形切成 `CELL_BANDS` 段同心環，每段的頂高從
+ * 天線高度線性遞減到 0——fill-extrusion 一塊只有一個高度，斜面只能這樣逼近。
+ *
+ * **這個楔形不是波束形狀，是一個投射示意。** 真的波束有垂直張角、下傾角、
+ * 旁瓣，還會被樓擋住；這裡一個都沒有算。它回答的是「這個方向、這個距離」，
+ * 不是「這裡收得到多少 dB」。 */
+export function siteCellVolFC(buildings: GeoJSON.FeatureCollection | null)
+    : GeoJSON.FeatureCollection {
+  if (!buildings) return EMPTY;
+  const feats: GeoJSON.Feature[] = [];
+  for (const s of SITE_POINTS) {
+    const p = placeOnRoof(s.lat, s.lon, buildings);
+    if (!p) continue;
+    // 天線面板的中心高度：屋頂 ＋ 桿高 − 面板頂距桿頂 − 半個面板
+    const hAnt = p.roof + MAST_M - PANEL_TOP_DROP - PANEL_H / 2;
+    const a0 = aim(s.id) - CELL_BEAM_DEG / 2;
+    const a1 = aim(s.id) + CELL_BEAM_DEG / 2;
+    for (let k = 0; k < CELL_BANDS; k++) {
+      const r0 = (CELL_R_M * k) / CELL_BANDS;
+      const r1 = (CELL_R_M * (k + 1)) / CELL_BANDS;
+      const top = hAnt * (1 - (r0 + r1) / 2 / CELL_R_M);
+      feats.push({
+        type: "Feature",
+        properties: { site: s.id, name: s.name, band: k, top,
+                      color: CELL_COLORS[s.id] ?? "#3f7f8c" },
+        geometry: { type: "Polygon",
+                    coordinates: [sectorRing(p.lat, p.lon, r0, r1, a0, a1)] },
+      });
+    }
   }
   return feats.length ? { type: "FeatureCollection", features: feats } : EMPTY;
 }

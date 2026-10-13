@@ -22,7 +22,7 @@ import { CANVAS, groundGrid, M_LAT, mLon, planPath, ribbon, trailLineString }
   from "@/lib/geo";
 import { getJson } from "@/lib/fetchJson";
 import { API, LINK_CLASSES } from "@/lib/signal";
-import { CELL_COLORS, siteCellsFC, siteModelFC, sitePointsFC }
+import { CELL_COLORS, siteCellVolFC, siteCellsFC, siteModelFC, sitePointsFC }
   from "@/lib/siteModel";
 import { freshOnly, staleLevel } from "@/lib/staleness";
 import { firstFleetPos, useUavStore, type Telemetry } from "@/lib/store";
@@ -379,7 +379,18 @@ export default function MapView() {
       map.addSource("cells", { type: "geojson", data: EMPTY });
       map.addLayer({
         id: "cell-fill", type: "fill", source: "cells",
-        paint: { "fill-color": ["get", "color"], "fill-opacity": 0.1 },
+        paint: { "fill-color": ["get", "color"], "fill-opacity": 0.07 },
+      }, "plan3d");
+      // 立體的那一份：從天線往外往下斜到地面的楔形（使用者 2026-10-13
+      // 「把 CELL 畫成立體的，不要只有平面圓」）。**不是波束形狀**——沒有
+      // 垂直張角、沒有下傾、沒有被樓擋住，它說的只有方向與距離
+      map.addSource("cell-vol", { type: "geojson", data: EMPTY });
+      map.addLayer({
+        id: "cell-vol", type: "fill-extrusion", source: "cell-vol",
+        paint: { "fill-extrusion-color": ["get", "color"],
+                 "fill-extrusion-base": 0,
+                 "fill-extrusion-height": ["get", "top"],
+                 "fill-extrusion-opacity": 0.17 },
       }, "plan3d");
       map.addLayer({
         id: "cell-edge", type: "line", source: "cells",
@@ -642,6 +653,8 @@ export default function MapView() {
           ?.setData(sitePointsFC(bfc));
         (m?.getSource("cells") as maplibregl.GeoJSONSource | undefined)
           ?.setData(siteCellsFC(bfc));
+        (m?.getSource("cell-vol") as maplibregl.GeoJSONSource | undefined)
+          ?.setData(siteCellVolFC(bfc));
       } catch { /* 沒有建物資料＝不畫 */ }
       try {
         const r = await fetch(
@@ -1020,11 +1033,13 @@ export default function MapView() {
             要「會不會撞」的判斷請看規劃頁，那裡會把高度未知的樓畫成高過航線。
             屋頂設備是 2026-10-13 指定的兩個座標，照實際尺寸畫（桿 6 m）；
             它坐落的樓高本身是樓層數推算的，所以模型的高度跟著一起不準。
-            **兩個 CELL 的圈是示意，不是量到的覆蓋範圍**：圈心的訊號強度量得到
+            **兩個 CELL 的扇形是示意，不是量到的覆蓋範圍**：扇心的訊號強度量得到
             （4343 筆實測的中位），但往外衰減多快量不出來——實際飛過的範圍只跨
             1.7 倍距離，訊號變化埋在樣本的散佈裡。半徑 250 m 來自一個假設的
-            衰減指數，換一個假設就會變成 200 m 或 380 m。方位也沒有資料，
-            畫成正圓同樣是示意。" />
+            衰減指數，換一個假設就會變成 200 m 或 380 m。
+            方位（131°／138°）是指定要投射的方向，不是量到的天線方位，也不會
+            跟著航線轉；張角 65° 是三扇區基站的常見值。立體的楔形是投射示意，
+            沒有算垂直張角、下傾，也沒有算被樓擋住。" />
         </div>
         <BasemapToggle on={base.on} set={base.set}
           offline={base.offline} outside={base.outside} />
