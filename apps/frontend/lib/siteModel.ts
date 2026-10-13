@@ -131,8 +131,17 @@ function placeOnRoof(lat: number, lon: number,
  * 畫成正圓也是示意：兩個 cell 的天線方位我們沒有資料，畫成扇形等於編方向。 */
 export const CELL_R_M = 250;
 
-/** CELL 的顏色。兩座天線只差 20.7 m，兩個扇形幾乎重疊，靠色相分辨。 */
-export const CELL_COLORS: Record<string, string> = { a: "#3f7f8c", b: "#8a6b9e" };
+/** CELL 的顏色。
+ *
+ * 兩座天線只差 20.7 m，兩個扇形大面積重疊，**只能靠色相分辨**——所以取
+ * 色環上接近對角的一對（青／洋紅），不是同一個色系的深淺（2026-10-13 使用者
+ * 回報「顏色太暗」「兩者顏色太相近」）。原本的 #3f7f8c／#8a6b9e 是同一個
+ * 冷色區間的兩個濁色，疊起來分不出誰是誰。
+ *
+ * **避開已經有主的顏色**：綠/黃/橘/深紅是 SINR 分級（lib/signal 的
+ * LINK_CLASSES），藍是機體，橄欖綠是植被，土黃是建物，鮮紅留給干擾區。
+ * 青與洋紅在這張圖上都還沒有人用。 */
+export const CELL_COLORS: Record<string, string> = { a: "#22d3ee", b: "#e879f6" };
 
 /** 扇形的指向（度，正北為 0、順時針）。
  *
