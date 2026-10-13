@@ -22,7 +22,8 @@ import { CANVAS, groundGrid, M_LAT, mLon, planPath, ribbon, trailLineString }
   from "@/lib/geo";
 import { getJson } from "@/lib/fetchJson";
 import { API, LINK_CLASSES } from "@/lib/signal";
-import { siteModelFC, sitePointsFC } from "@/lib/siteModel";
+import { CELL_COLORS, siteCellsFC, siteModelFC, sitePointsFC }
+  from "@/lib/siteModel";
 import { freshOnly, staleLevel } from "@/lib/staleness";
 import { firstFleetPos, useUavStore, type Telemetry } from "@/lib/store";
 
@@ -369,6 +370,24 @@ export default function MapView() {
       // libs/buildings.py：「猜 9 m 而實際 12 m 的樓，在這裡是撞機」。
       // 建在 `plan3d` 之前＝永遠在計畫疊圖與 deck（軌跡、機體圖示）之下，
       // §2.4c「圖示永不被覆蓋」。
+      // 兩個 CELL 的示意範圍（2026-10-13 使用者要求「畫出半透明的兩個
+      // CELL」）。**建在 buildings 之前＝最底下**：它是地面上的一片底色，
+      // 樓、植被、航線、軌跡都該壓在它上面，不能反過來把場景蓋掉。
+      // **半徑是示意，不是量到的覆蓋**：錨點量得到（4343 筆的中位
+      // −89/−90 dBm @ ~105 m），往外推的斜率是假設的——實測只跨 1.7 倍距離，
+      // 擬合出來的衰減指數是負的（越遠越強），斜率根本量不出來。見 siteModel。
+      map.addSource("cells", { type: "geojson", data: EMPTY });
+      map.addLayer({
+        id: "cell-fill", type: "fill", source: "cells",
+        paint: { "fill-color": ["get", "color"], "fill-opacity": 0.1 },
+      }, "plan3d");
+      map.addLayer({
+        id: "cell-edge", type: "line", source: "cells",
+        paint: { "line-color": ["get", "color"], "line-width": 1.5,
+                 // 虛線＝這條邊界是推的，不是量出來的門檻
+                 "line-dasharray": [3, 3], "line-opacity": 0.6 },
+      }, "plan3d");
+
       map.addSource("buildings", { type: "geojson", data: EMPTY });
       map.addLayer({
         id: "buildings", type: "fill-extrusion", source: "buildings",
@@ -621,6 +640,8 @@ export default function MapView() {
           ?.setData(siteModelFC(bfc));
         (m?.getSource("site-pts") as maplibregl.GeoJSONSource | undefined)
           ?.setData(sitePointsFC(bfc));
+        (m?.getSource("cells") as maplibregl.GeoJSONSource | undefined)
+          ?.setData(siteCellsFC(bfc));
       } catch { /* 沒有建物資料＝不畫 */ }
       try {
         const r = await fetch(
@@ -983,6 +1004,13 @@ export default function MapView() {
             <i className="legend-sw" style={{ background: "#d9d4c6" }} />
             屋頂設備
           </span>
+          <span className="legend-seg">
+            <i className="legend-sw legend-sw-dash"
+              style={{ borderColor: CELL_COLORS.a }} />
+            <i className="legend-sw legend-sw-dash"
+              style={{ borderColor: CELL_COLORS.b }} />
+            CELL（示意）
+          </span>
           <InfoTip tip="輪廓來自 OpenStreetMap，開場前先抓好、現場離線也能用。
             建物：有樓層數才推算得出高度，推得出來的照高度拉成立體；推不出來的
             只畫地面輪廓、不給屋頂——這裡假一個高度出來，代價是撞機。
@@ -991,7 +1019,12 @@ export default function MapView() {
             這個圖層說得出「這裡標了一棵樹」，說不出「這裡只有這些樹」。
             要「會不會撞」的判斷請看規劃頁，那裡會把高度未知的樓畫成高過航線。
             屋頂設備是 2026-10-13 指定的兩個座標，照實際尺寸畫（桿 6 m）；
-            它坐落的樓高本身是樓層數推算的，所以模型的高度跟著一起不準。" />
+            它坐落的樓高本身是樓層數推算的，所以模型的高度跟著一起不準。
+            **兩個 CELL 的圈是示意，不是量到的覆蓋範圍**：圈心的訊號強度量得到
+            （4343 筆實測的中位），但往外衰減多快量不出來——實際飛過的範圍只跨
+            1.7 倍距離，訊號變化埋在樣本的散佈裡。半徑 250 m 來自一個假設的
+            衰減指數，換一個假設就會變成 200 m 或 380 m。方位也沒有資料，
+            畫成正圓同樣是示意。" />
         </div>
         <BasemapToggle on={base.on} set={base.set}
           offline={base.offline} outside={base.outside} />

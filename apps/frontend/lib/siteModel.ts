@@ -35,8 +35,14 @@ const PANEL_W = 0.45;    // 面板寬
 const PANEL_T = 0.22;    // 面板厚
 const PANEL_R = 1.0;     // 面板離桿心的距離
 const PANEL_TOP_DROP = 0.6;   // 面板頂距桿頂
-/** 挪進輪廓後再往內讓一點，免得模型卡在屋簷線上（看起來仍像飄著）。 */
-const INSET_M = 1.5;
+/** 挪進輪廓後再往內讓多少。
+ *
+ * 原本 1.5 m，只夠讓它「不在輪廓外」——但 1.5 m 在屋簷線上，傾斜視角下看
+ * 起來仍然像掛在邊緣外（使用者 2026-10-13 第二次回報「還是飄在 3D 建築物
+ * 外」，並指示「貼齊到 3D 建模的建築物中」）。改成 6 m：目視就在屋頂面上。
+ * **這是顯示用的位置，不是量到的位置**——座標與輪廓的落差使用者裁定
+ * 「先不管，之後再量」，`shift_m` 仍然記著一共挪了多少。 */
+const INSET_M = 6;
 /** 超過這個距離就不算「同一棟樓的屋頂」——寧可不畫，也不要硬接。 */
 const MAX_SNAP_M = 25;
 
@@ -109,6 +115,25 @@ function placeOnRoof(lat: number, lon: number,
            shift: Math.hypot(x, y) };
 }
 
+/** CELL 的示意半徑（公尺）。
+ *
+ * **這是示意，不是量到的覆蓋範圍。** 怎麼來的：實測 4343 筆（2026-09-14 以來
+ * 的真實飛行）的中位是 **−89／−90 dBm @ 3D 距離 ~105 m**——這一段是量到的；
+ * 往外推到 −100 dBm 要**假設**一個路徑損耗指數，取 n=2.7 得 243–268 m，
+ * 這裡取 250。
+ *
+ * **為什麼不是從量測擬合出來的**：全部樣本只跨 82–141 m（1.7 倍，不到 0.2 個
+ * 數量級），那段距離上的路徑損耗只有 4–8 dB，而樣本散佈是 ±6.6–7 dB。實際
+ * 擬合出來的衰減指數是**負的**（R²≈0.00／0.11），也就是「越遠越強」——物理
+ * 上不可能。訊號埋在雜訊裡，所以斜率只能假設。n 從 2.0 換到 3.5，半徑就在
+ * 200–380 m 之間跑，**這個圈的大小主要由那個假設決定，不由量測決定**。
+ *
+ * 畫成正圓也是示意：兩個 cell 的天線方位我們沒有資料，畫成扇形等於編方向。 */
+export const CELL_R_M = 250;
+
+/** CELL 的顏色。兩個圓幾乎同心（天線只差 20.7 m），靠色相分辨。 */
+export const CELL_COLORS: Record<string, string> = { a: "#3f7f8c", b: "#8a6b9e" };
+
 const EMPTY: GeoJSON.FeatureCollection = { type: "FeatureCollection", features: [] };
 
 /** 兩座模型的立體幾何。`base`／`top` 給 fill-extrusion 吃。
@@ -144,6 +169,38 @@ export function siteModelFC(buildings: GeoJSON.FeatureCollection | null)
     }
   }
   return { type: "FeatureCollection", features: feats };
+}
+
+/** 以 (lat, lon) 為心、半徑 r 公尺的圓（96 邊形近似——地圖上看不出差別）。 */
+function circleRing(lat: number, lon: number, r: number): [number, number][] {
+  const ml = mLon(lat);
+  const ring: [number, number][] = [];
+  for (let i = 0; i <= 96; i++) {
+    const a = (i / 96) * 2 * Math.PI;
+    ring.push([lon + (r * Math.cos(a)) / ml, lat + (r * Math.sin(a)) / M_LAT]);
+  }
+  return ring;
+}
+
+/** 兩個 CELL 的示意範圍（地面上的半透明圓）。
+ *
+ * 圓心跟著模型實際站的位置走，**不是另外一組座標**：畫面上只能有一個
+ * 「它在哪裡」。半徑見 `CELL_R_M` 的說明——量到的是錨點，外推的斜率是假設。 */
+export function siteCellsFC(buildings: GeoJSON.FeatureCollection | null)
+    : GeoJSON.FeatureCollection {
+  if (!buildings) return EMPTY;
+  const feats: GeoJSON.Feature[] = [];
+  for (const s of SITE_POINTS) {
+    const p = placeOnRoof(s.lat, s.lon, buildings);
+    if (!p) continue;
+    feats.push({
+      type: "Feature",
+      properties: { site: s.id, name: s.name, radius_m: CELL_R_M,
+                    color: CELL_COLORS[s.id] ?? "#3f7f8c" },
+      geometry: { type: "Polygon", coordinates: [circleRing(p.lat, p.lon, CELL_R_M)] },
+    });
+  }
+  return feats.length ? { type: "FeatureCollection", features: feats } : EMPTY;
 }
 
 /** 模型腳下的地面標記：6 m 的桿子縮遠只有幾個像素，沒有這個就找不到它在哪。
