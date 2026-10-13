@@ -22,6 +22,7 @@ import { CANVAS, groundGrid, M_LAT, mLon, planPath, ribbon, trailLineString }
   from "@/lib/geo";
 import { getJson } from "@/lib/fetchJson";
 import { API, LINK_CLASSES } from "@/lib/signal";
+import { siteModelFC, sitePointsFC } from "@/lib/siteModel";
 import { freshOnly, staleLevel } from "@/lib/staleness";
 import { firstFleetPos, useUavStore, type Telemetry } from "@/lib/store";
 
@@ -417,6 +418,41 @@ export default function MapView() {
                  "circle-stroke-width": 1.5, "circle-stroke-color": VEG },
       }, "plan3d");
 
+      // 屋頂設備的視覺模型（2026-10-13 使用者給的兩點）。**只有幾何，沒有
+      // 概念**——使用者裁定「現在先不要有基站或干擾區的概念，單純嵌入視覺
+      // 模型就好了」，所以這裡不碰訊號資料、不畫覆蓋範圍。見 lib/siteModel。
+      // **要等建物抓回來才有東西畫**：模型站在哪個高度、甚至站不站得住，
+      // 都是向那份建物資料問的（見 lib/siteModel 的開頭）
+      map.addSource("sites", { type: "geojson", data: EMPTY });
+      map.addLayer({
+        id: "site-mast", type: "fill-extrusion", source: "sites",
+        filter: ["==", ["get", "part"], "mast"],
+        paint: { "fill-extrusion-color": "#6f6d66",
+                 "fill-extrusion-base": ["get", "base"],
+                 "fill-extrusion-height": ["get", "top"],
+                 "fill-extrusion-opacity": 0.95 },
+      }, "plan3d");
+      map.addLayer({
+        id: "site-panel", type: "fill-extrusion", source: "sites",
+        filter: ["==", ["get", "part"], "panel"],
+        paint: { "fill-extrusion-color": "#d9d4c6",
+                 "fill-extrusion-base": ["get", "base"],
+                 "fill-extrusion-height": ["get", "top"],
+                 "fill-extrusion-opacity": 0.95 },
+      }, "plan3d");
+      // 地面標記：6 m 的桿子在縮遠時只有幾個像素，沒有這個就找不到它在哪。
+      // **這是「它在這裡」，不是「它涵蓋這裡」**——半徑是固定像素，不是距離。
+      // **拉近就淡出**：circle 不吃深度測試，近看時它會貼在樓的牆面上，像一張
+      // 貼紙；而那個距離本來就看得到桿子本身，標記已經沒有用處
+      map.addSource("site-pts", { type: "geojson", data: EMPTY });
+      map.addLayer({
+        id: "site-pt", type: "circle", source: "site-pts",
+        paint: { "circle-radius": 4, "circle-color": "transparent",
+                 "circle-stroke-width": 1.6, "circle-stroke-color": "#d9d4c6",
+                 "circle-stroke-opacity":
+                   ["interpolate", ["linear"], ["zoom"], 17.5, 0.85, 19, 0] },
+      }, "plan3d");
+
       // ⚠ 繪製順序（§2.4c）：**計畫路徑必須在 deck overlay 之前建立**。
       // interleaved overlay 掛上時插在「當下最上層」，之後才 addLayer 的
       // maplibre 圖層會蓋在 deck 之上——先前計畫路徑正是建在 overlay 之後，
@@ -575,8 +611,16 @@ export default function MapView() {
         });
         if (!r.ok || stop) return;
         const fc = await r.json();
-        (mapRef.current?.getSource("buildings") as maplibregl.GeoJSONSource
-          | undefined)?.setData(fc as GeoJSON.FeatureCollection);
+        const bfc = fc as GeoJSON.FeatureCollection;
+        const m = mapRef.current;
+        (m?.getSource("buildings") as maplibregl.GeoJSONSource | undefined)
+          ?.setData(bfc);
+        // 屋頂設備：站在剛抓回來的這批樓上面。**沒抓到樓就不畫**——
+        // 第一版把屋頂高度寫死，結果模型飄在半空中（使用者回報）
+        (m?.getSource("sites") as maplibregl.GeoJSONSource | undefined)
+          ?.setData(siteModelFC(bfc));
+        (m?.getSource("site-pts") as maplibregl.GeoJSONSource | undefined)
+          ?.setData(sitePointsFC(bfc));
       } catch { /* 沒有建物資料＝不畫 */ }
       try {
         const r = await fetch(
@@ -935,13 +979,19 @@ export default function MapView() {
             <i className="legend-sw" style={{ background: VEG }} />
             植被
           </span>
+          <span className="legend-seg">
+            <i className="legend-sw" style={{ background: "#d9d4c6" }} />
+            屋頂設備
+          </span>
           <InfoTip tip="輪廓來自 OpenStreetMap，開場前先抓好、現場離線也能用。
             建物：有樓層數才推算得出高度，推得出來的照高度拉成立體；推不出來的
             只畫地面輪廓、不給屋頂——這裡假一個高度出來，代價是撞機。
             植被（樹、行道樹、樹林）一律只畫在地面：OSM 這一帶的樹沒有一棵有高度。
             **沒有標記的地方不等於淨空**：OSM 標到的樹遠少於現場實際的樹，
             這個圖層說得出「這裡標了一棵樹」，說不出「這裡只有這些樹」。
-            要「會不會撞」的判斷請看規劃頁，那裡會把高度未知的樓畫成高過航線。" />
+            要「會不會撞」的判斷請看規劃頁，那裡會把高度未知的樓畫成高過航線。
+            屋頂設備是 2026-10-13 指定的兩個座標，照實際尺寸畫（桿 6 m）；
+            它坐落的樓高本身是樓層數推算的，所以模型的高度跟著一起不準。" />
         </div>
         <BasemapToggle on={base.on} set={base.set}
           offline={base.offline} outside={base.outside} />
