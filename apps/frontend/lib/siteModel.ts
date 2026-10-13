@@ -184,41 +184,45 @@ export const CELL_R_M = 250;
  * 青與洋紅在這張圖上都還沒有人用。 */
 export const CELL_COLORS: Record<string, string> = { a: "#22d3ee", b: "#e879f6" };
 
-/** 扇形的指向（度，正北為 0、順時針）——**兩支平行、同一個值**。
- *
- * 2026-10-13 使用者的兩個條件把這件事定死了：
- *   1.「在三角形的兩側不在干擾區覆蓋範圍」
- *   2.「兩個 CELL 會在三角路徑的最遠點前面形成覆蓋區」
- *
- * 原本兩支各自瞄最遠航點（131°／138°，會聚），那時**脊線（起飛→wp1）永遠
- * 100% 落在重疊裡**——張角再怎麼縮都滿足不了條件 1，因為兩個扇形在近處就
- * 交疊了。改成平行指向之後，兩束在 ≈ 間距/(2·tan(張角/2)) 之前完全不相交，
- * 重疊因此被推到遠處才成形。
- *
- * 136.6° ＝ 兩支中點朝最遠航點 wp1 的方位。
- *
- * **仍然是指定的投射方向，不是量到的天線方位**，而且不會跟著航線轉。 */
+/** 兩支的**共同軸**（度，正北為 0、順時針）＝ 兩支中點朝最遠航點 wp1。
+ *  各自的指向是這個軸往外岔開 `CELL_SPLIT_DEG`，見 `cellAim()`。 */
 export const CELL_AIM_DEG = 136.6;
+
+/** 兩支各自往外岔開的角度。**這個數字決定交會點在多遠。**
+ *
+ * 2026-10-13 使用者：「兩者個扇形角度在更大 算到120度 交會點比現在再大一點」。
+ * 這兩件事在幾何上是對抗的：平行指向時交會點 ≈ 間距/(2·tan(張角/2))，張角
+ * 12° 時是 155 m，**張角一開到 120° 就只剩 9 m**——角度越大，兩束越早相交。
+ * 要把交會點推回遠處，只剩一條路：兩支往外岔開，讓「A 朝 B 那側的邊」與
+ * 「B 朝 A 那側的邊」幾乎平行，交會點就被推到遠方。
+ *
+ * 實測掃描（間距 33.1 m、張角 120°）：
+ *
+ *     岔開   A 指向   B 指向   交會點   起飛→wp1  wp1→wp2  wp2→起飛
+ *     45°   181.6°    91.6°    64 m     100%      52%      34%
+ *     50°   186.6°    86.6°    94 m     100%      25%       5%
+ *     53°   189.6°    83.6°   133 m      29%       6%       0%
+ *     55°   191.6°    81.6°   185 m       0%       0%       0%
+ *     57°   193.6°    79.6°     —         0%       0%       0%
+ *
+ * 取 55°：交會點 185 m（原本 155 m，「再大一點」），而且三角形三條邊仍然
+ * 全部落在重疊之外。再岔 2° 就完全不相交，連干擾區都沒有了。 */
+export const CELL_SPLIT_DEG = 55;
+
+/** 這一支的指向。A（邊緣支）往軸的一側、B（中心支）往另一側。 */
+export function cellAim(id: string): number {
+  return (CELL_AIM_DEG + (id === "a" ? CELL_SPLIT_DEG : -CELL_SPLIT_DEG) + 360) % 360;
+}
 
 /** 干擾區的顏色。**鮮紅，而且與 SINR「瀕斷」的深紅 #a01818 分得開**——
  *  那條是量出來的軌跡分級，這塊是推出來的範圍，不能看起來像同一件事。 */
 export const ZONE_COLOR = "#ff3b30";
 
-/** 扇形張角（度）。**由使用者的條件解出來的，不是天線規格。**
+/** 扇形張角（度）。使用者 2026-10-13 指定 120°（「算到120度」）。
  *
- * 兩支相距 33.1 m、平行指向，重疊從 ≈ 16/tan(張角/2) 公尺處開始：
- *
- *     張角   重疊起始   起飛→wp1   wp1→wp2   wp2→起飛
- *     12°    155 m      0%         0%        0%
- *     14°    133 m      29%        6%        0%
- *     20°     94 m      100%       25%       5%
- *
- * 最遠航點 wp1 在 140／150 m，所以 12° 時干擾區正好成形在**它前面**，三角形
- * 三條邊全部落在重疊之外——使用者的兩個條件同時成立，再寬一度就不成立。
- *
- * **12° 不是一般扇區天線的張角**（那是 65° 上下）。這是照指定的畫面效果解
- * 出來的值，不是量到的、也不是型錄上的。 */
-export const CELL_BEAM_DEG = 12;
+ * 一般三扇區基站是 65° 上下，120° 是雙扇區的常見值——但**這仍然不是量到的
+ * 天線規格**，是指定的畫面效果。交會點改由 `CELL_SPLIT_DEG` 控制。 */
+export const CELL_BEAM_DEG = 120;
 
 /** 光束的厚度（公尺）。**不是實心楔形，是一片有厚度的斜板。**
  *
@@ -231,12 +235,17 @@ export const CELL_BEAM_DEG = 12;
  * 投射，不像一塊果凍。 */
 const BEAM_SLAB_M = 4;
 
-/** 光束往前推多少才開始畫（公尺）——**跨過腳下那棟樓**。
+/** 光束往前推多少才開始畫（公尺）——**只是讓開桅桿本身**。
  *
- * 同一個回報的另一半：兩支都站在 52館 上，光束的頭幾公尺就埋在那棟樓裡。
- * 實測掃描：邊緣支 2.0 m、中心支 22.0 m 之後才離開 52館 的輪廓，而光束
- * ±6° 內沒有別的 3D 樓。這裡按需求動態量（`clearRadius`），不寫死。 */
-const BEAM_CLEAR_PAD_M = 2;
+ * 原本這裡會動態量「跨過腳下那棟樓要多遠」，那是實心楔形時代的補救：楔形
+ * 從地面填到斜頂，埋在樓裡的部分會從牆面穿出來。改成薄板之後不需要了，而且
+ * 張角開到 120° 之後那個做法會**反過來壞事**——實測掃描顯示 120° 的光束會
+ * 掃過 51館／58館，統一切除半徑會變成 120 m，等於砍掉半條光束。
+ *
+ * 薄板不需要切：它低於屋頂時就在樓**裡面**，被樓擋住——那正是使用者要的
+ * 「建築物的顯示優先權大於訊號」。會吃掉樓的是擋在相機與樓之間的那道牆，
+ * 而薄板不會形成牆。 */
+const BEAM_START_M = 3;
 
 /** 立體扇形切成幾段。fill-extrusion 的每一塊只有一個高度，所以「從天線往外
  *  下斜」是用多段階梯逼近的——段數只影響平不平滑，不影響它是推估這件事。 */
@@ -318,8 +327,8 @@ export function siteCellsFC(buildings: GeoJSON.FeatureCollection | null)
       properties: { site: s.id, name: s.name, radius_m: CELL_R_M,
                     color: CELL_COLORS[s.id] ?? "#3f7f8c" },
       geometry: { type: "Polygon", coordinates: [sectorRing(
-        p.lat, p.lon, 0, CELL_R_M, CELL_AIM_DEG - CELL_BEAM_DEG / 2,
-        CELL_AIM_DEG + CELL_BEAM_DEG / 2)] },
+        p.lat, p.lon, BEAM_START_M, CELL_R_M, cellAim(s.id) - CELL_BEAM_DEG / 2,
+        cellAim(s.id) + CELL_BEAM_DEG / 2)] },
     });
   }
   return feats.length ? { type: "FeatureCollection", features: feats } : EMPTY;
@@ -426,14 +435,14 @@ export function interferenceZoneFC(buildings: GeoJSON.FeatureCollection | null)
     return Math.max(0, hAnt(s) * (1 - d / CELL_R_M));
   };
   const sectorB = sectorXY(bxy[0], bxy[1], 0, CELL_R_M,
-                           CELL_AIM_DEG - CELL_BEAM_DEG / 2,
-                           CELL_AIM_DEG + CELL_BEAM_DEG / 2);
+                           cellAim(B.id) - CELL_BEAM_DEG / 2,
+                           cellAim(B.id) + CELL_BEAM_DEG / 2);
   const feats: GeoJSON.Feature[] = [];
   for (let k = 0; k < CELL_BANDS; k++) {
     const r0 = (CELL_R_M * k) / CELL_BANDS;
     const r1 = (CELL_R_M * (k + 1)) / CELL_BANDS;
-    const bandA = sectorXY(0, 0, r0, r1, CELL_AIM_DEG - CELL_BEAM_DEG / 2,
-                           CELL_AIM_DEG + CELL_BEAM_DEG / 2);
+    const bandA = sectorXY(0, 0, r0, r1, cellAim(A.id) - CELL_BEAM_DEG / 2,
+                           cellAim(A.id) + CELL_BEAM_DEG / 2);
     const hit = clipConvex(bandA, sectorB);
     if (hit.length < 3) continue;
     const c = centroid(hit);
@@ -463,42 +472,15 @@ export function interferenceFootprintFC(buildings: GeoJSON.FeatureCollection | n
   const lat0 = A.lat, lon0 = A.lon;
   const bxy = toXY(B.lat, B.lon, lat0, lon0);
   const hit = clipConvex(
-    sectorXY(0, 0, 0, CELL_R_M, CELL_AIM_DEG - CELL_BEAM_DEG / 2,
-             CELL_AIM_DEG + CELL_BEAM_DEG / 2),
-    sectorXY(bxy[0], bxy[1], 0, CELL_R_M, CELL_AIM_DEG - CELL_BEAM_DEG / 2,
-             CELL_AIM_DEG + CELL_BEAM_DEG / 2));
+    sectorXY(0, 0, 0, CELL_R_M, cellAim(A.id) - CELL_BEAM_DEG / 2,
+             cellAim(A.id) + CELL_BEAM_DEG / 2),
+    sectorXY(bxy[0], bxy[1], 0, CELL_R_M, cellAim(B.id) - CELL_BEAM_DEG / 2,
+             cellAim(B.id) + CELL_BEAM_DEG / 2));
   if (hit.length < 3) return EMPTY;
   const ring = hit.map((p) => toLL(p, lat0, lon0));
   return { type: "FeatureCollection", features: [{
     type: "Feature", properties: {},
     geometry: { type: "Polygon", coordinates: [[...ring, ring[0]]] } }] };
-}
-
-/** 這一支的光束要從多遠開始畫，才不會埋在腳下那棟樓裡。
- *
- * 沿光束取樣（7 條射線 × 1 m），找最遠一個仍落在**高度已知**（＝會被畫成
- * 3D）的樓輪廓內的點。高度未知的樓只畫地面輪廓、不會擋住誰，所以不算。 */
-function clearRadius(lat: number, lon: number,
-                     buildings: GeoJSON.FeatureCollection): number {
-  const ml = mLon(lat);
-  const rings: [number, number][][] = [];
-  for (const f of buildings.features) {
-    const g = f.geometry;
-    if (!g || g.type !== "Polygon") continue;
-    if ((f.properties as { height_m?: number | null } | null)?.height_m == null) continue;
-    rings.push((g.coordinates[0] as number[][]).map(
-      ([lo, la]) => [(lo - lon) * ml, (la - lat) * M_LAT]));
-  }
-  let worst = 0;
-  for (let k = 0; k < 7; k++) {
-    const a = CELL_AIM_DEG - CELL_BEAM_DEG / 2 + (CELL_BEAM_DEG * k) / 6;
-    const t = ((90 - a) * Math.PI) / 180;
-    for (let d = 1; d <= 80; d += 1) {
-      const x = d * Math.cos(t), y = d * Math.sin(t);
-      if (rings.some((r) => inRing(x, y, r))) worst = Math.max(worst, d);
-    }
-  }
-  return worst > 0 ? worst + BEAM_CLEAR_PAD_M : 0;
 }
 
 /** 兩個 CELL 的**立體**扇形：從天線往外、往下斜到地面的那一片斜板。
@@ -519,9 +501,9 @@ export function siteCellVolFC(buildings: GeoJSON.FeatureCollection | null)
     if (!p) continue;
     // 天線面板的中心高度：屋頂 ＋ 桿高 − 面板頂距桿頂 − 半個面板
     const hAnt = p.roof + MAST_M - PANEL_TOP_DROP - PANEL_H / 2;
-    const a0 = CELL_AIM_DEG - CELL_BEAM_DEG / 2;
-    const a1 = CELL_AIM_DEG + CELL_BEAM_DEG / 2;
-    const rc = clearRadius(p.lat, p.lon, buildings);
+    const a0 = cellAim(s.id) - CELL_BEAM_DEG / 2;
+    const a1 = cellAim(s.id) + CELL_BEAM_DEG / 2;
+    const rc = BEAM_START_M;
     for (let k = 0; k < CELL_BANDS; k++) {
       const r0 = rc + ((CELL_R_M - rc) * k) / CELL_BANDS;
       const r1 = rc + ((CELL_R_M - rc) * (k + 1)) / CELL_BANDS;
