@@ -826,7 +826,12 @@ export default function PlanPage() {
     .filter((p) => p.seq != null && p.plan != null)
     .map((p) => ({ seq: p.seq as number, lat: p.lat ?? 0, lon: p.lon ?? 0,
       amsl: p.plan as number, ground: p.ground,
-      bad: badSeq.has(p.seq as number), fixed: !isNew && p.seq === 0,
+      // **起飛點也拖得動**（2026-10-13 使用者）。原本 `!isNew && seq === 0`
+      // 把既有航線的起飛點鎖住——那條規則來自 route-planning-redesign §16.2
+      // 的「既有航線的起飛點照舊固定」，而那句話**沒有給理由**，只是當時
+      // 沒一起改。後端的 `_apply_overrides` 對 seq 0 沒有任何限制，
+      // 拖它與拖別的點走同一條路（寫 `ov[0]` 的 lat/lon）
+      bad: badSeq.has(p.seq as number),
       kind: p.kind, auto: p.auto, srcI: p.src_i ?? null, hold: p.hold_s ?? 0 }))
     .map((w) => {
       // **位置直接讀操作員那份，不等後端。** 剖面要跑一趟後端才回來，

@@ -362,11 +362,19 @@ export default function TerrainStage({ wps, sel, onSelect, onAmbiguous, tipFor, 
         e.preventDefault();
         return;
       }
+      // **重疊時拖的是「剛才挑中的那一個」**（2026-10-13 使用者）。
+      // 原本一律拖最近的，於是 065 B 的那個選單挑完之後，一拖還是拖到別人
+      // ——選單等於白挑。只有在目前選取的點也落在這個位置時才優先它，
+      // 否則照舊取最近的（沒有選取、或選的是別處的點時行為不變）。
+      const many = hitsAt(e.point);
+      const selI = dataRef.current.sel;
       const h = hitTest(e.point);
-      if (h?.kind === "wp" && !dataRef.current.wps[h.i]?.fixed && moveRef.current) {
-        dragRef.current = h.i;
+      const pick = many.includes(selI) ? selI
+        : h?.kind === "wp" ? h.i : null;
+      if (pick != null && !dataRef.current.wps[pick]?.fixed && moveRef.current) {
+        dragRef.current = pick;
         map.dragPan.disable(); map.dragRotate.disable();
-        onSelect(h.i);
+        onSelect(pick);
         e.preventDefault();
       }
     });
