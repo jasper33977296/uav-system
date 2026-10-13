@@ -154,6 +154,10 @@ export const CELL_COLORS: Record<string, string> = { a: "#22d3ee", b: "#e879f6" 
  * 假話。航線換到別的方位時，這兩個數字要跟著重訂（或等實地量到真方位）。 */
 export const CELL_AIM_DEG: Record<string, number> = { a: 131, b: 138 };
 
+/** 干擾區的顏色。**鮮紅，而且與 SINR「瀕斷」的深紅 #a01818 分得開**——
+ *  那條是量出來的軌跡分級，這塊是推出來的範圍，不能看起來像同一件事。 */
+export const ZONE_COLOR = "#ff3b30";
+
 /** 扇形張角（度）。三扇區基站的常見值；整條三角路徑從兩站看過去只佔 21°，
  *  所以會整個落在覆蓋裡。**同樣是假設**：真值要看天線型號與實際設定。 */
 export const CELL_BEAM_DEG = 65;
@@ -246,6 +250,151 @@ export function siteCellsFC(buildings: GeoJSON.FeatureCollection | null)
 }
 
 const aim = (id: string) => CELL_AIM_DEG[id] ?? 0;
+
+// ── 干擾區＝兩個扇形的重疊（2026-10-13 使用者裁定）──────────────────────
+// 系統裡沒有場地干擾區的定義（真表 interference_zones 2026-08-10 砍掉，只剩
+// link_sim 在台北的模擬常數；4343 筆實測的 in_interference_zone 全是 NULL）。
+// 使用者裁定「兩個 cell 重疊範圍就是干擾區」——所以它是**算出來的幾何**，
+// 不是量出來的區域，而且**它繼承兩個扇形的每一個假設**：半徑來自假設的
+// 衰減指數、方位是指定的、張角 65° 是常見值。圖例的 ⓘ 要把這件事講出來，
+// 因為紅色讀起來就是「這裡有事」。
+
+type XY = [number, number];
+
+/** 以 (lat0, lon0) 為原點的公尺平面。扇形只有幾百公尺，平面近似綽綽有餘。 */
+function toXY(lat: number, lon: number, lat0: number, lon0: number): XY {
+  return [(lon - lon0) * mLon(lat0), (lat - lat0) * M_LAT];
+}
+function toLL(p: XY, lat0: number, lon0: number): [number, number] {
+  return [lon0 + p[0] / mLon(lat0), lat0 + p[1] / M_LAT];
+}
+
+/** 公尺平面上的扇形（方位角：正北 0、順時針）。r0 = 0 時是一般扇形。 */
+function sectorXY(cx: number, cy: number, r0: number, r1: number,
+                  a0: number, a1: number): XY[] {
+  const N = 36;
+  const pt = (r: number, degN: number): XY => {
+    const t = ((90 - degN) * Math.PI) / 180;
+    return [cx + r * Math.cos(t), cy + r * Math.sin(t)];
+  };
+  const ring: XY[] = [];
+  for (let i = 0; i <= N; i++) ring.push(pt(r1, a0 + ((a1 - a0) * i) / N));
+  if (r0 > 0) for (let i = N; i >= 0; i--) ring.push(pt(r0, a0 + ((a1 - a0) * i) / N));
+  else ring.push(pt(0, a0));
+  return ring;
+}
+
+/** Sutherland–Hodgman：用**凸**多邊形 clip 去裁 subject（subject 可以凹）。
+ *  扇形張角 65° < 180°，所以兩個扇形都是凸的——交集算得出精確解，
+ *  不需要拉一個多邊形布林運算的函式庫進來。 */
+function clipConvex(subject: XY[], clip: XY[]): XY[] {
+  // clip 的繞向決定「內側」是哪一邊，先量一次有號面積
+  let a2 = 0;
+  for (let i = 0; i < clip.length; i++) {
+    const [x1, y1] = clip[i], [x2, y2] = clip[(i + 1) % clip.length];
+    a2 += x1 * y2 - x2 * y1;
+  }
+  const ccw = a2 > 0;
+  let out = subject;
+  for (let i = 0; i < clip.length && out.length; i++) {
+    const A = clip[i], B = clip[(i + 1) % clip.length];
+    const side = (p: XY) => {
+      const c = (B[0] - A[0]) * (p[1] - A[1]) - (B[1] - A[1]) * (p[0] - A[0]);
+      return ccw ? c : -c;
+    };
+    const inp = out;
+    out = [];
+    for (let j = 0; j < inp.length; j++) {
+      const P = inp[j], Q = inp[(j + 1) % inp.length];
+      const sp = side(P), sq = side(Q);
+      if (sp >= 0) out.push(P);
+      if ((sp >= 0) !== (sq >= 0)) {
+        const t = sp / (sp - sq);
+        out.push([P[0] + t * (Q[0] - P[0]), P[1] + t * (Q[1] - P[1])]);
+      }
+    }
+  }
+  return out;
+}
+
+function centroid(ring: XY[]): XY {
+  let x = 0, y = 0;
+  for (const p of ring) { x += p[0]; y += p[1]; }
+  return [x / ring.length, y / ring.length];
+}
+
+interface Site { lat: number; lon: number; roof: number; id: string }
+
+function placedSites(buildings: GeoJSON.FeatureCollection): Site[] {
+  const out: Site[] = [];
+  for (const s of SITE_POINTS) {
+    const p = placeOnRoof(s.lat, s.lon, buildings);
+    if (p) out.push({ lat: p.lat, lon: p.lon, roof: p.roof, id: s.id });
+  }
+  return out;
+}
+
+/** 干擾區：兩個立體扇形的重疊，切成同心環段好做出和扇形一致的下斜。
+ *
+ * 每一段的高度取**兩個扇形在那一段形心處的較低者**——重疊只到比較矮的那個
+ * 為止。兩座天線只差 20.7 m，所以兩者其實差不到 10%，但照算不花什麼力氣。 */
+export function interferenceZoneFC(buildings: GeoJSON.FeatureCollection | null)
+    : GeoJSON.FeatureCollection {
+  if (!buildings) return EMPTY;
+  const sites = placedSites(buildings);
+  if (sites.length < 2) return EMPTY;      // 要兩個才有重疊
+  const [A, B] = sites;
+  const lat0 = A.lat, lon0 = A.lon;
+  const bxy = toXY(B.lat, B.lon, lat0, lon0);
+  const hAnt = (s: Site) => s.roof + MAST_M - PANEL_TOP_DROP - PANEL_H / 2;
+  const top = (c: XY, cx: number, cy: number, s: Site) => {
+    const d = Math.hypot(c[0] - cx, c[1] - cy);
+    return Math.max(0, hAnt(s) * (1 - d / CELL_R_M));
+  };
+  const sectorB = sectorXY(bxy[0], bxy[1], 0, CELL_R_M,
+                           aim(B.id) - CELL_BEAM_DEG / 2,
+                           aim(B.id) + CELL_BEAM_DEG / 2);
+  const feats: GeoJSON.Feature[] = [];
+  for (let k = 0; k < CELL_BANDS; k++) {
+    const r0 = (CELL_R_M * k) / CELL_BANDS;
+    const r1 = (CELL_R_M * (k + 1)) / CELL_BANDS;
+    const bandA = sectorXY(0, 0, r0, r1, aim(A.id) - CELL_BEAM_DEG / 2,
+                           aim(A.id) + CELL_BEAM_DEG / 2);
+    const hit = clipConvex(bandA, sectorB);
+    if (hit.length < 3) continue;
+    const c = centroid(hit);
+    const h = Math.min(top(c, 0, 0, A), top(c, bxy[0], bxy[1], B));
+    if (h <= 0.05) continue;
+    const ring = hit.map((p) => toLL(p, lat0, lon0));
+    feats.push({
+      type: "Feature",
+      properties: { band: k, top: h },
+      geometry: { type: "Polygon", coordinates: [[...ring, ring[0]]] },
+    });
+  }
+  return feats.length ? { type: "FeatureCollection", features: feats } : EMPTY;
+}
+
+/** 干擾區落在地面上的那一塊（整塊重疊，給填色與邊界用）。 */
+export function interferenceFootprintFC(buildings: GeoJSON.FeatureCollection | null)
+    : GeoJSON.FeatureCollection {
+  if (!buildings) return EMPTY;
+  const sites = placedSites(buildings);
+  if (sites.length < 2) return EMPTY;
+  const [A, B] = sites;
+  const lat0 = A.lat, lon0 = A.lon;
+  const bxy = toXY(B.lat, B.lon, lat0, lon0);
+  const hit = clipConvex(
+    sectorXY(0, 0, 0, CELL_R_M, aim(A.id) - CELL_BEAM_DEG / 2,
+             aim(A.id) + CELL_BEAM_DEG / 2),
+    sectorXY(bxy[0], bxy[1], 0, CELL_R_M, aim(B.id) - CELL_BEAM_DEG / 2,
+             aim(B.id) + CELL_BEAM_DEG / 2));
+  if (hit.length < 3) return EMPTY;
+  const ring = hit.map((p) => toLL(p, lat0, lon0));
+  return { type: "FeatureCollection", features: [{
+    type: "Feature", properties: {},
+    geometry: { type: "Polygon", coordinates: [[...ring, ring[0]]] } }] };
+}
 
 /** 兩個 CELL 的**立體**扇形：從天線往外、往下斜到地面的那個楔形。
  *

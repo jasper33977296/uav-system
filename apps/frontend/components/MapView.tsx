@@ -22,8 +22,8 @@ import { CANVAS, groundGrid, M_LAT, mLon, planPath, ribbon, trailLineString }
   from "@/lib/geo";
 import { getJson } from "@/lib/fetchJson";
 import { API, LINK_CLASSES } from "@/lib/signal";
-import { CELL_COLORS, siteCellVolFC, siteCellsFC, siteModelFC, sitePointsFC }
-  from "@/lib/siteModel";
+import { CELL_COLORS, ZONE_COLOR, interferenceFootprintFC, interferenceZoneFC,
+  siteCellVolFC, siteCellsFC, siteModelFC, sitePointsFC } from "@/lib/siteModel";
 import { freshOnly, staleLevel } from "@/lib/staleness";
 import { firstFleetPos, useUavStore, type Telemetry } from "@/lib/store";
 
@@ -392,6 +392,29 @@ export default function MapView() {
                  "fill-extrusion-height": ["get", "top"],
                  "fill-extrusion-opacity": 0.17 },
       }, "plan3d");
+      // 干擾區＝兩個扇形的重疊（2026-10-13 使用者裁定）。**與兩個扇形同一
+      // 組幾何，所以繼承它們的每一個假設**——半徑來自假設的衰減指數、方位
+      // 是指定的、張角是常見值。紅色讀起來就是「這裡有事」，所以圖例的 ⓘ
+      // 必須說清楚它是算出來的範圍，不是量出來的。
+      // 立體的那份建在 cell-vol 之後：同為 fill-extrusion，會互相做深度測試，
+      // 紅色不會糊在扇形表面上
+      map.addSource("zone", { type: "geojson", data: EMPTY });
+      map.addSource("zone-foot", { type: "geojson", data: EMPTY });
+      map.addLayer({
+        id: "zone-fill", type: "fill", source: "zone-foot",
+        paint: { "fill-color": ZONE_COLOR, "fill-opacity": 0.14 },
+      }, "plan3d");
+      map.addLayer({
+        id: "zone-edge", type: "line", source: "zone-foot",
+        paint: { "line-color": ZONE_COLOR, "line-width": 2,
+                 "line-dasharray": [3, 2], "line-opacity": 0.85 },
+      }, "plan3d");
+      map.addLayer({
+        id: "zone-vol", type: "fill-extrusion", source: "zone",
+        paint: { "fill-extrusion-color": ZONE_COLOR, "fill-extrusion-base": 0,
+                 "fill-extrusion-height": ["get", "top"],
+                 "fill-extrusion-opacity": 0.3 },
+      }, "plan3d");
       map.addLayer({
         id: "cell-edge", type: "line", source: "cells",
         paint: { "line-color": ["get", "color"], "line-width": 1.5,
@@ -655,6 +678,10 @@ export default function MapView() {
           ?.setData(siteCellsFC(bfc));
         (m?.getSource("cell-vol") as maplibregl.GeoJSONSource | undefined)
           ?.setData(siteCellVolFC(bfc));
+        (m?.getSource("zone") as maplibregl.GeoJSONSource | undefined)
+          ?.setData(interferenceZoneFC(bfc));
+        (m?.getSource("zone-foot") as maplibregl.GeoJSONSource | undefined)
+          ?.setData(interferenceFootprintFC(bfc));
       } catch { /* 沒有建物資料＝不畫 */ }
       try {
         const r = await fetch(
@@ -1024,6 +1051,11 @@ export default function MapView() {
               style={{ borderColor: CELL_COLORS.b }} />
             CELL（示意）
           </span>
+          <span className="legend-seg">
+            <i className="legend-sw legend-sw-dash"
+              style={{ borderColor: ZONE_COLOR }} />
+            干擾區
+          </span>
           <InfoTip tip="輪廓來自 OpenStreetMap，開場前先抓好、現場離線也能用。
             建物：有樓層數才推算得出高度，推得出來的照高度拉成立體；推不出來的
             只畫地面輪廓、不給屋頂——這裡假一個高度出來，代價是撞機。
@@ -1039,7 +1071,10 @@ export default function MapView() {
             衰減指數，換一個假設就會變成 200 m 或 380 m。
             方位（131°／138°）是指定要投射的方向，不是量到的天線方位，也不會
             跟著航線轉；張角 65° 是三扇區基站的常見值。立體的楔形是投射示意，
-            沒有算垂直張角、下傾，也沒有算被樓擋住。" />
+            沒有算垂直張角、下傾，也沒有算被樓擋住。
+            **干擾區＝兩個扇形的重疊**（使用者定義），所以它是算出來的幾何，
+            不是量出來的區域——上面那些假設改一個，這塊紅色就跟著變。
+            實測資料裡沒有任何一筆標記過干擾區。" />
         </div>
         <BasemapToggle on={base.on} set={base.set}
           offline={base.offline} outside={base.outside} />
