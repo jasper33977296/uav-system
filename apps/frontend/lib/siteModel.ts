@@ -176,17 +176,18 @@ function placeOnRoof(lat: number, lon: number,
  * 訊號埋在雜訊裡，所以斜率量不出來。 */
 export const CELL_R_M = 167;
 
-/** CELL 的顏色。
+/** CELL 的顏色。2026-10-13 使用者：「我不喜歡紫色 換成藍跟綠吧」。
  *
- * 兩座天線只差 20.7 m，兩個扇形大面積重疊，**只能靠色相分辨**——所以取
- * 色環上接近對角的一對（青／洋紅），不是同一個色系的深淺（2026-10-13 使用者
- * 回報「顏色太暗」「兩者顏色太相近」）。原本的 #3f7f8c／#8a6b9e 是同一個
- * 冷色區間的兩個濁色，疊起來分不出誰是誰。
+ * 兩座天線只差 33 m、扇形大面積重疊，**重疊處只能靠色相分辨**，所以兩色要
+ * 夠遠：藍 221° vs 綠 145°，差 76°。
  *
- * **避開已經有主的顏色**：綠/黃/橘/深紅是 SINR 分級（lib/signal 的
- * LINK_CLASSES），藍是機體，橄欖綠是植被，土黃是建物，鮮紅留給干擾區。
- * 青與洋紅在這張圖上都還沒有人用。 */
-export const CELL_COLORS: Record<string, string> = { a: "#22d3ee", b: "#e879f6" };
+ * **這張圖上已經有藍也有綠，所以挑的是「同色相但明顯不同調」**：
+ *   機體圖示 #3987e5（藍，較淡）  → 這裡用更深更濃的 #1b6ef3
+ *   SINR「良好」#0ca30c（偏黃的深綠）
+ *   圍欄 #4a9d5f（濁綠）、植被 #5c8a3c（橄欖）→ 這裡用更亮的 #2ee07a
+ * 這幾個在畫面上都是細線或小圖示，扇形是大面積的淡色塊，加上圖例有字
+ * （§0.1：顏色永不單獨傳達語意），實際上分得出來。鮮紅仍留給干擾區。 */
+export const CELL_COLORS: Record<string, string> = { a: "#1b6ef3", b: "#2ee07a" };
 
 /** 兩支的**共同軸**（度，正北為 0、順時針）＝ 兩支中點朝最遠航點 wp1。
  *  各自的指向是這個軸往外岔開 `CELL_SPLIT_DEG`，見 `cellAim()`。 */
@@ -275,10 +276,10 @@ function fade(hex: string, r: number, a0: number): string {
   return `rgba(${(n >> 16) & 255}, ${(n >> 8) & 255}, ${n & 255}, ${a.toFixed(3)})`;
 }
 
-/** 最靠近天線處的不透明度。2026-10-13 使用者：「透明度調到 50%」——
- *  立體與地面都取 0.5，往外照 `fade()` 的曲線遞減。 */
-const FADE_VOL = 0.5;
-const FADE_GROUND = 0.5;
+/** 最靠近天線處的不透明度。2026-10-13 使用者指定 50% → 再改 **35%**。
+ *  立體與地面都取 0.35，往外照 `fade()` 的曲線遞減。 */
+const FADE_VOL = 0.35;
+const FADE_GROUND = 0.35;
 
 const EMPTY: GeoJSON.FeatureCollection = { type: "FeatureCollection", features: [] };
 

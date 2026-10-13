@@ -411,8 +411,8 @@ export default function MapView() {
       map.addSource("zone-foot", { type: "geojson", data: EMPTY });
       map.addLayer({
         id: "zone-fill", type: "fill", source: "zone-foot",
-        // 50%（2026-10-13 使用者指定）
-        paint: { "fill-color": ZONE_COLOR, "fill-opacity": 0.5 },
+        // 35%（2026-10-13 使用者指定；原本 50%）
+        paint: { "fill-color": ZONE_COLOR, "fill-opacity": 0.35 },
       }, "plan3d");
       map.addLayer({
         id: "zone-edge", type: "line", source: "zone-foot",
@@ -424,7 +424,7 @@ export default function MapView() {
         paint: { "fill-extrusion-color": ZONE_COLOR,
                  "fill-extrusion-base": ["get", "base"],
                  "fill-extrusion-height": ["get", "top"],
-                 "fill-extrusion-opacity": 0.5 },
+                 "fill-extrusion-opacity": 0.35 },
       }, "plan3d");
       map.addLayer({
         id: "cell-edge", type: "line", source: "cells",
