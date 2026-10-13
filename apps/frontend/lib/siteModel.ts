@@ -271,9 +271,10 @@ function fade(hex: string, r: number, a0: number): string {
   return `rgba(${(n >> 16) & 255}, ${(n >> 8) & 255}, ${n & 255}, ${a.toFixed(3)})`;
 }
 
-/** 立體那層最靠近天線處的不透明度；地面足跡用比較淡的一組。 */
-const FADE_VOL = 0.55;
-const FADE_GROUND = 0.3;
+/** 最靠近天線處的不透明度。2026-10-13 使用者：「透明度調到 50%」——
+ *  立體與地面都取 0.5，往外照 `fade()` 的曲線遞減。 */
+const FADE_VOL = 0.5;
+const FADE_GROUND = 0.5;
 
 const EMPTY: GeoJSON.FeatureCollection = { type: "FeatureCollection", features: [] };
 
