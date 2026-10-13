@@ -190,24 +190,26 @@ export const CELL_AIM_DEG = 136.6;
 
 /** 兩支各自往外岔開的角度。**這個數字決定交會點在多遠。**
  *
- * 2026-10-13 使用者：「兩者個扇形角度在更大 算到120度 交會點比現在再大一點」。
- * 這兩件事在幾何上是對抗的：平行指向時交會點 ≈ 間距/(2·tan(張角/2))，張角
- * 12° 時是 155 m，**張角一開到 120° 就只剩 9 m**——角度越大，兩束越早相交。
- * 要把交會點推回遠處，只剩一條路：兩支往外岔開，讓「A 朝 B 那側的邊」與
- * 「B 朝 A 那側的邊」幾乎平行，交會點就被推到遠方。
+ * 平行指向時交會點 ≈ 間距/(2·tan(張角/2))，張角一開到 120° 就只剩 9 m——
+ * 角度越大兩束越早相交。要把交會點推遠只能靠岔開，讓「A 朝 B 那側的邊」與
+ * 「B 朝 A 那側的邊」幾乎平行。
  *
- * 實測掃描（間距 33.1 m、張角 120°）：
+ * 2026-10-13 使用者第二次修正：「那個頂點所在位置要已經在干擾區內了」——
+ * 最遠航點 wp1 必須落在干擾區**內**。實測掃描（間距 33.1 m、張角 120°）：
  *
- *     岔開   A 指向   B 指向   交會點   起飛→wp1  wp1→wp2  wp2→起飛
- *     45°   181.6°    91.6°    64 m     100%      52%      34%
- *     50°   186.6°    86.6°    94 m     100%      25%       5%
- *     53°   189.6°    83.6°   133 m      29%       6%       0%
- *     55°   191.6°    81.6°   185 m       0%       0%       0%
- *     57°   193.6°    79.6°     —         0%       0%       0%
+ *     岔開   交會點   wp1 在區內   離邊界   起飛→wp1  wp1→wp2  wp2→起飛
+ *     50°    94 m      是          9 m      100%      25%       5%
+ *     51°   105 m      是          6 m       97%      19%       0%
+ *     52°   117 m      是          4 m       71%      13%       0%
+ *     53°   133 m      是          2 m       29%       6%       0%
+ *     55°   185 m      **否**      —          0%       0%       0%
  *
- * 取 55°：交會點 185 m（原本 155 m，「再大一點」），而且三角形三條邊仍然
- * 全部落在重疊之外。再岔 2° 就完全不相交，連干擾區都沒有了。 */
-export const CELL_SPLIT_DEG = 55;
+ * 取 **52°**：wp1 進區 4 m（53° 只有 2 m，在幾何誤差裡太勉強），而
+ * `wp2→起飛` 仍然完全在外。
+ *
+ * **`wp1→wp2` 的那 13% 躲不掉**：wp1 既然在區內，交於它的兩條邊必然各有
+ * 一小段在區內。要兩條邊都 0%，就得把 wp1 推出區外——與這次的要求相反。 */
+export const CELL_SPLIT_DEG = 52;
 
 /** 這一支的指向。A（邊緣支）往軸的一側、B（中心支）往另一側。 */
 export function cellAim(id: string): number {
@@ -248,8 +250,30 @@ const BEAM_SLAB_M = 4;
 const BEAM_START_M = 3;
 
 /** 立體扇形切成幾段。fill-extrusion 的每一塊只有一個高度，所以「從天線往外
- *  下斜」是用多段階梯逼近的——段數只影響平不平滑，不影響它是推估這件事。 */
-const CELL_BANDS = 14;
+ *  下斜」是用多段階梯逼近的——段數只影響平不平滑，不影響它是推估這件事。
+ *
+ *  14 → 40（2026-10-13 使用者：「現在的訊號格子很粗糙」）。250 m 切 40 段，
+ *  一段 6 m、落差 0.8 m，階梯在一般縮放下看不出來。 */
+const CELL_BANDS = 40;
+
+/** 訊號的衰減漸層：離天線越遠越淡。
+ *
+ * **為什麼把透明度寫進顏色**：MapLibre 的 `fill-extrusion-opacity` 不吃
+ * data-driven 運算式（整個圖層只能一個值），但 `fill-extrusion-color` 吃，
+ * 而且顏色可以帶 alpha。所以漸層做在顏色的 alpha 上，圖層 opacity 設 1。
+ *
+ * 曲線是**視覺上的衰減示意**，不是任何傳播模型的輸出——真正的衰減指數量不
+ * 出來（見 `CELL_R_M`），這裡只是讓它看起來像訊號，而不是一塊色板。 */
+function fade(hex: string, r: number, a0: number): string {
+  const t = Math.max(0, 1 - r / CELL_R_M);
+  const a = Math.max(0.03, a0 * Math.pow(t, 0.9));
+  const n = parseInt(hex.slice(1), 16);
+  return `rgba(${(n >> 16) & 255}, ${(n >> 8) & 255}, ${n & 255}, ${a.toFixed(3)})`;
+}
+
+/** 立體那層最靠近天線處的不透明度；地面足跡用比較淡的一組。 */
+const FADE_VOL = 0.55;
+const FADE_GROUND = 0.3;
 
 const EMPTY: GeoJSON.FeatureCollection = { type: "FeatureCollection", features: [] };
 
@@ -310,10 +334,12 @@ function sectorRing(lat: number, lon: number, r0: number, r1: number,
   return ring;
 }
 
-/** 兩個 CELL 落在地面上的扇形（給淡填色與虛線邊界用）。
+/** 兩個 CELL 落在地面上的扇形：**切成同心環段、往外漸淡**，不是一塊色板
+ *  （2026-10-13 使用者：「現在的訊號格子很粗糙 換成比較像訊號的視覺呈現
+ *  方式」）。最後再多一個整塊的 `edge` feature，給虛線邊界用。
  *
  * 扇心跟著模型實際站的位置走，**不是另外一組座標**：畫面上只能有一個
- * 「它在哪裡」。半徑見 `CELL_R_M`、方位見 `CELL_AIM_DEG`——量到的只有錨點，
+ * 「它在哪裡」。半徑見 `CELL_R_M`、方位見 `cellAim()`——量到的只有錨點，
  * 往外的斜率、方位、張角全是假設。 */
 export function siteCellsFC(buildings: GeoJSON.FeatureCollection | null)
     : GeoJSON.FeatureCollection {
@@ -322,13 +348,25 @@ export function siteCellsFC(buildings: GeoJSON.FeatureCollection | null)
   for (const s of SITE_POINTS) {
     const p = placeOnRoof(s.lat, s.lon, buildings, s.place);
     if (!p) continue;
+    const hex = CELL_COLORS[s.id] ?? "#3f7f8c";
+    const a0 = cellAim(s.id) - CELL_BEAM_DEG / 2;
+    const a1 = cellAim(s.id) + CELL_BEAM_DEG / 2;
+    for (let k = 0; k < CELL_BANDS; k++) {
+      const r0 = BEAM_START_M + ((CELL_R_M - BEAM_START_M) * k) / CELL_BANDS;
+      const r1 = BEAM_START_M + ((CELL_R_M - BEAM_START_M) * (k + 1)) / CELL_BANDS;
+      feats.push({
+        type: "Feature",
+        properties: { site: s.id, name: s.name, band: k,
+                      rgba: fade(hex, (r0 + r1) / 2, FADE_GROUND) },
+        geometry: { type: "Polygon",
+                    coordinates: [sectorRing(p.lat, p.lon, r0, r1, a0, a1)] },
+      });
+    }
     feats.push({
       type: "Feature",
-      properties: { site: s.id, name: s.name, radius_m: CELL_R_M,
-                    color: CELL_COLORS[s.id] ?? "#3f7f8c" },
+      properties: { site: s.id, name: s.name, edge: 1, color: hex },
       geometry: { type: "Polygon", coordinates: [sectorRing(
-        p.lat, p.lon, BEAM_START_M, CELL_R_M, cellAim(s.id) - CELL_BEAM_DEG / 2,
-        cellAim(s.id) + CELL_BEAM_DEG / 2)] },
+        p.lat, p.lon, BEAM_START_M, CELL_R_M, a0, a1)] },
     });
   }
   return feats.length ? { type: "FeatureCollection", features: feats } : EMPTY;
@@ -513,7 +551,9 @@ export function siteCellVolFC(buildings: GeoJSON.FeatureCollection | null)
         properties: { site: s.id, name: s.name, band: k, top,
                       // 薄板：底 ＝ 頂減厚度，不是從地面實心填上來
                       base: Math.max(0, top - BEAM_SLAB_M),
-                      color: CELL_COLORS[s.id] ?? "#3f7f8c" },
+                      // 漸層寫在 alpha 裡（圖層 opacity 不吃 data-driven）
+                      rgba: fade(CELL_COLORS[s.id] ?? "#3f7f8c",
+                                 (r0 + r1) / 2, FADE_VOL) },
         geometry: { type: "Polygon",
                     coordinates: [sectorRing(p.lat, p.lon, r0, r1, a0, a1)] },
       });

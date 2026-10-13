@@ -377,11 +377,13 @@ export default function MapView() {
       // −89/−90 dBm @ ~105 m），往外推的斜率是假設的——實測只跨 1.7 倍距離，
       // 擬合出來的衰減指數是負的（越遠越強），斜率根本量不出來。見 siteModel。
       map.addSource("cells", { type: "geojson", data: EMPTY });
+      // 地面足跡：**同心環段 ＋ 往外漸淡**（2026-10-13 使用者：「訊號格子
+      // 很粗糙，換成比較像訊號的視覺呈現方式」）。漸層寫在顏色的 alpha 裡
+      // ——MapLibre 的 `*-opacity` 不吃 data-driven 運算式，`*-color` 吃
       map.addLayer({
         id: "cell-fill", type: "fill", source: "cells",
-        // 透明度全面調高（2026-10-13 使用者：「現在看不出來哪邊有重疊
-        // 哪邊是單一 cell 訊號」）。地面足跡 0.07→0.16
-        paint: { "fill-color": ["get", "color"], "fill-opacity": 0.16 },
+        filter: ["!", ["has", "edge"]],
+        paint: { "fill-color": ["get", "rgba"], "fill-opacity": 1 },
       }, "plan3d");
       // 立體的那一份：從天線往外往下斜到地面的楔形（使用者 2026-10-13
       // 「把 CELL 畫成立體的，不要只有平面圓」）。**不是波束形狀**——沒有
@@ -389,14 +391,15 @@ export default function MapView() {
       map.addSource("cell-vol", { type: "geojson", data: EMPTY });
       map.addLayer({
         id: "cell-vol", type: "fill-extrusion", source: "cell-vol",
-        paint: { "fill-extrusion-color": ["get", "color"],
+        paint: { "fill-extrusion-color": ["get", "rgba"],
                  // **薄板**：底從 feature 來，不是 0。原本從地面實心填到斜頂，
                  // 天線那端 32 m 高，等於在樓前面豎一道牆——fill-extrusion 之間
                  // 會互相深度測試，牆擋在相機與樓之間時後畫的樓也贏不了，
                  // 使用者回報「訊號會把建築物建模吃掉」
                  "fill-extrusion-base": ["get", "base"],
                  "fill-extrusion-height": ["get", "top"],
-                 "fill-extrusion-opacity": 0.32 },
+                 // opacity 固定 1，濃淡由顏色的 alpha 帶（見 siteModel.fade）
+                 "fill-extrusion-opacity": 1 },
       }, "plan3d");
       // 干擾區＝兩個扇形的重疊（2026-10-13 使用者裁定）。**與兩個扇形同一
       // 組幾何，所以繼承它們的每一個假設**——半徑來自假設的衰減指數、方位
@@ -424,9 +427,10 @@ export default function MapView() {
       }, "plan3d");
       map.addLayer({
         id: "cell-edge", type: "line", source: "cells",
+        filter: ["has", "edge"],      // 只畫整塊扇形的外框，不畫每一環
         paint: { "line-color": ["get", "color"], "line-width": 1.5,
                  // 虛線＝這條邊界是推的，不是量出來的門檻
-                 "line-dasharray": [3, 3], "line-opacity": 0.6 },
+                 "line-dasharray": [3, 3], "line-opacity": 0.55 },
       }, "plan3d");
 
       map.addSource("buildings", { type: "geojson", data: EMPTY });
@@ -1076,10 +1080,11 @@ export default function MapView() {
             （4343 筆實測的中位），但往外衰減多快量不出來——實際飛過的範圍只跨
             1.7 倍距離，訊號變化埋在樣本的散佈裡。半徑 250 m 來自一個假設的
             衰減指數，換一個假設就會變成 200 m 或 380 m。
-            方位（共同軸 136.6°，兩支各往外岔開 55°）是指定要投射的方向，不是
+            方位（共同軸 136.6°，兩支各往外岔開 52°）是指定要投射的方向，不是
             量到的天線方位，也不會跟著航線轉；張角 120° 是指定值（一般三扇區天線
-            約 65°）。岔開角決定交會點落在 185 m——張角越大兩束越早相交，
-            要把交會點推遠只能靠岔開，這兩個數字是綁在一起的。
+            約 65°）。岔開角決定交會點落在 117 m，最遠航點因此落在干擾區內——
+            張角越大兩束越早相交，要把交會點推遠只能靠岔開，這兩個數字綁在一起。
+            扇形的濃淡只是**衰減示意**，不是算出來的場強。
             立體的那片斜板是投射示意，沒有算垂直張角、下傾，也沒有算被樓擋住；
             它從建物輪廓外才開始畫，**建築物的顯示優先於訊號**。
             **干擾區＝兩個扇形的重疊**（使用者定義），所以它是算出來的幾何，
