@@ -13,7 +13,7 @@ import { colorFor } from "@/components/droneLayer";
 import { modeLabel } from "@/lib/modeVerb";
 import { API, CLIENT_HEADERS, COMMAND_API } from "@/lib/signal";
 import { emph } from "@/lib/emph";
-import { armFix, armNote } from "@/lib/prearm";
+import { armFix, armNote, armWhat } from "@/lib/prearm";
 import { useUavStore } from "@/lib/store";
 import { durText } from "@/lib/evtext";
 import { ageText } from "@/lib/staleness";
@@ -1188,11 +1188,17 @@ export default function CommandPanel() {
               後端在 ready=null 時也帶原因句（「尚未收到 SYS_STATUS…」） */}
           {!linkLost && live && live.ready !== true
             && (live.not_ready_reasons ?? []).map((r, i) => {
+            const what = armWhat(r);
             const fix = armFix(r);
             const note = armNote(r);
+            // **人話當主角，飛控原文退到 tooltip**（2026-10-13 使用者：
+            // 「讓就算不懂無人機的人知道是啥問題，要做對應的操作就好」）。
+            // 原文仍然不刪——查韌體行為時要，只是不佔版面；認不得的原因
+            // 沒有人話可寫，照舊原樣列出來（不編一個看起來合理的）。
+            const tip = [r, note].filter(Boolean).join("\n");
             return (
               <div className="hint-line" key={i}>
-                · {r}
+                · {what ? <span title={tip}>{what}</span> : r}
                 {/* **「為什麼」與「怎麼辦」是兩件事，畫面上要都有。**
                     飛控說得出哪裡不對（Throttle (RC3) is not neutral），
                     說不出要做什麼——而站在場邊的人需要的是後者。
@@ -1203,8 +1209,8 @@ export default function CommandPanel() {
                     連「換一顆電池」那幾個字都被埋掉。補充說明改掛 tooltip
                     （lib/prearm.ts 的 note），要查的人查得到，不佔版面。 */}
                 {fix
-                  ? <div className="cmd-fix" title={note ?? undefined}>
-                      → {fix}{note && <span className="cmd-fix-more">⋯</span>}
+                  ? <div className="cmd-fix" title={tip}>
+                      → {fix}<span className="cmd-fix-more">⋯</span>
                     </div>
                   : <div className="cmd-fix cmd-fix-none"
                       title={"看起來合理但其實錯誤的指示，比沒有指示更糟——"
