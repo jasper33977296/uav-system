@@ -103,7 +103,36 @@ class Transcoder:
         return a + ["-"]
 
     async def _run(self) -> None:
-        """跑到沒人看為止。**例外一律吞掉**——影像壞了不准影響飛行資料。"""
+        """跑到沒人看為止。**ffmpeg 死了就重起，不要讓畫面永遠卡住。**
+
+        2026-10-13 使用者回報「即時畫面容易卡住」。原因不在前端：ffmpeg 中途
+        結束（上游斷一下、機上 on-demand 收掉、5G 抖動）時，原本這支就直接
+        結束了，而**瀏覽器的 `<img>` 在 multipart 串流結束後只會停在最後一張、
+        不會重連**——畫面就這樣永遠停住，而且看起來和「正常但靜止」一模一樣。
+        轉碼器只在有**新請求**進來時才會被重建，所以使用者不重新整理就不會回來。
+
+        **例外一律吞掉**——影像壞了不准影響飛行資料。
+        """
+        attempt = 0
+        while True:
+            if (self.viewers == 0
+                    and time.monotonic() - self.demand_at > settings.mjpeg_idle_s):
+                log.info("影像：%s 沒人看滿 %.0f 秒，停止轉碼",
+                         self.path, settings.mjpeg_idle_s)
+                return
+            ok = await self._run_once()
+            if ok:                       # 正常收場（沒人看）＝不要再起
+                return
+            attempt += 1
+            # **退避但不放棄**：只要還有人在看就一直試。上游可能只是斷幾秒，
+            # 而放棄的代價是使用者盯著一張凍住的畫面，什麼提示都沒有
+            delay = min(1.0 * attempt, 5.0)
+            log.info("影像：%s 轉碼中斷，%.0f 秒後重試（第 %d 次）",
+                     self.path, delay, attempt)
+            await asyncio.sleep(delay)
+
+    async def _run_once(self) -> bool:
+        """跑一輪 ffmpeg。回傳 True＝正常收場（沒人看了），False＝它死了。"""
         try:
             self._proc = await asyncio.create_subprocess_exec(
                 *self._args(), stdout=asyncio.subprocess.PIPE,
@@ -111,16 +140,16 @@ class Transcoder:
         except Exception as e:
             self.last_error = f"啟動 ffmpeg 失敗：{type(e).__name__}: {e}"
             log.warning("影像：%s", self.last_error)
-            return
+            return False
         self.started_at = time.monotonic()
         log.info("影像：%s 開始轉 MJPEG", self.path)
         buf = b""
+        clean = False            # True＝沒人看而正常收場；False＝ffmpeg 死了
         try:
             while True:
                 if (self.viewers == 0
                         and time.monotonic() - self.demand_at > settings.mjpeg_idle_s):
-                    log.info("影像：%s 沒人看滿 %.0f 秒，停止轉碼",
-                             self.path, settings.mjpeg_idle_s)
+                    clean = True
                     break
                 try:
                     chunk = await asyncio.wait_for(
@@ -158,6 +187,7 @@ class Transcoder:
                     with contextlib.suppress(asyncio.TimeoutError):
                         await asyncio.wait_for(self._proc.wait(), timeout=3.0)
             self._proc = None
+        return clean
 
 
 _streams: dict[str, Transcoder] = {}

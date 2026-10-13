@@ -3687,7 +3687,17 @@ async def camera_mjpeg(drone_id: str, request: Request):
                 yield (b"--frame\r\nContent-Type: image/jpeg\r\nContent-Length: "
                        + str(len(frame)).encode() + b"\r\n\r\n" + frame + b"\r\n")
                 got = await mjpeg.next_frame(t, seq, timeout=10.0)
-                if got is None or await request.is_disconnected():
+                if got is None:
+                    # **沒有新影格不代表要收掉這條回應。** 2026-10-13：收掉之後
+                    # 瀏覽器的 `<img>` 只會停在最後一張、不會重連，使用者看到的
+                    # 是一張凍住的畫面——而且和「正常但靜止」長得一模一樣。
+                    # 改成留著連線、把轉碼器叫回來，等它恢復就繼續送。
+                    # 離開的唯一條件是**對方真的斷線**。
+                    if await request.is_disconnected():
+                        return
+                    await t.ensure()
+                    continue
+                if await request.is_disconnected():
                     return
                 seq, frame = got
         finally:
