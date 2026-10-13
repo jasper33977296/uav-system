@@ -18,7 +18,8 @@ import { DRONE_ICON_SIZE, droneIconUrl } from "@/lib/droneIcon";
 import { lodFactor } from "@/lib/droneMesh";
 import { droneMeshLayers } from "@/lib/droneMeshLayer";
 import { basePreview, separatePreview, unifiedPreview, type Wp } from "@/lib/formation";
-import { CANVAS, groundGrid, planPath, ribbon, trailLineString } from "@/lib/geo";
+import { CANVAS, groundGrid, M_LAT, mLon, planPath, ribbon, trailLineString }
+  from "@/lib/geo";
 import { getJson } from "@/lib/fetchJson";
 import { API, LINK_CLASSES } from "@/lib/signal";
 import { freshOnly, staleLevel } from "@/lib/staleness";
@@ -39,6 +40,15 @@ interface LabelDatum {
   alt: number | null; spd: number | null;   // 過舊時為 null → 畫成「—」
 }
 const LABEL_H = 48;
+
+//: 周遭建物抓多遠、移動多少才重抓（公尺）。即時頁要的是「我周圍有什麼」，
+//: 所以比規劃頁的 30 m（沿線檢查用）大一個量級；重抓是整源替換會閃一下，
+//: 所以原地晃動不重抓。
+const BLD_BUFFER_M = 300;
+const BLD_REFETCH_M = 150;
+//: 植被的綠：**刻意比 SINR 的「良好」(#0ca30c) 暗而濁**——同一張圖上
+//: 兩個綠不能看起來像同一件事（一個是地物，一個是量測值）。
+const VEG = "#5c8a3c";
 
 /** 讀數的變動指紋——deck 的 updateTriggers 只吃純值，機數不變但高度在動時
  *  也必須重算 getText。取到小數一位就好：再細只是每幀重建字串。 */
@@ -61,6 +71,9 @@ export default function MapView() {
   const planReq = useUavStore((s) => s.planReq);
   useEffect(() => { refreshPlanRef.current(); }, [planReq]);
   const ribbonGateRef = useRef({ t: 0, n: -1 });   // 地面投影重建節流
+  // 周遭建物：已抓範圍的中心，與「沒有遙測時改抓哪裡」的退路
+  const bldAnchorRef = useRef<{ lat: number; lon: number } | null>(null);
+  const routeAnchorRef = useRef<{ lat: number; lon: number } | null>(null);
   const pitchRef = useRef(55);   // 機體圖示的俯角尺寸補償用（見 IconLayer）
   const zoomRef = useRef(15);    // §2.4d LOD 換手與標籤同位判定用
 
@@ -344,6 +357,66 @@ export default function MapView() {
                  "circle-stroke-width": 2, "circle-stroke-color": "#c8a44a" },
       }, "trail-line");
 
+      // 周遭建物（2026-10-13 使用者要求「建築物的 3D 圖也顯示在即時畫面上」）。
+      // **同一份資料、兩種畫法**：規劃頁的建物在回答「會不會撞」（§9-A 的
+      // 三層退讓，高度未知就畫成高過航線的橘塊，讓你非看一眼不可）；即時頁
+      // 在回答「我現在在哪、周圍有什麼」。所以這裡：
+      //   已知高度 → 照實際高度拉起來（**量得到的才給 3D**）
+      //   高度未知 → 只畫地面輪廓與虛線框，**不給它屋頂**
+      // 場域這塊 59 棟裡有 50 棟 OSM 沒高度（2026-10-13 的資料）。比照規劃頁
+      // 一律拉高的話，即時畫面會變成一片橘牆，而那個高度是猜的——
+      // libs/buildings.py：「猜 9 m 而實際 12 m 的樓，在這裡是撞機」。
+      // 建在 `plan3d` 之前＝永遠在計畫疊圖與 deck（軌跡、機體圖示）之下，
+      // §2.4c「圖示永不被覆蓋」。
+      map.addSource("buildings", { type: "geojson", data: EMPTY });
+      map.addLayer({
+        id: "buildings", type: "fill-extrusion", source: "buildings",
+        filter: ["==", ["get", "known"], true],
+        paint: {
+          "fill-extrusion-height": ["get", "height_m"], "fill-extrusion-base": 0,
+          "fill-extrusion-color": "#8d8579", "fill-extrusion-opacity": 0.85,
+        },
+      }, "plan3d");
+      map.addLayer({
+        id: "buildings-unknown", type: "fill", source: "buildings",
+        filter: ["==", ["get", "known"], false],
+        paint: { "fill-color": "#c98a2b", "fill-opacity": 0.16 },
+      }, "plan3d");
+      map.addLayer({
+        id: "buildings-unknown-line", type: "line", source: "buildings",
+        filter: ["==", ["get", "known"], false],
+        paint: { "line-color": "#c98a2b", "line-width": 1.4,
+                 // 虛線＝「這個框是真的，上面沒量過」。實線會看起來像已知
+                 "line-dasharray": [2, 2], "line-opacity": 0.9 },
+      }, "plan3d");
+
+      // 植被（樹／行道樹／樹林）——使用者要的「可能障礙物譬如樹」。
+      // **全部畫在地面上，沒有一棵拉起來**：OSM 在場地這塊的 11 筆植被
+      // 高度全是空的（2026-10-13 實查），而樹的高度正是「會不會擋到」的
+      // 全部重點。拉一個猜的高度上去，等於用畫面保證一件沒人量過的事。
+      // 更要緊的是**覆蓋率**：11 筆遠少於現場實際的樹，所以這個圖層能說的
+      // 只有「這裡標了一棵樹」，不能說「這裡只有這些樹」——圖例的 ⓘ 必須
+      // 把「沒標到不等於淨空」講出來，否則它會被讀成查過了。
+      map.addSource("vegetation", { type: "geojson", data: EMPTY });
+      map.addLayer({
+        id: "veg-area", type: "fill", source: "vegetation",
+        filter: ["==", ["geometry-type"], "Polygon"],
+        paint: { "fill-color": VEG, "fill-opacity": 0.22 },
+      }, "plan3d");
+      map.addLayer({
+        id: "veg-row", type: "line", source: "vegetation",
+        filter: ["==", ["geometry-type"], "LineString"],
+        paint: { "line-color": VEG, "line-width": 4, "line-opacity": 0.75 },
+      }, "plan3d");
+      map.addLayer({
+        id: "veg-tree", type: "circle", source: "vegetation",
+        filter: ["==", ["geometry-type"], "Point"],
+        // 半徑是**固定像素**，不是樹冠——OSM 沒有樹冠直徑，照比例畫
+        // 等於憑空給它一個大小
+        paint: { "circle-radius": 4, "circle-color": VEG, "circle-opacity": 0.5,
+                 "circle-stroke-width": 1.5, "circle-stroke-color": VEG },
+      }, "plan3d");
+
       // ⚠ 繪製順序（§2.4c）：**計畫路徑必須在 deck overlay 之前建立**。
       // interleaved overlay 掛上時插在「當下最上層」，之後才 addLayer 的
       // maplibre 圖層會蓋在 deck 之上——先前計畫路徑正是建在 overlay 之後，
@@ -398,6 +471,10 @@ export default function MapView() {
             wps = planPath(plan.waypoints ?? [], plan.home);
           }
           const has = wps.length >= 2;
+          // 沒有遙測座標時（GPS 未鎖、機沒連），建物要抓「畫面當下在看的
+          // 地方」＝航線所在，否則整頁空無一物——與上面 fitBounds 同一個理由
+          const a0 = wps.find((w: any) => w.lat && w.lon);
+          routeAnchorRef.current = a0 ? { lat: a0.lat, lon: a0.lon } : null;
           // 半寬 1.0→0.45m（使用者反饋「投影上去的預計路線太粗」）：計畫是
           // 參照、不是主角——實測航跡（deck 路徑層）才是。計畫帶比航跡窄
           // 一截，兩條疊在一起時看得出誰是誰
@@ -482,6 +559,50 @@ export default function MapView() {
     });
 
     return () => map.remove();
+  }, []);
+
+  // 周遭建物：抓一次撐一片，飛出去再抓。
+  //
+  // **錨點優先用機體當下座標**，沒有才退回航線（見 routeAnchorRef）。抓不到
+  // 就不畫——那塊沒有抓過 OSM 輪廓（離線場域的常態），不是錯誤。
+  useEffect(() => {
+    let stop = false;
+    const load = async (lat: number, lon: number) => {
+      try {
+        const r = await fetch(`${API}/api/buildings/near`, {
+          method: "POST", headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ points: [[lat, lon]], buffer_m: BLD_BUFFER_M }),
+        });
+        if (!r.ok || stop) return;
+        const fc = await r.json();
+        (mapRef.current?.getSource("buildings") as maplibregl.GeoJSONSource
+          | undefined)?.setData(fc as GeoJSON.FeatureCollection);
+      } catch { /* 沒有建物資料＝不畫 */ }
+      try {
+        const r = await fetch(
+          `${API}/api/vegetation/near?lat=${lat}&lon=${lon}&radius_m=${BLD_BUFFER_M}`);
+        if (!r.ok || stop) return;
+        const fc = await r.json();
+        (mapRef.current?.getSource("vegetation") as maplibregl.GeoJSONSource
+          | undefined)?.setData(fc as GeoJSON.FeatureCollection);
+      } catch { /* 沒有植被資料＝不畫 */ }
+    };
+    const tick = () => {
+      const map = mapRef.current;
+      if (!map || !map.getSource("buildings")) return;
+      const t = useUavStore.getState().live;
+      const pt = t?.lat && t?.lon
+        ? { lat: t.lat, lon: t.lon } : routeAnchorRef.current;
+      if (!pt) return;
+      const a = bldAnchorRef.current;
+      if (a && Math.hypot((pt.lat - a.lat) * M_LAT,
+                          (pt.lon - a.lon) * mLon(pt.lat)) < BLD_REFETCH_M) return;
+      bldAnchorRef.current = pt;
+      load(pt.lat, pt.lon);
+    };
+    const id = setInterval(tick, 3000);
+    tick();
+    return () => { stop = true; clearInterval(id); };
   }, []);
 
   // 即時更新：懸浮機體 + 航向投影 + 絲帶
@@ -796,6 +917,31 @@ export default function MapView() {
           <InfoTip tip={`軌跡依實測 SINR 上色，門檻與 backend 的事件門檻同一出處：${
             LINK_CLASSES.map((c) => c.label).join("、")}。灰色＝那一段沒有 SINR 樣本。
             另外：灰色細帶＝預計任務路徑、空心圈＝起飛點。`} />
+        </div>
+        {/* 建物：**兩種畫法要在圖例裡講清楚差別**，否則「平的那些」看起來
+            像畫壞了。色塊旁一律帶字——顏色不單獨傳達語意（§2） */}
+        <div className="legend-row">
+          <span className="legend-lab">建物</span>
+          <span className="legend-seg">
+            <i className="legend-sw" style={{ background: "#8d8579" }} />
+            已知高度
+          </span>
+          <span className="legend-seg">
+            <i className="legend-sw legend-sw-dash"
+              style={{ borderColor: "#c98a2b" }} />
+            高度未知
+          </span>
+          <span className="legend-seg">
+            <i className="legend-sw" style={{ background: VEG }} />
+            植被
+          </span>
+          <InfoTip tip="輪廓來自 OpenStreetMap，開場前先抓好、現場離線也能用。
+            建物：有樓層數才推算得出高度，推得出來的照高度拉成立體；推不出來的
+            只畫地面輪廓、不給屋頂——這裡假一個高度出來，代價是撞機。
+            植被（樹、行道樹、樹林）一律只畫在地面：OSM 這一帶的樹沒有一棵有高度。
+            **沒有標記的地方不等於淨空**：OSM 標到的樹遠少於現場實際的樹，
+            這個圖層說得出「這裡標了一棵樹」，說不出「這裡只有這些樹」。
+            要「會不會撞」的判斷請看規劃頁，那裡會把高度未知的樓畫成高過航線。" />
         </div>
         <BasemapToggle on={base.on} set={base.set}
           offline={base.offline} outside={base.outside} />

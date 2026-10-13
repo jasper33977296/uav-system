@@ -121,6 +121,9 @@ a:focus-visible, button:focus-visible, input:focus-visible, select:focus-visible
 .legend-lab { color: var(--muted); }
 .legend-seg { display: inline-flex; align-items: center; gap: 5px; color: var(--ink-2); }
 .legend-sw { width: 14px; height: 6px; border-radius: 2px; flex: none; }
+/* 虛線色票＝「這個框是真的，上面沒量過」（即時頁的高度未知建物）。
+   實心與虛線的差別本身就是語意，所以不是只換顏色——色盲也分得出來 */
+.legend-sw-dash { background: none; border: 1px dashed; height: 8px; }
 .legend h4 { font-size: 12px; font-weight: 600; margin-bottom: 6px; }
 .legend .row { display: flex; align-items: center; gap: 6px; color: var(--ink-2); line-height: 1.7; }
 .dot { width: 8px; height: 8px; border-radius: 50%; flex: none; }

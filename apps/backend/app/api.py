@@ -24,6 +24,7 @@ import buildings
 import mission_time        # libs/ 的共用實作（PYTHONPATH=/srv/libs）
 import plan_check
 import terrain
+import vegetation
 import video_stream
 
 from . import (agent_link, captures, chainage, db, groups, logindex,
@@ -2630,6 +2631,41 @@ async def buildings_near(body: NearIn):
                      "known": sum(1 for f in feats if f["properties"]["known"]),
                      "unknown": sum(1 for f in feats if not f["properties"]["known"]),
                      "assumed_default_m": buildings.ASSUMED_DEFAULT_M}}
+
+
+@router.get("/vegetation/near")
+async def vegetation_near(lat: float, lon: float, radius_m: float = 300.0):
+    """這一點附近標到的植被（樹／行道樹／樹林）。
+
+    **`meta.complete` 永遠是 false，而且要被講出來。** 這不是保守，是實況：
+    OSM 在場地這塊只標了 11 筆（2026-10-13 實查），現場顯然不只這些。資料
+    回答得了「這裡標了一棵樹」，回答不了「這裡只有這些樹」——
+    **沒有標記的地方不等於淨空**。畫面不准讓人讀成樹的清單。
+
+    高度一律跟著出去（多半是 null）。null 不是 0，也不是某個預設值：
+    沒量過的樹說不出它會不會擋到航線（同 `/buildings/near`、§9-A）。
+    """
+    radius_m = max(1.0, min(float(radius_m), 1000.0))
+    store = vegetation.shared()
+    feats = []
+    tally: dict[str, int] = {}
+    for ft, d in store.near(lat, lon, radius_m):
+        props = {**(ft.get("properties") or {}), "dist_m": d}
+        tally[props.get("kind") or "?"] = tally.get(props.get("kind") or "?", 0) + 1
+        feats.append({**ft, "properties": props})
+    deg = radius_m / 110574.0
+    box = (lat - deg, lon - deg * 2, lat + deg, lon + deg * 2)
+    return {"type": "FeatureCollection", "features": feats,
+            "meta": {"count": len(feats), "radius_m": radius_m,
+                     "available": store.available,
+                     # 有抓過這一區嗎——與「這裡沒有樹」不是同一件事
+                     "covered": store.covers(box),
+                     "by_kind": tally,
+                     "with_height": sum(
+                         1 for f in feats
+                         if f["properties"].get("height_m") is not None),
+                     "complete": False,
+                     "source": "OpenStreetMap"}}
 
 
 @router.get("/plans/{plan_id}/profile")
