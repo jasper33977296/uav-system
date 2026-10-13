@@ -96,8 +96,24 @@ const PATH_BASE = {
  * 代價：帶面不再表達「這段在空中怎麼躺」。但那個資訊本來就被 §1 的
  * 俯角壓縮扭曲得讀不出來，換到的是一條寬度處處相同、看得出分級色的線。
  * 垂直段可見（原本分流的目的）由 billboard 一併保住。 */
+//: 分級色線的深色描邊。**這不是裝飾，是辨識度的替代來源。**
+//  底圖原本蓋 80% 暗化，為的是讓四級色在最亮地物（水泥、屋頂）上仍分得出來
+//  ——設計師 2026-08-12 在 NLSC 台北 z17 實影像上量過：暗化降到 50% 時四色
+//  對比全部 <3:1。2026-10-13 使用者要即時頁的底圖與規劃頁一致（不暗化），
+//  那個量測並沒有因此失效，所以辨識度改由描邊承擔：線的邊緣與亮底圖之間
+//  永遠有一圈暗色，**「看得出線在哪」不再取決於線色與底圖的對比**。
+const HALO: [number, number, number, number] = [10, 9, 8, 235];
+const HALO_PX = 2.5;        // 每邊各約 1.25px
+
 export function pathsLayer(id: string, data: RouteRun[], pickable = false) {
   return [
+    new PathLayer<RouteRun>({
+      ...PATH_BASE, id: `${id}-halo`, data, billboard: true, pickable: false,
+      getColor: HALO,
+      getWidth: (d: RouteRun) => (d.width ?? 3) + 1,
+      widthMinPixels: PATH_BASE.widthMinPixels + HALO_PX,
+      widthMaxPixels: PATH_BASE.widthMaxPixels + HALO_PX,
+    }),
     new PathLayer<RouteRun>({ ...PATH_BASE, id, data, billboard: true, pickable }),
   ];
 }

@@ -84,7 +84,11 @@ export default function VideoPlayer({ url, controls = true }: {
     return (
       <>
         {/* eslint-disable-next-line @next/next/no-img-element */}
-        <img src={url} alt="即時畫面（MJPEG）"
+        {/* **不給瀏覽器原生拖曳**（2026-10-13）：`<img>` 預設可拖，而那個原生
+            拖曳會把指標捕捉取消掉（pointercancel），於是 PiP 小窗自己的拖曳
+            當場失效——使用者回報「縮小畫面沒辦法拖拉」。換成 MJPEG 之前是
+            `<video>`，沒有這個預設行為，所以是換法帶進來的回歸。 */}
+        <img src={url} alt="即時畫面（MJPEG）" draggable={false}
           onLoad={() => setLive(true)}
           onError={() => { setMode("error"); setErr("MJPEG 串流無法載入"); }} />
         {!live && (
