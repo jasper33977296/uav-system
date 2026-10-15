@@ -22,8 +22,7 @@ import { CANVAS, groundGrid, M_LAT, mLon, planPath, ribbon, trailLineString }
   from "@/lib/geo";
 import { getJson } from "@/lib/fetchJson";
 import { API, LINK_CLASSES } from "@/lib/signal";
-import { CELL_COLORS, ZONE_COLOR, interferenceFootprintFC, interferenceZoneFC,
-  siteCellVolFC, siteCellsFC, siteModelFC, sitePointsFC } from "@/lib/siteModel";
+import { siteModelFC, sitePointsFC } from "@/lib/siteModel";
 import { freshOnly, staleLevel } from "@/lib/staleness";
 import { firstFleetPos, useUavStore, type Telemetry } from "@/lib/store";
 
@@ -370,70 +369,6 @@ export default function MapView() {
       // libs/buildings.py：「猜 9 m 而實際 12 m 的樓，在這裡是撞機」。
       // 建在 `plan3d` 之前＝永遠在計畫疊圖與 deck（軌跡、機體圖示）之下，
       // §2.4c「圖示永不被覆蓋」。
-      // 兩個 CELL 的示意範圍（2026-10-13 使用者要求「畫出半透明的兩個
-      // CELL」）。**建在 buildings 之前＝最底下**：它是地面上的一片底色，
-      // 樓、植被、航線、軌跡都該壓在它上面，不能反過來把場景蓋掉。
-      // **半徑是示意，不是量到的覆蓋**：錨點量得到（4343 筆的中位
-      // −89/−90 dBm @ ~105 m），往外推的斜率是假設的——實測只跨 1.7 倍距離，
-      // 擬合出來的衰減指數是負的（越遠越強），斜率根本量不出來。見 siteModel。
-      map.addSource("cells", { type: "geojson", data: EMPTY });
-      // 地面足跡：**同心環段 ＋ 往外漸淡**（2026-10-13 使用者：「訊號格子
-      // 很粗糙，換成比較像訊號的視覺呈現方式」）。漸層寫在顏色的 alpha 裡
-      // ——MapLibre 的 `*-opacity` 不吃 data-driven 運算式，`*-color` 吃
-      map.addLayer({
-        id: "cell-fill", type: "fill", source: "cells",
-        filter: ["!", ["has", "edge"]],
-        paint: { "fill-color": ["get", "rgba"], "fill-opacity": 1 },
-      }, "plan3d");
-      // 立體的那一份：從天線往外往下斜到地面的楔形（使用者 2026-10-13
-      // 「把 CELL 畫成立體的，不要只有平面圓」）。**不是波束形狀**——沒有
-      // 垂直張角、沒有下傾、沒有被樓擋住，它說的只有方向與距離
-      map.addSource("cell-vol", { type: "geojson", data: EMPTY });
-      map.addLayer({
-        id: "cell-vol", type: "fill-extrusion", source: "cell-vol",
-        paint: { "fill-extrusion-color": ["get", "rgba"],
-                 // **薄板**：底從 feature 來，不是 0。原本從地面實心填到斜頂，
-                 // 天線那端 32 m 高，等於在樓前面豎一道牆——fill-extrusion 之間
-                 // 會互相深度測試，牆擋在相機與樓之間時後畫的樓也贏不了，
-                 // 使用者回報「訊號會把建築物建模吃掉」
-                 "fill-extrusion-base": ["get", "base"],
-                 "fill-extrusion-height": ["get", "top"],
-                 // opacity 固定 1，濃淡由顏色的 alpha 帶（見 siteModel.fade）
-                 "fill-extrusion-opacity": 1 },
-      }, "plan3d");
-      // 干擾區＝兩個扇形的重疊（2026-10-13 使用者裁定）。**與兩個扇形同一
-      // 組幾何，所以繼承它們的每一個假設**——半徑來自假設的衰減指數、方位
-      // 是指定的、張角是常見值。紅色讀起來就是「這裡有事」，所以圖例的 ⓘ
-      // 必須說清楚它是算出來的範圍，不是量出來的。
-      // 立體的那份建在 cell-vol 之後：同為 fill-extrusion，會互相做深度測試，
-      // 紅色不會糊在扇形表面上
-      map.addSource("zone", { type: "geojson", data: EMPTY });
-      map.addSource("zone-foot", { type: "geojson", data: EMPTY });
-      map.addLayer({
-        id: "zone-fill", type: "fill", source: "zone-foot",
-        // 35%（2026-10-13 使用者指定；原本 50%）
-        paint: { "fill-color": ZONE_COLOR, "fill-opacity": 0.35 },
-      }, "plan3d");
-      map.addLayer({
-        id: "zone-edge", type: "line", source: "zone-foot",
-        paint: { "line-color": ZONE_COLOR, "line-width": 2,
-                 "line-dasharray": [3, 2], "line-opacity": 0.85 },
-      }, "plan3d");
-      map.addLayer({
-        id: "zone-vol", type: "fill-extrusion", source: "zone",
-        paint: { "fill-extrusion-color": ZONE_COLOR,
-                 "fill-extrusion-base": ["get", "base"],
-                 "fill-extrusion-height": ["get", "top"],
-                 "fill-extrusion-opacity": 0.35 },
-      }, "plan3d");
-      map.addLayer({
-        id: "cell-edge", type: "line", source: "cells",
-        filter: ["has", "edge"],      // 只畫整塊扇形的外框，不畫每一環
-        paint: { "line-color": ["get", "color"], "line-width": 1.5,
-                 // 虛線＝這條邊界是推的，不是量出來的門檻
-                 "line-dasharray": [3, 3], "line-opacity": 0.55 },
-      }, "plan3d");
-
       map.addSource("buildings", { type: "geojson", data: EMPTY });
       map.addLayer({
         id: "buildings", type: "fill-extrusion", source: "buildings",
@@ -686,14 +621,6 @@ export default function MapView() {
           ?.setData(siteModelFC(bfc));
         (m?.getSource("site-pts") as maplibregl.GeoJSONSource | undefined)
           ?.setData(sitePointsFC(bfc));
-        (m?.getSource("cells") as maplibregl.GeoJSONSource | undefined)
-          ?.setData(siteCellsFC(bfc));
-        (m?.getSource("cell-vol") as maplibregl.GeoJSONSource | undefined)
-          ?.setData(siteCellVolFC(bfc));
-        (m?.getSource("zone") as maplibregl.GeoJSONSource | undefined)
-          ?.setData(interferenceZoneFC(bfc));
-        (m?.getSource("zone-foot") as maplibregl.GeoJSONSource | undefined)
-          ?.setData(interferenceFootprintFC(bfc));
       } catch { /* 沒有建物資料＝不畫 */ }
       try {
         const r = await fetch(
@@ -1056,18 +983,6 @@ export default function MapView() {
             <i className="legend-sw" style={{ background: "#d9d4c6" }} />
             屋頂設備
           </span>
-          <span className="legend-seg">
-            <i className="legend-sw legend-sw-dash"
-              style={{ borderColor: CELL_COLORS.a }} />
-            <i className="legend-sw legend-sw-dash"
-              style={{ borderColor: CELL_COLORS.b }} />
-            CELL（示意）
-          </span>
-          <span className="legend-seg">
-            <i className="legend-sw legend-sw-dash"
-              style={{ borderColor: ZONE_COLOR }} />
-            干擾區
-          </span>
           <InfoTip tip="輪廓來自 OpenStreetMap，開場前先抓好、現場離線也能用。
             建物：有樓層數才推算得出高度，推得出來的照高度拉成立體；推不出來的
             只畫地面輪廓、不給屋頂——這裡假一個高度出來，代價是撞機。
@@ -1076,21 +991,7 @@ export default function MapView() {
             這個圖層說得出「這裡標了一棵樹」，說不出「這裡只有這些樹」。
             要「會不會撞」的判斷請看規劃頁，那裡會把高度未知的樓畫成高過航線。
             屋頂設備是 2026-10-13 指定的兩個座標，照實際尺寸畫（桿 6 m）；
-            它坐落的樓高本身是樓層數推算的，所以模型的高度跟著一起不準。
-            **兩個 CELL 的扇形是示意，不是量到的覆蓋範圍**：扇心的訊號強度量得到
-            （4343 筆實測的中位），但往外衰減多快量不出來——實際飛過的範圍只跨
-            1.7 倍距離，訊號變化埋在樣本的散佈裡。半徑 167 m 是指定的畫面大小
-            （同一組假設下大約相當於 −94 dBm 的等值線，換個假設就會變）。
-            方位（共同軸 136.6°，兩支各往外岔開 52°）是指定要投射的方向，不是
-            量到的天線方位，也不會跟著航線轉；張角 120° 是指定值（一般三扇區天線
-            約 65°）。岔開角決定交會點落在 117 m，最遠航點因此落在干擾區內——
-            張角越大兩束越早相交，要把交會點推遠只能靠岔開，這兩個數字綁在一起。
-            扇形的濃淡只是**衰減示意**，不是算出來的場強。
-            立體的那片斜板是投射示意，沒有算垂直張角、下傾，也沒有算被樓擋住；
-            它從建物輪廓外才開始畫，**建築物的顯示優先於訊號**。
-            **干擾區＝兩個扇形的重疊**（使用者定義），所以它是算出來的幾何，
-            不是量出來的區域——上面那些假設改一個，這塊紅色就跟著變。
-            實測資料裡沒有任何一筆標記過干擾區。" />
+            它坐落的樓高本身是樓層數推算的，所以模型的高度跟著一起不準。" />
         </div>
         <BasemapToggle on={base.on} set={base.set}
           offline={base.offline} outside={base.outside} />
