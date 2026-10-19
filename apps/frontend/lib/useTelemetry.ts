@@ -73,10 +73,12 @@ export function useTelemetry() {
       ws.onerror = () => ws?.close();
     };
     connect();
+    const ager = setInterval(() => useUavStore.getState().tickAges(), 1000);
 
     return () => {
       closed = true;
       clearTimeout(retry);
+      clearInterval(ager);
       ws?.close();
     };
   }, [setLive, setWsConnected, pushEvent]);

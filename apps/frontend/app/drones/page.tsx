@@ -10,7 +10,7 @@ import { Battery, SignalBars } from "@/components/SimpleHud";
 import { errText, getJson } from "@/lib/fetchJson";
 import { parseJsonb } from "@/lib/jsonb";
 import { API, classifySinr } from "@/lib/signal";
-import { ageText } from "@/lib/staleness";
+import { ageText, freshLink } from "@/lib/staleness";
 import { AgentState, useUavStore } from "@/lib/store";
 
 interface Drone {
@@ -274,7 +274,7 @@ export default function Drones() {
               <span className={`drone-state${st.tone ? ` drone-state-${st.tone}` : ""}`}>
                 {st.text}
               </span>
-              {st.online && <SignalBars sinr={fleet[d.id]?.link?.sinr} />}
+              {st.online && <SignalBars sinr={freshLink(fleet[d.id])?.sinr} />}
               {st.online && <Battery pct={fleet[d.id]?.battery_pct} plain />}
               {squads.filter((q) => q.members.some((m) => m.drone_id === d.id))
                 .map((q) => (

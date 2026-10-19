@@ -1,4 +1,5 @@
 import { create } from "zustand";
+import { staleLevel } from "./staleness";
 
 export interface LinkMetrics {
   rsrp: number; rsrq: number; sinr: number; cqi: number;
@@ -62,6 +63,8 @@ export interface AgentState {
    * 後端收不到 MAVLink 時，這一格分得出斷在哪一段：`ok=false`＝機上序列埠斷了
    * （指令送不到飛控）、`ok=true`＝飛控好好的、斷的是遙測回地面站那段。 */
   fc_link?: FcLink | null;
+  /** 收到這則的本地時刻（tickAges 用；不是協定欄位） */
+  _rx?: number;
 }
 
 export interface FcLink {
@@ -136,6 +139,8 @@ export interface Telemetry {
   // 影像錄製現況（§2.9；022 暫定契約形，欄位缺＝記錄燈維持原文案不宣告影像）
   video_mode?: "on" | "off" | "no_source" | null;
   link: Partial<LinkMetrics>;
+  //: 收到這則的本地時刻與當時後端給的年齡（tickAges 用；不是協定欄位）
+  _rx?: number; _telem0?: number | null; _link0?: number | null;
 }
 
 /** 機上資料 §2.8（014 Phase B 訊息登錄表）。後端契約落地前的暫定形：
@@ -175,6 +180,14 @@ interface UavStore {
   trails: Record<string, TrailPoint[]>;      // 每機各自的尾跡
   selectedId: string | null;                 // 側欄顯示哪台；null＝跟隨主機
   wsConnected: boolean;
+  /** 讓年齡在**前端自己的時鐘上**繼續長。
+   *
+   * `telem_age_s`／`link_age_s` 是後端在送出那一刻算的。後端還在送時沒問題；
+   * 但**與系統的連線一斷（或後端不再廣播某台機），就再也沒有人更新它**——
+   * 畫面停在「0.3 秒前」，所有看年齡決定要不要拿掉數值的地方都以為它是新的，
+   * 最後一筆訊號、姿態、位置就這樣一直亮著，看起來和「還連著」一模一樣。
+   * 所以年齡＝收到時後端給的年齡＋收到之後本地過了多久。 */
+  tickAges: () => void;
   registry: Record<string, DroneRegistry>;   // 機上資料 §2.8，鍵為 drone_id
   // 意圖協定的狀態鏡像，鍵為 drone_id（沒註冊的代理沒有 drone_id，不入表——
   // 那種連線在後端 log 看得到，但它不對應畫面上任何一台機）
@@ -267,7 +280,8 @@ export const useUavStore = create<UavStore>((set) => ({
   registry: {},
   agents: {},
   setAgent: (a) =>
-    set((s) => (a.drone_id ? { agents: { ...s.agents, [a.drone_id]: a } } : s)),
+    set((s) => (a.drone_id
+      ? { agents: { ...s.agents, [a.drone_id]: { ...a, _rx: Date.now() } } } : s)),
   replays: {},
   pushReplay: (r) =>
     set((s) => {
@@ -320,18 +334,24 @@ export const useUavStore = create<UavStore>((set) => ({
       const id = t.drone_id ?? "unknown";
       // 主機＝帶 primary 旗標的（MAVLink 機）；旗標未到前暫用第一台出現的
       const primaryId = t.primary ? id : (s.primaryId ?? id);
+      t = { ...t, _rx: Date.now(), _telem0: t.telem_age_s ?? null,
+            _link0: t.link_age_s ?? null };
       const fleet = { ...s.fleet, [id]: t };
+      // **只收新鮮的樣本進歷史**：後端每則遙測（約 5Hz）都附著最後一筆 link，
+      // 訊號斷了也照附——原樣累積的話，走勢圖會畫出一條「訊號很穩」的平線、
+      // 尾跡會用斷線前的顏色一路塗下去，而那段時間其實什麼都沒量到
+      const sinr = staleLevel(t.link_age_s) === "live" ? t.link?.sinr ?? null : null;
       let trails = s.trails;
       if (t.lat != null && t.lon != null) {
         const prev = s.trails[id] ?? [];
         trails = { ...s.trails,
-          [id]: [...prev, { lat: t.lat, lon: t.lon, sinr: t.link?.sinr ?? null, alt: t.alt_rel }]
+          [id]: [...prev, { lat: t.lat, lon: t.lon, sinr, alt: t.alt_rel }]
             .slice(-TRAIL_MAX) };
       }
       let sinrHistories = s.sinrHistories;
-      if (t.link?.sinr != null) {
+      if (sinr != null) {
         sinrHistories = { ...s.sinrHistories,
-          [id]: [...(s.sinrHistories[id] ?? []), t.link.sinr].slice(-120) };
+          [id]: [...(s.sinrHistories[id] ?? []), sinr].slice(-120) };
       }
       // 側欄顯示選中的那台（未選＝主機）
       const effective = s.selectedId ?? primaryId;
@@ -366,6 +386,30 @@ export const useUavStore = create<UavStore>((set) => ({
       live: st.live?.drone_id === id ? { ...st.live, drone_name: name } : st.live,
     })),
   setWsConnected: (v) => set({ wsConnected: v }),
+  tickAges: () =>
+    set((s) => {
+      const now = Date.now();
+      const grow = (a0: number | null | undefined, el: number) =>
+        a0 == null ? null : Math.round((a0 + el) * 100) / 100;
+      let fleet = s.fleet, live = s.live, agents = s.agents;
+      for (const [id, t] of Object.entries(s.fleet)) {
+        if (t._rx == null) continue;
+        const el = (now - t._rx) / 1000;
+        if (el < 1.5) continue;            // 後端照常在送（約 5Hz）：不必動
+        const nt = { ...t, telem_age_s: grow(t._telem0, el),
+                     link_age_s: grow(t._link0, el) };
+        if (fleet === s.fleet) fleet = { ...s.fleet };
+        fleet[id] = nt;
+        if (live?.drone_id === id) live = nt;
+      }
+      // 代理鏡像同理：`fresh` 是後端說的，**後端說不了話時它就該變成不知道**
+      for (const [id, a] of Object.entries(s.agents)) {
+        if (a._rx == null || !a.fresh || now - a._rx < 5000) continue;
+        if (agents === s.agents) agents = { ...s.agents };
+        agents[id] = { ...a, fresh: false };
+      }
+      return fleet === s.fleet && agents === s.agents ? s : { fleet, live, agents };
+    }),
   setRegistry: (droneId, r) =>
     set((s) => ({ registry: { ...s.registry, [droneId]: r } })),
   // fold＝同句 STATUSTEXT 重複：就地替換同 id 那筆（count/時間更新、位置不動）；

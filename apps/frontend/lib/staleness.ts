@@ -52,6 +52,15 @@ export function freshOnly<T>(v: T, ageS: number | null | undefined): T | null {
   return staleLevel(ageS) === "old" || staleLevel(ageS) === "never" ? null : v;
 }
 
+/** 訊號量測，**看訊號樣本自己的年齡**（`link_age_s`，不是 `telem_age_s`）。
+ *
+ * 後端把最後一筆 `link` 一直掛在遙測上送，斷了也不清；5G 樣本走機上代理、
+ * 遙測走 MAVLink，兩條路各斷各的。過舊回 undefined＝畫面拿掉。 */
+export function freshLink<L>(t: { link?: L; link_age_s?: number | null } | null | undefined): L | undefined {
+  const lv = staleLevel(t?.link_age_s);
+  return lv === "old" || lv === "never" ? undefined : t?.link;
+}
+
 /** 舊資料的視覺弱化。`old` 不該只靠這個——數值本身要被拿掉。 */
 export function staleStyle(ageS: number | null | undefined): React.CSSProperties | undefined {
   const lv = staleLevel(ageS);

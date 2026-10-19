@@ -6,7 +6,7 @@ import LogIndexSheet from "@/components/LogIndexSheet";
 import OnboardDataCard from "@/components/OnboardData";
 import { EventsCard } from "@/components/SimpleHud";
 import { API, classifySinr } from "@/lib/signal";
-import { ageText, staleLevel } from "@/lib/staleness";
+import { ageText, freshLink, staleLevel, staleStyle } from "@/lib/staleness";
 import { type ImuData, type Telemetry, useUavStore } from "@/lib/store";
 
 function Metric({ label, value, unit, derived }: {
@@ -147,7 +147,11 @@ function VibBar({ imu }: { imu: ImuData }) {
   );
 }
 
-function ImuCard({ live }: { live: Telemetry | null }) {
+function ImuCard({ live, gone, style }: {
+  live: Telemetry | null;
+  gone: string | null;               // 過舊時的年齡字串（數值已拿掉）
+  style?: React.CSSProperties;
+}) {
   const imu = live?.imu ?? ({} as ImuData);
   // 航向本就是 yaw——併入姿態列（§2.6 安置 3）；360°＝0° 正規化照舊
   const yaw = live?.heading == null ? null : Math.round(live.heading) % 360;
@@ -155,8 +159,9 @@ function ImuCard({ live }: { live: Telemetry | null }) {
     has(imu.xacc, imu.yacc, imu.zacc, imu.xgyro, imu.ygyro, imu.zgyro,
         imu.xmag, imu.ymag, imu.zmag);
   return (
-    <div className="card">
+    <div className="card" style={style}>
       <h3>IMU</h3>
+      {gone && <div className="hint-line">遙測在 {gone}更新——姿態與位置已拿掉</div>}
       <div className="imu-grid">
         {has(live?.roll, live?.pitch, yaw) && (
           <div className="imu-row imu-att">
@@ -378,7 +383,16 @@ function RecordCard({ live }: { live: Telemetry | null }) {
 
 export default function SidePanel() {
   const { live, primaryId, selectedId, sinrHistories } = useUavStore();
-  const link = live?.link;
+  // **訊號看訊號自己的年齡，不看遙測的**：5G 樣本走機上代理、遙測走 MAVLink，
+  // 兩條路各斷各的。過舊就把數值拿掉（同 StatusCard 的規則）——原本這張卡
+  // 完全不看年齡，斷線之後最後一筆 SINR／RSRP 會以全亮的大字一直留在畫面上，
+  // 和「還連著、訊號就是這樣」長得一模一樣
+  const sigAge = live?.link_age_s;
+  const sigLv = staleLevel(sigAge);
+  const sigGone = sigLv === "old" || sigLv === "never";
+  const link = freshLink(live);
+  const telemLv = staleLevel(live?.telem_age_s);
+  const telemGone = telemLv === "old" || telemLv === "never";
   const cls = link?.sinr != null ? classifySinr(link.sinr) : null;
   // **分得出「模組報的」與「我方算的」**：後端在 raw._derived 記下解了哪幾欄
   // （app/modem_raw.py）。舊資料沒有這個鍵＝那些值本來就是模組填的
@@ -404,6 +418,14 @@ export default function SidePanel() {
 
       <div className="card">
         <h3>訊號品質<InfoTip tip="大字＝最新一筆 SINR。走勢圖裡細線是原始樣本、粗線是 2 秒滑動平均——只畫平滑線會產生量測點之間沒有量到的值。分級門檻與 backend 的事件門檻同一出處。" /></h3>
+        {live && sigLv !== "live" && (
+          <div className="hint-line">
+            {sigLv === "never" ? "還沒收到過訊號樣本"
+              : sigGone ? `訊號在 ${ageText(sigAge)}更新——不是現在的訊號，數值已拿掉`
+              : `訊號 ${ageText(sigAge)}`}
+          </div>
+        )}
+        <div style={staleStyle(sigAge)}>
         <div className="hero">
           <span className="num">{fmt(link?.sinr)}</span>
           <span className="unit">dB SINR</span>
@@ -420,7 +442,7 @@ export default function SidePanel() {
               那些是量測結果不是推測。後端 in_interference_zone 欄位仍在，
               若日後研究需要對照，應標成「模擬設定」而非現場事實 */}
         </div>
-        <Sparkline data={(effective && sinrHistories[effective]) || []} />
+        <Sparkline data={(!sigGone && effective && sinrHistories[effective]) || []} />
         {/* 次要數字一列；其餘收「詳細」摺疊（IA 定案：漸進揭露＋展開記憶） */}
         <div className="metrics">
           <Metric label="RSRP" value={fmt(link?.rsrp)} unit="dBm" />
@@ -451,6 +473,7 @@ export default function SidePanel() {
             </div>
           )}
         </details>
+        </div>
         {/* 圖例回歸地圖左下常駐（ui-spec §2 使用者定案）——不在卡內 */}
       </div>
 
@@ -464,7 +487,10 @@ export default function SidePanel() {
 
       {/* 以下是排查層，順序照使用者 2026-09-07 的指示：IMU 在上、機上資料最後
           （「這個沒那重要」）*/}
-      <ImuCard live={live} />
+      {/* IMU 與座標同 StatusCard：過舊就整張拿掉數值，只留一句過去式 */}
+      <ImuCard live={telemGone ? null : live}
+        gone={live && telemGone ? ageText(live.telem_age_s) : null}
+        style={staleStyle(live?.telem_age_s)} />
       <OnboardDataCard />
     </aside>
   );

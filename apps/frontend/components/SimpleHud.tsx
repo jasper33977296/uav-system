@@ -17,7 +17,7 @@ import { asGroups, EvDensity, foldEvents, foldTitle } from "@/lib/foldEvents";
 import { armFix } from "@/lib/prearm";
 import { normSev, SEV_DOT } from "@/lib/severity";
 import { classifySinr } from "@/lib/signal";
-import { ageText, staleLevel, staleStyle } from "@/lib/staleness";
+import { ageText, freshLink, staleLevel, staleStyle } from "@/lib/staleness";
 import { useUavStore } from "@/lib/store";
 
 const BAR_LEVEL: Record<string, number> = { good: 4, warning: 3, serious: 2, critical: 1 };
@@ -267,7 +267,9 @@ export default function SimpleHud() {
   // 異常 toast（ui-spec §0.2/§0.3）：同時多事只顯最嚴重一則；
   // 一律 10s 或點擊即消（✕）——toast 是通知不是狀態的家，持續性危險由
   // HUD 樣式（訊號格斜線等）與事件流承載
-  const cls = live?.link?.sinr != null ? classifySinr(live.link.sinr) : null;
+  // 過舊的那筆不拿來報「訊號變差／恢復」——那是在描述現在
+  const sinrNow = freshLink(live)?.sinr;
+  const cls = sinrNow != null ? classifySinr(sinrNow) : null;
   const clsKey = cls?.key ?? null;
   const prevClsRef = useRef<string | null>(null);
   const epRef = useRef({ degraded: 0, recovered: 0, gps: 0 });
@@ -450,7 +452,8 @@ export default function SimpleHud() {
             →<span className="hud-num">
             {lv === "old" ? "—" : live.ground_speed.toFixed(1)}</span></span>
         )}
-        <SignalBars sinr={lv === "old" ? undefined : live?.link?.sinr}
+        {/* 訊號格看**訊號樣本**的年齡（5G 走代理、遙測走 MAVLink，各斷各的） */}
+        <SignalBars sinr={freshLink(live)?.sinr}
           lost={!wsConnected || droneLost}
           onOpen={() => setPanelOpen(true)} />
         <Battery pct={lv === "old" ? undefined : live?.battery_pct} />
