@@ -3341,7 +3341,7 @@ async def delete_mission(plan_id: str):
 
 class LinkSample(BaseModel):
     """機上一次採樣的完整結果。欄位對應 RM500Q-GL 的 AT+QENG 回應。"""
-    drone_id: str | None = None     # 多機：這筆樣本屬於哪台（不填＝主機）
+    drone_id: str | None = None     # 多機：這筆樣本屬於哪台（不填＝主機，**只在單機時接受**）
     seq: int | None = None          # 機上單調遞增序號，只用於批次確認，不入庫
     time: datetime                  # 機上採樣時刻，須含時區
     lat: float | None = None        # 採樣當下位置，機上從 PX4 取得後綁進同一筆
@@ -3459,8 +3459,14 @@ async def link_metrics_live(s: LinkSample):
     """
     _require_modem_mode()
     _require_aware(s.time)
-    # 多機：樣本自帶 drone_id 決定更新哪台的 live state（不填＝主機）
+    # 多機：樣本自帶 drone_id 決定更新哪台的 live state。
+    # **不填＝主機只在單機時成立**（2026-10-19）：第二台機的代理即時通道沒帶
+    # drone_id，它的訊號整天被畫在 drone C 身上、兩顆 dongle 的值輪流蓋，
+    # 而這裡回的「上行確認」也是 drone C 的遙測年齡。多機時猜錯比不收更糟
     from .state import fleet
+    if not s.drone_id and len(fleet) > 1:
+        raise HTTPException(409, "多機時訊號樣本要帶 drone_id——否則不知道是哪台的"
+                                 "（代理太舊？請更新）")
     target = fleet.get(s.drone_id) if s.drone_id else live
     if target is None:
         raise HTTPException(404, f"未知的 drone_id：{s.drone_id}（該機尚未註冊）")
