@@ -501,6 +501,19 @@ async def admission_state(sysid: int):
         return {**base, "state": "reassigning", "reassigning": re,
                 "reason": f"正在把號碼從 {re.get('from')} 換成 {re.get('to')}"
                           "（重開飛控中，稍候它會用新號碼回來）"}
+    # 076：**代理自己說序列埠上的飛控不是它綁的那塊**（或還沒確認是）。
+    # 只看 `locked`——armed 時代理不鎖（在天上切斷比認錯更危險），那時這裡
+    # 也不擋，由事件流把不符說出來
+    fb = (last.payload or {}).get("fc_binding") or {}
+    if fb.get("locked") and fb.get("state") == "mismatch":
+        return {**base, "state": "quarantined", "fc_binding": fb,
+                "reason": f"機上代理綁定的飛控板是 {fb.get('bound')}，序列埠上接的卻是 "
+                          f"{fb.get('observed')}——代理已鎖住，不轉發也不收指令",
+                "hint": "若確實換了飛控，要在機上跑 fc-rebind.py 走更換流程"}
+    if fb.get("locked"):
+        return {**base, "state": "identifying", "fc_binding": fb,
+                "reason": f"機上代理正在確認序列埠上的飛控是不是它綁的那塊"
+                          f"（{fb.get('why') or fb.get('state')}）"}
     if not st.board_uid:
         return {**base, "state": "identifying",
                 "reason": "還沒拿到飛控板 UID，身分未定"}
@@ -549,6 +562,10 @@ class AgentHello(BaseModel):
     #: 簽章金鑰的**指紋**（040 A5-c）。**永遠不是金鑰本身**——交換指紋是為了
     #: 在開簽章之前就發現兩邊不同，而簽章不符是靜默丟棄（設計 §3）
     signing_fp: str | None = None
+    #: 代理綁的飛控板對不對得上（076）。`state == "mismatch"` 時代理報的是
+    #: **綁定的**板號，而眼前那塊飛控的事實（廠牌、韌體、號碼）一律不帶——
+    #: 這裡因此不配號：號碼是發給那塊板子的，而它現在不在序列埠上
+    fc_binding: dict | None = None
 
 
 @router.post("/agent/hello")
@@ -586,32 +603,37 @@ async def agent_hello(h: AgentHello):
     # 兩難，是換一個號碼。這裡把答案算出來回給代理；要不要照做、怎麼落到飛控，
     # 是 A3。A2 之前拿到 `change` 只用於顯示與留痕。
     assign = None
-    try:
-        assign = await db.allocate_sysid(uid, h.sysid)
-        if assign["sysid"] is not None:
-            # **`keep` 與 `change` 都要登錄。** 一度只在 keep 時寫，理由是
-            # 「機端還沒改過來，登錄與實況會對不上」——但實測立刻打臉：兩塊
-            # 板子先後連上、都被告知「改用 2」，因為第一次的 change 沒有登錄，
-            # 2 仍然是空的。**配號不登錄就不是配號，只是建議。**
-            #
-            # 而「登錄與實況對不上」根本不是問題，是**設計**：`assigned_sysid`
-            # 是我們的決定、`mav_sysid` 是觀察到的事實，**兩欄分開的全部理由
-            # 就是讓它們能夠不一致**——那個不一致正是「它還沒改過來」。
-            await db.record_assignment(uid, assign["sysid"], drone_id)
-        if assign["action"] == "change":
-            log.warning("配號不符：%s（board_uid=%s）→ %s",
-                        assign["reason"], uid, assign["sysid"])
-            ev = await db.insert_event(
-                drone_id, None, "warn", "sysid_reassign_needed",
-                {"board_uid": uid, "claimed": h.sysid,
-                 "assigned": assign["sysid"], "reason": assign["reason"],
-                 "note": "本階段只通知不下發——改號要重開飛控，屬 issues/040 A3"})
-            ev["drone"] = name
-            await manager.broadcast({"type": "event", "event": ev})
-    except Exception:
-        # **配號失敗不擋註冊**：註冊本身是身分的地基，讓它因為配號出錯而失敗，
-        # 等於為了修好號碼把整台機擋在門外
-        log.exception("配號失敗（不影響註冊）board_uid=%s", uid)
+    mismatch = (h.fc_binding or {}).get("state") == "mismatch"
+    if mismatch:
+        log.error("⚠ 代理 %s 回報序列埠上的飛控不是它綁的那塊（實際 %s）——不配號",
+                  uid, (h.fc_binding or {}).get("observed"))
+    else:
+        try:
+            assign = await db.allocate_sysid(uid, h.sysid)
+            if assign["sysid"] is not None:
+                # **`keep` 與 `change` 都要登錄。** 一度只在 keep 時寫，理由是
+                # 「機端還沒改過來，登錄與實況會對不上」——但實測立刻打臉：兩塊
+                # 板子先後連上、都被告知「改用 2」，因為第一次的 change 沒有登錄，
+                # 2 仍然是空的。**配號不登錄就不是配號，只是建議。**
+                #
+                # 而「登錄與實況對不上」根本不是問題，是**設計**：`assigned_sysid`
+                # 是我們的決定、`mav_sysid` 是觀察到的事實，**兩欄分開的全部理由
+                # 就是讓它們能夠不一致**——那個不一致正是「它還沒改過來」。
+                await db.record_assignment(uid, assign["sysid"], drone_id)
+            if assign["action"] == "change":
+                log.warning("配號不符：%s（board_uid=%s）→ %s",
+                            assign["reason"], uid, assign["sysid"])
+                ev = await db.insert_event(
+                    drone_id, None, "warn", "sysid_reassign_needed",
+                    {"board_uid": uid, "claimed": h.sysid,
+                     "assigned": assign["sysid"], "reason": assign["reason"],
+                     "note": "本階段只通知不下發——改號要重開飛控，屬 issues/040 A3"})
+                ev["drone"] = name
+                await manager.broadcast({"type": "event", "event": ev})
+        except Exception:
+            # **配號失敗不擋註冊**：註冊本身是身分的地基，讓它因為配號出錯而失敗，
+            # 等於為了修好號碼把整台機擋在門外
+            log.exception("配號失敗（不影響註冊）board_uid=%s", uid)
 
     # ── A5-c：簽章金鑰的指紋自檢 ──────────────────────────────────
     # **這一批還沒有在簽任何東西**，所以措辭一律是「尚未啟用」。先做偵測的
