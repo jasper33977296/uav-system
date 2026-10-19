@@ -60,6 +60,15 @@ function labelStamp(fleet: Record<string, Telemetry>): string {
     .join(",");
 }
 
+/** 這台機現在要不要畫在地圖上。**遙測過舊（> 10 秒，staleLevel 的 old）就不畫**
+ *  ——使用者 2026-10-19：斷線時機身也要清掉，避免誤解還連著。原本機身留在最後
+ *  已知位置、外加紅色閃環；但一個停在地圖上的機身讀起來就是「它在這裡」，
+ *  閃環得先被注意到才救得回來（同 lib/staleness 的判準）。尾跡保留：那是歷史。 */
+function onMap(t: Telemetry): boolean {
+  const lv = staleLevel(t.telem_age_s);
+  return t.lat != null && t.lon != null && lv !== "old" && lv !== "never";
+}
+
 export default function MapView() {
   const containerRef = useRef<HTMLDivElement>(null);
   const mapRef = useRef<maplibregl.Map | null>(null);
@@ -696,7 +705,7 @@ export default function MapView() {
           // §2.4d 3D 機體：近距真 mesh（有實體高度）、遠距交回 2D 圖示，
           // 門檻區間交叉淡出；五條硬約束的實作見 lib/droneMeshLayer
           ...droneMeshLayers(
-            Object.entries(s.fleet).map(([id, t]) => ({
+            Object.entries(s.fleet).filter(([, t]) => onMap(t)).map(([id, t]) => ({
               id, lat: t.lat, lon: t.lon, alt_rel: t.alt_rel })),
             zoomRef.current, (id) => rgba(colorFor(id))),
           // 斷線標記（使用者定案 2026-08-24）：紅色外框閃爍。
@@ -707,8 +716,7 @@ export default function MapView() {
           new ScatterplotLayer({
             id: "drone-lost-ring",
             data: Object.entries(s.fleet)
-              .filter(([, t]) => t.connected === false
-                && t.lat != null && t.lon != null)
+              .filter(([, t]) => t.connected === false && onMap(t))
               .map(([id, t]) => ({
                 id,
                 pos: [t.lon!, t.lat!, t.alt_rel ?? 0] as [number, number, number],
@@ -735,7 +743,7 @@ export default function MapView() {
             // 與 3D mesh 互補淡出（共用 lodFactor，門檻只有一份不漂移）
             opacity: 1 - lodFactor(zoomRef.current),
             data: Object.entries(s.fleet)
-              .filter(([, t]) => t.lat != null && t.lon != null)
+              .filter(([, t]) => onMap(t))
               .map(([id, t]) => ({
                 id,
                 pos: [t.lon!, t.lat!, t.alt_rel ?? 0] as [number, number, number],
@@ -777,7 +785,7 @@ export default function MapView() {
             // 「在畫面上會不會疊到」
             data: (() => {
               const list = Object.entries(s.fleet)
-                .filter(([, t]) => t.lat != null && t.lon != null)
+                .filter(([, t]) => onMap(t))
                 .sort(([a], [b]) => (a < b ? -1 : 1));   // 順序穩定不跳動
               const mpp = (156543.03392 * Math.cos(((list[0]?.[1].lat ?? 25)
                 * Math.PI) / 180)) / Math.pow(2, zoomRef.current);
@@ -911,10 +919,11 @@ export default function MapView() {
                 //  1. **沒有座標就不動鏡頭。** 那台機的位置我方不知道（GPS 未鎖、
                 //     剛連上、只有 0,0），飛去一個猜的位置比留在原地更糟。
                 //  2. **不改縮放。** 使用者自己調的視野是他的決定；這裡只平移。
+                //  3. **位置過舊也不動**（同 onMap：地圖上已經不畫它了）。
                 const t = st.fleet[id];
                 const map = mapRef.current;
-                if (map && t?.lat != null && t?.lon != null) {
-                  map.easeTo({ center: [t.lon, t.lat], duration: 600 });
+                if (map && t && onMap(t)) {
+                  map.easeTo({ center: [t.lon!, t.lat!], duration: 600 });
                 }
               }}>
               {/* §0.1：色點一律配機身文字——3 台內是冗餘保險，超過 3 台
