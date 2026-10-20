@@ -138,6 +138,7 @@ class MavRouter(threading.Thread):
         # 迴圈活性時戳（見 alive()／STALL_S）。初值設為現在而非 0：執行緒
         # start() 之前就被健康檢查問到時，不該回報成「卡住」。
         self._alive_t = time.monotonic()
+        self.busy = None    # (工作名, sysid, 開始的 monotonic)；沒在做工作＝None
 
     # ── API 層入口（任意執行緒呼叫；在 executor 裡跑，不阻塞事件迴圈）──
     def submit(self, fn, *args, timeout: float = JOB_TIMEOUT_S):
@@ -191,10 +192,16 @@ class MavRouter(threading.Thread):
                 except queue.Empty:
                     self._recv(0.2)
                     continue
+                # 忙在哪個工作上：/healthz 要分得出「迴圈死了」與「正在做一件久的事」
+                # ——後者期間其他指令會排隊，那也是要讓人知道的事實，但不是同一件事
+                self.busy = (getattr(fn, "__name__", "?"), args[0] if args else None,
+                             time.monotonic())
                 try:
                     fut.set_result(fn(self, *args))
                 except Exception as e:        # 工作失敗浮回呼叫端；不殺迴圈
                     fut.set_exception(e)
+                finally:
+                    self.busy = None
             except Exception:                 # _tick/_recv 的網路例外等——吞掉續跑
                 log.exception("router 迴圈例外（網路瞬斷等），吞掉續跑")
 
@@ -227,6 +234,13 @@ class MavRouter(threading.Thread):
             self._write_peers()
 
     def _recv(self, timeout: float):
+        # **活性時戳蓋在這裡**（2026-10-20）。原本只蓋在 _tick()，而 _tick() 要
+        # 靠呼叫的人記得叫——_wait() 有叫，但 job_get_params／job_log_list／
+        # job_log_fetch／job_terrain_check 自己跑 _recv() 迴圈、沒有叫。上傳航線
+        # 時先讀 WP_SPD，飛控不回就會在這裡收 3 輪×8 秒，5 秒後 /healthz 就宣告
+        # 「router 迴圈未在運轉」——**畫面說指令服務死了，其實它正在等飛控回話**。
+        # 每一次 recv 的逾時都有上限（≤ 秒級），所以「還在收」就是「還在轉」
+        self._tick()
         msg = self.conn.recv_match(blocking=True, timeout=timeout)
         if msg is None:
             return None

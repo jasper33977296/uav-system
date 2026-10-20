@@ -409,6 +409,10 @@ async def healthz():
     body = {"ok": alive, "router_alive": alive,
             "enabled": settings.enable_commands, "gcs_sysid": mav.GCS_SYSID,
             "drones": router.snapshot() if router is not None else {}}
+    b = getattr(router, "busy", None) if router is not None else None
+    # 正在做一件久的工作（例如讀參數等飛控回話）：迴圈是活的，但其他指令在排隊
+    body["busy"] = ({"job": b[0], "sysid": b[1], "for_s": round(time.monotonic() - b[2], 1)}
+                    if b else None)
     if not alive:
         # 連狀態碼都要說實話：只看狀態碼的檢查（curl -f／docker healthcheck／
         # 外部監看）不會去讀 body，回 200 就是對它們謊報健康。
