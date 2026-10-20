@@ -337,9 +337,9 @@ async def lifespan(app):
     await pool.execute(
         "ALTER TABLE IF EXISTS missions ADD COLUMN IF NOT EXISTS external BOOLEAN NOT NULL DEFAULT false")
     # 群組執行期即時態欄位（issue 013-B；backend migrate 也建，這裡防序）
-    await pool.execute("ALTER TABLE group_assignments ADD COLUMN IF NOT EXISTS error JSONB")
+    await pool.execute("ALTER TABLE IF EXISTS group_assignments ADD COLUMN IF NOT EXISTS error JSONB")
     await pool.execute(
-        "ALTER TABLE group_assignments ADD COLUMN IF NOT EXISTS updated_at TIMESTAMPTZ")
+        "ALTER TABLE IF EXISTS group_assignments ADD COLUMN IF NOT EXISTS updated_at TIMESTAMPTZ")
     router = mav.MavRouter(settings.command_mavlink_url,
                            heartbeat=settings.enable_commands)
     router.start()

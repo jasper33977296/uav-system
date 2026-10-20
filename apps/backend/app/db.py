@@ -137,6 +137,31 @@ async def migrate() -> None:
     # 038：飛控板的唯一 ID（AUTOPILOT_VERSION.uid2）。**目前唯一機器可驗證的
     # 身分**——sysid 只是機上可改的參數。NULL＝還沒問到（不是「沒有」）
     await pool.execute("ALTER TABLE drones ADD COLUMN IF NOT EXISTS board_uid TEXT")
+    # ── 小隊＝常設編組（doc/squads-design.md，2026-09-08 使用者核准）────────
+    # （放在任務段**之前**：missions.squad_id 的外鍵與不變式觸發器都指向這兩張表。
+    # 舊庫早有它們所以沒事，全新的庫第一次啟動就會 relation does not exist）
+    #
+    # **與 mission_groups 分開**：後者是一次群飛的執行實例（status／phase／
+    # materialized 任務），一次飛行一筆、飛完就是歷史；小隊是跨飛行存在的名單。
+    # 塞進同一張表會長出「status 永遠是 draft 的群組」，而且刪一次飛行紀錄
+    # ＝刪掉編組——兩者的生命週期不同。
+    await pool.execute("""CREATE TABLE IF NOT EXISTS squads (
+        id         UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+        name       TEXT NOT NULL,
+        note       TEXT,
+        created_at TIMESTAMPTZ NOT NULL DEFAULT now())""")
+    # **名稱唯一（不分大小寫）**：小隊是拿來喊的（「等一下派 A 隊出去」），
+    # 兩隊同名時畫面分得出（有 id）、人喊出來分不出
+    await pool.execute("CREATE UNIQUE INDEX IF NOT EXISTS idx_squads_name "
+                       "ON squads (lower(name))")
+    # **多對多，不是 drones.squad_id**：同一台機在不同實驗扮不同角色是常事，
+    # 一欄外鍵會逼人二選一。`position` 是顯示順序與 layer_index 的**預設種子**，
+    # 不是 layer_index 本身——分層要看 vsep／航線高度／地形，那是派任務當下的決定
+    await pool.execute("""CREATE TABLE IF NOT EXISTS squad_members (
+        squad_id UUID NOT NULL REFERENCES squads(id) ON DELETE CASCADE,
+        drone_id UUID NOT NULL REFERENCES drones(id) ON DELETE CASCADE,
+        position INT NOT NULL DEFAULT 0,
+        PRIMARY KEY (squad_id, drone_id))""")
     # ── 階段 2：任務（doc/mission-vs-plan-design.md §4）──────────────
     # **`missions` 現在是「要達成的那件事」**，不是路徑（路徑在 `plans`）。
     # 一個任務可以有 N 個架次、N 份路徑、N 台機——三個 N 都不設限，
@@ -366,29 +391,6 @@ async def migrate() -> None:
         phase TEXT NOT NULL DEFAULT 'idle',              -- 見 §7.1 assignment.phase
         PRIMARY KEY (group_id, drone_id))""")
     await pool.execute("ALTER TABLE flight_sessions ADD COLUMN IF NOT EXISTS group_id UUID")
-    # ── 小隊＝常設編組（doc/squads-design.md，2026-09-08 使用者核准）────────
-    #
-    # **與 mission_groups 分開**：後者是一次群飛的執行實例（status／phase／
-    # materialized 任務），一次飛行一筆、飛完就是歷史；小隊是跨飛行存在的名單。
-    # 塞進同一張表會長出「status 永遠是 draft 的群組」，而且刪一次飛行紀錄
-    # ＝刪掉編組——兩者的生命週期不同。
-    await pool.execute("""CREATE TABLE IF NOT EXISTS squads (
-        id         UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
-        name       TEXT NOT NULL,
-        note       TEXT,
-        created_at TIMESTAMPTZ NOT NULL DEFAULT now())""")
-    # **名稱唯一（不分大小寫）**：小隊是拿來喊的（「等一下派 A 隊出去」），
-    # 兩隊同名時畫面分得出（有 id）、人喊出來分不出
-    await pool.execute("CREATE UNIQUE INDEX IF NOT EXISTS idx_squads_name "
-                       "ON squads (lower(name))")
-    # **多對多，不是 drones.squad_id**：同一台機在不同實驗扮不同角色是常事，
-    # 一欄外鍵會逼人二選一。`position` 是顯示順序與 layer_index 的**預設種子**，
-    # 不是 layer_index 本身——分層要看 vsep／航線高度／地形，那是派任務當下的決定
-    await pool.execute("""CREATE TABLE IF NOT EXISTS squad_members (
-        squad_id UUID NOT NULL REFERENCES squads(id) ON DELETE CASCADE,
-        drone_id UUID NOT NULL REFERENCES drones(id) ON DELETE CASCADE,
-        position INT NOT NULL DEFAULT 0,
-        PRIMARY KEY (squad_id, drone_id))""")
     # 這一次群飛是哪一隊派出去的。**ON DELETE SET NULL**：刪小隊不刪歷史；
     # 而 mission_groups.name 在派任務時就寫入當時的隊名快照，所以即使 FK 斷了，
     # 歷史仍說得出當時是哪一隊飛的（不另外加 squad_name 欄位）
@@ -601,6 +603,13 @@ async def migrate() -> None:
     # 補一個 drone_id 外鍵，往後由寫入端解析。
     # **舊資料不回填**：拿今天的 sysid 去反推當時是誰，正是這個欄位要防的錯誤——
     # 空著代表「不知道」，那是實話。
+    # 表本身由 command 服務建；這裡防序（全新的庫 backend 可能先跑，而 command
+    # 又要等 backend 建好 group_assignments——兩邊互等就永遠起不來）。DDL 與
+    # apps/command/app/main.py 一致
+    await pool.execute("""CREATE TABLE IF NOT EXISTS command_log (
+        id BIGSERIAL PRIMARY KEY, time TIMESTAMPTZ NOT NULL DEFAULT now(),
+        sysid INT, action TEXT NOT NULL, params JSONB,
+        result TEXT NOT NULL, detail TEXT)""")
     await pool.execute("ALTER TABLE command_log ADD COLUMN IF NOT EXISTS drone_id UUID")
     await pool.execute("""
         DO $$ BEGIN
