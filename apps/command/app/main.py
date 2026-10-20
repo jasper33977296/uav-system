@@ -95,6 +95,24 @@ def build_items(wps: list[dict]) -> list[dict]:
     return items
 
 
+#: 航線速度與到達半徑在不同韌體的名字：(名字們, 換成 m/s 與 m 的倍率)
+WP_PARAM_SETS = ((("WP_SPD", "WP_RADIUS_M"), 1.0),         # ArduCopter 4.7 起
+                 (("WPNAV_SPEED", "WPNAV_RADIUS"), 0.01))  # 之前：cm/s、cm
+
+
+async def _wp_param_names(sysid: int):
+    """這台飛控的航線速度參數叫什麼。查地面站存的機上參數清單；查不到回 (None, None)。"""
+    rows = await pool.fetch(
+        """SELECT p.name FROM drone_params p JOIN drones d ON d.id = p.drone_id
+            WHERE d.mav_sysid = $1 AND p.name = ANY($2::text[])""",
+        sysid, [n for names, _ in WP_PARAM_SETS for n in names])
+    have = {r["name"] for r in rows}
+    for names, scale in WP_PARAM_SETS:
+        if set(names) <= have:
+            return names, scale
+    return None, None
+
+
 async def _link_of(sysid: int):
     """sysid → (drone_id, 進行中的 session_id)。查不到就 (None, None)。
 
@@ -1619,16 +1637,26 @@ async def mission_upload(sysid: int, body: UploadIn):
     # 航點卻是 8。讀不到就是**不判定**（`leg_profile` 會說「速度沒有檢查」），
     # 不是當成安全。
     wp_spd = wp_radius = None
-    try:
-        got = await _run(sysid, "param_get", mav.job_get_params,
-                         ["WP_SPD", "WP_RADIUS_M"],
-                         params={"names": ["WP_SPD", "WP_RADIUS_M"],
-                                 "why": "leg_profile"})
-        wp_spd = got["values"].get("WP_SPD")
-        wp_radius = got["values"].get("WP_RADIUS_M")
-    except Exception as e:                                    # noqa: BLE001
-        log.warning("讀不到 WP_SPD／WP_RADIUS_M（%s）——速度相關的檢查會標成"
-                    "「沒有檢查」，不會當成通過", e)
+    # **先查這台飛控叫它們什麼**（2026-10-20）。ArduCopter 4.7 是 WP_SPD／WP_RADIUS_M
+    # （m/s、m），之前是 WPNAV_SPEED／WPNAV_RADIUS（cm/s、cm）——而 ArduPilot 對
+    # 不存在的名字**一個字都不回**。drone E 是舊韌體：每次上傳都問 4.7 的名字、
+    # 等滿 24 秒，期間 /healthz 還誤報「指令服務失效」。原本的錯誤訊息把這歸咎於
+    # MAVLink 版本，但兩台機所有序列埠都是 v2——那是一個沒驗證過的猜測寫成了事實。
+    # 機上全部參數的清單地面站本來就有（drone_params），查就知道，不必猜版本
+    names, scale = await _wp_param_names(sysid)
+    if names is None:
+        log.warning("不知道 sysid %s 的航線速度參數叫什麼（地面站沒有它的參數清單，"
+                    "或兩套名字都沒有）——速度相關的檢查會標成「沒有檢查」", sysid)
+    else:
+        try:
+            got = await _run(sysid, "param_get", mav.job_get_params, list(names),
+                             params={"names": list(names), "why": "leg_profile"})
+            v = got["values"]
+            wp_spd = v[names[0]] * scale if names[0] in v else None
+            wp_radius = v[names[1]] * scale if names[1] in v else None
+        except Exception as e:                                # noqa: BLE001
+            log.warning("讀不到 %s（%s）——速度相關的檢查會標成「沒有檢查」，"
+                        "不會當成通過", "／".join(names), e)
     report = plan_check.check_waypoints(
         wps, settings.geofence_radius_m, settings.geofence_alt_m,
         settings.geofence_margin, fence=mf, dem=terrain.shared(),

@@ -580,15 +580,22 @@ def job_get_params(r: MavRouter, sysid: int, names: list) -> dict:
     #
     # 機上那支 set-fc-params.py 的用法本身就是這個結論的旁證：它要求
     # **先停掉代理**再跑，那正是把串流關掉、把線路讓出來。
+    #
+    # **2026-10-20 更正**：上面的頻寬推論、以及後來改寫成「MAVLink 版本」的推論，
+    # 在 drone E 上都不成立——它的序列埠是 115200、所有埠都是 MAVLink v2，照樣
+    # 一個都讀不到。真正的原因是**它沒有那個名字**（舊韌體叫 WPNAV_SPEED），而
+    # ArduPilot 對不存在的名字安靜不回。抓封包看得到：請求送進飛控、讓路期間
+    # 飛控只送了 34 則、唯一的 PARAM_VALUE 是它自己定期送的 STAT_RUNTIME。
+    # 所以先問「這台有沒有這個名字」（地面站存著機上全部參數的清單），再來讀
     if not values and other > 0:
         raise CommandError(
             f"飛控沒有回應具名參數讀取（這段期間這條鏈路收到 {other} 則其他"
             "訊息，鏈路與轉發都是通的）。已排除：轉發（機上代理逐則記下轉送到"
             "飛控的請求，名字與 target 都對）、頻寬（代理 v0.18.2 起在交換參數"
-            "期間讓路，實測 98→8 msg/s，讓乾淨了一樣沒有回應）。"
-            "**目前最可能的是 MAVLink 版本**：飛控的 SERIAL1_PROTOCOL=1（v1），"
-            "而本服務送 v2；v2 會截掉尾端零位元組，而 param_id 尾巴正好是 NUL。"
-            "驗證方式是把 SERIAL1_PROTOCOL 改成 2，或讓本服務改送 v1")
+            "期間讓路，實測 98→8 msg/s，讓乾淨了一樣沒有回應）、MAVLink 版本"
+            "（兩台機所有序列埠都是 v2）。**最常見的原因是這台飛控沒有這個名字的"
+            "參數**——ArduPilot 對不存在的名字不回任何東西。例如 4.7 之前的韌體叫"
+            f" WPNAV_SPEED／WPNAV_RADIUS，不是 WP_SPD／WP_RADIUS_M。問的是：{', '.join(names)}")
     return {"values": values, "elapsed_s": round(time.monotonic() - t0, 1),
             "missing": [n for n in names if n not in values]}
 
