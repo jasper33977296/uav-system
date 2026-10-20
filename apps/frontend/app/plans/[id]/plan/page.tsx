@@ -898,6 +898,12 @@ export default function PlanPage() {
         {renaming != null && (
           <span className="hint-line">Enter 存・Esc 取消</span>
         )}
+        {/* 下載這條路徑（QGC .plan）。下載的是**已存的那一份**——這頁還沒存的
+            修改不在裡面，所以有未存的修改時照實說 */}
+        {!isNew && (
+          <a className="btn-plain btn-sm" href={`${API}/api/plans/${id}/export`}
+            title="下載已存的這條路徑（QGC .plan：可再上傳回本系統，或用 QGroundControl 開）。這頁還沒存的修改不包含在內">⤓ .plan</a>
+        )}
         {isNew && (
           <>
           {/* **使用者不會記得經緯度**（2026-09-11）：先用地址把地圖移到大致的

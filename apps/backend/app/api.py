@@ -2286,6 +2286,85 @@ async def active_mission():
             "waypoints": [dict(w) for w in wps]}
 
 
+@router.get("/plans/{plan_id}/export")
+async def export_plan(plan_id: str):
+    """把一條路徑匯出成 **QGC `.plan`**（使用者 2026-10-20：下載路徑）。
+
+    格式選 `.plan` 是因為**上傳也是它**：下載下來可以原樣再上傳回本系統，也能在
+    QGroundControl 打開編輯。所以這裡是前端 `parsePlan`／`parseFence` 的**反函數**——
+    航點的原始 command／frame／p1–p4（上傳時存在 params）原樣寫回，不重新推導；
+    舊資料沒有原始 command 時才從 action 推（與 `plan_check._cmd` 同一份對照）。
+    宣告不出來的不編：機種沒宣告寫 0（MAV_AUTOPILOT_GENERIC＝「沒說」），
+    home、速度、備降點沒有就不寫進去。
+    """
+    row = await db.pool.fetchrow(
+        """SELECT name, firmware_type, vehicle_type, fence, home, cruise_speed,
+                  hover_speed, rally FROM plans WHERE id = $1""", plan_id)
+    if row is None:
+        raise HTTPException(404, "無此路徑")
+    wps = await db.pool.fetch(
+        "SELECT seq, lat, lon, alt, action, params FROM waypoints WHERE plan_id = $1 ORDER BY seq",
+        plan_id)
+
+    def _j(v):
+        return json.loads(v) if isinstance(v, str) else v
+
+    items = []
+    for i, w in enumerate(wps):
+        p = _j(w["params"]) or {}
+        cmd = plan_check._cmd({"command": p.get("command"), "action": w["action"]})
+        is_nav = cmd in (16, 17, 18, 19, 20, 21, 22)
+        frame = p.get("frame")
+        if frame is None:
+            frame = 3 if is_nav else 2          # 離起飛點／MISSION（DO_* 沒有座標）
+        alt = w["alt"]
+        item = {"type": "SimpleItem", "autoContinue": True, "command": cmd,
+                "doJumpId": i + 1, "frame": frame,
+                "params": [p.get("p1", 0) or 0, p.get("p2", 0) or 0,
+                           p.get("p3", 0) or 0, p.get("p4", 0) or 0,
+                           w["lat"] or 0, w["lon"] or 0, alt if alt is not None else 0]}
+        if is_nav and alt is not None:
+            # QGC 讀檔時優先看 Altitude；AltitudeMode 1＝離起飛點、3＝離地面
+            item.update({"Altitude": alt, "AltitudeMode": 3 if frame == 10 else 1,
+                         "AMSLAltAboveTerrain": None})
+        items.append(item)
+
+    home = _j(row["home"])
+    if not home and wps:
+        first = next((w for w in wps if w["lat"] and w["lon"]), None)
+        home = [first["lat"], first["lon"], 0] if first else None
+    mission = {"version": 2, "firmwareType": row["firmware_type"] or 0,
+               "vehicleType": row["vehicle_type"] or 0,
+               "globalPlanAltitudeMode": 1, "items": items}
+    if home:
+        mission["plannedHomePosition"] = home
+    if row["cruise_speed"] is not None:
+        mission["cruiseSpeed"] = row["cruise_speed"]
+    if row["hover_speed"] is not None:
+        mission["hoverSpeed"] = row["hover_speed"]
+
+    f = _j(row["fence"]) or {}
+    circles = ([{"circle": {"center": [c["lat"], c["lon"]], "radius": c["radius"]},
+                 "inclusion": inc, "version": 1}
+                for key, inc in (("inclusion_circles", True), ("exclusion_circles", False))
+                for c in (f.get(key) or [])])
+    polygons = ([{"polygon": [[pt[0], pt[1]] for pt in poly], "inclusion": inc, "version": 1}
+                 for key, inc in (("inclusion_polygons", True), ("exclusion_polygons", False))
+                 for poly in (f.get(key) or [])])
+    rally = [pt for pt in (_j(row["rally"]) or []) if pt]
+    plan = {"fileType": "Plan", "version": 1, "groundStation": "uav-system",
+            "mission": mission,
+            "geoFence": {"version": 2, "circles": circles, "polygons": polygons},
+            "rallyPoints": {"version": 2, "points": rally}}
+    # 檔名：中文路徑名要用 RFC 5987 的 filename*，否則瀏覽器會存成亂碼或 export
+    from urllib.parse import quote
+    fname = f"{row['name']}.plan"
+    return Response(json.dumps(plan, ensure_ascii=False, indent=2),
+                    media_type="application/json",
+                    headers={"Content-Disposition":
+                             f"attachment; filename=\"plan.plan\"; filename*=UTF-8''{quote(fname)}"})
+
+
 @router.get("/plans/{plan_id}/waypoints")
 async def mission_waypoints(plan_id: str):
     # `frame` 一起回（MAV_FRAME，躺在 params 裡）：**高度的意思寫在它上面**

@@ -481,6 +481,12 @@ export default function Plans() {
               </div>
               <button className="btn-plain btn-sm caret" title={open ? "收起飛行紀錄" : "展開飛行紀錄"}
                 onClick={(e) => { e.stopPropagation(); toggle(); }}>{open ? "▾" : "▸"}</button>
+              {/* **下載路徑**（使用者 2026-10-20）。存成 QGC .plan——上傳也是它，
+                  所以下載下來能原樣傳回本系統、也能在 QGroundControl 打開。
+                  後端回 Content-Disposition: attachment，跨埠也會直接下載 */}
+              <a className="btn-plain btn-sm" href={`${API}/api/plans/${m.id}/export`}
+                title="下載這條路徑（QGC .plan：可再上傳回本系統，或用 QGroundControl 開）"
+                onClick={(e) => e.stopPropagation()}>⤓</a>
               <button className="btn-plain btn-sm" title="更多"
                 onClick={(e) => {
                   e.stopPropagation();
@@ -507,6 +513,9 @@ export default function Plans() {
                 <a className="btn-plain btn-sm" href={`/plans/${m.id}/plan`}
                   title="到地圖上編輯這條路徑：航點、高度、速度、停留、圍欄（與點整列同一個去處）"
                   onClick={() => setMenuId(null)}>編輯路徑檔</a>
+                <a className="btn-plain btn-sm" href={`${API}/api/plans/${m.id}/export`}
+                  title="QGC .plan：可再上傳回本系統，或用 QGroundControl 開"
+                  onClick={() => setMenuId(null)}>下載 .plan</a>
                 {/* **「改成地形跟隨」暫緩，按鈕收起來**（issues/073，使用者 2026-09-23 裁定）。
                     端點 `POST /plans/{id}/terrain-frame`、`plan_check.to_terrain_frame`、
                     上傳前的地形閘門**都留著**——留的是能力，收的是入口：按下去會產生一份
