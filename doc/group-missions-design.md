@@ -19,7 +19,7 @@ offset（把安全推給 runtime、無法預檢）。
 mission_groups
   id UUID PK
   name TEXT
-  base_mission_id UUID       -- 「統一路徑」的來源；「分別分配」時可 NULL
+  base_plan_id UUID       -- 「統一路徑」的來源；「分別分配」時可 NULL
   mode TEXT                  -- 'unified'（展開自 base）/ 'separate'（逐台指派）
   params JSONB               -- 展開參數（vsep_m、rtl_stagger_m…）
   created_at TIMESTAMPTZ
@@ -47,7 +47,7 @@ link_metrics/events 完整可追，且與 019 MCP 的 submit_mission(N 台) 同�
 
 ## 2. 「統一路徑」地面展開
 
-`mode='unified'`：從 `base_mission_id` 生成 N 條具體任務，每台：
+`mode='unified'`：從 `base_plan_id` 生成 N 條具體任務，每台：
 - **高度分層**：每個航點高度 += `layer_index × GROUP_VSEP_M`（避免同線同高相撞）。
   這也順帶提供**返航分離**：unified 各台在不同高度層飛行，RTL 時 PX4 於高於
   `RTL_RETURN_ALT` 時維持當前高度返航，故各台以 vsep 的間隔錯開返航（2026-08-12
@@ -151,7 +151,7 @@ skew ≈ N×25ms（數十 ms），量測用途可接受（回放本就相對時�
 
 資料層（backend :38000，有 missions 表＋plan_check）：
 - `POST /api/groups` — 建群組＋展開 materialized 任務＋預檢（capabilities＋check_group）。
-  body: `{name, mode, base_mission_id?, drones:[{drone_id, mission_id?, layer_index?}], params?}`
+  body: `{name, mode, base_plan_id?, drones:[{drone_id, mission_id?, layer_index?}], params?}`
   回: `{group, assignments:[{drone_id, mission_id, layer_index, capability, precheck}], conflicts}`
 - `GET /api/groups/{id}` — 群組狀態（assignments、逐台 capability、預檢、執行中即時態）。
 

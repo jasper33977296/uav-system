@@ -312,7 +312,8 @@ export default function CommandPanel() {
           name: `編隊 ${new Date().toLocaleTimeString("zh-TW",
             { hour: "2-digit", minute: "2-digit", hour12: false })}`,
           mode: cfg.mode,
-          base_mission_id: cfg.mode === "unified" ? cfg.base : undefined,
+          // 9-08 missions→plans 改名後後端只認 base_plan_id；送舊名會被靜默忽略、一定 422
+          base_plan_id: cfg.mode === "unified" ? cfg.base : undefined,
           drones: targetIds.map((id, i) => ({
             drone_id: id,
             layer_index: i,
