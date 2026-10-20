@@ -497,14 +497,17 @@ async def ws_agent(ws: WebSocket):
                 link, stale = agent_link.on_hello(
                     msg, row["id"] if row else None,
                     row["name"] if row else None)
+                # **先接手再關舊的**（2026-10-20 改）。原本是先 await 關舊連線、再接手——
+                # 舊連線的收尾若在那段 await 裡跑，看到 link.ws 還是自己，就把整條 link
+                # 判成斷線。先把 link.ws 換成這條，舊連線收尾時就知道自己已經被取代
+                # （見本函式 finally），兩條也不會同時以為自己是那台機的通道
+                link.ws = ws          # 送 intent 走這條
                 if stale is not None and stale is not ws:
-                    # 一台機一個代理：舊連線讓位。**先關掉再接手**，否則
-                    # 兩條連線都以為自己是那台機的通道
+                    # 一台機一個代理：舊連線讓位
                     try:
                         await stale.close(code=1000)
                     except Exception:
                         pass
-                link.ws = ws          # 送 intent 走這條
                 await ws.send_json({"type": "ack", "of": "hello",
                                     "drone_id": link.drone_id,
                                     "accepts": ["state", "event", "ack",
@@ -584,7 +587,15 @@ async def ws_agent(ws: WebSocket):
     except Exception:
         log.exception("/ws/agent 例外")
     finally:
-        if link is not None:
+        # **只有「還是現在這條」的連線才能宣告斷線**（2026-10-20）。代理換 IP 重連時，
+        # 新連線的 hello 會把舊的那條關掉——而舊那條的這段收尾跟著跑，原本照樣呼叫
+        # on_disconnect：把 link.ws（已經是新連線）清掉、connected 設成 False。
+        # drone E 實測：dongle 重連後代理 1 秒內就連回來，地面站卻一直判「意圖通道斷了」、
+        # 入列停在 admitted_offline——被自己的舊連線抹掉
+        if link is not None and link.ws is not ws and link.ws is not None:
+            log.info("意圖通道舊連線收尾：%s（已被新連線取代，不算斷線）",
+                     link.drone_name or link.board_uid)
+        elif link is not None:
             agent_link.on_disconnect(link)
             log.warning("意圖通道斷線：%s（最後狀態 %s）",
                         link.drone_name or link.board_uid, link.state)
