@@ -745,14 +745,32 @@ async def ensure_drone_by_board(board_uid: str, *, autopilot: str | None = None,
             log.info("板號 %s 收養既有的佔位記錄 %s（sysid %d）",
                      board_uid[-6:], row["name"], claimed_sysid)
     if row is None:
-        name = f"uav-{board_uid[-6:]}"      # 之後由人改名
-        row = await pool.fetchrow(
-            """INSERT INTO drones (name, serial_no, is_simulated, status, board_uid)
-               VALUES ($1, $1, $2, 'idle', $3)
-               ON CONFLICT (serial_no) DO UPDATE SET board_uid = EXCLUDED.board_uid
-               RETURNING id::text AS id, name""",
-            name, settings.link_source == "simulated", board_uid)
-        created = True
+        # **名字撞了就換一個，絕不搶別人的記錄**（2026-10-20）。原本是
+        # `ON CONFLICT (serial_no) DO UPDATE SET board_uid = …`——名字取板號末 6 碼，
+        # 而同一批板子的 UID 尾巴相同（drone C 2a00…383538、drone E 2c00…383538）。
+        # 新地面站上 drone C 一註冊就把 drone E 那筆的板號改成自己的、拿走它的
+        # drone_id 與 sysid 2；之後 drone E 再註冊又搶回去——兩台的記錄來回翻。
+        # 同一塊板子不會走到這裡（上面已經用 board_uid 找到了），所以撞名＝另一塊板子
+        base = f"uav-{board_uid[-6:]}"      # 之後由人改名
+        row = None
+        for n in range(1, 50):
+            name = base if n == 1 else f"{base}-{n}"
+            row = await pool.fetchrow(
+                """INSERT INTO drones (name, serial_no, is_simulated, status, board_uid)
+                   VALUES ($1, $1, $2, 'idle', $3)
+                   ON CONFLICT DO NOTHING
+                   RETURNING id::text AS id, name""",
+                name, settings.link_source == "simulated", board_uid)
+            if row is not None:
+                created = True
+                break
+            # 撞的可能是 board_uid 本身（同一塊板子同時註冊兩次）：那就用它，不再換名字
+            row = await pool.fetchrow(
+                "SELECT id::text AS id, name FROM drones WHERE board_uid = $1", board_uid)
+            if row is not None:
+                break
+        if row is None:
+            raise RuntimeError(f"板號 {board_uid} 找不到不撞的名字（{base}-1…49 都被用了）")
     await pool.execute(
         """UPDATE drones SET flight_sw_version = COALESCE($2, flight_sw_version),
                              agent_uid         = COALESCE($3, agent_uid)
